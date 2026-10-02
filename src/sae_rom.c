@@ -25,6 +25,12 @@ SAE_JSFN(sae_ui_text);
 SAE_JSFN(sae_ui_btn);
 SAE_JSFN(sae_ui_divider);
 
+SAE_JSFN(sae_bc_change_page);
+SAE_JSFN(sae_bc_back);
+SAE_JSFN(sae_bc_forward);
+SAE_JSFN(sae_bc_reload);
+SAE_JSFN(sae_bc_current_url);
+
 #include "sae_stdlib.h"
 
 static void sae_log_func(void *opaque, const void *buf, size_t buf_len)

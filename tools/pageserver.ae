@@ -1,0 +1,96 @@
+// A development page server, filesystem-mapped the way Tsyne's sample server
+// is: GET /about serves <site>/about.js, GET / serves <site>/index.js, an
+// unknown path serves <site>/404.js with status 404. GET /old-home answers
+// 302 to /, to exercise redirect following.
+//
+//   ae run tools/pageserver.ae -- <site-dir> [port]     (default port 8090)
+
+import std.http
+import std.http.middleware
+import std.fs
+import std.dir
+import std.os
+import std.string
+
+// Declared here because std.http.middleware does not export it, although
+// aether's docs/http-server.md calls it bare ("Custom error pages").
+extern aether_error_pages_opts_new() -> ptr
+
+struct Site {
+    dir: string
+}
+
+page_file_(site: *Site, path: string) -> string {
+    if path == "/" || path == "" { return "${site.dir}/index.js" }
+    return "${site.dir}${path}.js"
+}
+
+serve_page_(req: ptr, res: ptr, ud: ptr) {
+    site = ud as *Site
+    f = page_file_(site, http.request_path(req))
+    body, err = fs.read(f)
+    if err != "" {
+        body, err = fs.read("${site.dir}/404.js")
+        http.response_set_status(res, 404)
+    } else {
+        http.response_set_status(res, 200)
+    }
+    http.response_set_header(res, "Content-Type", "text/javascript")
+    http.response_set_body(res, body)
+}
+
+redirect_home_(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 302)
+    http.response_set_header(res, "Location", "/")
+    http.response_set_body(res, "")
+}
+
+main() {
+    if os.args_count() < 2 {
+        println("usage: pageserver <site-dir> [port]")
+        exit(2)
+    }
+    site = heap.new(Site)
+    site.dir = string.concat(os.args_get(1), "")
+    port = 8090
+    if os.args_count() > 2 {
+        p, _ = string.to_int(os.args_get(2))
+        port = p
+    }
+
+    server = http.server_create(port)
+    if server == 0 {
+        println("pageserver: could not bind ${port}")
+        exit(1)
+    }
+    http.server_get(server, "/", serve_page_, site)
+    http.server_get(server, "/old-home", redirect_home_, 0)
+
+    // One route per page file (routes are exact paths, no wildcard).
+    l, lerr = dir.list(site.dir)
+    if lerr != "" {
+        println("pageserver: cannot list ${site.dir}")
+        exit(1)
+    }
+    n = dir.list_count(l)
+    i = 0
+    while i < n {
+        name = dir.list_get(l, i)
+        if string.string_ends_with(name, ".js") == 1 && name != "index.js" {
+            route = string.concat("/", string.string_substring(name, 0, string.length(name) - 3))
+            http.server_get(server, route, serve_page_, site)
+        }
+        i = i + 1
+    }
+
+    // Anything unrouted gets the site's own 404 page.
+    nf, nerr = fs.read("${site.dir}/404.js")
+    if nerr == "" {
+        ep = aether_error_pages_opts_new()
+        middleware.error_pages_register(ep, 404, nf, "text/javascript")
+        middleware.use_error_pages(server, ep)
+    }
+
+    println("pageserver: serving ${site.dir} on http://127.0.0.1:${port}/")
+    http.server_start(server)
+}

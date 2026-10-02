@@ -13,6 +13,7 @@ extern build_atoms(stdlib_name: ptr, global_obj: ptr, c_function_decl: ptr, argc
 extern object(_ctx: ptr, name: ptr) -> ptr
 extern cfunc(_ctx: ptr, name: ptr, length: int, fn: ptr)
 extern statics_of(spec: ptr) -> ptr
+extern mq_cgetset(_ctx: ptr, name: ptr, getn: ptr, setn: ptr)
 
 sae_stdlib_main(argc: int, argv: ptr) -> int {
     g = mqjs_stdlib_spec(2)
@@ -23,6 +24,13 @@ sae_stdlib_main(argc: int, argv: ptr) -> int {
     cfunc(u, "text", 1, "sae_ui_text")
     cfunc(u, "btn", 2, "sae_ui_btn")
     cfunc(u, "divider", 0, "sae_ui_divider")
+
+    bc = statics_of(object(g, "browserContext"))
+    cfunc(bc, "changePage", 1, "sae_bc_change_page")
+    cfunc(bc, "back", 0, "sae_bc_back")
+    cfunc(bc, "forward", 0, "sae_bc_forward")
+    cfunc(bc, "reload", 0, "sae_bc_reload")
+    mq_cgetset(bc, "currentUrl", "sae_bc_current_url", "NULL")
 
     return build_atoms("js_stdlib", build_global(g), build_global(mqjs_extra_cfuncs(2)), argc, argv)
 }

@@ -15,9 +15,22 @@ import std.string
 // MQJS_AETHER_HOME). ./build.sh sets it.
 // The AetherUIDriver control server is opt-in, as in aether-ui: a listening
 // socket must not ship by default. AETHER_UI_WITH_DRIVER=1 links it.
+// The driver build is a separate binary, sae-driver: aeb's link cache does
+// not key on the environment, so one output name for both would hand back
+// whichever was linked last.
+with_driver_() -> int {
+    if string.length(os.getenv("AETHER_UI_WITH_DRIVER")) > 0 { return 1 }
+    return 0
+}
+
 control_source_() -> string {
-    if string.length(os.getenv("AETHER_UI_WITH_DRIVER")) > 0 { return "aether-ui/backend/aether_ui_test_server.c" }
+    if with_driver_() == 1 { return "aether-ui/backend/aether_ui_test_server.c" }
     return "aether-ui/backend/aether_ui_no_control.c"
+}
+
+output_name_() -> string {
+    if with_driver_() == 1 { return "sae-driver" }
+    return "sae"
 }
 
 aether_root_() -> string {
@@ -37,8 +50,9 @@ aeb(cap) {
             cflag("-Imqjs")
             aether_home(aether_root_())
             // ui reads theme files (std.fs) and the environment (std.os);
-            // the host reads page files. Pages themselves get neither.
-            aether_caps("fs,os")
+            // the host reads and fetches pages (std.fs, std.http). Pages
+            // themselves get none of these.
+            aether_caps("fs,os,net")
 
             mqjssources.register_engine_c_sources("mqjs")
             mqjssources.register_engine_sources("ae")
@@ -60,9 +74,12 @@ aeb(cap) {
             link_flag("-framework ImageIO")
             link_flag("-framework OpenGL")
 
+            // libaether's own dependencies (OpenSSL for std.http, ...),
+            // as aether-ui's ui_backend gets them.
+            link_flag("$(${aether_root_()}/build/ae cflags --libs 2>/dev/null)")
             link_flag("-lpthread")
             link_flag("-lm")
-            output_file("sae")
+            output_file(output_name_())
         }
         return 0
     }

@@ -36,8 +36,19 @@ parent, runs `fn` with the stack as the parent, and pops it again even if
 `fn` throws.
 
 A page reaches only what `gen/sae_spec.ae` registers: the language builtins,
-`print`/`console`, and `ui`. There is no `load()`, no file system and no
-process access.
+`print`/`console`, `ui`, and `browserContext`. There is no `load()`, no file
+system and no process access.
+
+`browserContext` is Tsyne's: `changePage(url)`, `back()`, `forward()`,
+`reload()` and `currentUrl`. A URL resolves against the page that asked
+(`/about` is origin-relative). Navigation happens on the next turn of the
+event loop, after the page's JS returns, so a click handler can navigate away
+from the page its button is on. Leaving a page clears its widget subtree and
+frees its context; `tests/test_nav.py` checks the widget census stays flat.
+
+Pages come over HTTP (10 s timeout, up to 5 redirects followed) or from a
+file. A non-200 page still runs, so a server's own 404 page renders; the
+status line under the toolbar shows the status and final URL.
 
 ## Build and run
 
@@ -51,6 +62,16 @@ target/build/bin/sae pages/hello.js
 SAE_NO_WINDOW=1 target/build/bin/sae pages/hello.js   # build the page, print timings, exit
 ```
 
+A development page server maps `/about` to `site/about.js`, serves
+`site/404.js` with status 404 for unknown paths, and answers `/old-home` with
+a 302:
+
+```sh
+(cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
+target/pageserver site 8090 &
+target/build/bin/sae http://127.0.0.1:8090/
+```
+
 `./build.sh` uses the Aether tree at `$SAE_AETHER_HOME` (default `../aether`)
 and the aeb in `target/toolchain/bin` if present. mquickjs-ae needs Aether
 0.760+ and aeb b0cc057 or later (see its `ci-pins`).
@@ -58,15 +79,20 @@ and the aeb in `target/toolchain/bin` if present. mquickjs-ae needs Aether
 To drive the window over HTTP with the AetherUIDriver:
 
 ```sh
-AETHER_UI_WITH_DRIVER=1 ./build.sh
-AETHER_UI_TEST_PORT=9333 target/build/bin/sae pages/hello.js &
+AETHER_UI_WITH_DRIVER=1 ./build.sh          # target/build/bin/sae-driver
+AETHER_UI_TEST_PORT=9333 target/build/bin/sae-driver pages/hello.js &
 curl -s localhost:9333/widgets
 curl -s -X POST localhost:9333/widget/9/click
 ```
 
+The driver build is a separate binary because the control server must not
+ship in `sae`. `python3 tests/test_nav.py` runs the navigation spec against
+it.
+
 ## Status
 
-First spike from the design doc: five builders bound through the context
-stack, click handlers held as GC roots, per-phase timings. Not yet: the
-page-dialect lowerer (TypeScript-ish to ES5), HTTP fetch, navigation, the
-bytecode cache.
+Done: the spike (five builders through the context stack, click handlers held
+as GC roots, per-phase timings; numbers in `docs/spike-results.md`), HTTP
+fetch, history and navigation, browser chrome. Not yet: the page-dialect
+lowerer (TypeScript-ish to ES5), more of the `ui` surface, the bytecode
+cache, GTK4/Win32 build arms.

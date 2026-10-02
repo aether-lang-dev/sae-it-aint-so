@@ -1,5 +1,5 @@
 // sae's host: the browser window, one mquickjs context per page, and the
-// page API that context can reach (the `ui` builders).
+// page API that context can reach (`ui` and `browserContext`).
 //
 // The page API mirrors the Aether DSL. In Aether, `vstack(4) { ... }` makes a
 // handle, attaches it to the ambient `_ctx`, and runs the trailing block with
@@ -7,13 +7,20 @@
 // ... })` and the host does the same thing at run time with a stack of
 // handles: push, call the function, pop. The bottom of the stack is the
 // browser's content area, so a page's top-level widgets land there.
+//
+// Navigation is deferred. A page asks for it (browserContext.changePage)
+// from inside its own JS, often from a click handler whose button is about to
+// be destroyed; so the request is recorded and carried out on the next turn
+// of the event loop, after the JS call has returned.
 
 import ui
 import std.mem
 import std.fs
 import std.os
 import std.list
+import std.strarr
 import std.string
+import std.http.client
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -25,6 +32,7 @@ extern sae_js_is_exception(v: long) -> int
 extern sae_gcref_size() -> long
 extern sae_cstringbuf_size() -> long
 extern sae_throw_type_error(ctx: ptr, msg: string) -> long
+extern sae_stdout() -> ptr
 extern JS_FreeContext(ctx: ptr)
 extern JS_SetContextOpaque(ctx: ptr, opaque: ptr)
 extern JS_GetContextOpaque(ctx: ptr) -> ptr
@@ -38,6 +46,7 @@ extern JS_ToCStringLen(ctx: ptr, plen: ptr, val: long, buf: ptr) -> string
 extern JS_ToInt32(ctx: ptr, pres: ptr, val: long) -> int
 extern JS_NewInt32(ctx: ptr, val: int) -> long
 extern JS_NewInt64(ctx: ptr, val: long) -> long
+extern JS_NewString(ctx: ptr, buf: string) -> long
 extern JS_NewDate(ctx: ptr, epoch_ms: float) -> long
 extern JS_IsNumber(ctx: ptr, val: long) -> int
 extern JS_ToNumber(ctx: ptr, pres: ptr, val: long) -> int
@@ -49,7 +58,6 @@ extern JS_Call(ctx: ptr, call_flags: int) -> long
 extern putchar(c: int) -> int
 extern fputs(s: string, stream: ptr) -> int
 extern fflush(stream: ptr) -> int
-extern sae_stdout() -> ptr
 extern aether_ui_vstack_create(spacing: int) -> int
 
 const JS_DUMP_LONG = 1
@@ -57,9 +65,33 @@ const FRAME_CF_CTOR = 65536
 const STACK_MAX = 64
 const PAGE_MEM_DEFAULT = 1048576
 
+const NAV_NONE = 0
+const NAV_GO = 1
+const NAV_BACK = 2
+const NAV_FORWARD = 3
+const NAV_RELOAD = 4
+
+// The browser: chrome widgets, history, and the page currently shown.
+struct Browser {
+    addr: int        // address field
+    status: int      // status line
+    content: int     // the content area pages build into
+    history: ptr     // std.strarr of URL copies; entries past hist_len are stale
+    hist_len: int
+    hist_index: int
+    page: ptr        // *Page, or null
+    pending_kind: int
+    pending_url: string
+    nav_timer: int
+    page_mem: long
+    last_ok: int     // did the last load fetch and run cleanly
+}
+
 // One per loaded page, hung off its JSContext's opaque slot.
 struct Page {
     ctx: ptr
+    browser: ptr     // *Browser
+    url: string
     mem_block: ptr
     stack: ptr       // handles, STACK_MAX ints
     depth: int
@@ -73,6 +105,24 @@ struct Page {
 page_of_(ctx: ptr) -> *Page {
     return JS_GetContextOpaque(ctx) as *Page
 }
+
+browser_of_(ctx: ptr) -> *Browser {
+    return page_of_(ctx).browser as *Browser
+}
+
+// An owned copy of a borrowed string (a JS_ToCStringLen result, say).
+own_(s: string) -> string {
+    return string.concat(s, "")
+}
+
+// An environment variable's value, "" when unset (os.getenv gives null).
+env_(name: string) -> string {
+    v = os.getenv(name)
+    if v == null { return "" }
+    return v
+}
+
+us_(ns: long) -> long { return ns / 1000 }
 
 arg_(argv: ptr, i: int) -> long {
     return mem.get_long(argv, i * 8)
@@ -120,6 +170,7 @@ report_exception_(ctx: ptr, where_: string) {
     println("sae: uncaught exception in ${where_}:")
     JS_PrintValueF(ctx, JS_GetException(ctx), JS_DUMP_LONG)
     putchar(10)
+    fflush(sae_stdout())
 }
 
 // Keep a JS function alive (and findable after a compacting GC) for as long
@@ -160,7 +211,7 @@ ui_done_(p: *Page, t: long) {
     p.ui_calls = p.ui_calls + 1
 }
 
-// --- the page API (named in gen/sae_spec.ae) ---
+// --- the page API: ui (named in gen/sae_spec.ae) ---
 
 @c_callback
 sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
@@ -217,6 +268,39 @@ sae_ui_btn(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return JS_NewInt32(ctx, h)
 }
 
+// --- the page API: browserContext ---
+
+@c_callback
+sae_bc_change_page(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    b = browser_of_(ctx)
+    href = arg_str_(ctx, argv, argc, 0)
+    request_nav_(b, NAV_GO, resolve_(page_of_(ctx).url, href))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_bc_back(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    request_nav_(browser_of_(ctx), NAV_BACK, "")
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_bc_forward(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    request_nav_(browser_of_(ctx), NAV_FORWARD, "")
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_bc_reload(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    request_nav_(browser_of_(ctx), NAV_RELOAD, "")
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_bc_current_url(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    return JS_NewString(ctx, page_of_(ctx).url)
+}
+
 // --- the core library's host functions (mode 2 of genengine) ---
 
 // All of print's output goes through C stdio (the engine's log sink for
@@ -270,21 +354,95 @@ js_date_constructor(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return JS_NewDate(ctx, val)
 }
 
-// --- page lifecycle ---
+// --- URLs and fetching ---
 
-page_new_(mem_size: long, content: int) -> *Page {
-    p = malloc(sizeof(Page)) as *Page
-    p.mem_block = malloc(mem_size)
+is_http_(u: string) -> int {
+    if string.string_starts_with(u, "http://") == 1 { return 1 }
+    if string.string_starts_with(u, "https://") == 1 { return 1 }
+    return 0
+}
+
+// The end of "scheme://host[:port]" in an http(s) URL.
+origin_end_(u: string) -> int {
+    start = string.string_index_of(u, "://") + 3
+    rest = string.string_substring(u, start, string.length(u))
+    slash = string.string_index_of(rest, "/")
+    if slash < 0 { return string.length(u) }
+    return start + slash
+}
+
+// Everything up to and including the last '/' of s (or "" if none).
+dir_of_(s: string) -> string {
+    i = string.length(s) - 1
+    while i >= 0 {
+        if string.string_substring(s, i, i + 1) == "/" {
+            return string.string_substring(s, 0, i + 1)
+        }
+        i = i - 1
+    }
+    return ""
+}
+
+// Resolve href against the URL of the page that asked for it. Absolute
+// http(s) URLs pass through; "/x" is origin-relative; anything else is
+// relative to the base's directory. A base that is a file path resolves the
+// same way against the file system.
+resolve_(base: string, href: string) -> string {
+    if is_http_(href) == 1 { return own_(href) }
+    if is_http_(base) == 1 {
+        oe = origin_end_(base)
+        if string.string_starts_with(href, "/") == 1 {
+            return string.concat(string.string_substring(base, 0, oe), href)
+        }
+        path_part = string.string_substring(base, oe, string.length(base))
+        if path_part == "" { path_part = "/" }
+        return string.concat(string.concat(string.string_substring(base, 0, oe), dir_of_(path_part)), href)
+    }
+    if string.string_starts_with(href, "/") == 1 { return own_(href) }
+    return string.concat(dir_of_(base), href)
+}
+
+// Fetch a page. Returns (status, body, final_url, err): status is the HTTP
+// status (200 for a file read), final_url is where redirects ended, and err
+// is "" unless nothing could be fetched at all.
+fetch_(url: string) -> (int, string, string, string) {
+    if is_http_(url) == 0 {
+        src, ferr = fs.read(url)
+        if ferr != "" { return 0, "", url, ferr }
+        return 200, src, url, ""
+    }
+    req = client.request("GET", url)
+    if req == null { return 0, "", url, "not a valid URL" }
+    client.set_timeout(req, 10s)
+    client.set_follow_redirects(req, 5)
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if err != "" { return 0, "", url, err }
+    status = client.response_status(resp)
+    body = client.response_body(resp)
+    final_url = own_(client.response_url(resp))
+    client.response_free(resp)
+    if final_url == "" { final_url = own_(url) }
+    return status, body, final_url, ""
+}
+
+// --- pages ---
+
+page_new_(b: *Browser, url: string) -> *Page {
+    p = heap.new(Page)
+    p.browser = b
+    p.url = own_(url)
+    p.mem_block = malloc(b.page_mem)
     p.stack = malloc(STACK_MAX * 4)
     p.depth = 0
-    p.ui_ns = 0
-    p.ui_calls = 0
     p.refs = list.new()
     p.scratch = malloc(8)
     p.cbuf = malloc(sae_cstringbuf_size())
-    p.ctx = sae_new_context(p.mem_block, mem_size)
+    p.ui_ns = 0
+    p.ui_calls = 0
+    p.ctx = sae_new_context(p.mem_block, b.page_mem)
     JS_SetContextOpaque(p.ctx, p)
-    push_(p, content)
+    push_(p, b.content)
     return p
 }
 
@@ -303,78 +461,180 @@ page_free_(p: *Page) {
     free(p.stack)
     free(p.scratch)
     free(p.cbuf)
-    free(p)
+    heap.free(p)
 }
 
 // Run page source into the page's content area: parse to bytecode, then run.
 // Returns 1 on success. Fills times_ns[0..1] with the parse and run times.
-page_run_(p: *Page, src: string, name: string, times_ns: ptr) -> int {
+page_run_(p: *Page, src: string, times_ns: ptr) -> int {
     long t0 = os.now_monotonic_ns()
-    fnv = JS_Parse(p.ctx, src, string.length(src), name, 0)
+    fnv = JS_Parse(p.ctx, src, string.length(src), p.url, 0)
     long t1 = os.now_monotonic_ns()
     mem.set_long(times_ns, 0, t1 - t0)
+    mem.set_long(times_ns, 8, 0)
     if sae_js_is_exception(fnv) != 0 {
-        report_exception_(p.ctx, name)
+        report_exception_(p.ctx, p.url)
         return 0
     }
     r = JS_Run(p.ctx, fnv)
     mem.set_long(times_ns, 8, os.now_monotonic_ns() - t1)
     if sae_js_is_exception(r) != 0 {
-        report_exception_(p.ctx, name)
+        report_exception_(p.ctx, p.url)
         return 0
     }
     return 1
 }
 
-us_(ns: long) -> long { return ns / 1000 }
+// --- navigation ---
 
-// An environment variable's value, "" when unset (os.getenv gives null).
-env_(name: string) -> string {
-    v = os.getenv(name)
-    if v == null { return "" }
-    return v
+set_status_(b: *Browser, s: string) {
+    if b.status != 0 { ui.set_text(b.status, s) }
 }
 
-@c_callback
-sae_main(path: string) -> int {
-    if path == "" {
-        println("usage: sae <page.js>")
-        return 2
-    }
+// Tear down the current page (its widgets, then its context) and load url
+// into the content area. Does not touch history.
+load_(b: *Browser, url: string) {
     long t0 = os.now_monotonic_ns()
-    src, err = fs.read(path)
+    status, body, final_url, err = fetch_(url)
+    long t_fetch = os.now_monotonic_ns()
+
+    ui.clear_children(b.content)
+    if b.page != null {
+        page_free_(b.page as *Page)
+        b.page = null
+    }
+    if b.addr != 0 { ui.set_text(b.addr, final_url) }
+
     if err != "" {
-        println("sae: cannot read ${path}: ${err}")
-        return 1
+        ui.text(mem.long_to_ptr(b.content), "Could not load ${url}")
+        ui.text(mem.long_to_ptr(b.content), err)
+        set_status_(b, "error: ${err}")
+        println("sae: could not load ${url}: ${err}")
+        b.last_ok = 0
+        return
     }
-    long t_read = os.now_monotonic_ns()
 
-    // Browser chrome, then the content area pages build into.
-    root = aether_ui_vstack_create(6)
-    ui.text(mem.long_to_ptr(root), "Sae it ain't so — ${path}")
-    ui.divider(mem.long_to_ptr(root))
-    content = ui.vstack(mem.long_to_ptr(root), 4)
-    long t_chrome = os.now_monotonic_ns()
-
-    long page_mem = PAGE_MEM_DEFAULT
-    pm = env_("SAE_PAGE_MEM")
-    if pm != "" {
-        v, perr = string.to_long(pm)
-        if perr == "" && v > 0 { page_mem = v }
-    }
-    p = page_new_(page_mem, content)
-    long t_ctx = os.now_monotonic_ns()
+    p = page_new_(b, final_url)
+    b.page = p
     times = malloc(16)
-    ok = page_run_(p, src, path, times)
+    ok = page_run_(p, body, times)
     long parse_ns = mem.get_long(times, 0)
     long run_ns = mem.get_long(times, 8)
     free(times)
+    b.last_ok = ok
+    if ok == 0 {
+        ui.text(mem.long_to_ptr(b.content), "This page failed: see the console.")
+    }
+    set_status_(b, "${status} ${final_url}")
+    println("sae: ${status} ${final_url} (us) fetch=${us_(t_fetch - t0)} parse=${us_(parse_ns)} run=${us_(run_ns)} widgets=${us_(p.ui_ns)}/${p.ui_calls} js=${us_(run_ns - p.ui_ns)}")
+}
 
-    println("sae: timing (us) read=${us_(t_read - t0)} chrome=${us_(t_chrome - t_read)} context=${us_(t_ctx - t_chrome)} parse=${us_(parse_ns)} run=${us_(run_ns)} (widgets=${us_(p.ui_ns)} in ${p.ui_calls} calls, js=${us_(run_ns - p.ui_ns)})")
+hist_url_(b: *Browser, i: int) -> string {
+    return strarr.get(b.history, i)
+}
+
+// Go to url as a new history entry, dropping any forward entries.
+go_(b: *Browser, url: string) {
+    i = b.hist_index + 1
+    if i < strarr.size(b.history) {
+        strarr.set(b.history, i, own_(url))
+    } else {
+        strarr.push_copy(b.history, url)
+    }
+    b.hist_index = i
+    b.hist_len = i + 1
+    load_(b, url)
+}
+
+run_nav_(b: *Browser) {
+    kind = b.pending_kind
+    url = b.pending_url
+    b.pending_kind = NAV_NONE
+    if kind == NAV_GO { go_(b, url) }
+    if kind == NAV_BACK {
+        if b.hist_index > 0 {
+            b.hist_index = b.hist_index - 1
+            load_(b, hist_url_(b, b.hist_index))
+        }
+    }
+    if kind == NAV_FORWARD {
+        if b.hist_index + 1 < b.hist_len {
+            b.hist_index = b.hist_index + 1
+            load_(b, hist_url_(b, b.hist_index))
+        }
+    }
+    if kind == NAV_RELOAD {
+        if b.hist_index >= 0 { load_(b, hist_url_(b, b.hist_index)) }
+    }
+}
+
+// Record a navigation and carry it out on the next turn of the event loop.
+// The latest request wins, as a second click on a link would.
+request_nav_(b: *Browser, kind: int, url: string) {
+    b.pending_kind = kind
+    b.pending_url = own_(url)
+    if b.nav_timer == 0 {
+        b.nav_timer = ui.timer(1, || {
+            ui.timer_cancel(b.nav_timer)
+            b.nav_timer = 0
+            run_nav_(b)
+        })
+    }
+}
+
+// --- the window ---
+
+build_chrome_(b: *Browser, root: int) {
+    rctx = mem.long_to_ptr(root)
+    bar = ui.hstack(rctx, 4)
+    bctx = mem.long_to_ptr(bar)
+    ui.btn(bctx, "Back", || { request_nav_(b, NAV_BACK, "") })
+    ui.btn(bctx, "Forward", || { request_nav_(b, NAV_FORWARD, "") })
+    ui.btn(bctx, "Reload", || { request_nav_(b, NAV_RELOAD, "") })
+    b.addr = ui.textfield(bctx, "address", |s: string| { })
+    ui.btn(bctx, "Go", || {
+        typed = ui.get_text(b.addr)
+        base = ""
+        if b.page != null { base = (b.page as *Page).url }
+        request_nav_(b, NAV_GO, resolve_(base, typed))
+    })
+    b.status = ui.text(rctx, "")
+    ui.divider(rctx)
+    scroller = ui.scrollview(rctx)
+    b.content = ui.vstack(mem.long_to_ptr(scroller), 4)
+}
+
+browser_new_() -> *Browser {
+    b = heap.new(Browser)
+    b.history = strarr.new()
+    b.hist_len = 0
+    b.hist_index = -1
+    b.page = null
+    b.pending_kind = NAV_NONE
+    b.nav_timer = 0
+    b.page_mem = PAGE_MEM_DEFAULT
+    pm = env_("SAE_PAGE_MEM")
+    if pm != "" {
+        v, perr = string.to_long(pm)
+        if perr == "" && v > 0 { b.page_mem = v }
+    }
+    return b
+}
+
+@c_callback
+sae_main(start_url: string) -> int {
+    if start_url == "" {
+        println("usage: sae <url | page.js>")
+        return 2
+    }
+    b = browser_new_()
+    root = aether_ui_vstack_create(6)
+    build_chrome_(b, root)
+    go_(b, start_url)
 
     if env_("SAE_NO_WINDOW") != "" {
-        page_free_(p)
-        if ok == 1 { return 0 }
+        if b.page != null { page_free_(b.page as *Page) }
+        if b.last_ok == 1 { return 0 }
         return 1
     }
     port = env_("AETHER_UI_TEST_PORT")
@@ -382,7 +642,7 @@ sae_main(path: string) -> int {
         pn, _ = string.to_int(port)
         ui.enable_test_server_root(pn, root)
     }
-    ui.window_run("Sae it ain't so", 640, 480, root)
-    page_free_(p)
+    ui.window_run("Sae it ain't so", 800, 600, root)
+    if b.page != null { page_free_(b.page as *Page) }
     return 0
 }
