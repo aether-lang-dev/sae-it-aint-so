@@ -66,6 +66,8 @@ struct Page {
     refs: ptr        // std.list of JSGCRef*, the JS functions widgets hold
     scratch: ptr     // 8 bytes for out-params
     cbuf: ptr        // JSCStringBuf for JS_ToCStringLen
+    ui_ns: long      // time spent inside ui builders (excludes nested page blocks)
+    ui_calls: int
 }
 
 page_of_(ctx: ptr) -> *Page {
@@ -151,33 +153,49 @@ container_(ctx: ptr, argv: ptr, argc: int, handle: int) -> long {
     return JS_NewInt32(ctx, handle)
 }
 
+// Account a builder call's native time to the page, so the timing report
+// can split engine time from widget-creation time.
+ui_done_(p: *Page, t: long) {
+    p.ui_ns = p.ui_ns + (os.now_monotonic_ns() - t)
+    p.ui_calls = p.ui_calls + 1
+}
+
 // --- the page API (named in gen/sae_spec.ae) ---
 
 @c_callback
 sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     p = page_of_(ctx)
+    long t = os.now_monotonic_ns()
     h = ui.vstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
+    ui_done_(p, t)
     return container_(ctx, argv, argc, h)
 }
 
 @c_callback
 sae_ui_hstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     p = page_of_(ctx)
+    long t = os.now_monotonic_ns()
     h = ui.hstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
+    ui_done_(p, t)
     return container_(ctx, argv, argc, h)
 }
 
 @c_callback
 sae_ui_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     p = page_of_(ctx)
-    h = ui.text(mem.long_to_ptr(top_(p)), arg_str_(ctx, argv, argc, 0))
+    label = arg_str_(ctx, argv, argc, 0)
+    long t = os.now_monotonic_ns()
+    h = ui.text(mem.long_to_ptr(top_(p)), label)
+    ui_done_(p, t)
     return JS_NewInt32(ctx, h)
 }
 
 @c_callback
 sae_ui_divider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     p = page_of_(ctx)
+    long t = os.now_monotonic_ns()
     h = ui.divider(mem.long_to_ptr(top_(p)))
+    ui_done_(p, t)
     return JS_NewInt32(ctx, h)
 }
 
@@ -193,7 +211,9 @@ sae_ui_btn(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
         r = call0_(ctx, mem.get_long(ref, 0))
         if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a click handler") }
     }
+    long t = os.now_monotonic_ns()
     h = ui.btn(mem.long_to_ptr(top_(p)), label, on_press)
+    ui_done_(p, t)
     return JS_NewInt32(ctx, h)
 }
 
@@ -257,6 +277,8 @@ page_new_(mem_size: long, content: int) -> *Page {
     p.mem_block = malloc(mem_size)
     p.stack = malloc(STACK_MAX * 4)
     p.depth = 0
+    p.ui_ns = 0
+    p.ui_calls = 0
     p.refs = list.new()
     p.scratch = malloc(8)
     p.cbuf = malloc(sae_cstringbuf_size())
@@ -334,7 +356,13 @@ sae_main(path: string) -> int {
     content = ui.vstack(mem.long_to_ptr(root), 4)
     long t_chrome = os.now_monotonic_ns()
 
-    p = page_new_(PAGE_MEM_DEFAULT, content)
+    long page_mem = PAGE_MEM_DEFAULT
+    pm = env_("SAE_PAGE_MEM")
+    if pm != "" {
+        v, perr = string.to_long(pm)
+        if perr == "" && v > 0 { page_mem = v }
+    }
+    p = page_new_(page_mem, content)
     long t_ctx = os.now_monotonic_ns()
     times = malloc(16)
     ok = page_run_(p, src, path, times)
@@ -342,7 +370,7 @@ sae_main(path: string) -> int {
     long run_ns = mem.get_long(times, 8)
     free(times)
 
-    println("sae: timing (us) read=${us_(t_read - t0)} chrome=${us_(t_chrome - t_read)} context=${us_(t_ctx - t_chrome)} parse=${us_(parse_ns)} run=${us_(run_ns)}")
+    println("sae: timing (us) read=${us_(t_read - t0)} chrome=${us_(t_chrome - t_read)} context=${us_(t_ctx - t_chrome)} parse=${us_(parse_ns)} run=${us_(run_ns)} (widgets=${us_(p.ui_ns)} in ${p.ui_calls} calls, js=${us_(run_ns - p.ui_ns)})")
 
     if env_("SAE_NO_WINDOW") != "" {
         page_free_(p)
