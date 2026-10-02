@@ -45,10 +45,27 @@ computation before it lays out (sorting thousands of records) pays about
 100 ms where C would pay about 13 ms. That is a problem for the engine, fixable
 in mquickjs-ae without touching sae, and nothing in sae's design depends on it.
 
+## With the lowerer in the loop
+
+Each page is lowered in-process before it is parsed, so there are now two
+parses per page. Per-load timings from `tests/test_nav.py` (localhost HTTP),
+microseconds:
+
+| Page | fetch | lower | parse | run (widgets / js) |
+|---|---|---|---|---|
+| `site/index.ts` (8 widgets) | 113–300 | 35–62 | 95–175 | 2,000 (1,970 / 30) |
+| `site/about.ts` (5 widgets) | 120 | 22 | 57 | 1,350 (1,340 / 5) |
+| `site/calculator.ts` (24 widgets) | 60 | 131 | 475 | 5,240 (5,080 / 165) |
+
+Lowering plus parsing costs under 0.7 ms on every page; native widgets cost
+2 to 5 ms. **So the bytecode cache is deferred**: at best it would save the
+0.1–0.7 ms of lower and parse, under a tenth of what a page costs to show.
+It becomes worth building if pages grow large or a phone-class target makes
+parsing dear. The cache key would be sha256(source) plus `LOWER_VERSION`
+plus engine version, word size and byte order.
+
 ## Not measured yet
 
 - **Tsyne, cold and warm** (`tsyne-browser.sh`). This machine has no Node and
   no Go, and Tsyne's Fyne bridge is not built. Running it means installing
   both and building Tsyne.
-- **Bytecode against source.** Parse is already under 0.2 ms, so this waits
-  for the lowerer, when there are two parses per page to save.
