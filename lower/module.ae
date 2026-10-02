@@ -1,0 +1,2357 @@
+// lower: the sae page dialect to the ES5 subset mquickjs runs.
+//
+// The dialect is TypeScript restricted to `--erasableSyntaxOnly`, over ES5
+// plus a written list of ES2015 forms. Lowering never re-prints the program.
+// It tokenizes, parses enough of the grammar to know what each token is, and
+// records edits against the source text:
+//
+//   - TypeScript is erased by overwriting it with spaces (the ts-blank-space
+//     approach), so every line AND column stays where the author wrote it.
+//   - ES2015 forms are rewritten in place, keeping line breaks where they
+//     were, so an engine error's line points at the line the author wrote.
+//
+// Rewritten forms: arrow functions (with `.bind(this)` when they use
+// `this`), let/const (to var, with each loop iteration wrapped in a function
+// when a closure in the body could see a per-iteration binding), template
+// literals, shorthand properties and methods, destructuring declarations,
+// default and rest parameters, 0b/0o literals and numeric separators.
+//
+// Anything else outside ES5 is an error naming line and column: classes,
+// async/await, generators, spread, optional chaining, `??`, `**`, computed
+// keys, enum, namespace, parameter properties, import/export.
+
+import std.string
+import std.strbuilder
+import std.strarr
+import std.mem
+
+exports (lower_source, LOWER_VERSION)
+
+extern malloc(n: long) -> ptr
+extern realloc(p: ptr, n: long) -> ptr
+extern free(p: ptr)
+
+// Part of sae's bytecode cache key: bump it whenever output changes.
+const LOWER_VERSION = "lower-1"
+
+// ---------------------------------------------------------------------------
+// A growable int vector.
+
+struct IVec {
+    data: ptr
+    len: int
+    cap: int
+}
+
+iv_new_() -> *IVec {
+    v = malloc(sizeof(IVec)) as *IVec
+    v.cap = 64
+    v.len = 0
+    v.data = malloc(256)
+    return v
+}
+
+iv_push_(v: *IVec, x: int) {
+    if v.len == v.cap {
+        v.cap = v.cap * 2
+        v.data = realloc(v.data, v.cap * 4)
+    }
+    mem.set_int(v.data, v.len * 4, x)
+    v.len = v.len + 1
+}
+
+iv_get_(v: *IVec, i: int) -> int {
+    return mem.get_int(v.data, i * 4)
+}
+
+iv_set_(v: *IVec, i: int, x: int) {
+    mem.set_int(v.data, i * 4, x)
+}
+
+iv_pop_(v: *IVec) -> int {
+    v.len = v.len - 1
+    return mem.get_int(v.data, v.len * 4)
+}
+
+iv_top_(v: *IVec) -> int {
+    return mem.get_int(v.data, (v.len - 1) * 4)
+}
+
+iv_free_(v: *IVec) {
+    free(v.data)
+    free(v)
+}
+
+// ---------------------------------------------------------------------------
+// Tokens
+
+const T_EOF = 0
+const T_IDENT = 1
+const T_NUM = 2
+const T_STR = 3
+const T_TPL_FULL = 4     // `...` with no substitution
+const T_TPL_HEAD = 5     // `...${
+const T_TPL_MID = 6      // }...${
+const T_TPL_TAIL = 7     // }...`
+const T_PUNCT = 8
+const T_REGEX = 9
+
+// Everything the lowerer knows about one source file.
+struct Lx {
+    src: string
+    n: int
+    kind: ptr        // *IVec, per token
+    start: ptr
+    end: ptr
+    line: ptr        // 1-based
+    col: ptr         // 1-based
+    nlb: ptr         // 1 if a line break precedes the token
+    mate: ptr        // index of the matching bracket, or -1
+    err: string
+    err_line: int
+    err_col: int
+    // parser
+    pos: int
+    last_end: int    // end offset of the last consumed token
+    es: ptr          // edits: start, end, seq, replacement
+    ee: ptr
+    eq: ptr
+    er: ptr          // std.strarr of owned replacement strings
+    ei: ptr          // per edit: its index in er (edits can be rolled back)
+    seq: int
+    tmp: int         // counter for _sae$N temporaries
+    // contexts
+    fn_arrow: ptr    // per function: 1 if an arrow
+    fn_this: ptr     // per function: uses `this` (arrows: lexically)
+    fn_args: ptr     // per function: uses `arguments`
+    lp_fn: ptr       // per loop: function depth it belongs to
+    lp_closure: ptr  // per loop: a closure is created inside it
+    lp_let: ptr      // per loop: let/const declared in its head or body
+    lp_jump: ptr     // per loop: break/continue/return would cross a wrap
+    lp_switch: ptr   // per loop: switch nesting inside it
+    lp_args: ptr     // per loop: `arguments` used inside it
+    sc_names: ptr    // std.strarr: let/const names of enclosing blocks
+    sc_mark: ptr     // *IVec: sc_names length at each block start
+    fn_scbase: ptr   // per function: sc_names length at its start
+    fn_vars: ptr     // std.strarr: var/param names, all functions, stacked
+    fn_varbase: ptr  // per function: fn_vars length at its start
+}
+
+ch_(x: *Lx, i: int) -> int {
+    if i >= x.n { return 0 }
+    return string.string_char_at_n(x.src, x.n, i)
+}
+
+is_id_start_(c: int) -> int {
+    if c >= 97 && c <= 122 { return 1 }
+    if c >= 65 && c <= 90 { return 1 }
+    if c == 95 || c == 36 { return 1 }
+    if c >= 128 { return 1 }
+    return 0
+}
+
+is_id_char_(c: int) -> int {
+    if is_id_start_(c) == 1 { return 1 }
+    if c >= 48 && c <= 57 { return 1 }
+    return 0
+}
+
+is_digit_(c: int) -> int {
+    if c >= 48 && c <= 57 { return 1 }
+    return 0
+}
+
+fail_at_(x: *Lx, off: int, msg: string) {
+    if x.err != "" { return }
+    line = 1
+    col = 1
+    i = 0
+    while i < off && i < x.n {
+        if ch_(x, i) == 10 {
+            line = line + 1
+            col = 1
+        } else {
+            col = col + 1
+        }
+        i = i + 1
+    }
+    x.err = string.concat(msg, "")
+    x.err_line = line
+    x.err_col = col
+}
+
+tk_kind_(x: *Lx, i: int) -> int { return iv_get_(x.kind as *IVec, i) }
+tk_start_(x: *Lx, i: int) -> int { return iv_get_(x.start as *IVec, i) }
+tk_end_(x: *Lx, i: int) -> int { return iv_get_(x.end as *IVec, i) }
+tk_nlb_(x: *Lx, i: int) -> int { return iv_get_(x.nlb as *IVec, i) }
+tk_mate_(x: *Lx, i: int) -> int { return iv_get_(x.mate as *IVec, i) }
+ntok_(x: *Lx) -> int { return (x.kind as *IVec).len }
+
+// Does token i's text equal lit?
+tk_is_(x: *Lx, i: int, lit: string) -> int {
+    s = tk_start_(x, i)
+    e = tk_end_(x, i)
+    ln = string.length(lit)
+    if e - s != ln { return 0 }
+    k = 0
+    while k < ln {
+        if ch_(x, s + k) != string.string_char_at_n(lit, ln, k) { return 0 }
+        k = k + 1
+    }
+    return 1
+}
+
+tk_text_(x: *Lx, i: int) -> string {
+    return string.string_substring(x.src, tk_start_(x, i), tk_end_(x, i))
+}
+
+push_tok_(x: *Lx, kind: int, s: int, e: int, nl: int) {
+    iv_push_(x.kind as *IVec, kind)
+    iv_push_(x.start as *IVec, s)
+    iv_push_(x.end as *IVec, e)
+    iv_push_(x.nlb as *IVec, nl)
+    iv_push_(x.mate as *IVec, -1)
+}
+
+// The punctuators, longest first within each length.
+punct_len_(x: *Lx, i: int) -> int {
+    c0 = ch_(x, i)
+    c1 = ch_(x, i + 1)
+    c2 = ch_(x, i + 2)
+    c3 = ch_(x, i + 3)
+    if c0 == 62 && c1 == 62 && c2 == 62 && c3 == 61 { return 4 }      // >>>=
+    if c0 == 46 && c1 == 46 && c2 == 46 { return 3 }                  // ...
+    if c0 == 61 && c1 == 61 && c2 == 61 { return 3 }                  // ===
+    if c0 == 33 && c1 == 61 && c2 == 61 { return 3 }                  // !==
+    if c0 == 42 && c1 == 42 && c2 == 61 { return 3 }                  // **=
+    if c0 == 60 && c1 == 60 && c2 == 61 { return 3 }                  // <<=
+    if c0 == 62 && c1 == 62 && c2 == 61 { return 3 }                  // >>=
+    if c0 == 62 && c1 == 62 && c2 == 62 { return 3 }                  // >>>
+    if c0 == 38 && c1 == 38 && c2 == 61 { return 3 }                  // &&=
+    if c0 == 124 && c1 == 124 && c2 == 61 { return 3 }                // ||=
+    if c0 == 63 && c1 == 63 && c2 == 61 { return 3 }                  // ??=
+    if c0 == 63 && c1 == 46 && is_digit_(c2) == 0 { return 2 }        // ?.
+    if c1 == 61 {
+        // == != <= >= += -= *= /= %= &= |= ^=
+        if c0 == 61 || c0 == 33 || c0 == 60 || c0 == 62 || c0 == 43 || c0 == 45 { return 2 }
+        if c0 == 42 || c0 == 47 || c0 == 37 || c0 == 38 || c0 == 124 || c0 == 94 { return 2 }
+    }
+    if c0 == 61 && c1 == 62 { return 2 }                              // =>
+    if c0 == 38 && c1 == 38 { return 2 }                              // &&
+    if c0 == 124 && c1 == 124 { return 2 }                            // ||
+    if c0 == 63 && c1 == 63 { return 2 }                              // ??
+    if c0 == 43 && c1 == 43 { return 2 }                              // ++
+    if c0 == 45 && c1 == 45 { return 2 }                              // --
+    if c0 == 60 && c1 == 60 { return 2 }                              // <<
+    if c0 == 62 && c1 == 62 { return 2 }                              // >>
+    if c0 == 42 && c1 == 42 { return 2 }                              // **
+    return 1
+}
+
+// Can a regular expression start here, given the previous token?
+regex_allowed_(x: *Lx) -> int {
+    nt = ntok_(x)
+    if nt == 0 { return 1 }
+    p = nt - 1
+    k = tk_kind_(x, p)
+    if k == T_NUM || k == T_STR || k == T_REGEX || k == T_TPL_FULL || k == T_TPL_TAIL { return 0 }
+    if k == T_IDENT {
+        if tk_is_(x, p, "return") == 1 || tk_is_(x, p, "typeof") == 1 { return 1 }
+        if tk_is_(x, p, "case") == 1 || tk_is_(x, p, "do") == 1 || tk_is_(x, p, "else") == 1 { return 1 }
+        if tk_is_(x, p, "in") == 1 || tk_is_(x, p, "of") == 1 || tk_is_(x, p, "new") == 1 { return 1 }
+        if tk_is_(x, p, "delete") == 1 || tk_is_(x, p, "void") == 1 || tk_is_(x, p, "throw") == 1 { return 1 }
+        if tk_is_(x, p, "instanceof") == 1 { return 1 }
+        return 0
+    }
+    if tk_is_(x, p, ")") == 1 || tk_is_(x, p, "]") == 1 || tk_is_(x, p, "}") == 1 { return 0 }
+    if tk_is_(x, p, "++") == 1 || tk_is_(x, p, "--") == 1 { return 0 }
+    return 1
+}
+
+// Scan template characters from i (just after ` or }) to the closing `
+// or the next ${. Returns the offset after the delimiter, and whether it
+// ended with ${ (1) or ` (0); -1 offset on an unterminated template.
+scan_tpl_(x: *Lx, i: int) -> (int, int) {
+    while i < x.n {
+        c = ch_(x, i)
+        if c == 92 {
+            i = i + 2
+        } else {
+            if c == 96 { return i + 1, 0 }
+            if c == 36 && ch_(x, i + 1) == 123 { return i + 2, 1 }
+            i = i + 1
+        }
+    }
+    return -1, 0
+}
+
+lex_(x: *Lx) {
+    i = 0
+    nl = 1
+    // Brace depth inside each open template substitution, innermost last.
+    tdepth = iv_new_()
+    while i < x.n && x.err == "" {
+        c = ch_(x, i)
+        if c == 10 {
+            nl = 1
+            i = i + 1
+        } else if c == 32 || c == 9 || c == 13 || c == 11 || c == 12 {
+            i = i + 1
+        } else if c == 47 && ch_(x, i + 1) == 47 {
+            while i < x.n && ch_(x, i) != 10 { i = i + 1 }
+        } else if c == 47 && ch_(x, i + 1) == 42 {
+            j = i + 2
+            while j < x.n && (ch_(x, j) != 42 || ch_(x, j + 1) != 47) {
+                if ch_(x, j) == 10 { nl = 1 }
+                j = j + 1
+            }
+            if j >= x.n {
+                fail_at_(x, i, "unterminated comment")
+                return
+            }
+            i = j + 2
+        } else if is_id_start_(c) == 1 || c == 92 {
+            j = i + 1
+            while j < x.n && (is_id_char_(ch_(x, j)) == 1 || ch_(x, j) == 92) { j = j + 1 }
+            push_tok_(x, T_IDENT, i, j, nl)
+            nl = 0
+            i = j
+        } else if is_digit_(c) == 1 || (c == 46 && is_digit_(ch_(x, i + 1)) == 1) {
+            j = i + 1
+            while j < x.n {
+                d = ch_(x, j)
+                if is_id_char_(d) == 1 || d == 46 {
+                    j = j + 1
+                } else if (d == 43 || d == 45) && (ch_(x, j - 1) == 101 || ch_(x, j - 1) == 69) && ch_(x, i + 1) != 120 && ch_(x, i + 1) != 88 {
+                    j = j + 1
+                } else {
+                    break
+                }
+            }
+            push_tok_(x, T_NUM, i, j, nl)
+            nl = 0
+            i = j
+        } else if c == 34 || c == 39 {
+            j = i + 1
+            while j < x.n && ch_(x, j) != c {
+                if ch_(x, j) == 92 { j = j + 1 }
+                if ch_(x, j) == 10 {
+                    fail_at_(x, i, "unterminated string")
+                    return
+                }
+                j = j + 1
+            }
+            if j >= x.n {
+                fail_at_(x, i, "unterminated string")
+                return
+            }
+            push_tok_(x, T_STR, i, j + 1, nl)
+            nl = 0
+            i = j + 1
+        } else if c == 96 {
+            e, more = scan_tpl_(x, i + 1)
+            if e < 0 {
+                fail_at_(x, i, "unterminated template literal")
+                return
+            }
+            if more == 1 {
+                push_tok_(x, T_TPL_HEAD, i, e, nl)
+                iv_push_(tdepth, 0)
+            } else {
+                push_tok_(x, T_TPL_FULL, i, e, nl)
+            }
+            nl = 0
+            i = e
+        } else if c == 125 && tdepth.len > 0 && iv_top_(tdepth) == 0 {
+            e, more = scan_tpl_(x, i + 1)
+            if e < 0 {
+                fail_at_(x, i, "unterminated template literal")
+                return
+            }
+            if more == 1 {
+                push_tok_(x, T_TPL_MID, i, e, nl)
+            } else {
+                push_tok_(x, T_TPL_TAIL, i, e, nl)
+                iv_pop_(tdepth)
+            }
+            nl = 0
+            i = e
+        } else if c == 47 && regex_allowed_(x) == 1 {
+            j = i + 1
+            in_class = 0
+            while j < x.n {
+                d = ch_(x, j)
+                if d == 10 {
+                    fail_at_(x, i, "unterminated regular expression")
+                    return
+                }
+                if d == 92 {
+                    j = j + 2
+                } else {
+                    if d == 91 { in_class = 1 }
+                    if d == 93 { in_class = 0 }
+                    if d == 47 && in_class == 0 { break }
+                    j = j + 1
+                }
+            }
+            j = j + 1
+            while j < x.n && is_id_char_(ch_(x, j)) == 1 { j = j + 1 }
+            push_tok_(x, T_REGEX, i, j, nl)
+            nl = 0
+            i = j
+        } else {
+            ln = punct_len_(x, i)
+            if c == 123 && tdepth.len > 0 { iv_set_(tdepth, tdepth.len - 1, iv_top_(tdepth) + 1) }
+            if c == 125 && tdepth.len > 0 { iv_set_(tdepth, tdepth.len - 1, iv_top_(tdepth) - 1) }
+            push_tok_(x, T_PUNCT, i, i + ln, nl)
+            nl = 0
+            i = i + ln
+        }
+    }
+    push_tok_(x, T_EOF, x.n, x.n, 1)
+    iv_free_(tdepth)
+}
+
+// Pair every ( [ { with its closer (template substitutions pair their own
+// braces through the HEAD/MID/TAIL tokens, which are not counted here).
+match_brackets_(x: *Lx) {
+    st = iv_new_()
+    nt = ntok_(x)
+    i = 0
+    while i < nt && x.err == "" {
+        if tk_kind_(x, i) == T_PUNCT {
+            if tk_is_(x, i, "(") == 1 || tk_is_(x, i, "[") == 1 || tk_is_(x, i, "{") == 1 {
+                iv_push_(st, i)
+            } else if tk_is_(x, i, ")") == 1 || tk_is_(x, i, "]") == 1 || tk_is_(x, i, "}") == 1 {
+                if st.len == 0 {
+                    fail_at_(x, tk_start_(x, i), "unmatched closing bracket")
+                } else {
+                    o = iv_pop_(st)
+                    oc = ch_(x, tk_start_(x, o))
+                    cc = ch_(x, tk_start_(x, i))
+                    ok = 0
+                    if oc == 40 && cc == 41 { ok = 1 }
+                    if oc == 91 && cc == 93 { ok = 1 }
+                    if oc == 123 && cc == 125 { ok = 1 }
+                    if ok == 0 {
+                        fail_at_(x, tk_start_(x, i), "mismatched bracket")
+                    }
+                    iv_set_(x.mate as *IVec, o, i)
+                    iv_set_(x.mate as *IVec, i, o)
+                }
+            }
+        }
+        i = i + 1
+    }
+    if st.len > 0 && x.err == "" {
+        fail_at_(x, tk_start_(x, iv_top_(st)), "unclosed bracket")
+    }
+    iv_free_(st)
+}
+
+// ---------------------------------------------------------------------------
+// Edits
+
+edit_(x: *Lx, s: int, e: int, text: string) {
+    iv_push_(x.es as *IVec, s)
+    iv_push_(x.ee as *IVec, e)
+    iv_push_(x.eq as *IVec, x.seq)
+    iv_push_(x.ei as *IVec, strarr.size(x.er))
+    x.seq = x.seq + 1
+    _r = strarr.push_copy(x.er, text)
+}
+
+// Forget the edits recorded after the first n (a construct that turned out
+// to be erased whole).
+edits_truncate_(x: *Lx, n: int) {
+    (x.es as *IVec).len = n
+    (x.ee as *IVec).len = n
+    (x.eq as *IVec).len = n
+    (x.ei as *IVec).len = n
+}
+
+insert_(x: *Lx, at: int, text: string) {
+    edit_(x, at, at, text)
+}
+
+// Overwrite [s, e) with spaces, keeping every line break.
+blank_(x: *Lx, s: int, e: int) {
+    if e <= s { return }
+    sb = strbuilder.new(e - s + 1)
+    i = s
+    while i < e {
+        c = ch_(x, i)
+        if c == 10 || c == 13 {
+            strbuilder.append_byte(sb, c)
+        } else {
+            strbuilder.append_byte(sb, 32)
+        }
+        i = i + 1
+    }
+    edit_(x, s, e, strbuilder.finish(sb))
+}
+
+// Replace [s, e) with text, carrying the span's line breaks along so the
+// lines after it do not move.
+replace_keep_lines_(x: *Lx, s: int, e: int, text: string) {
+    sb = strbuilder.new(e - s + string.length(text) + 1)
+    strbuilder.append(sb, text)
+    i = s
+    while i < e {
+        if ch_(x, i) == 10 { strbuilder.append_byte(sb, 10) }
+        i = i + 1
+    }
+    edit_(x, s, e, strbuilder.finish(sb))
+}
+
+// Number of edits recorded so far (to tell whether a span needed any).
+nedits_(x: *Lx) -> int {
+    return (x.es as *IVec).len
+}
+
+apply_edits_(x: *Lx) -> string {
+    es = x.es as *IVec
+    ee = x.ee as *IVec
+    eq = x.eq as *IVec
+    n = es.len
+    // Order by (start, seq): an insertion sort over an index vector. Edits
+    // arrive almost sorted (the parser walks forward), so this is ~linear.
+    ord = iv_new_()
+    i = 0
+    while i < n {
+        iv_push_(ord, i)
+        j = ord.len - 1
+        while j > 0 {
+            a = iv_get_(ord, j - 1)
+            b = iv_get_(ord, j)
+            sa = iv_get_(es, a)
+            sb2 = iv_get_(es, b)
+            if sa < sb2 { break }
+            if sa == sb2 && iv_get_(eq, a) < iv_get_(eq, b) { break }
+            iv_set_(ord, j - 1, b)
+            iv_set_(ord, j, a)
+            j = j - 1
+        }
+        i = i + 1
+    }
+    out = strbuilder.new(x.n + n * 8 + 16)
+    cur = 0
+    k = 0
+    while k < n {
+        idx = iv_get_(ord, k)
+        s = iv_get_(es, idx)
+        e = iv_get_(ee, idx)
+        if s < cur {
+            fail_at_(x, s, "internal error: overlapping rewrites")
+            iv_free_(ord)
+            return ""
+        }
+        if s > cur { strbuilder.append(out, string.string_substring(x.src, cur, s)) }
+        strbuilder.append(out, strarr.get(x.er, iv_get_(x.ei as *IVec, idx)))
+        cur = e
+        k = k + 1
+    }
+    if cur < x.n { strbuilder.append(out, string.string_substring(x.src, cur, x.n)) }
+    iv_free_(ord)
+    return strbuilder.finish(out)
+}
+
+// ---------------------------------------------------------------------------
+// Parser plumbing
+
+cur_(x: *Lx) -> int { return x.pos }
+
+at_(x: *Lx, lit: string) -> int {
+    k = tk_kind_(x, x.pos)
+    if k != T_PUNCT && k != T_IDENT { return 0 }
+    return tk_is_(x, x.pos, lit)
+}
+
+at_off_(x: *Lx, d: int, lit: string) -> int {
+    i = x.pos + d
+    if i >= ntok_(x) { return 0 }
+    k = tk_kind_(x, i)
+    if k != T_PUNCT && k != T_IDENT { return 0 }
+    return tk_is_(x, i, lit)
+}
+
+advance_(x: *Lx) {
+    if tk_kind_(x, x.pos) == T_EOF { return }
+    x.last_end = tk_end_(x, x.pos)
+    x.pos = x.pos + 1
+}
+
+expect_(x: *Lx, lit: string) -> int {
+    if at_(x, lit) == 1 {
+        advance_(x)
+        return 1
+    }
+    if x.err == "" {
+        if tk_kind_(x, x.pos) == T_EOF {
+            fail_at_(x, tk_start_(x, x.pos), "expected '${lit}' before the end of the page")
+        } else {
+            fail_at_(x, tk_start_(x, x.pos), "expected '${lit}' but found '${tk_text_(x, x.pos)}'")
+        }
+    }
+    return 0
+}
+
+unsupported_(x: *Lx, i: int, what: string) {
+    fail_at_(x, tk_start_(x, i), "${what} is not in the page dialect")
+}
+
+// Statement end: ';', or automatic semicolon insertion before a line break,
+// '}' or the end.
+semi_(x: *Lx) {
+    if at_(x, ";") == 1 {
+        advance_(x)
+        return
+    }
+    if tk_nlb_(x, x.pos) == 1 || at_(x, "}") == 1 || tk_kind_(x, x.pos) == T_EOF { return }
+    if x.err == "" {
+        fail_at_(x, tk_start_(x, x.pos), "expected ';' but found '${tk_text_(x, x.pos)}'")
+    }
+}
+
+is_ident_tok_(x: *Lx, i: int) -> int {
+    if tk_kind_(x, i) == T_IDENT { return 1 }
+    return 0
+}
+
+fresh_tmp_(x: *Lx) -> string {
+    t = "_sae$${x.tmp}"
+    x.tmp = x.tmp + 1
+    return t
+}
+
+// ---------------------------------------------------------------------------
+// Context stacks: functions, loops, block scopes
+
+fn_push_(x: *Lx, is_arrow: int) {
+    iv_push_(x.fn_arrow as *IVec, is_arrow)
+    iv_push_(x.fn_this as *IVec, 0)
+    iv_push_(x.fn_args as *IVec, 0)
+    iv_push_(x.fn_scbase as *IVec, strarr.size(x.sc_names))
+    iv_push_(x.fn_varbase as *IVec, strarr.size(x.fn_vars))
+    // A closure created inside a loop: every enclosing loop contains it.
+    lc = x.lp_closure as *IVec
+    i = 0
+    while i < lc.len {
+        iv_set_(lc, i, 1)
+        i = i + 1
+    }
+}
+
+fn_depth_(x: *Lx) -> int {
+    return (x.fn_arrow as *IVec).len
+}
+
+// Pop a function context. Returns whether it used `this`; an arrow that did
+// passes the use up, since its `this` is its parent's.
+fn_pop_(x: *Lx) -> int {
+    is_arrow = iv_pop_(x.fn_arrow as *IVec)
+    used_this = iv_pop_(x.fn_this as *IVec)
+    iv_pop_(x.fn_args as *IVec)
+    iv_pop_(x.fn_scbase as *IVec)
+    vb = iv_pop_(x.fn_varbase as *IVec)
+    strarr_truncate_(x.fn_vars, vb)
+    if is_arrow == 1 && used_this == 1 && fn_depth_(x) > 0 {
+        iv_set_(x.fn_this as *IVec, fn_depth_(x) - 1, 1)
+    }
+    return used_this
+}
+
+strarr_truncate_(a: ptr, n: int) {
+    // strarr has no truncate; overwrite the tail with "" and track length
+    // through the base indices instead. Entries past a popped base are
+    // cleared so a later lookup cannot see them.
+    i = n
+    sz = strarr.size(a)
+    while i < sz {
+        strarr.set(a, i, "")
+        i = i + 1
+    }
+}
+
+note_this_(x: *Lx) {
+    if fn_depth_(x) > 0 { iv_set_(x.fn_this as *IVec, fn_depth_(x) - 1, 1) }
+}
+
+lp_push_(x: *Lx) {
+    iv_push_(x.lp_fn as *IVec, fn_depth_(x))
+    iv_push_(x.lp_closure as *IVec, 0)
+    iv_push_(x.lp_let as *IVec, 0)
+    iv_push_(x.lp_jump as *IVec, 0)
+    iv_push_(x.lp_switch as *IVec, 0)
+    iv_push_(x.lp_args as *IVec, 0)
+}
+
+lp_pop_(x: *Lx) {
+    iv_pop_(x.lp_fn as *IVec)
+    iv_pop_(x.lp_closure as *IVec)
+    iv_pop_(x.lp_let as *IVec)
+    iv_pop_(x.lp_jump as *IVec)
+    iv_pop_(x.lp_switch as *IVec)
+    iv_pop_(x.lp_args as *IVec)
+}
+
+// Index of the innermost loop belonging to the current function, or -1.
+lp_here_(x: *Lx) -> int {
+    lf = x.lp_fn as *IVec
+    if lf.len == 0 { return -1 }
+    i = lf.len - 1
+    if iv_get_(lf, i) == fn_depth_(x) { return i }
+    return -1
+}
+
+note_let_(x: *Lx) {
+    i = lp_here_(x)
+    if i >= 0 { iv_set_(x.lp_let as *IVec, i, 1) }
+}
+
+// A break/continue that leaves the innermost loop (or a return leaving all of
+// this function's loops) cannot cross a wrapping function.
+note_jump_(x: *Lx, all: int, is_break: int) {
+    lf = x.lp_fn as *IVec
+    i = lf.len - 1
+    while i >= 0 {
+        if iv_get_(lf, i) != fn_depth_(x) { return }
+        if all == 0 && is_break == 1 && iv_get_(x.lp_switch as *IVec, i) > 0 { return }
+        iv_set_(x.lp_jump as *IVec, i, 1)
+        if all == 0 { return }
+        i = i - 1
+    }
+}
+
+note_args_(x: *Lx) {
+    if fn_depth_(x) > 0 { iv_set_(x.fn_args as *IVec, fn_depth_(x) - 1, 1) }
+    lf = x.lp_fn as *IVec
+    i = lf.len - 1
+    while i >= 0 {
+        if iv_get_(lf, i) != fn_depth_(x) { return }
+        iv_set_(x.lp_args as *IVec, i, 1)
+        i = i - 1
+    }
+}
+
+block_push_(x: *Lx) {
+    iv_push_(x.sc_mark as *IVec, strarr.size(x.sc_names))
+}
+
+// strarr cannot shrink, so a popped block's names are blanked out.
+block_pop_(x: *Lx) {
+    m = iv_pop_(x.sc_mark as *IVec)
+    strarr_truncate_(x.sc_names, m)
+}
+
+name_in_(a: ptr, from: int, name: string) -> int {
+    sz = strarr.size(a)
+    i = from
+    while i < sz {
+        if strarr.get(a, i) == name { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn_scbase_(x: *Lx) -> int {
+    if fn_depth_(x) == 0 { return 0 }
+    return iv_top_(x.fn_scbase as *IVec)
+}
+
+fn_varbase_(x: *Lx) -> int {
+    if fn_depth_(x) == 0 { return 0 }
+    return iv_top_(x.fn_varbase as *IVec)
+}
+
+// let/const name declared at token i. Lowering to var merges every same-name
+// binding in one function, so a let that shadows another binding there would
+// silently become the same variable: refuse it.
+declare_let_(x: *Lx, i: int) {
+    name = tk_text_(x, i)
+    if name_in_(x.sc_names, fn_scbase_(x), name) == 1 || name_in_(x.fn_vars, fn_varbase_(x), name) == 1 {
+        fail_at_(x, tk_start_(x, i), "'${name}' is declared again in an inner block of the same function; rename one (lowering to var would merge them)")
+        return
+    }
+    _r = strarr.push_copy(x.sc_names, name)
+    note_let_(x)
+}
+
+declare_var_(x: *Lx, i: int) {
+    name = tk_text_(x, i)
+    if name_in_(x.sc_names, fn_scbase_(x), name) == 1 {
+        fail_at_(x, tk_start_(x, i), "'${name}' is also a let/const of an enclosing block; rename one")
+        return
+    }
+    _r = strarr.push_copy(x.fn_vars, name)
+}
+
+// ---------------------------------------------------------------------------
+// TypeScript types: skipped (and blanked by the caller)
+
+// Skip a type starting at token i. Returns the index after it, or -1.
+skip_type_(x: *Lx, i: int) -> int {
+    // leading | or &
+    if tk_is_(x, i, "|") == 1 || tk_is_(x, i, "&") == 1 { i = i + 1 }
+    i = skip_type_operand_(x, i)
+    if i < 0 { return -1 }
+    while tk_is_(x, i, "|") == 1 || tk_is_(x, i, "&") == 1 {
+        i = skip_type_operand_(x, i + 1)
+        if i < 0 { return -1 }
+    }
+    // conditional type: A extends B ? C : D
+    if tk_is_(x, i, "extends") == 1 && tk_nlb_(x, i) == 0 {
+        j = skip_type_(x, i + 1)
+        if j < 0 { return -1 }
+        if tk_is_(x, j, "?") == 0 { return -1 }
+        j = skip_type_(x, j + 1)
+        if j < 0 || tk_is_(x, j, ":") == 0 { return -1 }
+        return skip_type_(x, j + 1)
+    }
+    return i
+}
+
+skip_type_args_(x: *Lx, i: int) -> int {
+    // i at '<'. Returns the index after the matching '>' or -1.
+    if tk_is_(x, i, "<") == 0 { return -1 }
+    i = i + 1
+    if tk_is_(x, i, ">") == 1 { return i + 1 }
+    while true {
+        i = skip_type_(x, i)
+        if i < 0 { return -1 }
+        if tk_is_(x, i, ",") == 1 {
+            i = i + 1
+        } else if tk_is_(x, i, ">") == 1 {
+            return i + 1
+        } else {
+            return -1
+        }
+    }
+    return -1
+}
+
+// Skip a type parameter list <T, U extends X = Y>.
+skip_type_params_(x: *Lx, i: int) -> int {
+    if tk_is_(x, i, "<") == 0 { return -1 }
+    i = i + 1
+    while true {
+        if tk_is_(x, i, "const") == 1 || tk_is_(x, i, "in") == 1 || tk_is_(x, i, "out") == 1 { i = i + 1 }
+        if is_ident_tok_(x, i) == 0 { return -1 }
+        i = i + 1
+        if tk_is_(x, i, "extends") == 1 {
+            i = skip_type_(x, i + 1)
+            if i < 0 { return -1 }
+        }
+        if tk_is_(x, i, "=") == 1 {
+            i = skip_type_(x, i + 1)
+            if i < 0 { return -1 }
+        }
+        if tk_is_(x, i, ",") == 1 {
+            i = i + 1
+            if tk_is_(x, i, ">") == 1 { return i + 1 }
+        } else if tk_is_(x, i, ">") == 1 {
+            return i + 1
+        } else {
+            return -1
+        }
+    }
+    return -1
+}
+
+skip_type_operand_(x: *Lx, i: int) -> int {
+    k = tk_kind_(x, i)
+    // prefix operators
+    if tk_is_(x, i, "keyof") == 1 || tk_is_(x, i, "readonly") == 1 || tk_is_(x, i, "unique") == 1 || tk_is_(x, i, "infer") == 1 {
+        if is_ident_tok_(x, i + 1) == 1 || tk_is_(x, i + 1, "(") == 1 || tk_is_(x, i + 1, "[") == 1 || tk_is_(x, i + 1, "{") == 1 {
+            return skip_type_operand_(x, i + 1)
+        }
+    }
+    if tk_is_(x, i, "typeof") == 1 {
+        i = i + 1
+        if is_ident_tok_(x, i) == 0 { return -1 }
+        i = i + 1
+        while tk_is_(x, i, ".") == 1 && is_ident_tok_(x, i + 1) == 1 { i = i + 2 }
+        return skip_type_suffix_(x, i)
+    }
+    if tk_is_(x, i, "new") == 1 {
+        i = i + 1
+        if tk_is_(x, i, "<") == 1 {
+            i = skip_type_params_(x, i)
+            if i < 0 { return -1 }
+        }
+        if tk_is_(x, i, "(") == 0 { return -1 }
+        j = tk_mate_(x, i) + 1
+        if tk_is_(x, j, "=>") == 0 { return -1 }
+        return skip_type_(x, j + 1)
+    }
+    if tk_is_(x, i, "<") == 1 {
+        // generic function type <T>(a: T) => T
+        i = skip_type_params_(x, i)
+        if i < 0 || tk_is_(x, i, "(") == 0 { return -1 }
+        j = tk_mate_(x, i) + 1
+        if tk_is_(x, j, "=>") == 0 { return -1 }
+        return skip_type_(x, j + 1)
+    }
+    if tk_is_(x, i, "(") == 1 {
+        j = tk_mate_(x, i) + 1
+        if tk_is_(x, j, "=>") == 1 { return skip_type_(x, j + 1) }
+        return skip_type_suffix_(x, j)
+    }
+    if tk_is_(x, i, "[") == 1 || tk_is_(x, i, "{") == 1 {
+        return skip_type_suffix_(x, tk_mate_(x, i) + 1)
+    }
+    if k == T_STR || k == T_NUM || k == T_TPL_FULL {
+        return skip_type_suffix_(x, i + 1)
+    }
+    if tk_is_(x, i, "-") == 1 && tk_kind_(x, i + 1) == T_NUM {
+        return skip_type_suffix_(x, i + 2)
+    }
+    if k == T_TPL_HEAD {
+        // template literal type: find its TAIL
+        depth = 0
+        j = i
+        while tk_kind_(x, j) != T_EOF {
+            kj = tk_kind_(x, j)
+            if kj == T_TPL_HEAD { depth = depth + 1 }
+            if kj == T_TPL_TAIL {
+                depth = depth - 1
+                if depth == 0 { return skip_type_suffix_(x, j + 1) }
+            }
+            j = j + 1
+        }
+        return -1
+    }
+    if k == T_IDENT {
+        // a type predicate: x is T / asserts x [is T]
+        if tk_is_(x, i, "asserts") == 1 && is_ident_tok_(x, i + 1) == 1 && tk_nlb_(x, i + 1) == 0 {
+            i = i + 2
+            if tk_is_(x, i, "is") == 1 { return skip_type_(x, i + 1) }
+            return i
+        }
+        if tk_is_(x, i + 1, "is") == 1 && tk_nlb_(x, i + 1) == 0 {
+            return skip_type_(x, i + 2)
+        }
+        i = i + 1
+        while tk_is_(x, i, ".") == 1 && is_ident_tok_(x, i + 1) == 1 { i = i + 2 }
+        if tk_is_(x, i, "<") == 1 && tk_nlb_(x, i) == 0 {
+            i = skip_type_args_(x, i)
+            if i < 0 { return -1 }
+        }
+        return skip_type_suffix_(x, i)
+    }
+    return -1
+}
+
+// T[] and T[K] suffixes.
+skip_type_suffix_(x: *Lx, i: int) -> int {
+    while tk_is_(x, i, "[") == 1 && tk_nlb_(x, i) == 0 {
+        i = tk_mate_(x, i) + 1
+    }
+    return i
+}
+
+// At ':' (current token): blank ': Type'. Returns 1 if a type was there.
+erase_annotation_(x: *Lx) -> int {
+    if at_(x, ":") == 0 { return 0 }
+    s = tk_start_(x, x.pos)
+    j = skip_type_(x, x.pos + 1)
+    if j < 0 {
+        fail_at_(x, tk_start_(x, x.pos + 1), "cannot read this type annotation")
+        return 0
+    }
+    blank_(x, s, tk_end_(x, j - 1))
+    x.pos = j
+    x.last_end = tk_end_(x, j - 1)
+    return 1
+}
+
+// Blank tokens [i, j) and move the cursor past them.
+erase_tokens_(x: *Lx, i: int, j: int) {
+    blank_(x, tk_start_(x, i), tk_end_(x, j - 1))
+    x.pos = j
+    x.last_end = tk_end_(x, j - 1)
+}
+
+// ---------------------------------------------------------------------------
+// Statements
+
+parse_program_(x: *Lx) {
+    while tk_kind_(x, x.pos) != T_EOF && x.err == "" {
+        parse_statement_(x)
+    }
+}
+
+parse_block_body_(x: *Lx) {
+    // at '{'
+    expect_(x, "{")
+    block_push_(x)
+    while at_(x, "}") == 0 && tk_kind_(x, x.pos) != T_EOF && x.err == "" {
+        parse_statement_(x)
+    }
+    block_pop_(x)
+    expect_(x, "}")
+}
+
+// Is token i the start of a TS declaration statement that is erased whole?
+// (`type X =`, `interface X`, `declare ...`)
+ts_decl_kind_(x: *Lx, i: int) -> int {
+    if is_ident_tok_(x, i + 1) == 0 || tk_nlb_(x, i + 1) == 1 { return 0 }
+    if tk_is_(x, i, "interface") == 1 { return 1 }
+    if tk_is_(x, i, "type") == 1 { return 2 }
+    if tk_is_(x, i, "declare") == 1 { return 3 }
+    if tk_is_(x, i, "abstract") == 1 && tk_is_(x, i + 1, "class") == 1 { return 4 }
+    if tk_is_(x, i, "enum") == 1 { return 5 }
+    if tk_is_(x, i, "namespace") == 1 || tk_is_(x, i, "module") == 1 { return 6 }
+    return 0
+}
+
+// Skip an import/export type statement: to ';' or a line break, stepping
+// over brackets.
+skip_stmt_(x: *Lx, i: int) -> int {
+    first = i
+    while tk_kind_(x, i) != T_EOF {
+        if tk_is_(x, i, ";") == 1 { return i + 1 }
+        if i > first && tk_nlb_(x, i) == 1 { return i }
+        if tk_is_(x, i, "{") == 1 || tk_is_(x, i, "(") == 1 || tk_is_(x, i, "[") == 1 {
+            i = tk_mate_(x, i) + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return i
+}
+
+// Skip a declaration to its end without parsing it: through a top-level
+// '{...}' body, or to ';' / a line break at bracket depth 0.
+skip_decl_(x: *Lx, i: int) -> int {
+    first = i
+    while tk_kind_(x, i) != T_EOF {
+        if tk_is_(x, i, ";") == 1 { return i + 1 }
+        if i > first + 1 && tk_nlb_(x, i) == 1 && tk_is_(x, i - 1, "{") == 0 && tk_is_(x, i - 1, ",") == 0 && tk_is_(x, i - 1, "=") == 0 && tk_is_(x, i - 1, "|") == 0 && tk_is_(x, i - 1, "&") == 0 && tk_is_(x, i - 1, ":") == 0 {
+            return i
+        }
+        if tk_is_(x, i, "{") == 1 {
+            j = tk_mate_(x, i) + 1
+            if tk_is_(x, j, ";") == 1 { return j + 1 }
+            if tk_is_(x, i - 1, "=") == 1 || tk_is_(x, i - 1, ":") == 1 || tk_is_(x, i - 1, "|") == 1 || tk_is_(x, i - 1, "&") == 1 || tk_is_(x, i - 1, "<") == 1 || tk_is_(x, i - 1, ",") == 1 {
+                i = j
+            } else {
+                return j
+            }
+        } else if tk_is_(x, i, "(") == 1 || tk_is_(x, i, "[") == 1 {
+            i = tk_mate_(x, i) + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return i
+}
+
+parse_statement_(x: *Lx) {
+    if x.err != "" { return }
+    i = x.pos
+    k = tk_kind_(x, i)
+
+    if k == T_PUNCT {
+        if tk_is_(x, i, "{") == 1 {
+            parse_block_body_(x)
+            return
+        }
+        if tk_is_(x, i, ";") == 1 {
+            advance_(x)
+            return
+        }
+    }
+
+    if k == T_IDENT {
+        dk = ts_decl_kind_(x, i)
+        if dk == 4 {
+            unsupported_(x, i, "class")
+            return
+        }
+        if dk == 5 {
+            fail_at_(x, tk_start_(x, i), "enum is not erasable TypeScript (--erasableSyntaxOnly); use a const object")
+            return
+        }
+        if dk == 6 {
+            fail_at_(x, tk_start_(x, i), "namespace is not erasable TypeScript (--erasableSyntaxOnly)")
+            return
+        }
+        if dk == 2 && tk_is_(x, i + 1, "=") == 1 {
+            dk = 0
+        }
+        if dk > 0 {
+            j = skip_decl_(x, i)
+            erase_tokens_(x, i, j)
+            return
+        }
+        if tk_is_(x, i, "var") == 1 || tk_is_(x, i, "let") == 1 || tk_is_(x, i, "const") == 1 {
+            if tk_is_(x, i, "let") == 1 && is_ident_tok_(x, i + 1) == 0 && at_off_(x, 1, "[") == 0 && at_off_(x, 1, "{") == 0 {
+                // `let` used as an identifier
+            } else {
+                parse_var_decl_(x, 0)
+                semi_(x)
+                return
+            }
+        }
+        if tk_is_(x, i, "function") == 1 {
+            parse_function_(x, 1, 0)
+            return
+        }
+        if tk_is_(x, i, "async") == 1 && tk_is_(x, i + 1, "function") == 1 && tk_nlb_(x, i + 1) == 0 {
+            unsupported_(x, i, "async")
+            return
+        }
+        if tk_is_(x, i, "class") == 1 {
+            unsupported_(x, i, "class")
+            return
+        }
+        if tk_is_(x, i, "import") == 1 && at_off_(x, 1, "(") == 0 && at_off_(x, 1, ".") == 0 {
+            if tk_is_(x, i + 1, "type") == 1 {
+                j = skip_stmt_(x, i)
+                erase_tokens_(x, i, j)
+                return
+            }
+            fail_at_(x, tk_start_(x, i), "a page is a script: import is not supported")
+            return
+        }
+        if tk_is_(x, i, "export") == 1 {
+            if tk_is_(x, i + 1, "type") == 1 && tk_is_(x, i + 2, "{") == 1 {
+                j = skip_stmt_(x, i)
+                erase_tokens_(x, i, j)
+                return
+            }
+            if tk_is_(x, i + 1, "type") == 1 || tk_is_(x, i + 1, "interface") == 1 {
+                j = skip_decl_(x, i)
+                erase_tokens_(x, i, j)
+                return
+            }
+            fail_at_(x, tk_start_(x, i), "a page is a script: export is not supported")
+            return
+        }
+        if tk_is_(x, i, "if") == 1 {
+            advance_(x)
+            expect_(x, "(")
+            parse_expr_(x)
+            expect_(x, ")")
+            parse_statement_(x)
+            if at_(x, "else") == 1 {
+                advance_(x)
+                parse_statement_(x)
+            }
+            return
+        }
+        if tk_is_(x, i, "for") == 1 {
+            parse_for_(x)
+            return
+        }
+        if tk_is_(x, i, "while") == 1 {
+            advance_(x)
+            expect_(x, "(")
+            parse_expr_(x)
+            expect_(x, ")")
+            parse_loop_body_(x, "")
+            return
+        }
+        if tk_is_(x, i, "do") == 1 {
+            advance_(x)
+            parse_loop_body_(x, "")
+            expect_(x, "while")
+            expect_(x, "(")
+            parse_expr_(x)
+            expect_(x, ")")
+            if at_(x, ";") == 1 { advance_(x) }
+            return
+        }
+        if tk_is_(x, i, "return") == 1 {
+            advance_(x)
+            note_jump_(x, 1, 0)
+            if at_(x, ";") == 0 && at_(x, "}") == 0 && tk_nlb_(x, x.pos) == 0 && tk_kind_(x, x.pos) != T_EOF {
+                parse_expr_(x)
+            }
+            semi_(x)
+            return
+        }
+        if tk_is_(x, i, "break") == 1 || tk_is_(x, i, "continue") == 1 {
+            is_break = tk_is_(x, i, "break")
+            advance_(x)
+            if is_ident_tok_(x, x.pos) == 1 && tk_nlb_(x, x.pos) == 0 {
+                // a labelled jump may leave any loop: treat as leaving all
+                advance_(x)
+                note_jump_(x, 1, is_break)
+            } else {
+                note_jump_(x, 0, is_break)
+            }
+            semi_(x)
+            return
+        }
+        if tk_is_(x, i, "throw") == 1 {
+            advance_(x)
+            parse_expr_(x)
+            semi_(x)
+            return
+        }
+        if tk_is_(x, i, "try") == 1 {
+            advance_(x)
+            parse_block_body_(x)
+            if at_(x, "catch") == 1 {
+                advance_(x)
+                if at_(x, "(") == 1 {
+                    advance_(x)
+                    if is_ident_tok_(x, x.pos) == 0 {
+                        unsupported_(x, x.pos, "a destructuring catch parameter")
+                        return
+                    }
+                    advance_(x)
+                    erase_annotation_(x)
+                    expect_(x, ")")
+                } else {
+                    unsupported_(x, x.pos, "catch without a parameter")
+                    return
+                }
+                parse_block_body_(x)
+            }
+            if at_(x, "finally") == 1 {
+                advance_(x)
+                parse_block_body_(x)
+            }
+            return
+        }
+        if tk_is_(x, i, "switch") == 1 {
+            advance_(x)
+            expect_(x, "(")
+            parse_expr_(x)
+            expect_(x, ")")
+            lp_sw_(x, 1)
+            expect_(x, "{")
+            block_push_(x)
+            while at_(x, "}") == 0 && tk_kind_(x, x.pos) != T_EOF && x.err == "" {
+                if at_(x, "case") == 1 {
+                    advance_(x)
+                    parse_expr_(x)
+                    expect_(x, ":")
+                } else if at_(x, "default") == 1 {
+                    advance_(x)
+                    expect_(x, ":")
+                } else {
+                    parse_statement_(x)
+                }
+            }
+            block_pop_(x)
+            expect_(x, "}")
+            lp_sw_(x, -1)
+            return
+        }
+        // label:
+        if tk_is_(x, i + 1, ":") == 1 && is_reserved_(x, i) == 0 {
+            advance_(x)
+            advance_(x)
+            parse_statement_(x)
+            return
+        }
+    }
+
+    parse_expr_(x)
+    semi_(x)
+}
+
+lp_sw_(x: *Lx, d: int) {
+    i = lp_here_(x)
+    if i >= 0 { iv_set_(x.lp_switch as *IVec, i, iv_get_(x.lp_switch as *IVec, i) + d) }
+}
+
+is_reserved_(x: *Lx, i: int) -> int {
+    if tk_is_(x, i, "default") == 1 || tk_is_(x, i, "case") == 1 { return 1 }
+    return 0
+}
+
+// The body of a loop. head_vars names the loop-head let/const bindings
+// (comma separated) or "". If the body (or head) declares let/const and a
+// closure is created inside, each iteration runs in its own function so the
+// closure sees that iteration's bindings, as ES2015 promises.
+parse_loop_body_(x: *Lx, head_vars: string) {
+    lp_push_(x)
+    li = (x.lp_fn as *IVec).len - 1
+    if head_vars != "" { iv_set_(x.lp_let as *IVec, li, 1) }
+    b0 = x.pos
+    s = tk_start_(x, x.pos)
+    is_block = at_(x, "{")
+    parse_statement_(x)
+    b1 = x.pos
+    e = x.last_end
+    needs = 0
+    if iv_get_(x.lp_let as *IVec, li) == 1 && iv_get_(x.lp_closure as *IVec, li) == 1 { needs = 1 }
+    if needs == 1 && x.err == "" {
+        if iv_get_(x.lp_jump as *IVec, li) == 1 {
+            fail_at_(x, s, "this loop body declares let/const used by a closure, and also breaks, continues or returns out of the loop; per-iteration bindings cannot be lowered with that (move the closure into a helper function)")
+        } else if iv_get_(x.lp_args as *IVec, li) == 1 {
+            fail_at_(x, s, "this loop body declares let/const used by a closure and also uses `arguments`; that cannot be lowered")
+        } else {
+            check_head_assign_(x, b0, b1, head_vars)
+            params = head_vars
+            cargs = "this"
+            if params != "" { cargs = "this, ${params}" }
+            if is_block == 1 {
+                insert_(x, s, "(function (${params}) ")
+                insert_(x, e, ").call(${cargs});")
+            } else {
+                insert_(x, s, "(function (${params}) { ")
+                insert_(x, e, " }).call(${cargs});")
+            }
+        }
+    }
+    lp_pop_(x)
+}
+
+// A wrapped iteration gets the head variables as copies, so an assignment
+// to one inside the body would be lost.
+check_head_assign_(x: *Lx, b0: int, b1: int, head_vars: string) {
+    if head_vars == "" { return }
+    i = b0
+    while i < b1 && x.err == "" {
+        if is_ident_tok_(x, i) == 1 && (i == 0 || tk_is_(x, i - 1, ".") == 0) && list_has_(head_vars, tk_text_(x, i)) == 1 {
+            assigned = 0
+            if tk_is_(x, i + 1, "=") == 1 || tk_is_(x, i + 1, "+=") == 1 || tk_is_(x, i + 1, "-=") == 1 || tk_is_(x, i + 1, "*=") == 1 || tk_is_(x, i + 1, "/=") == 1 { assigned = 1 }
+            if tk_is_(x, i + 1, "++") == 1 || tk_is_(x, i + 1, "--") == 1 { assigned = 1 }
+            if i > 0 && (tk_is_(x, i - 1, "++") == 1 || tk_is_(x, i - 1, "--") == 1) { assigned = 1 }
+            if assigned == 1 {
+                fail_at_(x, tk_start_(x, i), "'${tk_text_(x, i)}' is a loop variable captured per iteration; assigning it inside the body cannot be lowered")
+            }
+        }
+        i = i + 1
+    }
+}
+
+// Is name an element of the comma-separated list?
+list_has_(lst: string, name: string) -> int {
+    n = string.length(lst)
+    s = 0
+    i = 0
+    while i <= n {
+        if i == n || string.string_char_at_n(lst, n, i) == 44 {
+            if string.string_substring(lst, s, i) == name { return 1 }
+            s = i + 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+parse_for_(x: *Lx) {
+    advance_(x)    // for
+    if at_(x, "await") == 1 {
+        unsupported_(x, x.pos, "for await")
+        return
+    }
+    expect_(x, "(")
+    block_push_(x)
+    head_vars = ""
+    // A let in this head belongs to this loop (marked by parse_loop_body_),
+    // not to the enclosing one, so keep the enclosing loop's mark as it was.
+    outer = lp_here_(x)
+    outer_let = 0
+    if outer >= 0 { outer_let = iv_get_(x.lp_let as *IVec, outer) }
+    if at_(x, "let") == 1 || at_(x, "const") == 1 || at_(x, "var") == 1 {
+        is_let = 1
+        if at_(x, "var") == 1 { is_let = 0 }
+        head_vars = parse_var_decl_(x, 1)
+        if is_let == 0 { head_vars = "" }
+    } else if at_(x, ";") == 0 {
+        parse_expr_no_in_(x)
+    }
+    if outer >= 0 { iv_set_(x.lp_let as *IVec, outer, outer_let) }
+    if at_(x, "of") == 1 || at_(x, "in") == 1 {
+        advance_(x)
+        parse_assign_(x)
+    } else {
+        expect_(x, ";")
+        if at_(x, ";") == 0 { parse_expr_(x) }
+        expect_(x, ";")
+        if at_(x, ")") == 0 { parse_expr_(x) }
+    }
+    expect_(x, ")")
+    parse_loop_body_(x, head_vars)
+    block_pop_(x)
+}
+
+// var/let/const declarations. in_for: inside a for head (no 'in' operator,
+// and an initializer is optional before 'of'/'in'). Returns the bound names
+// as a comma-separated list (for the loop-wrapping logic).
+parse_var_decl_(x: *Lx, in_for: int) -> string {
+    kw = x.pos
+    is_let = 0
+    if tk_is_(x, kw, "let") == 1 {
+        is_let = 1
+        edit_(x, tk_start_(x, kw), tk_end_(x, kw), "var")
+    } else if tk_is_(x, kw, "const") == 1 {
+        is_let = 1
+        edit_(x, tk_start_(x, kw), tk_end_(x, kw), "var  ")
+    }
+    advance_(x)
+    names = ""
+    while x.err == "" {
+        if at_(x, "{") == 1 || at_(x, "[") == 1 {
+            bound = parse_destructure_decl_(x, is_let, in_for)
+            if names == "" { names = bound } else { if bound != "" { names = "${names},${bound}" } }
+        } else {
+            if is_ident_tok_(x, x.pos) == 0 {
+                fail_at_(x, tk_start_(x, x.pos), "expected a variable name")
+                return names
+            }
+            ni = x.pos
+            if is_let == 1 { declare_let_(x, ni) } else { declare_var_(x, ni) }
+            nm = tk_text_(x, ni)
+            if names == "" { names = nm } else { names = "${names},${nm}" }
+            advance_(x)
+            if at_(x, "!") == 1 {
+                blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+                advance_(x)
+            }
+            erase_annotation_(x)
+            if at_(x, "=") == 1 {
+                advance_(x)
+                if in_for == 1 { parse_assign_no_in_(x) } else { parse_assign_(x) }
+            } else if is_let == 1 && in_for == 0 {
+                // A let without an initializer is fresh (undefined) on every
+                // pass through it; a var would keep the last value.
+                insert_(x, x.last_end, " = void 0")
+            }
+        }
+        if at_(x, ",") == 0 { break }
+        advance_(x)
+    }
+    return names
+}
+
+// `{ a, b: c, d = 1 }` or `[a, , b = 2, ...rest]` bound from an initializer.
+// The pattern becomes a temporary; the bindings follow the initializer.
+parse_destructure_decl_(x: *Lx, is_let: int, in_for: int) -> string {
+    if in_for == 1 {
+        unsupported_(x, x.pos, "a destructuring pattern in a for head")
+        return ""
+    }
+    op_i = x.pos
+    cl_i = tk_mate_(x, op_i)
+    is_obj = at_(x, "{")
+    tmp = fresh_tmp_(x)
+    tail = strbuilder.new(64)
+    names = ""
+    i = op_i + 1
+    idx = 0
+    while i < cl_i && x.err == "" {
+        if tk_is_(x, i, ",") == 1 {
+            if is_obj == 0 { idx = idx + 1 }
+            i = i + 1
+        } else {
+            rest = 0
+            if tk_is_(x, i, "...") == 1 {
+                rest = 1
+                i = i + 1
+            }
+            key = ""
+            key_kind = T_IDENT
+            target = -1
+            if is_obj == 1 {
+                kk = tk_kind_(x, i)
+                if kk != T_IDENT && kk != T_STR && kk != T_NUM {
+                    unsupported_(x, i, "this destructuring key")
+                    return names
+                }
+                key = tk_text_(x, i)
+                key_kind = kk
+                if tk_is_(x, i + 1, ":") == 1 {
+                    if is_ident_tok_(x, i + 2) == 0 {
+                        unsupported_(x, i + 2, "a nested destructuring pattern")
+                        return names
+                    }
+                    target = i + 2
+                    i = i + 3
+                } else {
+                    if kk != T_IDENT {
+                        unsupported_(x, i, "this destructuring key")
+                        return names
+                    }
+                    target = i
+                    i = i + 1
+                }
+            } else {
+                if is_ident_tok_(x, i) == 0 {
+                    unsupported_(x, i, "a nested destructuring pattern")
+                    return names
+                }
+                target = i
+                i = i + 1
+            }
+            if is_let == 1 { declare_let_(x, target) } else { declare_var_(x, target) }
+            tname = tk_text_(x, target)
+            if names == "" { names = tname } else { names = "${names},${tname}" }
+            access = ""
+            if rest == 1 {
+                if is_obj == 1 {
+                    unsupported_(x, target, "an object rest pattern")
+                    return names
+                }
+                access = "${tmp}.slice(${idx})"
+            } else if is_obj == 1 {
+                if key_kind == T_STR || key_kind == T_NUM {
+                    access = "${tmp}[${key}]"
+                } else {
+                    access = "${tmp}.${key}"
+                }
+            } else {
+                access = "${tmp}[${idx}]"
+            }
+            if tk_is_(x, i, "=") == 1 {
+                // default: the raw text of a simple expression
+                ds = i + 1
+                de = ds
+                depth = 0
+                while de < cl_i {
+                    if depth == 0 && tk_is_(x, de, ",") == 1 { break }
+                    if tk_is_(x, de, "(") == 1 || tk_is_(x, de, "[") == 1 || tk_is_(x, de, "{") == 1 { depth = depth + 1 }
+                    if tk_is_(x, de, ")") == 1 || tk_is_(x, de, "]") == 1 || tk_is_(x, de, "}") == 1 { depth = depth - 1 }
+                    kd = tk_kind_(x, de)
+                    if tk_is_(x, de, "=>") == 1 || (kd >= T_TPL_FULL && kd <= T_TPL_TAIL) {
+                        unsupported_(x, de, "an arrow or template in a destructuring default")
+                        return names
+                    }
+                    de = de + 1
+                }
+                dtext = string.string_substring(x.src, tk_start_(x, ds), tk_end_(x, de - 1))
+                strbuilder.append(tail, ", ${tname} = ${access} === undefined ? (${dtext}) : ${access}")
+                i = de
+            } else {
+                strbuilder.append(tail, ", ${tname} = ${access}")
+            }
+        }
+    }
+    replace_keep_lines_(x, tk_start_(x, op_i), tk_end_(x, cl_i), tmp)
+    x.pos = cl_i + 1
+    x.last_end = tk_end_(x, cl_i)
+    erase_annotation_(x)
+    if at_(x, "=") == 0 {
+        fail_at_(x, tk_start_(x, x.pos), "a destructuring declaration needs an initializer")
+        return names
+    }
+    advance_(x)
+    parse_assign_(x)
+    insert_(x, x.last_end, strbuilder.finish(tail))
+    return names
+}
+
+// ---------------------------------------------------------------------------
+// Functions
+
+// Parameters, starting at '('. Records erasures; returns the prologue to
+// insert at the top of the body (defaults and rest), and the parameter
+// names (comma separated) through declare_var_.
+parse_params_(x: *Lx) -> string {
+    op_i = x.pos
+    cl_i = tk_mate_(x, op_i)
+    expect_(x, "(")
+    pro = strbuilder.new(32)
+    idx = 0
+    prev_comma = -1
+    while x.pos < cl_i && x.err == "" {
+        if at_(x, "this") == 1 && tk_is_(x, x.pos + 1, ":") == 1 {
+            // TS `this` parameter: erase it and its comma
+            blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+            advance_(x)
+            erase_annotation_(x)
+            if at_(x, ",") == 1 {
+                blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+                advance_(x)
+            }
+        } else {
+            if at_(x, "public") == 1 || at_(x, "private") == 1 || at_(x, "protected") == 1 || at_(x, "readonly") == 1 {
+                fail_at_(x, tk_start_(x, x.pos), "parameter properties are not erasable TypeScript (--erasableSyntaxOnly)")
+                return ""
+            }
+            if at_(x, "{") == 1 || at_(x, "[") == 1 {
+                unsupported_(x, x.pos, "a destructuring parameter")
+                return ""
+            }
+            if at_(x, "...") == 1 {
+                rs = x.pos
+                advance_(x)
+                if is_ident_tok_(x, x.pos) == 0 {
+                    unsupported_(x, x.pos, "a destructuring rest parameter")
+                    return ""
+                }
+                nm = tk_text_(x, x.pos)
+                declare_var_(x, x.pos)
+                advance_(x)
+                if at_(x, ":") == 1 {
+                    // skipped, not erased: the blank below covers it
+                    j = skip_type_(x, x.pos + 1)
+                    if j < 0 {
+                        fail_at_(x, tk_start_(x, x.pos + 1), "cannot read this type annotation")
+                        return ""
+                    }
+                    x.pos = j
+                    x.last_end = tk_end_(x, j - 1)
+                }
+                // blank the preceding comma too: ES5 has no trailing comma
+                bs = tk_start_(x, rs)
+                if prev_comma >= 0 { bs = tk_start_(x, prev_comma) }
+                blank_(x, bs, x.last_end)
+                strbuilder.append(pro, " var ${nm} = Array.prototype.slice.call(arguments, ${idx});")
+                if at_(x, ",") == 1 {
+                    fail_at_(x, tk_start_(x, x.pos), "a rest parameter must be last")
+                    return ""
+                }
+            } else {
+                if is_ident_tok_(x, x.pos) == 0 {
+                    fail_at_(x, tk_start_(x, x.pos), "expected a parameter name")
+                    return ""
+                }
+                nm = tk_text_(x, x.pos)
+                declare_var_(x, x.pos)
+                advance_(x)
+                if at_(x, "?") == 1 {
+                    blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+                    advance_(x)
+                }
+                erase_annotation_(x)
+                if at_(x, "=") == 1 {
+                    ds = tk_start_(x, x.pos)
+                    advance_(x)
+                    vs = tk_start_(x, x.pos)
+                    n0 = nedits_(x)
+                    parse_assign_(x)
+                    if nedits_(x) != n0 {
+                        fail_at_(x, vs, "this default value needs lowering itself; compute it in the body instead")
+                        return ""
+                    }
+                    vtext = string.string_substring(x.src, vs, x.last_end)
+                    blank_(x, ds, x.last_end)
+                    strbuilder.append(pro, " if (${nm} === undefined) ${nm} = ${vtext};")
+                }
+            }
+            idx = idx + 1
+            if at_(x, ",") == 1 {
+                prev_comma = x.pos
+                advance_(x)
+                if x.pos == cl_i {
+                    // trailing comma (ES2017)
+                    blank_(x, tk_start_(x, prev_comma), tk_end_(x, prev_comma))
+                }
+            }
+        }
+    }
+    expect_(x, ")")
+    return strbuilder.finish(pro)
+}
+
+// function [name] [<T>] (params) [: R] { body }  — at 'function'.
+// is_decl: a declaration (name required). method_name_tok: >= 0 when called
+// for an object-literal method (starts at the '(' or '<').
+parse_function_(x: *Lx, is_decl: int, is_method: int) {
+    fstart = x.pos
+    ne0 = nedits_(x)
+    if is_method == 0 {
+        advance_(x)   // function
+        if at_(x, "*") == 1 {
+            unsupported_(x, x.pos, "a generator function")
+            return
+        }
+        if is_ident_tok_(x, x.pos) == 1 {
+            if is_decl == 1 { declare_var_(x, x.pos) }
+            advance_(x)
+        } else if is_decl == 1 {
+            fail_at_(x, tk_start_(x, x.pos), "expected a function name")
+            return
+        }
+    }
+    if at_(x, "<") == 1 {
+        j = skip_type_params_(x, x.pos)
+        if j < 0 {
+            fail_at_(x, tk_start_(x, x.pos), "cannot read these type parameters")
+            return
+        }
+        erase_tokens_(x, x.pos, j)
+    }
+    fn_push_(x, 0)
+    block_push_(x)
+    pro = parse_params_(x)
+    erase_annotation_(x)
+    if at_(x, "{") == 0 {
+        // an overload signature (no body): erase the whole declaration
+        if is_decl == 1 && x.err == "" {
+            block_pop_(x)
+            fn_pop_(x)
+            if at_(x, ";") == 1 { advance_(x) }
+            edits_truncate_(x, ne0)
+            blank_(x, tk_start_(x, fstart), x.last_end)
+            return
+        }
+        expect_(x, "{")
+    }
+    if pro != "" { insert_(x, tk_end_(x, x.pos), pro) }
+    parse_block_body_(x)
+    block_pop_(x)
+    fn_pop_(x)
+}
+
+// An arrow function. At its first token: an identifier (single parameter),
+// '(' or '<'.
+parse_arrow_(x: *Lx) {
+    s = tk_start_(x, x.pos)
+    insert_(x, s, "(function ")
+    fn_push_(x, 1)
+    block_push_(x)
+    pro = ""
+    if is_ident_tok_(x, x.pos) == 1 {
+        nm = tk_text_(x, x.pos)
+        declare_var_(x, x.pos)
+        edit_(x, tk_start_(x, x.pos), tk_end_(x, x.pos), "(${nm})")
+        advance_(x)
+    } else {
+        if at_(x, "<") == 1 {
+            j = skip_type_params_(x, x.pos)
+            erase_tokens_(x, x.pos, j)
+        }
+        pro = parse_params_(x)
+        erase_annotation_(x)
+    }
+    if at_(x, "=>") == 0 {
+        expect_(x, "=>")
+        return
+    }
+    blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+    advance_(x)
+    if at_(x, "{") == 1 {
+        if pro != "" { insert_(x, tk_end_(x, x.pos), pro) }
+        parse_block_body_(x)
+    } else {
+        insert_(x, tk_start_(x, x.pos), "{${pro} return ")
+        parse_assign_(x)
+        insert_(x, x.last_end, "; }")
+    }
+    block_pop_(x)
+    used_args = iv_top_(x.fn_args as *IVec)
+    if used_args == 1 {
+        fail_at_(x, s, "`arguments` inside an arrow function refers to the enclosing function's; that cannot be lowered")
+    }
+    used_this = fn_pop_(x)
+    if used_this == 1 {
+        insert_(x, x.last_end, ").bind(this)")
+    } else {
+        insert_(x, x.last_end, ")")
+    }
+}
+
+// Is the token at i the start of an arrow function?
+arrow_ahead_(x: *Lx, i: int) -> int {
+    if is_ident_tok_(x, i) == 1 && tk_is_(x, i + 1, "=>") == 1 && tk_nlb_(x, i + 1) == 0 {
+        if tk_is_(x, i, "async") == 1 { return 0 }
+        return 1
+    }
+    if tk_is_(x, i, "<") == 1 {
+        j = skip_type_params_(x, i)
+        if j < 0 || tk_is_(x, j, "(") == 0 { return 0 }
+        i = j
+    }
+    if tk_is_(x, i, "(") == 1 {
+        j = tk_mate_(x, i) + 1
+        if tk_is_(x, j, "=>") == 1 && tk_nlb_(x, j) == 0 { return 1 }
+        if tk_is_(x, j, ":") == 1 {
+            k = skip_type_(x, j + 1)
+            if k > 0 && tk_is_(x, k, "=>") == 1 { return 1 }
+        }
+    }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// Expressions
+
+parse_expr_(x: *Lx) {
+    parse_assign_(x)
+    while at_(x, ",") == 1 && x.err == "" {
+        advance_(x)
+        parse_assign_(x)
+    }
+}
+
+// The no-'in' variants for a for(;;) head share the code through a flag
+// kept on the cursor: 'in' is never a binary operator while it is set.
+parse_expr_no_in_(x: *Lx) {
+    parse_assign_inner_(x, 1)
+    while at_(x, ",") == 1 && x.err == "" {
+        advance_(x)
+        parse_assign_inner_(x, 1)
+    }
+}
+
+parse_assign_no_in_(x: *Lx) {
+    parse_assign_inner_(x, 1)
+}
+
+parse_assign_(x: *Lx) {
+    parse_assign_inner_(x, 0)
+}
+
+is_assign_op_(x: *Lx) -> int {
+    if tk_kind_(x, x.pos) != T_PUNCT { return 0 }
+    if at_(x, "=") == 1 || at_(x, "+=") == 1 || at_(x, "-=") == 1 || at_(x, "*=") == 1 || at_(x, "/=") == 1 { return 1 }
+    if at_(x, "%=") == 1 || at_(x, "<<=") == 1 || at_(x, ">>=") == 1 || at_(x, ">>>=") == 1 { return 1 }
+    if at_(x, "&=") == 1 || at_(x, "|=") == 1 || at_(x, "^=") == 1 { return 1 }
+    return 0
+}
+
+parse_assign_inner_(x: *Lx, no_in: int) {
+    if x.err != "" { return }
+    if arrow_ahead_(x, x.pos) == 1 {
+        parse_arrow_(x)
+        return
+    }
+    if at_(x, "async") == 1 && (arrow_ahead_(x, x.pos + 1) == 1 || at_off_(x, 1, "function") == 1) {
+        unsupported_(x, x.pos, "async")
+        return
+    }
+    if at_(x, "yield") == 1 {
+        unsupported_(x, x.pos, "yield")
+        return
+    }
+    lhs = x.pos
+    parse_conditional_(x, no_in)
+    if is_assign_op_(x) == 1 {
+        if tk_is_(x, lhs, "[") == 1 || tk_is_(x, lhs, "{") == 1 {
+            if at_(x, "=") == 1 && tk_mate_(x, lhs) == x.pos - 1 {
+                unsupported_(x, lhs, "destructuring assignment")
+                return
+            }
+        }
+        advance_(x)
+        parse_assign_inner_(x, no_in)
+        return
+    }
+    if at_(x, "&&=") == 1 || at_(x, "||=") == 1 || at_(x, "??=") == 1 || at_(x, "**=") == 1 {
+        unsupported_(x, x.pos, "the '${tk_text_(x, x.pos)}' operator")
+    }
+}
+
+parse_conditional_(x: *Lx, no_in: int) {
+    parse_binary_(x, 0, no_in)
+    if at_(x, "?") == 1 {
+        advance_(x)
+        parse_assign_(x)
+        expect_(x, ":")
+        parse_assign_inner_(x, no_in)
+    }
+}
+
+// Binary precedence of the operator at the cursor, 0 if none.
+binop_prec_(x: *Lx, no_in: int) -> int {
+    k = tk_kind_(x, x.pos)
+    if k == T_IDENT {
+        if at_(x, "instanceof") == 1 { return 7 }
+        if at_(x, "in") == 1 && no_in == 0 { return 7 }
+        if (at_(x, "as") == 1 || at_(x, "satisfies") == 1) && tk_nlb_(x, x.pos) == 0 { return 7 }
+        return 0
+    }
+    if k != T_PUNCT { return 0 }
+    if at_(x, "||") == 1 { return 1 }
+    if at_(x, "&&") == 1 { return 2 }
+    if at_(x, "|") == 1 { return 3 }
+    if at_(x, "^") == 1 { return 4 }
+    if at_(x, "&") == 1 { return 5 }
+    if at_(x, "==") == 1 || at_(x, "!=") == 1 || at_(x, "===") == 1 || at_(x, "!==") == 1 { return 6 }
+    if at_(x, "<") == 1 || at_(x, ">") == 1 || at_(x, "<=") == 1 || at_(x, ">=") == 1 { return 7 }
+    if at_(x, "<<") == 1 || at_(x, ">>") == 1 || at_(x, ">>>") == 1 { return 8 }
+    if at_(x, "+") == 1 || at_(x, "-") == 1 { return 9 }
+    if at_(x, "*") == 1 || at_(x, "/") == 1 || at_(x, "%") == 1 { return 10 }
+    if at_(x, "??") == 1 || at_(x, "**") == 1 { return 11 }
+    return 0
+}
+
+parse_binary_(x: *Lx, min_prec: int, no_in: int) {
+    parse_unary_(x)
+    while x.err == "" {
+        p = binop_prec_(x, no_in)
+        if p == 0 || p <= min_prec { return }
+        if p == 11 {
+            unsupported_(x, x.pos, "the '${tk_text_(x, x.pos)}' operator")
+            return
+        }
+        if at_(x, "as") == 1 || at_(x, "satisfies") == 1 {
+            s = tk_start_(x, x.pos)
+            if tk_is_(x, x.pos + 1, "const") == 1 {
+                j = x.pos + 2
+            } else {
+                j = skip_type_(x, x.pos + 1)
+            }
+            if j < 0 {
+                fail_at_(x, tk_start_(x, x.pos + 1), "cannot read this type")
+                return
+            }
+            blank_(x, s, tk_end_(x, j - 1))
+            x.pos = j
+            x.last_end = tk_end_(x, j - 1)
+        } else {
+            advance_(x)
+            parse_binary_(x, p, no_in)
+        }
+    }
+}
+
+parse_unary_(x: *Lx) {
+    if x.err != "" { return }
+    k = tk_kind_(x, x.pos)
+    if k == T_PUNCT {
+        if at_(x, "!") == 1 || at_(x, "~") == 1 || at_(x, "+") == 1 || at_(x, "-") == 1 || at_(x, "++") == 1 || at_(x, "--") == 1 {
+            advance_(x)
+            parse_unary_(x)
+            return
+        }
+        if at_(x, "<") == 1 {
+            // a TS type assertion <T>expr
+            j = skip_type_args_(x, x.pos)
+            if j < 0 {
+                fail_at_(x, tk_start_(x, x.pos), "unexpected '<'")
+                return
+            }
+            erase_tokens_(x, x.pos, j)
+            parse_unary_(x)
+            return
+        }
+    }
+    if k == T_IDENT {
+        if at_(x, "typeof") == 1 || at_(x, "void") == 1 || at_(x, "delete") == 1 {
+            advance_(x)
+            parse_unary_(x)
+            return
+        }
+        if at_(x, "await") == 1 && tk_nlb_(x, x.pos + 1) == 0 && tk_kind_(x, x.pos + 1) != T_PUNCT {
+            unsupported_(x, x.pos, "await")
+            return
+        }
+    }
+    parse_postfix_(x)
+}
+
+parse_postfix_(x: *Lx) {
+    parse_call_member_(x)
+    while x.err == "" {
+        if (at_(x, "++") == 1 || at_(x, "--") == 1) && tk_nlb_(x, x.pos) == 0 {
+            advance_(x)
+        } else if at_(x, "!") == 1 && tk_nlb_(x, x.pos) == 0 {
+            // TS non-null assertion
+            blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+            advance_(x)
+            parse_call_member_tail_(x)
+        } else {
+            return
+        }
+    }
+}
+
+parse_call_member_(x: *Lx) {
+    if at_(x, "new") == 1 {
+        advance_(x)
+        if at_(x, ".") == 1 {
+            unsupported_(x, x.pos, "new.target")
+            return
+        }
+        // the constructor: a member expression without calls
+        parse_primary_(x)
+        while x.err == "" {
+            if at_(x, ".") == 1 {
+                advance_(x)
+                advance_(x)
+            } else if at_(x, "[") == 1 {
+                advance_(x)
+                parse_expr_(x)
+                expect_(x, "]")
+            } else {
+                break
+            }
+        }
+        if at_(x, "<") == 1 {
+            j = skip_type_args_(x, x.pos)
+            if j > 0 && tk_is_(x, j, "(") == 1 { erase_tokens_(x, x.pos, j) }
+        }
+        if at_(x, "(") == 1 { parse_args_(x) }
+    } else {
+        parse_primary_(x)
+    }
+    parse_call_member_tail_(x)
+}
+
+parse_call_member_tail_(x: *Lx) {
+    while x.err == "" {
+        if at_(x, ".") == 1 {
+            advance_(x)
+            if tk_kind_(x, x.pos) != T_IDENT {
+                fail_at_(x, tk_start_(x, x.pos), "expected a property name after '.'")
+                return
+            }
+            advance_(x)
+        } else if at_(x, "?.") == 1 {
+            unsupported_(x, x.pos, "optional chaining (?.)")
+            return
+        } else if at_(x, "[") == 1 {
+            advance_(x)
+            parse_expr_(x)
+            expect_(x, "]")
+        } else if at_(x, "(") == 1 {
+            parse_args_(x)
+        } else if at_(x, "<") == 1 && tk_nlb_(x, x.pos) == 0 {
+            // f<T>(...): type arguments, if what follows is a call
+            j = skip_type_args_(x, x.pos)
+            if j > 0 && (tk_is_(x, j, "(") == 1 || tk_kind_(x, j) == T_TPL_FULL || tk_kind_(x, j) == T_TPL_HEAD) {
+                erase_tokens_(x, x.pos, j)
+            } else {
+                return
+            }
+        } else if tk_kind_(x, x.pos) == T_TPL_FULL || tk_kind_(x, x.pos) == T_TPL_HEAD {
+            unsupported_(x, x.pos, "a tagged template")
+            return
+        } else {
+            return
+        }
+    }
+}
+
+parse_args_(x: *Lx) {
+    expect_(x, "(")
+    while at_(x, ")") == 0 && x.err == "" {
+        if at_(x, "...") == 1 {
+            unsupported_(x, x.pos, "spread arguments (...)")
+            return
+        }
+        parse_assign_(x)
+        if at_(x, ",") == 1 {
+            c = x.pos
+            advance_(x)
+            if at_(x, ")") == 1 { blank_(x, tk_start_(x, c), tk_end_(x, c)) }
+        } else {
+            break
+        }
+    }
+    expect_(x, ")")
+}
+
+parse_primary_(x: *Lx) {
+    if x.err != "" { return }
+    i = x.pos
+    k = tk_kind_(x, i)
+    if k == T_NUM {
+        lower_number_(x, i)
+        advance_(x)
+        return
+    }
+    if k == T_STR || k == T_REGEX {
+        advance_(x)
+        return
+    }
+    if k == T_TPL_FULL || k == T_TPL_HEAD {
+        parse_template_(x)
+        return
+    }
+    if k == T_IDENT {
+        if tk_is_(x, i, "function") == 1 {
+            parse_function_(x, 0, 0)
+            return
+        }
+        if tk_is_(x, i, "class") == 1 {
+            unsupported_(x, i, "class")
+            return
+        }
+        if tk_is_(x, i, "this") == 1 {
+            note_this_(x)
+        }
+        if tk_is_(x, i, "arguments") == 1 {
+            note_args_(x)
+        }
+        if tk_is_(x, i, "super") == 1 {
+            unsupported_(x, i, "super")
+            return
+        }
+        advance_(x)
+        return
+    }
+    if k == T_PUNCT {
+        if tk_is_(x, i, "(") == 1 {
+            advance_(x)
+            parse_expr_(x)
+            expect_(x, ")")
+            return
+        }
+        if tk_is_(x, i, "[") == 1 {
+            parse_array_(x)
+            return
+        }
+        if tk_is_(x, i, "{") == 1 {
+            parse_object_(x)
+            return
+        }
+    }
+    if k == T_EOF {
+        fail_at_(x, tk_start_(x, i), "unexpected end of the page")
+        return
+    }
+    fail_at_(x, tk_start_(x, i), "unexpected '${tk_text_(x, i)}'")
+}
+
+parse_array_(x: *Lx) {
+    expect_(x, "[")
+    while at_(x, "]") == 0 && x.err == "" {
+        if at_(x, ",") == 1 {
+            advance_(x)
+        } else {
+            if at_(x, "...") == 1 {
+                unsupported_(x, x.pos, "array spread (...)")
+                return
+            }
+            parse_assign_(x)
+            if at_(x, ",") == 1 { advance_(x) } else { break }
+        }
+    }
+    expect_(x, "]")
+}
+
+parse_object_(x: *Lx) {
+    expect_(x, "{")
+    while at_(x, "}") == 0 && x.err == "" {
+        i = x.pos
+        k = tk_kind_(x, i)
+        if at_(x, "...") == 1 {
+            unsupported_(x, i, "object spread (...)")
+            return
+        }
+        if at_(x, "[") == 1 {
+            unsupported_(x, i, "a computed property key")
+            return
+        }
+        if at_(x, "*") == 1 || (at_(x, "async") == 1 && tk_is_(x, i + 1, ":") == 0 && tk_is_(x, i + 1, "(") == 0 && tk_is_(x, i + 1, ",") == 0) {
+            unsupported_(x, i, "a generator or async method")
+            return
+        }
+        if (at_(x, "get") == 1 || at_(x, "set") == 1) && tk_is_(x, i + 1, ":") == 0 && tk_is_(x, i + 1, "(") == 0 && tk_is_(x, i + 1, ",") == 0 && tk_is_(x, i + 1, "}") == 0 {
+            // an ES5 accessor: get name() { }
+            advance_(x)
+            advance_(x)
+            parse_function_(x, 0, 1)
+        } else {
+            if k != T_IDENT && k != T_STR && k != T_NUM {
+                fail_at_(x, tk_start_(x, i), "expected a property name")
+                return
+            }
+            if k == T_NUM { lower_number_(x, i) }
+            advance_(x)
+            if at_(x, ":") == 1 {
+                advance_(x)
+                parse_assign_(x)
+            } else if at_(x, "(") == 1 || at_(x, "<") == 1 {
+                insert_(x, tk_end_(x, i), ": function")
+                parse_function_(x, 0, 1)
+            } else if (at_(x, ",") == 1 || at_(x, "}") == 1) && k == T_IDENT {
+                insert_(x, tk_end_(x, i), ": ${tk_text_(x, i)}")
+            } else {
+                fail_at_(x, tk_start_(x, x.pos), "expected ':' after a property name")
+                return
+            }
+        }
+        if at_(x, ",") == 1 { advance_(x) } else { break }
+    }
+    expect_(x, "}")
+}
+
+// A template literal, lowered to string concatenation with the same line
+// breaks: `a${x}b` becomes ("a" + (x) + "b").
+parse_template_(x: *Lx) {
+    i = x.pos
+    if tk_kind_(x, i) == T_TPL_FULL {
+        s = tk_start_(x, i)
+        e = tk_end_(x, i)
+        edit_(x, s, e, tpl_piece_(x, s + 1, e - 1))
+        advance_(x)
+        return
+    }
+    // HEAD: `...${
+    s = tk_start_(x, i)
+    e = tk_end_(x, i)
+    edit_(x, s, e, "(${tpl_piece_(x, s + 1, e - 2)} + (")
+    advance_(x)
+    while x.err == "" {
+        parse_expr_(x)
+        j = x.pos
+        kj = tk_kind_(x, j)
+        if kj == T_TPL_MID {
+            s = tk_start_(x, j)
+            e = tk_end_(x, j)
+            edit_(x, s, e, ") + ${tpl_piece_(x, s + 1, e - 2)} + (")
+            advance_(x)
+        } else if kj == T_TPL_TAIL {
+            s = tk_start_(x, j)
+            e = tk_end_(x, j)
+            edit_(x, s, e, ") + ${tpl_piece_(x, s + 1, e - 1)})")
+            advance_(x)
+            return
+        } else {
+            fail_at_(x, tk_start_(x, j), "expected '}' to close a template substitution")
+            return
+        }
+    }
+}
+
+// The template characters [s, e) as a double-quoted string literal. A line
+// break inside becomes "\n" + a real line break + a new quoted piece, so
+// the output keeps the template's lines.
+tpl_piece_(x: *Lx, s: int, e: int) -> string {
+    sb = strbuilder.new(e - s + 8)
+    strbuilder.append_byte(sb, 34)
+    i = s
+    while i < e {
+        c = ch_(x, i)
+        if c == 92 {
+            d = ch_(x, i + 1)
+            if d == 96 || d == 36 {
+                strbuilder.append_byte(sb, d)
+            } else {
+                strbuilder.append_byte(sb, 92)
+                strbuilder.append_byte(sb, d)
+            }
+            i = i + 2
+        } else {
+            if c == 34 {
+                strbuilder.append_byte(sb, 92)
+                strbuilder.append_byte(sb, 34)
+            } else if c == 10 {
+                strbuilder.append(sb, "\\n\" +")
+                strbuilder.append_byte(sb, 10)
+                strbuilder.append_byte(sb, 34)
+            } else if c == 13 {
+                strbuilder.append(sb, "\\r")
+            } else {
+                strbuilder.append_byte(sb, c)
+            }
+            i = i + 1
+        }
+    }
+    strbuilder.append_byte(sb, 34)
+    return strbuilder.finish(sb)
+}
+
+// 0b1010, 0o17 and 1_000 are not ES5: rewrite them in decimal / without
+// separators. BigInt literals are refused.
+lower_number_(x: *Lx, i: int) {
+    s = tk_start_(x, i)
+    e = tk_end_(x, i)
+    c1 = ch_(x, s + 1)
+    if ch_(x, e - 1) == 110 {
+        unsupported_(x, i, "a BigInt literal")
+        return
+    }
+    has_sep = 0
+    j = s
+    while j < e {
+        if ch_(x, j) == 95 { has_sep = 1 }
+        j = j + 1
+    }
+    if ch_(x, s) == 48 && (c1 == 98 || c1 == 66 || c1 == 111 || c1 == 79) {
+        base = 2
+        if c1 == 111 || c1 == 79 { base = 8 }
+        long v = 0
+        j = s + 2
+        while j < e {
+            d = ch_(x, j)
+            if d != 95 { v = v * base + (d - 48) }
+            j = j + 1
+        }
+        edit_(x, s, e, "${v}")
+        return
+    }
+    if has_sep == 1 {
+        sb = strbuilder.new(e - s)
+        j = s
+        while j < e {
+            if ch_(x, j) != 95 { strbuilder.append_byte(sb, ch_(x, j)) }
+            j = j + 1
+        }
+        edit_(x, s, e, strbuilder.finish(sb))
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+lx_new_(src: string) -> *Lx {
+    x = heap.new(Lx)
+    x.src = src
+    x.n = string.length(src)
+    x.kind = iv_new_()
+    x.start = iv_new_()
+    x.end = iv_new_()
+    x.nlb = iv_new_()
+    x.mate = iv_new_()
+    x.err = ""
+    x.pos = 0
+    x.last_end = 0
+    x.es = iv_new_()
+    x.ee = iv_new_()
+    x.eq = iv_new_()
+    x.er = strarr.new()
+    x.ei = iv_new_()
+    x.seq = 0
+    x.tmp = 0
+    x.fn_arrow = iv_new_()
+    x.fn_this = iv_new_()
+    x.fn_args = iv_new_()
+    x.lp_fn = iv_new_()
+    x.lp_closure = iv_new_()
+    x.lp_let = iv_new_()
+    x.lp_jump = iv_new_()
+    x.lp_switch = iv_new_()
+    x.lp_args = iv_new_()
+    x.sc_names = strarr.new()
+    x.sc_mark = iv_new_()
+    x.fn_scbase = iv_new_()
+    x.fn_vars = strarr.new()
+    x.fn_varbase = iv_new_()
+    return x
+}
+
+lx_free_(x: *Lx) {
+    iv_free_(x.kind as *IVec)
+    iv_free_(x.start as *IVec)
+    iv_free_(x.end as *IVec)
+    iv_free_(x.nlb as *IVec)
+    iv_free_(x.mate as *IVec)
+    iv_free_(x.es as *IVec)
+    iv_free_(x.ee as *IVec)
+    iv_free_(x.eq as *IVec)
+    strarr.free(x.er)
+    iv_free_(x.ei as *IVec)
+    iv_free_(x.fn_arrow as *IVec)
+    iv_free_(x.fn_this as *IVec)
+    iv_free_(x.fn_args as *IVec)
+    iv_free_(x.lp_fn as *IVec)
+    iv_free_(x.lp_closure as *IVec)
+    iv_free_(x.lp_let as *IVec)
+    iv_free_(x.lp_jump as *IVec)
+    iv_free_(x.lp_switch as *IVec)
+    iv_free_(x.lp_args as *IVec)
+    strarr.free(x.sc_names)
+    iv_free_(x.sc_mark as *IVec)
+    iv_free_(x.fn_scbase as *IVec)
+    strarr.free(x.fn_vars)
+    iv_free_(x.fn_varbase as *IVec)
+    heap.free(x)
+}
+
+// Lower one page. Returns (es5_source, error): error is "" on success, or
+// "name:line:col: message".
+lower_source(src: string, name: string) -> (string, string) {
+    x = lx_new_(src)
+    lex_(x)
+    if x.err == "" { match_brackets_(x) }
+    if x.err == "" { parse_program_(x) }
+    out = ""
+    if x.err == "" { out = apply_edits_(x) }
+    err = ""
+    if x.err != "" { err = "${name}:${x.err_line}:${x.err_col}: ${x.err}" }
+    lx_free_(x)
+    return out, err
+}

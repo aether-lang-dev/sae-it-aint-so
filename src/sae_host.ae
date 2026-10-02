@@ -21,6 +21,7 @@ import std.list
 import std.strarr
 import std.string
 import std.http.client
+import lower
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -514,10 +515,22 @@ load_(b: *Browser, url: string) {
         return
     }
 
+    long t_lower0 = os.now_monotonic_ns()
+    es5, lerr = lower.lower_source(body, final_url)
+    long lower_ns = os.now_monotonic_ns() - t_lower0
+    if lerr != "" {
+        ui.text(mem.long_to_ptr(b.content), "This page could not be read:")
+        ui.text(mem.long_to_ptr(b.content), lerr)
+        set_status_(b, "${status} ${final_url}")
+        println("sae: ${lerr}")
+        b.last_ok = 0
+        return
+    }
+
     p = page_new_(b, final_url)
     b.page = p
     times = malloc(16)
-    ok = page_run_(p, body, times)
+    ok = page_run_(p, es5, times)
     long parse_ns = mem.get_long(times, 0)
     long run_ns = mem.get_long(times, 8)
     free(times)
@@ -526,7 +539,7 @@ load_(b: *Browser, url: string) {
         ui.text(mem.long_to_ptr(b.content), "This page failed: see the console.")
     }
     set_status_(b, "${status} ${final_url}")
-    println("sae: ${status} ${final_url} (us) fetch=${us_(t_fetch - t0)} parse=${us_(parse_ns)} run=${us_(run_ns)} widgets=${us_(p.ui_ns)}/${p.ui_calls} js=${us_(run_ns - p.ui_ns)}")
+    println("sae: ${status} ${final_url} (us) fetch=${us_(t_fetch - t0)} lower=${us_(lower_ns)} parse=${us_(parse_ns)} run=${us_(run_ns)} widgets=${us_(p.ui_ns)}/${p.ui_calls} js=${us_(run_ns - p.ui_ns)}")
 }
 
 hist_url_(b: *Browser, i: int) -> string {

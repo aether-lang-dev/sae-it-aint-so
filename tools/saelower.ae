@@ -1,0 +1,28 @@
+// saelower: lower one page file to ES5 on stdout (for tests and servers that
+// precompile). Errors go to stderr as name:line:col: message, exit status 1.
+//
+//   saelower page.ts > page.js
+
+import lower
+import std.fs
+import std.os
+
+
+main() {
+    if os.args_count() < 2 {
+        println("usage: saelower <page.ts>")
+        exit(2)
+    }
+    path = os.args_get(1)
+    src, err = fs.read(path)
+    if err != "" {
+        println("saelower: cannot read ${path}: ${err}")
+        exit(2)
+    }
+    out, lerr = lower.lower_source(src, path)
+    if lerr != "" {
+        println(lerr)
+        exit(1)
+    }
+    print(out)
+}

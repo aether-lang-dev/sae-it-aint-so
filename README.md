@@ -19,16 +19,23 @@ in-process call into aether-ui's `ui/module.ae` builders.
 
 ## A page
 
-```js
-var clicks = 0;
-ui.text("Hello from a page.");
-ui.hstack(8, function () {
-  ui.btn("Click me", function () {
-    clicks = clicks + 1;
-    print("clicked " + clicks);
-  });
-});
+Pages are written in a TypeScript dialect: TypeScript that erases
+(`--erasableSyntaxOnly`) over ES5 plus a written list of ES2015 forms. The
+browser lowers each page to ES5 in-process before the engine sees it; see
+`lower/README.md` for the dialect.
+
+```ts
+interface Link { label: string; href: string }
+const { text, btn } = ui;
+
+const links: Link[] = [{ label: "About", href: "/about" }];
+text(`You are at ${browserContext.currentUrl}`);
+for (const link of links) {
+  btn(link.label, () => browserContext.changePage(link.href));
+}
 ```
+
+Plain ES5 is valid dialect too, and passes through unchanged.
 
 Container builders take their block as the last argument, the way Aether's
 trailing block works: `ui.vstack(4, fn)` makes the stack under the current
@@ -87,12 +94,12 @@ curl -s -X POST localhost:9333/widget/9/click
 
 The driver build is a separate binary because the control server must not
 ship in `sae`. `python3 tests/test_nav.py` runs the navigation spec against
-it.
+it. `lower/run-tests.sh` runs the lowerer's tests (needs `target/saelower`).
 
 ## Status
 
 Done: the spike (five builders through the context stack, click handlers held
 as GC roots, per-phase timings; numbers in `docs/spike-results.md`), HTTP
-fetch, history and navigation, browser chrome. Not yet: the page-dialect
-lowerer (TypeScript-ish to ES5), more of the `ui` surface, the bytecode
-cache, GTK4/Win32 build arms.
+fetch, history and navigation, browser chrome, the page-dialect lowerer. Not
+yet: more of the `ui` surface, the bytecode cache, GTK4/Win32 build arms,
+`class` in the dialect.

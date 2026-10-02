@@ -1,0 +1,23 @@
+// Home page, in the page dialect: TypeScript that erases, ES2015 that lowers.
+interface Link {
+  label: string;
+  href: string;
+}
+
+const { text, btn, divider } = ui;
+
+const links: Link[] = [
+  { label: "About", href: "/about" },
+  { label: "Counter", href: "/counter" },
+  { label: "A page that is not there", href: "/nowhere" },
+  { label: "Old home (302 to /)", href: "/old-home" },
+  { label: "A page that throws", href: "/broken" },
+  { label: "A page outside the dialect", href: "/unsupported" },
+];
+
+text("Welcome to Sae it ain't so");
+text(`You are at ${browserContext.currentUrl}`);
+divider();
+for (const link of links) {
+  btn(link.label, () => browserContext.changePage(link.href));
+}

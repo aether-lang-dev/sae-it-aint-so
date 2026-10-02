@@ -1,6 +1,6 @@
 // A development page server, filesystem-mapped the way Tsyne's sample server
-// is: GET /about serves <site>/about.js, GET / serves <site>/index.js, an
-// unknown path serves <site>/404.js with status 404. GET /old-home answers
+// is: GET /about serves <site>/about.ts (or about.js), GET / serves the index
+// page, an unknown path serves the 404 page with status 404. GET /old-home answers
 // 302 to /, to exercise redirect following.
 //
 //   ae run tools/pageserver.ae -- <site-dir> [port]     (default port 8090)
@@ -20,9 +20,12 @@ struct Site {
     dir: string
 }
 
+// A page is <name>.ts, or <name>.js if there is no .ts.
 page_file_(site: *Site, path: string) -> string {
-    if path == "/" || path == "" { return "${site.dir}/index.js" }
-    return "${site.dir}${path}.js"
+    stem = "${site.dir}${path}"
+    if path == "/" || path == "" { stem = "${site.dir}/index" }
+    if fs.exists("${stem}.ts") == 1 { return "${stem}.ts" }
+    return "${stem}.js"
 }
 
 serve_page_(req: ptr, res: ptr, ud: ptr) {
@@ -30,7 +33,7 @@ serve_page_(req: ptr, res: ptr, ud: ptr) {
     f = page_file_(site, http.request_path(req))
     body, err = fs.read(f)
     if err != "" {
-        body, err = fs.read("${site.dir}/404.js")
+        body, err = fs.read(page_file_(site, "/404"))
         http.response_set_status(res, 404)
     } else {
         http.response_set_status(res, 200)
@@ -76,7 +79,8 @@ main() {
     i = 0
     while i < n {
         name = dir.list_get(l, i)
-        if string.string_ends_with(name, ".js") == 1 && name != "index.js" {
+        is_page = string.string_ends_with(name, ".js") == 1 || string.string_ends_with(name, ".ts") == 1
+        if is_page && name != "index.js" && name != "index.ts" {
             route = string.concat("/", string.string_substring(name, 0, string.length(name) - 3))
             http.server_get(server, route, serve_page_, site)
         }
@@ -84,7 +88,7 @@ main() {
     }
 
     // Anything unrouted gets the site's own 404 page.
-    nf, nerr = fs.read("${site.dir}/404.js")
+    nf, nerr = fs.read(page_file_(site, "/404"))
     if nerr == "" {
         ep = aether_error_pages_opts_new()
         middleware.error_pages_register(ep, 404, nf, "text/javascript")

@@ -64,6 +64,10 @@ def on_page(first_text, status_prefix):
 def main():
     server = subprocess.Popen([f"{ROOT}/target/pageserver", f"{ROOT}/site", str(SITE_PORT)],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not wait_for(lambda: urllib.request.urlopen(BASE + "/").status == 200, "page server up", 10):
+        print("FAIL page server never came up")
+        server.terminate()
+        return 1
     env = dict(os.environ, AETHER_UI_TEST_PORT=str(DRIVER_PORT))
     log = open(f"{ROOT}/target/test_nav.log", "w")
     sae = subprocess.Popen([f"{ROOT}/target/build/bin/sae-driver", BASE + "/"],
@@ -101,6 +105,14 @@ def main():
               and "Never reached" not in texts())
         click("Back")
         check("chrome Back after a broken page", on_page("Welcome to Sae it ain't so", "200 "))
+
+        click("A page outside the dialect")
+        check("a page outside the dialect shows where, and builds nothing",
+              lambda: "This page could not be read:" in texts()
+              and any(t.endswith("unsupported:3:1: class is not in the page dialect") for t in texts())
+              and "You should not see this" not in texts())
+        click("Back")
+        check("Back from the unreadable page", on_page("Welcome to Sae it ain't so", "200 "))
 
         click("Counter")
         check("counter page", on_page("Counter page", "200 "))
