@@ -42,6 +42,21 @@ trailing block works: `ui.vstack(4, fn)` makes the stack under the current
 parent, runs `fn` with the stack as the parent, and pops it again even if
 `fn` throws.
 
+The `ui` object (each builder returns its widget handle):
+
+| | |
+|---|---|
+| containers | `vstack(spacing, fn)`, `hstack(spacing, fn)`, `scroll(fn)`, `button(label, fn)` (the block styles the button) |
+| widgets | `text(s)`, `btn(label, onPress)`, `divider()`, `spacer()`, `textfield(placeholder, onChange(text))` |
+| modifiers (inside a block) | `margin(t, r, b, l)`, `bg_color(r, g, b, a)`, `onclick(fn)` |
+| reading and writing | `get_text(h)`, `set_text(h, s)`: synchronous, no `await` |
+| reactive state | `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` |
+
+A modifier at a page's top level has nothing to modify (the top of the stack
+is the browser's own content area), so it throws, where Aether would refuse
+to compile it. `site/calculator.ts` is the design doc's calculator example.
+Pages are not given `window()`: the browser owns the window.
+
 A page reaches only what `gen/sae_spec.ae` registers: the language builtins,
 `print`/`console`, `ui`, and `browserContext`. There is no `load()`, no file
 system and no process access.

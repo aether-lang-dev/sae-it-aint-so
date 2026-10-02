@@ -9,6 +9,9 @@ const { text, btn, divider } = ui;
 const links: Link[] = [
   { label: "About", href: "/about" },
   { label: "Counter", href: "/counter" },
+  { label: "Calculator", href: "/calculator" },
+  { label: "Form", href: "/form" },
+  { label: "Modifier misuse", href: "/misuse" },
   { label: "A page that is not there", href: "/nowhere" },
   { label: "Old home (302 to /)", href: "/old-home" },
   { label: "A page that throws", href: "/broken" },

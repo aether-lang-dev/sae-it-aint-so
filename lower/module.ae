@@ -120,6 +120,7 @@ struct Lx {
     ei: ptr          // per edit: its index in er (edits can be rolled back)
     seq: int
     tmp: int         // counter for _sae$N temporaries
+    for_bind: string // bindings of a for-head destructuring pattern, or ""
     // contexts
     fn_arrow: ptr    // per function: 1 if an arrow
     fn_this: ptr     // per function: uses `this` (arrows: lexically)
@@ -1370,7 +1371,17 @@ parse_for_(x: *Lx) {
         if at_(x, ")") == 0 { parse_expr_(x) }
     }
     expect_(x, ")")
+    // a copy: storing "" into the field frees the string it held
+    bind = string.concat(x.for_bind, "")
+    x.for_bind = ""
+    if bind != "" {
+        // `{ var a = t[0], b = t[1]; BODY }`. The wrap (if the body needs
+        // one) goes inside, around BODY, and takes a and b as parameters, so
+        // each iteration's closures get their own copies.
+        insert_(x, tk_start_(x, x.pos), "{ var ${bind}; ")
+    }
     parse_loop_body_(x, head_vars)
+    if bind != "" { insert_(x, x.last_end, " }") }
     block_pop_(x)
 }
 
@@ -1425,16 +1436,13 @@ parse_var_decl_(x: *Lx, in_for: int) -> string {
 
 // `{ a, b: c, d = 1 }` or `[a, , b = 2, ...rest]` bound from an initializer.
 // The pattern becomes a temporary; the bindings follow the initializer.
-parse_destructure_decl_(x: *Lx, is_let: int, in_for: int) -> string {
-    if in_for == 1 {
-        unsupported_(x, x.pos, "a destructuring pattern in a for head")
-        return ""
-    }
+// A one-level pattern at the cursor ({...} or [...]), bound from `tmp`.
+// Replaces the pattern with tmp, declares the names, appends ", name = ..."
+// bindings to `tail`, and returns the names comma-separated.
+parse_pattern_(x: *Lx, is_let: int, tmp: string, tail: ptr) -> string {
     op_i = x.pos
     cl_i = tk_mate_(x, op_i)
     is_obj = at_(x, "{")
-    tmp = fresh_tmp_(x)
-    tail = strbuilder.new(64)
     names = ""
     i = op_i + 1
     idx = 0
@@ -1528,6 +1536,21 @@ parse_destructure_decl_(x: *Lx, is_let: int, in_for: int) -> string {
     replace_keep_lines_(x, tk_start_(x, op_i), tk_end_(x, cl_i), tmp)
     x.pos = cl_i + 1
     x.last_end = tk_end_(x, cl_i)
+    return names
+}
+
+parse_destructure_decl_(x: *Lx, is_let: int, in_for: int) -> string {
+    tmp = fresh_tmp_(x)
+    tail = strbuilder.new(64)
+    names = parse_pattern_(x, is_let, tmp, tail)
+    if x.err != "" { return names }
+    if in_for == 1 {
+        // for (const [a, b] of xs): the bindings go at the top of each
+        // iteration; parse_for_ places them (x.for_bind).
+        bind = strbuilder.finish(tail)
+        x.for_bind = string.string_substring(bind, 2, string.length(bind))
+        return names
+    }
     erase_annotation_(x)
     if at_(x, "=") == 0 {
         fail_at_(x, tk_start_(x, x.pos), "a destructuring declaration needs an initializer")
@@ -2296,6 +2319,7 @@ lx_new_(src: string) -> *Lx {
     x.ei = iv_new_()
     x.seq = 0
     x.tmp = 0
+    x.for_bind = ""
     x.fn_arrow = iv_new_()
     x.fn_this = iv_new_()
     x.fn_args = iv_new_()

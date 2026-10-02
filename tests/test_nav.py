@@ -121,6 +121,43 @@ def main():
         click("Home")
         check("Home from counter", on_page("Welcome to Sae it ain't so", "200 "))
 
+        click("Calculator")
+        check("calculator page (the design doc's example)", on_page(" 0", "200 "))
+        display = lambda want: (lambda: want in texts())
+        for k in ("4", "2"):
+            click(k)
+        check("4 2 shows 42 (reactive state bound to text)", display(" 42"))
+        click("C")
+        check("C clears", display(" 0"))
+        for k in ("7", "+", "3", "="):
+            click(k)
+        check("7 + 3 = 10 (button block + onclick + closure-held op)", display(" 10"))
+        click("C")
+        for k in ("6", "*", "7", "="):
+            click(k)
+        check("6 * 7 = 42 (the row's op, captured per iteration)", display(" 42"))
+        click("Home")
+        check("Home from calculator", on_page("Welcome to Sae it ain't so", "200 "))
+
+        click("Form")
+        check("form page", on_page("echo: ", "200 "))
+        fid = [w["id"] for w in widgets() if w["type"] == "textfield"][-1]
+        urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{DRIVER_PORT}/widget/{fid}/set_text?v=Ada", method="POST")).read()
+        check("textfield handler receives the text", lambda: "echo: Ada" in texts())
+        click("Read")
+        check("get_text reads the field synchronously", lambda: "read: Ada" in texts())
+        check("scroll block built its rows", lambda: "row 29" in texts())
+        click("Home")
+        check("Home from form", on_page("Welcome to Sae it ain't so", "200 "))
+
+        click("Modifier misuse")
+        check("a top-level modifier throws; earlier widgets stay",
+              lambda: "Before the misuse" in texts() and "Never reached" not in texts()
+              and "This page failed: see the console." in texts())
+        click("Back")
+        check("Back from misuse", on_page("Welcome to Sae it ain't so", "200 "))
+
         for _ in range(5):
             click("About")
             wait_for(on_page("About", "200 "), "about")
@@ -137,7 +174,8 @@ def main():
 
     out = open(f"{ROOT}/target/test_nav.log").read()
     global fails
-    for want in ("count 1", "count 2", "count 3", "ReferenceError"):
+    for want in ("count 1", "count 2", "count 3", "ReferenceError",
+                 "margin() must be called inside a container's block"):
         ok = want in out
         print(("ok   " if ok else "FAIL ") + f"console shows {want!r}")
         if not ok:

@@ -41,7 +41,7 @@ does not check them.
 | `let` / `const` | `var`. When a loop's head or body declares one and a closure is created in the loop, each iteration runs in its own function (`(function (i) { ... }).call(this, i)`), so the closure sees that iteration's binding. A `let` without an initializer gets `= void 0`. |
 | template literals | `("a" + (x) + "b")`, one quoted piece per line |
 | shorthand properties and methods | `{ a: a, f: function () { ... } }` |
-| destructuring declarations (one level: renames, defaults, array holes, array rest) | a temporary and one `var` per binding |
+| destructuring declarations, including `for (const [a, b] of xs)` heads (one level: renames, defaults, array holes, array rest) | a temporary and one `var` per binding; in a for head, the bindings open each iteration and the per-iteration wrap takes them as parameters |
 | default and rest parameters | `if (p === undefined) p = ...;` / `var r = Array.prototype.slice.call(arguments, n);` at the top of the body |
 | `0b` / `0o` literals, numeric separators | decimal |
 | trailing commas in parameter and argument lists | removed |

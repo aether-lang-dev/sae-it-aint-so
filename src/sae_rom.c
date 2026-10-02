@@ -24,6 +24,18 @@ SAE_JSFN(sae_ui_hstack);
 SAE_JSFN(sae_ui_text);
 SAE_JSFN(sae_ui_btn);
 SAE_JSFN(sae_ui_divider);
+SAE_JSFN(sae_ui_button);
+SAE_JSFN(sae_ui_scroll);
+SAE_JSFN(sae_ui_spacer);
+SAE_JSFN(sae_ui_textfield);
+SAE_JSFN(sae_ui_get_text);
+SAE_JSFN(sae_ui_set_text);
+SAE_JSFN(sae_ui_onclick);
+SAE_JSFN(sae_ui_margin);
+SAE_JSFN(sae_ui_bg_color);
+SAE_JSFN(sae_ui_state);
+SAE_JSFN(sae_ui_set);
+SAE_JSFN(sae_ui_text_bound);
 
 SAE_JSFN(sae_bc_change_page);
 SAE_JSFN(sae_bc_back);

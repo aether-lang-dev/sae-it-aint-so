@@ -269,6 +269,165 @@ sae_ui_btn(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return JS_NewInt32(ctx, h)
 }
 
+// A modifier (margin, bg_color, onclick) acts on the innermost container or
+// widget the page opened. At the page's top level there is none: the top of
+// the stack is the browser's own content area, which a page must not
+// restyle. Aether makes that a compile error; here it throws.
+modifier_target_(ctx: ptr, name: string) -> int {
+    p = page_of_(ctx)
+    if p.depth < 2 { return 0 }
+    return top_(p)
+}
+
+arg_num_(ctx: ptr, argv: ptr, argc: int, i: int, dflt: float) -> float {
+    if i >= argc { return dflt }
+    p = page_of_(ctx)
+    if JS_ToNumber(ctx, p.scratch, arg_(argv, i)) != 0 { return dflt }
+    return mem.get_float64(p.scratch, 0)
+}
+
+// Call a held JS function with one string argument.
+call1_str_(ctx: ptr, ref: ptr, s: string) -> long {
+    if JS_StackCheck(ctx, 3) != 0 { return sae_js_exception() }
+    // Allocate the string first: the GC may move the function, so read it
+    // from its root afterwards.
+    sv = JS_NewString(ctx, s)
+    JS_PushArg(ctx, sv)
+    JS_PushArg(ctx, mem.get_long(ref, 0))
+    JS_PushArg(ctx, sae_js_null())
+    return JS_Call(ctx, 1)
+}
+
+// button(label, block?): a plain button; the block (if any) runs with the
+// button on top, for onclick/bg_color/margin.
+@c_callback
+sae_ui_button(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    label = arg_str_(ctx, argv, argc, 0)
+    long t = os.now_monotonic_ns()
+    h = ui.button(mem.long_to_ptr(top_(p)), label)
+    ui_done_(p, t)
+    return container_(ctx, argv, argc, h)
+}
+
+@c_callback
+sae_ui_scroll(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    long t = os.now_monotonic_ns()
+    sv = ui.scrollview(mem.long_to_ptr(top_(p)))
+    h = ui.vstack(mem.long_to_ptr(sv), 0)
+    ui_done_(p, t)
+    // scroll(block): the block's widgets go in the scrolled stack
+    if argc >= 1 && JS_IsFunction(ctx, arg_(argv, 0)) != 0 {
+        if push_(p, h) == 0 { return sae_throw_type_error(ctx, "containers nested too deeply") }
+        r = call0_(ctx, arg_(argv, 0))
+        pop_(p)
+        if sae_js_is_exception(r) != 0 { return r }
+    }
+    return JS_NewInt32(ctx, sv)
+}
+
+@c_callback
+sae_ui_spacer(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    h = ui.spacer(mem.long_to_ptr(top_(p)))
+    return JS_NewInt32(ctx, h)
+}
+
+// textfield(placeholder, onChange?): onChange(text) on every edit.
+@c_callback
+sae_ui_textfield(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    placeholder = own_(arg_str_(ctx, argv, argc, 0))
+    has_fn = 0
+    ref = null
+    if argc >= 2 && JS_IsFunction(ctx, arg_(argv, 1)) != 0 {
+        has_fn = 1
+        ref = hold_(ctx, arg_(argv, 1))
+    }
+    on_change = |s: string| {
+        if has_fn == 1 {
+            r = call1_str_(ctx, ref, s)
+            if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a textfield handler") }
+        }
+    }
+    long t = os.now_monotonic_ns()
+    h = ui.textfield(mem.long_to_ptr(top_(p)), placeholder, on_change)
+    ui_done_(p, t)
+    return JS_NewInt32(ctx, h)
+}
+
+// get_text(handle): synchronous, in-process (Tsyne needed an await here).
+@c_callback
+sae_ui_get_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    return JS_NewString(ctx, ui.get_text(h))
+}
+
+@c_callback
+sae_ui_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    ui.set_text(h, arg_str_(ctx, argv, argc, 1))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_ui_onclick(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    target = modifier_target_(ctx, "onclick")
+    if target == 0 { return sae_throw_type_error(ctx, "onclick() must be called inside a widget's block") }
+    if argc < 1 || JS_IsFunction(ctx, arg_(argv, 0)) == 0 {
+        return sae_throw_type_error(ctx, "onclick(fn): fn must be a function")
+    }
+    ref = hold_(ctx, arg_(argv, 0))
+    ui.onclick(mem.long_to_ptr(target), || {
+        r = call0_(ctx, mem.get_long(ref, 0))
+        if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a click handler") }
+    })
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_ui_margin(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    target = modifier_target_(ctx, "margin")
+    if target == 0 { return sae_throw_type_error(ctx, "margin() must be called inside a container's block") }
+    top = arg_int_(ctx, argv, argc, 0, 0)
+    ui.margin(mem.long_to_ptr(target), top, arg_int_(ctx, argv, argc, 1, top), arg_int_(ctx, argv, argc, 2, top), arg_int_(ctx, argv, argc, 3, top))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_ui_bg_color(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    target = modifier_target_(ctx, "bg_color")
+    if target == 0 { return sae_throw_type_error(ctx, "bg_color() must be called inside a widget's block") }
+    ui.bg_color(mem.long_to_ptr(target), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 1.0))
+    return sae_js_undefined()
+}
+
+// Reactive state, as in the Aether DSL: ui_state(v) makes a cell, ui_set
+// writes it, and every text_bound to it updates.
+@c_callback
+sae_ui_state(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    return JS_NewInt32(ctx, ui.ui_state(arg_num_(ctx, argv, argc, 0, 0.0)))
+}
+
+@c_callback
+sae_ui_set(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    ui.ui_set(arg_int_(ctx, argv, argc, 0, 0), arg_num_(ctx, argv, argc, 1, 0.0))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_ui_text_bound(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    st = arg_int_(ctx, argv, argc, 0, 0)
+    prefix = own_(arg_str_(ctx, argv, argc, 1))
+    suffix = own_(arg_str_(ctx, argv, argc, 2))
+    long t = os.now_monotonic_ns()
+    h = ui.text_bound(mem.long_to_ptr(top_(p)), st, prefix, suffix)
+    ui_done_(p, t)
+    return JS_NewInt32(ctx, h)
+}
+
 // --- the page API: browserContext ---
 
 @c_callback
