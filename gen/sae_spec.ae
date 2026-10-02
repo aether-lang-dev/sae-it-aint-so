@@ -1,0 +1,28 @@
+// sae's stdlib ROM spec: mquickjs's core library (mode 2, which has no
+// load() and no OS access) plus the page API. A page can reach only what is
+// registered here; this list is the sandbox boundary.
+//
+// The DSL functions are mquickjs-ae's gen/genengine, linked into the same
+// generator tool. Every name on the right ("sae_ui_vstack", ...) must have a
+// prototype in src/sae_rom.c, or the ROM table fails to compile.
+
+extern mqjs_stdlib_spec(mode: int) -> ptr
+extern mqjs_extra_cfuncs(mode: int) -> ptr
+extern build_global(spec: ptr) -> ptr
+extern build_atoms(stdlib_name: ptr, global_obj: ptr, c_function_decl: ptr, argc: int, argv: ptr) -> int
+extern object(_ctx: ptr, name: ptr) -> ptr
+extern cfunc(_ctx: ptr, name: ptr, length: int, fn: ptr)
+extern statics_of(spec: ptr) -> ptr
+
+sae_stdlib_main(argc: int, argv: ptr) -> int {
+    g = mqjs_stdlib_spec(2)
+
+    u = statics_of(object(g, "ui"))
+    cfunc(u, "vstack", 2, "sae_ui_vstack")
+    cfunc(u, "hstack", 2, "sae_ui_hstack")
+    cfunc(u, "text", 1, "sae_ui_text")
+    cfunc(u, "btn", 2, "sae_ui_btn")
+    cfunc(u, "divider", 0, "sae_ui_divider")
+
+    return build_atoms("js_stdlib", build_global(g), build_global(mqjs_extra_cfuncs(2)), argc, argv)
+}

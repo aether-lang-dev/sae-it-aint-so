@@ -1,0 +1,69 @@
+// sae, the browser. One native binary: the mquickjs engine (mquickjs-ae,
+// via the mqjs symlink), the aether-ui toolkit (via the aether-ui and ui
+// symlinks) and sae's own host. The ROM table comes from gen/.
+
+import bldr
+import bldr (dep)
+import c
+import c (sources, aether_source, cflag, link_flag, output_file, aether_home, aether_caps, include)
+import mqjs.gen.mqjssources
+import std.os
+import std.string
+
+// The Aether dev tree the engine builds against. Not AETHER_HOME, which
+// names the toolchain aeb itself runs on (same split as mquickjs-ae's
+// MQJS_AETHER_HOME). ./build.sh sets it.
+// The AetherUIDriver control server is opt-in, as in aether-ui: a listening
+// socket must not ship by default. AETHER_UI_WITH_DRIVER=1 links it.
+control_source_() -> string {
+    if string.length(os.getenv("AETHER_UI_WITH_DRIVER")) > 0 { return "aether-ui/backend/aether_ui_test_server.c" }
+    return "aether-ui/backend/aether_ui_no_control.c"
+}
+
+aether_root_() -> string {
+    root = os.getenv("SAE_AETHER_HOME")
+    if string.length(root) > 0 { return root }
+    return "../aether"
+}
+
+aeb(cap) {
+    bldr.build() {
+        dep("gen/.build.ae")
+        c.program() {
+            cflag("-Os")
+            cflag("-D_GNU_SOURCE")
+            cflag("-fno-math-errno")
+            cflag("-fno-trapping-math")
+            cflag("-Imqjs")
+            aether_home(aether_root_())
+            // ui reads theme files (std.fs) and the environment (std.os);
+            // the host reads page files. Pages themselves get neither.
+            aether_caps("fs,os")
+
+            mqjssources.register_engine_c_sources("mqjs")
+            mqjssources.register_engine_sources("ae")
+
+            aether_source("src/sae_host.ae")
+            sources("src/sae_rom.c")
+
+            // aether-ui's macOS backend (the darwin arm of aether-ui's
+            // build_support/aetherui ui_backend, which targets the aether
+            // SDK rather than c.program).
+            sources("aether-ui/backend/aether_ui_macos.m")
+            sources(control_source_())
+            sources("aether-ui/backend/aether_ui_system_extras.c")
+            cflag("-fobjc-arc")
+            link_flag("-framework AppKit")
+            link_flag("-framework Foundation")
+            link_flag("-framework QuartzCore")
+            link_flag("-framework CoreText")
+            link_flag("-framework ImageIO")
+            link_flag("-framework OpenGL")
+
+            link_flag("-lpthread")
+            link_flag("-lm")
+            output_file("sae")
+        }
+        return 0
+    }
+}

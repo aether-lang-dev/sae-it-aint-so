@@ -1,0 +1,360 @@
+// sae's host: the browser window, one mquickjs context per page, and the
+// page API that context can reach (the `ui` builders).
+//
+// The page API mirrors the Aether DSL. In Aether, `vstack(4) { ... }` makes a
+// handle, attaches it to the ambient `_ctx`, and runs the trailing block with
+// `_ctx` set to that handle. Here a page calls `ui.vstack(4, function () {
+// ... })` and the host does the same thing at run time with a stack of
+// handles: push, call the function, pop. The bottom of the stack is the
+// browser's content area, so a page's top-level widgets land there.
+
+import ui
+import std.mem
+import std.fs
+import std.os
+import std.list
+import std.string
+
+extern malloc(n: long) -> ptr
+extern free(p: ptr)
+extern sae_new_context(mem_block: ptr, mem_size: long) -> ptr
+extern sae_js_undefined() -> long
+extern sae_js_null() -> long
+extern sae_js_exception() -> long
+extern sae_js_is_exception(v: long) -> int
+extern sae_gcref_size() -> long
+extern sae_cstringbuf_size() -> long
+extern sae_throw_type_error(ctx: ptr, msg: string) -> long
+extern JS_FreeContext(ctx: ptr)
+extern JS_SetContextOpaque(ctx: ptr, opaque: ptr)
+extern JS_GetContextOpaque(ctx: ptr) -> ptr
+extern JS_Parse(ctx: ptr, input: string, input_len: long, filename: string, eval_flags: int) -> long
+extern JS_Run(ctx: ptr, val: long) -> long
+extern JS_GetException(ctx: ptr) -> long
+extern JS_PrintValueF(ctx: ptr, val: long, flags: int)
+extern JS_IsString(ctx: ptr, val: long) -> int
+extern JS_IsFunction(ctx: ptr, val: long) -> int
+extern JS_ToCStringLen(ctx: ptr, plen: ptr, val: long, buf: ptr) -> string
+extern JS_ToInt32(ctx: ptr, pres: ptr, val: long) -> int
+extern JS_NewInt32(ctx: ptr, val: int) -> long
+extern JS_NewInt64(ctx: ptr, val: long) -> long
+extern JS_NewDate(ctx: ptr, epoch_ms: float) -> long
+extern JS_IsNumber(ctx: ptr, val: long) -> int
+extern JS_ToNumber(ctx: ptr, pres: ptr, val: long) -> int
+extern JS_AddGCRef(ctx: ptr, ref: ptr) -> ptr
+extern JS_DeleteGCRef(ctx: ptr, ref: ptr)
+extern JS_StackCheck(ctx: ptr, len: int) -> int
+extern JS_PushArg(ctx: ptr, val: long)
+extern JS_Call(ctx: ptr, call_flags: int) -> long
+extern putchar(c: int) -> int
+extern fputs(s: string, stream: ptr) -> int
+extern fflush(stream: ptr) -> int
+extern sae_stdout() -> ptr
+extern aether_ui_vstack_create(spacing: int) -> int
+
+const JS_DUMP_LONG = 1
+const FRAME_CF_CTOR = 65536
+const STACK_MAX = 64
+const PAGE_MEM_DEFAULT = 1048576
+
+// One per loaded page, hung off its JSContext's opaque slot.
+struct Page {
+    ctx: ptr
+    mem_block: ptr
+    stack: ptr       // handles, STACK_MAX ints
+    depth: int
+    refs: ptr        // std.list of JSGCRef*, the JS functions widgets hold
+    scratch: ptr     // 8 bytes for out-params
+    cbuf: ptr        // JSCStringBuf for JS_ToCStringLen
+}
+
+page_of_(ctx: ptr) -> *Page {
+    return JS_GetContextOpaque(ctx) as *Page
+}
+
+arg_(argv: ptr, i: int) -> long {
+    return mem.get_long(argv, i * 8)
+}
+
+// The argument as a C string, valid until the next arg_str_ call on this page.
+arg_str_(ctx: ptr, argv: ptr, argc: int, i: int) -> string {
+    if i >= argc { return "" }
+    p = page_of_(ctx)
+    return JS_ToCStringLen(ctx, p.scratch, arg_(argv, i), p.cbuf)
+}
+
+arg_int_(ctx: ptr, argv: ptr, argc: int, i: int, dflt: int) -> int {
+    if i >= argc { return dflt }
+    p = page_of_(ctx)
+    if JS_ToInt32(ctx, p.scratch, arg_(argv, i)) != 0 { return dflt }
+    return mem.get_int(p.scratch, 0)
+}
+
+top_(p: *Page) -> int {
+    return mem.get_int(p.stack, (p.depth - 1) * 4)
+}
+
+push_(p: *Page, handle: int) -> int {
+    if p.depth >= STACK_MAX { return 0 }
+    mem.set_int(p.stack, p.depth * 4, handle)
+    p.depth = p.depth + 1
+    return 1
+}
+
+pop_(p: *Page) {
+    if p.depth > 0 { p.depth = p.depth - 1 }
+}
+
+// Call a JS function with no arguments. Returns the JSValue result, which is
+// the exception sentinel if the function threw.
+call0_(ctx: ptr, fnv: long) -> long {
+    if JS_StackCheck(ctx, 2) != 0 { return sae_js_exception() }
+    JS_PushArg(ctx, fnv)
+    JS_PushArg(ctx, sae_js_null())
+    return JS_Call(ctx, 0)
+}
+
+report_exception_(ctx: ptr, where_: string) {
+    println("sae: uncaught exception in ${where_}:")
+    JS_PrintValueF(ctx, JS_GetException(ctx), JS_DUMP_LONG)
+    putchar(10)
+}
+
+// Keep a JS function alive (and findable after a compacting GC) for as long
+// as the page lives. Returns the JSGCRef; its first word is the value.
+hold_(ctx: ptr, fnv: long) -> ptr {
+    p = page_of_(ctx)
+    ref = malloc(sae_gcref_size())
+    slot = JS_AddGCRef(ctx, ref)
+    mem.set_long(slot, 0, fnv)
+    list.add(p.refs, ref)
+    return ref
+}
+
+// A container builder: make it under the current top, then run the page's
+// block function with it on top. The pop happens even if the block throws,
+// so later widgets never attach to the wrong parent.
+container_(ctx: ptr, argv: ptr, argc: int, handle: int) -> long {
+    p = page_of_(ctx)
+    if argc >= 2 {
+        fnv = arg_(argv, 1)
+        if JS_IsFunction(ctx, fnv) == 0 {
+            return sae_throw_type_error(ctx, "container block must be a function")
+        }
+        if push_(p, handle) == 0 {
+            return sae_throw_type_error(ctx, "containers nested too deeply")
+        }
+        r = call0_(ctx, fnv)
+        pop_(p)
+        if sae_js_is_exception(r) != 0 { return r }
+    }
+    return JS_NewInt32(ctx, handle)
+}
+
+// --- the page API (named in gen/sae_spec.ae) ---
+
+@c_callback
+sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    h = ui.vstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
+    return container_(ctx, argv, argc, h)
+}
+
+@c_callback
+sae_ui_hstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    h = ui.hstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
+    return container_(ctx, argv, argc, h)
+}
+
+@c_callback
+sae_ui_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    h = ui.text(mem.long_to_ptr(top_(p)), arg_str_(ctx, argv, argc, 0))
+    return JS_NewInt32(ctx, h)
+}
+
+@c_callback
+sae_ui_divider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    h = ui.divider(mem.long_to_ptr(top_(p)))
+    return JS_NewInt32(ctx, h)
+}
+
+@c_callback
+sae_ui_btn(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    label = arg_str_(ctx, argv, argc, 0)
+    if argc < 2 || JS_IsFunction(ctx, arg_(argv, 1)) == 0 {
+        return sae_throw_type_error(ctx, "btn(label, fn): fn must be a function")
+    }
+    ref = hold_(ctx, arg_(argv, 1))
+    on_press = || {
+        r = call0_(ctx, mem.get_long(ref, 0))
+        if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a click handler") }
+    }
+    h = ui.btn(mem.long_to_ptr(top_(p)), label, on_press)
+    return JS_NewInt32(ctx, h)
+}
+
+// --- the core library's host functions (mode 2 of genengine) ---
+
+// All of print's output goes through C stdio (the engine's log sink for
+// non-strings is fwrite to stdout too), then is flushed, so it cannot
+// interleave with the host's own println output.
+@c_callback
+js_print(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    out = sae_stdout()
+    i = 0
+    while i < argc {
+        if i != 0 { putchar(32) }
+        v = arg_(argv, i)
+        if JS_IsString(ctx, v) != 0 {
+            fputs(arg_str_(ctx, argv, argc, i), out)
+        } else {
+            JS_PrintValueF(ctx, v, JS_DUMP_LONG)
+        }
+        i = i + 1
+    }
+    putchar(10)
+    fflush(out)
+    return sae_js_undefined()
+}
+
+@c_callback
+js_date_now(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    return JS_NewInt64(ctx, os.now_unix_ms())
+}
+
+@c_callback
+js_performance_now(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    return JS_NewInt64(ctx, os.now_monotonic_ms())
+}
+
+@c_callback
+js_date_constructor(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    ac = argc & (0 - 1 - FRAME_CF_CTOR)
+    float val = 0.0
+    if ac == 0 {
+        long ms = os.now_unix_ms()
+        val = ms
+    } else {
+        if ac == 1 && JS_IsNumber(ctx, arg_(argv, 0)) != 0 {
+            p = page_of_(ctx)
+            if JS_ToNumber(ctx, p.scratch, arg_(argv, 0)) != 0 { return sae_js_exception() }
+            val = mem.get_float64(p.scratch, 0)
+        } else {
+            return sae_throw_type_error(ctx, "unsupported Date() parameter")
+        }
+    }
+    return JS_NewDate(ctx, val)
+}
+
+// --- page lifecycle ---
+
+page_new_(mem_size: long, content: int) -> *Page {
+    p = malloc(sizeof(Page)) as *Page
+    p.mem_block = malloc(mem_size)
+    p.stack = malloc(STACK_MAX * 4)
+    p.depth = 0
+    p.refs = list.new()
+    p.scratch = malloc(8)
+    p.cbuf = malloc(sae_cstringbuf_size())
+    p.ctx = sae_new_context(p.mem_block, mem_size)
+    JS_SetContextOpaque(p.ctx, p)
+    push_(p, content)
+    return p
+}
+
+page_free_(p: *Page) {
+    n = list.size(p.refs)
+    i = 0
+    while i < n {
+        ref, _ = list.get(p.refs, i)
+        JS_DeleteGCRef(p.ctx, ref)
+        free(ref)
+        i = i + 1
+    }
+    list.free(p.refs)
+    JS_FreeContext(p.ctx)
+    free(p.mem_block)
+    free(p.stack)
+    free(p.scratch)
+    free(p.cbuf)
+    free(p)
+}
+
+// Run page source into the page's content area: parse to bytecode, then run.
+// Returns 1 on success. Fills times_ns[0..1] with the parse and run times.
+page_run_(p: *Page, src: string, name: string, times_ns: ptr) -> int {
+    long t0 = os.now_monotonic_ns()
+    fnv = JS_Parse(p.ctx, src, string.length(src), name, 0)
+    long t1 = os.now_monotonic_ns()
+    mem.set_long(times_ns, 0, t1 - t0)
+    if sae_js_is_exception(fnv) != 0 {
+        report_exception_(p.ctx, name)
+        return 0
+    }
+    r = JS_Run(p.ctx, fnv)
+    mem.set_long(times_ns, 8, os.now_monotonic_ns() - t1)
+    if sae_js_is_exception(r) != 0 {
+        report_exception_(p.ctx, name)
+        return 0
+    }
+    return 1
+}
+
+us_(ns: long) -> long { return ns / 1000 }
+
+// An environment variable's value, "" when unset (os.getenv gives null).
+env_(name: string) -> string {
+    v = os.getenv(name)
+    if v == null { return "" }
+    return v
+}
+
+@c_callback
+sae_main(path: string) -> int {
+    if path == "" {
+        println("usage: sae <page.js>")
+        return 2
+    }
+    long t0 = os.now_monotonic_ns()
+    src, err = fs.read(path)
+    if err != "" {
+        println("sae: cannot read ${path}: ${err}")
+        return 1
+    }
+    long t_read = os.now_monotonic_ns()
+
+    // Browser chrome, then the content area pages build into.
+    root = aether_ui_vstack_create(6)
+    ui.text(mem.long_to_ptr(root), "Sae it ain't so — ${path}")
+    ui.divider(mem.long_to_ptr(root))
+    content = ui.vstack(mem.long_to_ptr(root), 4)
+    long t_chrome = os.now_monotonic_ns()
+
+    p = page_new_(PAGE_MEM_DEFAULT, content)
+    long t_ctx = os.now_monotonic_ns()
+    times = malloc(16)
+    ok = page_run_(p, src, path, times)
+    long parse_ns = mem.get_long(times, 0)
+    long run_ns = mem.get_long(times, 8)
+    free(times)
+
+    println("sae: timing (us) read=${us_(t_read - t0)} chrome=${us_(t_chrome - t_read)} context=${us_(t_ctx - t_chrome)} parse=${us_(parse_ns)} run=${us_(run_ns)}")
+
+    if env_("SAE_NO_WINDOW") != "" {
+        page_free_(p)
+        if ok == 1 { return 0 }
+        return 1
+    }
+    port = env_("AETHER_UI_TEST_PORT")
+    if port != "" {
+        pn, _ = string.to_int(port)
+        ui.enable_test_server_root(pn, root)
+    }
+    ui.window_run("Sae it ain't so", 640, 480, root)
+    page_free_(p)
+    return 0
+}
