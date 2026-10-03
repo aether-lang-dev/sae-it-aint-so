@@ -1,0 +1,7 @@
+{
+  "name": "Gitify",
+  "capabilities": {
+    "http":  ["http://127.0.0.1:8091/api/v3/"],
+    "shell": { "open": ["https://github.com/"] }
+  }
+}

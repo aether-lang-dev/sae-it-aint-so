@@ -1,0 +1,9 @@
+{
+  "name": "Gitify",
+  "width": 500,
+  "height": 640,
+  "capabilities": {
+    "http":  ["https://api.github.com/"],
+    "shell": { "open": ["https://github.com/"] }
+  }
+}

@@ -301,9 +301,13 @@ sae's binary, the pages under `Contents/Resources/app`, where the binary finds
 them and starts in app mode with no arguments, and the non-system dylibs sae
 links (Homebrew's OpenSSL, nghttp2, pcre2) copied into `Contents/Frameworks`
 with their load paths rewritten, so it runs on a Mac without Homebrew. Signed
-ad hoc; not notarized. `apps/tasks` is the small example and `examples/pomatez` a real app ported
-from Electron/Tauri (7.6 MB packaged);
-`SAE_TEST_APP=apps/tasks tests/run_spec.sh spec_app` its spec.
+ad hoc; not notarized. `apps/tasks` is the small example
+(`SAE_TEST_APP=apps/tasks tests/run_spec.sh spec_app` its spec). Two real
+apps are ported: `examples/pomatez`, a Pomodoro timer from Electron/Tauri
+(7.6 MB packaged), and `examples/gitify`, GitHub notifications from Electron
+(7.7 MB), which talks to the GitHub API over sae's actor-backed http and is
+specced against a mock GitHub Enterprise API in the page server. Each has a
+README saying what is ported and what is not yet.
 
 ### Testing pages: saedriver
 

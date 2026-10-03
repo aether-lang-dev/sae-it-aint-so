@@ -1,0 +1,1 @@
+../../../examples/gitify/index.ts

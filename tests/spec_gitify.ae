@@ -1,0 +1,108 @@
+// spec_gitify.ae — the Gitify port (examples/gitify) as an app, against the
+// page server's mock GitHub Enterprise API (/api/v3, token "test-token").
+// tests/apps/gitify grants that API and nothing else; SAE_SHELL_LOG catches
+// what the app hands to the system browser.
+//
+//   SAE_TEST_APP=tests/apps/gitify SAE_STORAGE_DIR=target/spec-storage \
+//     SAE_SHELL_LOG=target/spec-shell.log tests/run_spec.sh spec_gitify
+import std.spec
+import std.string
+import std.fs
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+const HOST = "http://127.0.0.1:8091"
+
+stored(key: string) -> string {
+    d = os_getenv("SAE_STORAGE_DIR")
+    if d == null { return "" }
+    body, err = fs.read("${d}/app-Gitify/${key}")
+    if string.length(err) > 0 { return "" }
+    return body
+}
+
+shell_log() -> string {
+    f = os_getenv("SAE_SHELL_LOG")
+    if f == null { return "" }
+    body, err = fs.read(f)
+    if string.length(err) > 0 { return "" }
+    return body
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Gitify on sae") {
+        spec.it("starts on sign in") callback {
+            b.assert_text("Sign in with a personal access token", "the sign-in view")
+            spec.assert_true(b.button_exists("Sign in"), "a Sign in button")
+        }
+        spec.it("github.com is outside this app's http grant") callback {
+            b.set_field_by("ghp_...", "test-token")
+            b.click("Sign in")
+            b.assert_text("Could not sign in: this app may not reach https://api.github.com/user (app.json capabilities.http lists what it may)",
+                "the kernel refused it")
+        }
+        spec.it("a bad token is rejected") callback {
+            b.set_field_by("github.com", HOST)
+            b.set_field_by("ghp_...", "nope")
+            b.click("Sign in")
+            b.assert_text("Could not sign in: the token was rejected (401)", "401")
+        }
+        spec.it("signs in and lists notifications grouped by repository") callback {
+            b.set_field_by("ghp_...", "test-token")
+            b.click("Sign in")
+            b.assert_text("@octocat on ${HOST}", "who")
+            b.assert_text("3 notifications", "count")
+            b.assert_text("octo/hello", "first repo")
+            b.assert_text("octo/tools", "second repo")
+            b.assert_text("Issue: Crash on start", "an issue")
+            b.assert_text("Pull request: Add dark mode", "a pull request")
+            b.assert_text("Release: v1.2.0", "a release")
+            spec.assert_contains(b.page_texts(), "Review Requested · ", "Gitify's reason wording")
+        }
+        spec.it("the account is kept in app storage") callback {
+            spec.assert_contains(stored("account"), "\"login\":\"octocat\"", "login")
+            spec.assert_contains(stored("account"), "\"id\":583231", "user id")
+        }
+        spec.it("Open follows the subject to its page, with Gitify's referrer, and marks it read") callback {
+            b.click_nth("Open", 0)
+            b.assert_text("2 notifications", "marked read on open")
+            b.assert_no_text("Issue: Crash on start", "gone from the list")
+            spec.assert_contains(shell_log(),
+                "https://github.com/octo/hello/issues/7?notification_referrer_id=MDE4Ok5vdGlmaWNhdGlvblRocmVhZDE6NTgzMjMx",
+                "html_url plus base64(018:NotificationThread1:583231)")
+        }
+        spec.it("Done removes one") callback {
+            b.click_nth("Done", 0)
+            b.assert_text("1 notification", "one left")
+            b.assert_no_text("octo/hello", "its repository's group went with it")
+        }
+        spec.it("Show only participating hides what you only watch") callback {
+            b.click("Settings")
+            b.check("Show only participating")
+            b.click("Back")
+            b.assert_text("No new notifications", "the release was subscribed, not participating")
+            b.click("Settings")
+            b.check("Show only participating")
+            b.click("Back")
+            b.assert_text("1 notification", "back")
+            spec.assert_contains(stored("settings"), "\"participating\":false", "saved")
+        }
+        spec.it("Mark all read clears the list") callback {
+            b.click("Mark all read")
+            b.assert_text("No new notifications", "cleared")
+            b.click("Refresh")
+            b.assert_text("No new notifications", "and GitHub agrees")
+        }
+        spec.it("Sign out forgets the account") callback {
+            b.click("Settings")
+            b.click("Sign out")
+            b.assert_text("Sign in with a personal access token", "back to sign in")
+            spec.assert_str_eq(stored("account"), "", "account removed from storage")
+        }
+    }
+    return spec.run_summary(fw)
+}

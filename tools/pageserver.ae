@@ -91,6 +91,99 @@ api_slow_(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, "slow done")
 }
 
+// --- A mock GitHub (Enterprise layout, /api/v3), for spec_gitify ---
+//
+// Three notifications in two repositories; the token is "test-token". Read
+// and done state lives here until the server stops, so a spec sees what a
+// PATCH or PUT did. Not GitHub: only the calls examples/gitify makes.
+
+var gh_live_ = 7    // bit n-1: notification n is unread
+
+gh_authed_(req: ptr, res: ptr) -> int {
+    a = http.http_get_header(req, "Authorization")
+    if a != null && a == "token test-token" { return 1 }
+    http.response_set_status(res, 401)
+    http.response_set_header(res, "Content-Type", "application/json")
+    http.response_set_body(res, "{\"message\":\"Bad credentials\"}")
+    return 0
+}
+
+gh_json_(res: ptr, status: int, body: string) {
+    http.response_set_status(res, status)
+    http.response_set_header(res, "Content-Type", "application/json")
+    http.response_set_body(res, body)
+}
+
+gh_note_(n: int) -> string {
+    if n == 1 {
+        return "{\"id\":\"1\",\"unread\":true,\"reason\":\"mention\",\"updated_at\":\"2026-10-03T10:00:00Z\",\"subject\":{\"title\":\"Crash on start\",\"url\":\"http://127.0.0.1:8091/api/v3/repos/octo/hello/issues/7\",\"latest_comment_url\":null,\"type\":\"Issue\"},\"repository\":{\"full_name\":\"octo/hello\",\"html_url\":\"https://github.com/octo/hello\"}}"
+    }
+    if n == 2 {
+        return "{\"id\":\"2\",\"unread\":true,\"reason\":\"review_requested\",\"updated_at\":\"2026-10-02T09:00:00Z\",\"subject\":{\"title\":\"Add dark mode\",\"url\":\"http://127.0.0.1:8091/api/v3/repos/octo/hello/pulls/8\",\"latest_comment_url\":null,\"type\":\"PullRequest\"},\"repository\":{\"full_name\":\"octo/hello\",\"html_url\":\"https://github.com/octo/hello\"}}"
+    }
+    return "{\"id\":\"3\",\"unread\":true,\"reason\":\"subscribed\",\"updated_at\":\"2026-09-30T08:00:00Z\",\"subject\":{\"title\":\"v1.2.0\",\"url\":null,\"latest_comment_url\":null,\"type\":\"Release\"},\"repository\":{\"full_name\":\"octo/tools\",\"html_url\":\"https://github.com/octo/tools\"}}"
+}
+
+gh_user_(req: ptr, res: ptr, ud: ptr) {
+    if gh_authed_(req, res) == 0 { return }
+    gh_json_(res, 200, "{\"login\":\"octocat\",\"id\":583231}")
+}
+
+gh_notifications_(req: ptr, res: ptr, ud: ptr) {
+    if gh_authed_(req, res) == 0 { return }
+    part = http.http_get_query_param(req, "participating")
+    only = 0
+    if part != null && part == "true" { only = 1 }
+    out = "["
+    n = 1
+    while n <= 3 {
+        bit = 1
+        if n == 2 { bit = 2 }
+        if n == 3 { bit = 4 }
+        // Notification 3 (a subscription) is not participating.
+        if (gh_live_ & bit) != 0 && (only == 0 || n != 3) {
+            if out != "[" { out = string.concat(out, ",") }
+            out = string.concat(out, gh_note_(n))
+        }
+        n = n + 1
+    }
+    http.response_set_header(res, "X-Poll-Interval", "60")
+    gh_json_(res, 200, string.concat(out, "]"))
+}
+
+gh_thread_(req: ptr, res: ptr, ud: ptr) {
+    if gh_authed_(req, res) == 0 { return }
+    p = http.request_path(req)
+    bit = 1
+    if string.string_ends_with(p, "/2") == 1 { bit = 2 }
+    if string.string_ends_with(p, "/3") == 1 { bit = 4 }
+    gh_live_ = gh_live_ & (7 - bit)
+    http.response_set_status(res, 205)
+    http.response_set_body(res, "")
+}
+
+gh_mark_all_(req: ptr, res: ptr, ud: ptr) {
+    if gh_authed_(req, res) == 0 { return }
+    gh_live_ = 0
+    gh_json_(res, 205, "")
+}
+
+gh_mark_repo_hello_(req: ptr, res: ptr, ud: ptr) {
+    if gh_authed_(req, res) == 0 { return }
+    gh_live_ = gh_live_ & 4
+    gh_json_(res, 205, "")
+}
+
+gh_issue_(req: ptr, res: ptr, ud: ptr) {
+    if gh_authed_(req, res) == 0 { return }
+    gh_json_(res, 200, "{\"html_url\":\"https://github.com/octo/hello/issues/7\"}")
+}
+
+gh_pull_(req: ptr, res: ptr, ud: ptr) {
+    if gh_authed_(req, res) == 0 { return }
+    gh_json_(res, 200, "{\"html_url\":\"https://github.com/octo/hello/pull/8\"}")
+}
+
 redirect_home_(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 302)
     http.response_set_header(res, "Location", "/")
@@ -124,6 +217,18 @@ main() {
     http.http_server_add_route(server, "PATCH", "/api/headers", api_headers_, 0)
     http.http_server_add_route(server, "PUT", "/api/headers", api_headers_, 0)
     http.http_server_add_route(server, "DELETE", "/api/headers", api_headers_, 0)
+    http.server_get(server, "/api/v3/user", gh_user_, 0)
+    http.server_get(server, "/api/v3/notifications", gh_notifications_, 0)
+    http.http_server_add_route(server, "PUT", "/api/v3/notifications", gh_mark_all_, 0)
+    http.http_server_add_route(server, "PUT", "/api/v3/repos/octo/hello/notifications", gh_mark_repo_hello_, 0)
+    http.server_get(server, "/api/v3/repos/octo/hello/issues/7", gh_issue_, 0)
+    http.server_get(server, "/api/v3/repos/octo/hello/pulls/8", gh_pull_, 0)
+    t = 1
+    while t <= 3 {
+        http.http_server_add_route(server, "PATCH", "/api/v3/notifications/threads/${t}", gh_thread_, 0)
+        http.http_server_add_route(server, "DELETE", "/api/v3/notifications/threads/${t}", gh_thread_, 0)
+        t = t + 1
+    }
     http.server_get(server, "/api/slow", api_slow_, 0)
 
     // One route per page file (routes are exact paths, no wildcard).
