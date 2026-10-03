@@ -1,0 +1,19 @@
+# What ./bootstrap.sh installs and checks out. Pins are the versions sae was
+# last built and tested against, not "latest"; bump one in the same commit
+# that needs it (or that re-verified sae against it), as the other Aether
+# repos do with their own pins.
+
+# Aether release. Floor 0.760.0: mquickjs-ae needs it (its ci-pins).
+AE_PIN=0.762.0
+
+# aeb, by commit: no aeb release has these yet. b0cc057 gives each
+# aether_source its own object (sae compiles ~170 `module.ae` files), and
+# ebcb508 is needed on macOS (nodes without `return 0` reported FAILED, a
+# changed imported module did not relink). Move to a tag once one has them.
+AEB_REF=ebcb508561ae71902b5c8e24efc08198c59db620
+
+# Sibling checkouts, reached through the aether-ui and mqjs symlinks.
+AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
+AETHER_UI_REF=03bdf905213f050aee18f80acf94a61911568051
+MQUICKJS_AE_URL=https://github.com/aether-lang-dev/mquickjs-ae.git
+MQUICKJS_AE_REF=d5c47c372888503a18e2a0769b7ed6708055f65e

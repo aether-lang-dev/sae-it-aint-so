@@ -10,9 +10,6 @@ import mqjs.gen.mqjssources
 import std.os
 import std.string
 
-// The Aether dev tree the engine builds against. Not AETHER_HOME, which
-// names the toolchain aeb itself runs on (same split as mquickjs-ae's
-// MQJS_AETHER_HOME). ./build.sh sets it.
 // The AetherUIDriver control server is opt-in, as in aether-ui: a listening
 // socket must not ship by default. AETHER_UI_WITH_DRIVER=1 links it.
 // The driver build is a separate binary, sae-driver: aeb's link cache does
@@ -33,10 +30,23 @@ output_name_() -> string {
     return "sae"
 }
 
+// The Aether the engine and host compile against. SAE_AETHER_HOME names an
+// Aether dev tree (one with build/libaether.a), for working on the compiler
+// alongside sae; ./build.sh sets it when ../aether is one. Unset, the
+// installed toolchain on PATH is used (what ./bootstrap.sh installs). Not
+// AETHER_HOME, which names the toolchain aeb itself runs on (the same split
+// as mquickjs-ae's MQJS_AETHER_HOME).
 aether_root_() -> string {
     root = os.getenv("SAE_AETHER_HOME")
     if string.length(root) > 0 { return root }
-    return "../aether"
+    return ""
+}
+
+// The `ae` that reports libaether's own link dependencies.
+ae_bin_() -> string {
+    root = aether_root_()
+    if string.length(root) > 0 { return "${root}/build/ae" }
+    return "ae"
 }
 
 aeb(cap) {
@@ -48,7 +58,7 @@ aeb(cap) {
             cflag("-fno-math-errno")
             cflag("-fno-trapping-math")
             cflag("-Imqjs")
-            aether_home(aether_root_())
+            if string.length(aether_root_()) > 0 { aether_home(aether_root_()) }
             // ui reads theme files (std.fs) and the environment (std.os);
             // the host reads and fetches pages (std.fs, std.http). Pages
             // themselves get none of these.
@@ -76,7 +86,7 @@ aeb(cap) {
 
             // libaether's own dependencies (OpenSSL for std.http, ...),
             // as aether-ui's ui_backend gets them.
-            link_flag("$(${aether_root_()}/build/ae cflags --libs 2>/dev/null)")
+            link_flag("$(${ae_bin_()} cflags --libs 2>/dev/null)")
             link_flag("-lpthread")
             link_flag("-lm")
             output_file(output_name_())
