@@ -35,7 +35,7 @@ run with each engine's own `mqjs` CLI, `--memory-limit 16M`, median of 20:
 | mquickjs-ae (Aether port) | 117.4 ms | 1.8 ms |
 | upstream C MicroQuickJS `7ea5399` | 13.3 ms | 1.6 ms |
 
-**The port is about 9× slower than C on page logic.** That is worse than the
+**The port is about 9× slower than C on page logic.** (Since closed to about 2×: see `perf-gap.md`.) That is worse than the
 4.5× (Octane) to 7× (microbench) recorded in mquickjs-ae's AGENTS.md. That
 file names the cause: `ae/vm.ae` dispatches opcodes through a linear
 `if opcode == …` chain of about 124 compares rather than a jump table.
