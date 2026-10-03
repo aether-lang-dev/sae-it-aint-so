@@ -77,6 +77,7 @@ sae_stdlib_main(argc: int, argv: ptr) -> int {
     ht = statics_of(object(g, "http"))
     cfunc(ht, "get", 2, "sae_http_get")
     cfunc(ht, "post", 4, "sae_http_post")
+    cfunc(ht, "cancel", 1, "sae_http_cancel")
 
     st = statics_of(object(g, "storage"))
     cfunc(st, "get", 1, "sae_storage_get")

@@ -71,9 +71,18 @@ Pages are not given `window()`: the browser owns the window.
 ### HTTP, on Aether's actor core
 
 ```ts
-http.get("/api/items", (status: number, body: string, err: string) => { ... });
-http.post("/api/items", JSON.stringify(item), "application/json", (status, body, err) => { ... });
+const req = http.get("/api/items", (res) => {
+  if (!res.ok) { show(res.error || `HTTP ${res.status}`); return; }
+  render(res.json());                      // or res.text
+});
+http.post("/api/items", JSON.stringify(item), "application/json", (res) => { ... });
+req.cancel();                              // its callback will not run
 ```
+
+`res` is `{ ok, status, text, error, json() }`: `ok` is a 2xx answer,
+`status` is 0 when nothing came back, `error` is `""` unless the request
+failed or was refused. `http.get` and `http.post` return `{ id, cancel() }`;
+a cancelled request may still finish on its actor, but its callback won't run.
 
 A request runs on an Aether actor: a small pool of `HttpFetcher` actors does
 the blocking network call on the scheduler's threads, so the page's UI never
@@ -81,7 +90,7 @@ waits on it (the spec clicks a button while a slow request is out). Each
 finished job goes to an `HttpInbox` actor; while any are in flight, a UI
 timer asks the inbox for them and runs the callbacks on the UI thread, where
 the JS engine lives. A reply for a page that has since been left is
-dropped. `err` is `""` on success; `status` is 0 when nothing came back.
+dropped.
 
 Where a page may reach is the kernel's decision, behind the page veto: in
 the browser, the page's own origin; in an app, the URL prefixes `app.json`
@@ -91,8 +100,8 @@ lists under `"http"` (Tauri's allowlist):
 { "name": "My app", "http": ["https://api.example.com/"] }
 ```
 
-Anything else is refused, and the refusal arrives as `err` through the same
-callback. Callbacks, not promises: mquickjs-ae has no `Promise` yet
+Anything else is refused: the callback gets `res.ok` false and the reason in
+`res.error`. Callbacks, not promises: mquickjs-ae has no `Promise` yet
 and a callback is what the UI thread
 hand-off needs.
 

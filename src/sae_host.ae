@@ -67,6 +67,7 @@ extern aether_ui_vstack_create(spacing: int) -> int
 extern aether_ui_surface_flush_deferred_impl()
 extern JS_NewFloat64(ctx: ptr, d: float) -> long
 extern aether_ui_widget_count_impl() -> int
+extern sae_js_bool(v: int) -> long
 extern aether_ui_test_server_banner_handle() -> int
 extern aether_ui_current_sheet_set_impl(sheet: ptr)
 extern JS_GetGlobalObject(ctx: ptr) -> long
@@ -74,6 +75,7 @@ extern JS_GetPropertyStr(ctx: ptr, obj: long, name: string) -> long
 extern JS_GetPropertyUint32(ctx: ptr, obj: long, idx: int) -> long
 
 const JS_DUMP_LONG = 1
+const JS_EVAL_RETVAL = 1   // JS_Parse: the script's value is its last expression's
 const FRAME_CF_CTOR = 65536
 const STACK_MAX = 64
 const PAGE_MEM_DEFAULT = 1048576
@@ -137,6 +139,8 @@ struct Page {
     sheet_strs: ptr  // std.list: selector and family strings the sheet borrows
     timers: ptr      // std.list: the ui.timer ids this page started (0 once cancelled)
     seq: int         // which load this is: an http reply for an older page is dropped
+    http_res: ptr    // GC ref: the page's response-object maker (http_helpers_), or null
+    http_req: ptr    // GC ref: the page's request-object maker
 }
 
 page_of_(ctx: ptr) -> *Page {
@@ -1080,24 +1084,41 @@ sae_ui_timer_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 // --- the page API: http, on Aether's actor core ---
 //
-//   http.get(url, (status, body, err) => ...)
-//   http.post(url, body, contentType, (status, body, err) => ...)
+//   const req = http.get(url, (res) => {
+//     if (!res.ok) { show(res.error || `HTTP ${res.status}`); return; }
+//     render(res.json());          // or res.text
+//   });
+//   http.post(url, body, contentType, (res) => ...)
+//   req.cancel()                   // its callback will not run
+//
+// res is { ok, status, text, error, json() }: ok is a 2xx answer; status is
+// 0 when nothing came back; error is "" unless the request failed or was
+// refused.
 //
 // The request runs on an Aether actor (an HttpFetcher, one of a small pool),
 // on the scheduler's threads, so the UI thread never waits on the network.
 // Each finished job goes to the HttpInbox actor; while any are in flight a
 // UI timer asks the inbox for them and runs the page's callback on the UI
-// thread, where the JS engine lives. A reply for a page that has since gone
-// is dropped. err is "" on success; status is 0 when nothing came back.
+// thread, where the JS engine lives. A reply for a page that has since gone,
+// or for a cancelled request, is dropped.
 //
 // Where a page may reach: in the browser, its own origin; in an app, the
-// origins app.json lists under "http" (Tauri's allowlist). The rest is an
-// err, delivered the same way.
+// origins app.json lists under "http" (Tauri's allowlist). The rest is
+// refused: res.ok false, res.error saying why, delivered the same way.
 
 @c_callback
 sae_http_get(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     return http_start_(ctx, "GET", own_(arg_str_(ctx, argv, argc, 0)), "", "", held_fn_(ctx, argv, argc, 1))
+}
+
+// http.cancel(id): what req.cancel() calls. The request may still run to
+// completion on its actor; its callback will not.
+@c_callback
+sae_http_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    http_cancel_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    return sae_js_undefined()
 }
 
 @c_callback
@@ -1566,7 +1587,46 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
         f ! HttpRun { job: j as ptr }
     }
     if http_timer_ == 0 { http_timer_ = ui.timer(20, || { http_poll_() }) }
-    return JS_NewInt32(ctx, j.id)
+    // The request object: { id, cancel() }.
+    if http_helpers_(ctx, p) == 0 { return sae_js_exception() }
+    if JS_StackCheck(ctx, 3) != 0 { return sae_js_exception() }
+    JS_PushArg(ctx, JS_NewInt32(ctx, j.id))
+    JS_PushArg(ctx, mem.get_long(p.http_req, 0))
+    JS_PushArg(ctx, sae_js_null())
+    return JS_Call(ctx, 1)
+}
+
+// The two small JS functions the http API hands pages, compiled once per page
+// and held as GC roots: one makes the response object (so res.json() is a
+// method), one the request object (so req.cancel() is). 1 when they are
+// ready.
+http_helpers_(ctx: ptr, p: *Page) -> int {
+    if p.http_res != null { return 1 }
+    rs = "(function (ok, status, text, error) { return { ok: ok, status: status, text: text, error: error, json: function () { return JSON.parse(this.text); } }; })"
+    qs = "(function (id) { return { id: id, cancel: function () { http.cancel(id); } }; })"
+    rf = JS_Run(ctx, JS_Parse(ctx, rs, string.length(rs), "sae:http", JS_EVAL_RETVAL))
+    if sae_js_is_exception(rf) != 0 { return 0 }
+    p.http_res = hold_(ctx, rf)
+    qf = JS_Run(ctx, JS_Parse(ctx, qs, string.length(qs), "sae:http", JS_EVAL_RETVAL))
+    if sae_js_is_exception(qf) != 0 { return 0 }
+    p.http_req = hold_(ctx, qf)
+    return 1
+}
+
+http_cancel_(p: *Page, id: int) {
+    if http_waits_ == null { return }
+    n = list.size(http_waits_)
+    i = 0
+    while i < n {
+        wv, _ = list.get(http_waits_, i)
+        w = wv as *HttpWait
+        if w.id == id && w.page == p as ptr {
+            list.list_remove(http_waits_, i)
+            heap.free(w)
+            return
+        }
+        i = i + 1
+    }
 }
 
 http_inbox_() -> ptr {
@@ -1620,7 +1680,7 @@ http_deliver_(j: *HttpJob) {
                 cur = (b as *Browser).page
                 if cur != null && cur == w.page && (cur as *Page).seq == w.seq {
                     p = cur as *Page
-                    r = call3_http_(p.ctx, w.ref, j.status, j.resp, j.err)
+                    r = call_http_(p, w.ref, j.status, j.resp, j.err)
                     if sae_js_is_exception(r) != 0 { report_exception_(p.ctx, "an http callback") }
                 }
             }
@@ -1633,17 +1693,28 @@ http_deliver_(j: *HttpJob) {
     heap.free(j)
 }
 
-// fn(status, body, err): each argument pushed as soon as it exists, so it is
-// rooted on the engine stack before the next allocation can move anything;
-// the function is read from its root last.
-call3_http_(ctx: ptr, ref: ptr, status: int, body: string, err: string) -> long {
-    if JS_StackCheck(ctx, 5) != 0 { return sae_js_exception() }
+// fn(res): res is made by the page's response maker, then handed straight
+// to fn. Each value is pushed as soon as it exists, so it is rooted on the
+// engine stack before the next allocation can move anything; the functions
+// are read from their roots last.
+call_http_(p: *Page, ref: ptr, status: int, text: string, err: string) -> long {
+    ctx = p.ctx
+    if http_helpers_(ctx, p) == 0 { return sae_js_exception() }
+    if JS_StackCheck(ctx, 9) != 0 { return sae_js_exception() }
+    ok = 0
+    if err == "" && status >= 200 && status < 300 { ok = 1 }
     JS_PushArg(ctx, JS_NewString(ctx, err))
-    JS_PushArg(ctx, JS_NewString(ctx, body))
+    JS_PushArg(ctx, JS_NewString(ctx, text))
     JS_PushArg(ctx, JS_NewInt32(ctx, status))
+    JS_PushArg(ctx, sae_js_bool(ok))
+    JS_PushArg(ctx, mem.get_long(p.http_res, 0))
+    JS_PushArg(ctx, sae_js_null())
+    res = JS_Call(ctx, 4)
+    if sae_js_is_exception(res) != 0 { return res }
+    JS_PushArg(ctx, res)
     JS_PushArg(ctx, mem.get_long(ref, 0))
     JS_PushArg(ctx, sae_js_null())
-    return JS_Call(ctx, 3)
+    return JS_Call(ctx, 1)
 }
 
 // --- storage (the kernel side of the storage page API) ---
@@ -1837,6 +1908,8 @@ page_new_(b: *Browser, url: string) -> *Page {
     p.timers = list.new()
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
+    p.http_res = null
+    p.http_req = null
     p.ctx = sae_new_context(p.mem_block, b.page_mem)
     JS_SetContextOpaque(p.ctx, p)
     p.root = ui.vstack(mem.long_to_ptr(b.content), 4)

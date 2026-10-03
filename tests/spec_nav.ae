@@ -255,6 +255,10 @@ main() {
             b.click("POST echo")
             b.assert_text("post: 200 posted: a body", "POST")
         }
+        spec.it("res.json() parses the body") callback {
+            b.click("GET json")
+            b.assert_text("json: n=42, 3 items, last c", "parsed")
+        }
         spec.it("the UI stays live while a request is out (it runs on an actor)") callback {
             b.click("Slow GET")
             b.assert_text("slow: waiting", "sent")
@@ -266,7 +270,14 @@ main() {
         }
         spec.it("another origin is refused, through the callback") callback {
             b.click("Other origin")
-            b.assert_text("refused: 0 a page may reach only its own origin: https://example.com/", "refused")
+            b.assert_text("refused: ok=false status=0 a page may reach only its own origin: https://example.com/",
+                "refused: ok false, status 0, the reason in res.error")
+        }
+        spec.it("req.cancel(): the callback never runs") callback {
+            b.click("Slow, then cancel")
+            spec.assert_contains(b.page_texts(), "cancel: request ", "the request object has an id")
+            sleep(900)
+            spec.assert_false(b.console_contains("a cancelled request's callback ran"), "not run")
         }
         spec.it("a reply for a page that has gone is dropped") callback {
             b.click("Slow, then leave")

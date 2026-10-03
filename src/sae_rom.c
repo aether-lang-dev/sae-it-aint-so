@@ -51,6 +51,7 @@ SAE_JSFN(sae_ui_timer_cancel);
 SAE_JSFN(sae_storage_get);
 SAE_JSFN(sae_http_get);
 SAE_JSFN(sae_http_post);
+SAE_JSFN(sae_http_cancel);
 SAE_JSFN(sae_storage_set);
 SAE_JSFN(sae_storage_remove);
 SAE_JSFN(sae_ui_onclick);
@@ -102,6 +103,7 @@ JSContext *sae_new_context(void *mem, size_t mem_size)
 void *sae_stdout(void) { return stdout; }
 JSValue sae_js_undefined(void) { return JS_UNDEFINED; }
 JSValue sae_js_null(void) { return JS_NULL; }
+JSValue sae_js_bool(int v) { return JS_NewBool(v); }
 JSValue sae_js_exception(void) { return JS_EXCEPTION; }
 int sae_js_is_exception(JSValue v) { return JS_IsException(v); }
 size_t sae_gcref_size(void) { return sizeof(JSGCRef); }

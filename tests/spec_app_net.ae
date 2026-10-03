@@ -14,7 +14,7 @@ main() {
         }
         spec.it("anything else is refused, through the callback") callback {
             b.click("Not listed")
-            b.assert_text("other: 0 this app may not reach http://127.0.0.1:8091/old-home (app.json \"http\" lists what it may)",
+            b.assert_text("other: ok=false this app may not reach http://127.0.0.1:8091/old-home (app.json \"http\" lists what it may)",
                 "refused with the reason")
         }
     }
