@@ -87,6 +87,7 @@ const NAV_RELOAD = 4
 // app is made of, "" in browser mode. Its pages are app:/<path> URLs, mapped
 // onto <dir>/<path>.ts or .js the way tools/pageserver maps a site.
 var app_dir_ = ""
+var app_name_ = ""
 
 // The browser: chrome widgets, history, and the page currently shown.
 struct Browser {
@@ -131,6 +132,7 @@ struct Page {
                      //   go in it, its styles stop at it, it goes with the page
     sheet: ptr       // the page's AeCS sheet (ui.styles), or null
     sheet_strs: ptr  // std.list: selector and family strings the sheet borrows
+    timers: ptr      // std.list: the ui.timer ids this page started (0 once cancelled)
 }
 
 page_of_(ctx: ptr) -> *Page {
@@ -158,8 +160,33 @@ us_(ns: long) -> long { return ns / 1000 }
 // The clocks, for page-API functions, which cannot name `os` (see "The page
 // veto" below).
 now_ns_() -> long { return os.now_monotonic_ns() }
-now_ms_() -> long { return os.now_monotonic_ms() }
-now_unix_ms_() -> long { return os.now_unix_ms() }
+now_ms_() -> long { return scaled_(os.now_monotonic_ms(), 0) }
+now_unix_ms_() -> long { return scaled_(os.now_unix_ms(), 1) }
+
+// SAE_TIME_SCALE=<n> runs the clocks pages see (Date.now, new Date(),
+// performance.now) n times fast, from the moment each is first read, so a
+// spec can watch a minute-long timer finish in seconds. Off (1x) unless set.
+var time_scale_ = 0
+var time_base_mono_: long = 0
+var time_base_unix_: long = 0
+
+scaled_(real: long, which: int) -> long {
+    if time_scale_ == 0 {
+        time_scale_ = 1
+        sv = env_("SAE_TIME_SCALE")
+        if sv != "" {
+            n, nerr = string.to_int(sv)
+            if nerr == "" && n > 1 { time_scale_ = n }
+        }
+    }
+    if time_scale_ == 1 { return real }
+    if which == 0 {
+        if time_base_mono_ == 0 { time_base_mono_ = real }
+        return time_base_mono_ + (real - time_base_mono_) * time_scale_
+    }
+    if time_base_unix_ == 0 { time_base_unix_ = real }
+    return time_base_unix_ + (real - time_base_unix_) * time_scale_
+}
 
 arg_(argv: ptr, i: int) -> long {
     return mem.get_long(argv, i * 8)
@@ -461,7 +488,11 @@ sae_ui_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     h = arg_int_(ctx, argv, argc, 0, 0)
     if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "set_text(h, s): h is not a widget this page made") }
-    ui.set_text(h, arg_str_(ctx, argv, argc, 1))
+    t = arg_str_(ctx, argv, argc, 1)
+    ui.set_text(h, t)
+    // A button's caption too (Start / Pause): aether-ui keeps that in its own
+    // setter, a no-op on anything that is not a button.
+    _b = ui.set_button_label(h, t)
     return sae_js_undefined()
 }
 
@@ -990,6 +1021,97 @@ sae_ui_style_id(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return sae_js_undefined()
 }
 
+// set_visible(h, on): show or hide a widget the page made, keeping it (and
+// anything drawing into it) alive. For views a page switches between.
+@c_callback
+sae_ui_set_visible(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "set_visible(h, on): h is not a widget this page made") }
+    hidden = 1
+    if arg_int_(ctx, argv, argc, 1, 0) != 0 { hidden = 0 }
+    _r = ui.set_hidden(h, hidden)
+    return sae_js_undefined()
+}
+
+// --- the page API: timers ---
+
+// timer(ms, fn): call fn every ms milliseconds (at least 10) until
+// timer_cancel(id) or the page goes. Returns the timer's id.
+@c_callback
+sae_ui_timer(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    ms = arg_int_(ctx, argv, argc, 0, 1000)
+    if ms < 10 { ms = 10 }
+    ref = held_fn_(ctx, argv, argc, 1)
+    if ref == null { return sae_throw_type_error(ctx, "timer(ms, fn): fn must be a function") }
+    id = ui.timer(ms, || {
+        r = call0_(ctx, mem.get_long(ref, 0))
+        if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a timer") }
+    })
+    list.add(p.timers, mem.long_to_ptr(id))
+    return JS_NewInt32(ctx, id)
+}
+
+// timer_cancel(id): stop one of this page's timers. Another id is ignored.
+@c_callback
+sae_ui_timer_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    id = arg_int_(ctx, argv, argc, 0, 0)
+    n = list.size(p.timers)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.timers, i)
+        if mem.ptr_to_long(v) == id && id != 0 {
+            ui.timer_cancel(id)
+            list.set(p.timers, i, mem.long_to_ptr(0))
+            return sae_js_undefined()
+        }
+        i = i + 1
+    }
+    return sae_js_undefined()
+}
+
+// --- the page API: storage ---
+//
+// storage.get(key) / set(key, value) / remove(key): string values that
+// outlive the page and the process, like localStorage. Scoped to the app (in
+// app mode) or the page's origin (in the browser), so one site never reads
+// another's. Keys are letters, digits, '.', '_' and '-'. The file system is
+// the kernel's (storage_file_ below); a page reaches only these three calls.
+
+@c_callback
+sae_storage_get(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    key = own_(arg_str_(ctx, argv, argc, 0))
+    if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.get(key): key must be letters, digits, '.', '_' or '-'") }
+    v, found = storage_read_(page_of_(ctx).url, key)
+    if found == 0 { return sae_js_null() }
+    return JS_NewString(ctx, v)
+}
+
+@c_callback
+sae_storage_set(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    key = own_(arg_str_(ctx, argv, argc, 0))
+    if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.set(key, value): key must be letters, digits, '.', '_' or '-'") }
+    val = own_(arg_str_(ctx, argv, argc, 1))
+    if string.length(val) > STORAGE_MAX { return sae_throw_type_error(ctx, "storage.set: value over 1 MB") }
+    if storage_write_(page_of_(ctx).url, key, val) == 0 { return sae_throw_type_error(ctx, "storage.set: could not save") }
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_storage_remove(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    key = own_(arg_str_(ctx, argv, argc, 0))
+    if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.remove(key): key must be letters, digits, '.', '_' or '-'") }
+    storage_remove_(page_of_(ctx).url, key)
+    return sae_js_undefined()
+}
+
 // vg.scene(viewBox, w, h, block): a vector-graphics canvas w x h px under
 // the current ui container, drawing the viewBox.
 @c_callback
@@ -1134,6 +1256,17 @@ sae_vg_set_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return sae_js_undefined()
 }
 
+// vg.set_text(h, s): change a vg.text shape's text (a clock, a counter).
+@c_callback
+sae_vg_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if n == null { return sae_throw_type_error(ctx, "vg.set_text(h, s): h is not a vg shape") }
+    vg.element_set_text(vg.node_element(n), arg_str_(ctx, argv, argc, 1))
+    vg_repaint_(n)
+    return sae_js_undefined()
+}
+
 @c_callback
 sae_vg_set_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
@@ -1251,6 +1384,70 @@ js_date_constructor(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 }
 
 // --- URLs and fetching ---
+
+// --- storage (the kernel side of the storage page API) ---
+
+const STORAGE_MAX = 1048576
+
+storage_key_ok_(k: string) -> int {
+    n = string.length(k)
+    if n == 0 || n > 128 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(k, i)
+        ok = 0
+        if c >= 97 && c <= 122 { ok = 1 }
+        if c >= 65 && c <= 90 { ok = 1 }
+        if c >= 48 && c <= 57 { ok = 1 }
+        if c == 46 || c == 95 || c == 45 { ok = 1 }
+        if ok == 0 { return 0 }
+        i = i + 1
+    }
+    if string.string_starts_with(k, ".") == 1 { return 0 }
+    return 1
+}
+
+// The folder a page's storage lives in: one per app, or per origin.
+// $SAE_STORAGE_DIR, else ~/.sae/storage.
+storage_dir_(url: string) -> string {
+    root = env_("SAE_STORAGE_DIR")
+    if root == "" { root = "${env_("HOME")}/.sae/storage" }
+    scope = "file"
+    if is_app_(url) == 1 { scope = string.concat("app-", app_name_) }
+    if is_http_(url) == 1 { scope = string.string_substring(url, 0, origin_end_(url)) }
+    // A folder name: anything but letters, digits, '.', '-' becomes '_'.
+    out = ""
+    i = 0
+    while i < string.length(scope) {
+        c = string.char_at(scope, i)
+        keep = 0
+        if c >= 97 && c <= 122 { keep = 1 }
+        if c >= 65 && c <= 90 { keep = 1 }
+        if c >= 48 && c <= 57 { keep = 1 }
+        if c == 46 || c == 45 { keep = 1 }
+        if keep == 1 { out = string.concat(out, string.from_char(c)) } else { out = string.concat(out, "_") }
+        i = i + 1
+    }
+    return "${root}/${out}"
+}
+
+storage_read_(url: string, key: string) -> (string, int) {
+    v, err = fs.read("${storage_dir_(url)}/${key}")
+    if err != "" { return "", 0 }
+    return v, 1
+}
+
+storage_write_(url: string, key: string, val: string) -> int {
+    d = storage_dir_(url)
+    _m = fs.mkdir_p(d)
+    werr = fs.write_atomic("${d}/${key}", string.bytes(val))
+    if werr != "" { return 0 }
+    return 1
+}
+
+storage_remove_(url: string, key: string) {
+    _r = fs.remove_tree("${storage_dir_(url)}/${key}")
+}
 
 is_app_(u: string) -> int {
     return string.string_starts_with(u, "app:")
@@ -1376,6 +1573,7 @@ page_new_(b: *Browser, url: string) -> *Page {
     p.stacks = list.new()
     p.sheet = null
     p.sheet_strs = list.new()
+    p.timers = list.new()
     p.ctx = sae_new_context(p.mem_block, b.page_mem)
     JS_SetContextOpaque(p.ctx, p)
     p.root = ui.vstack(mem.long_to_ptr(b.content), 4)
@@ -1386,6 +1584,17 @@ page_new_(b: *Browser, url: string) -> *Page {
 }
 
 page_free_(p: *Page) {
+    // A page's timers stop with it: a tick after this would call into a
+    // freed JS context.
+    nt = list.size(p.timers)
+    ti = 0
+    while ti < nt {
+        tv, _ = list.get(p.timers, ti)
+        tid = mem.ptr_to_long(tv)
+        if tid != 0 { ui.timer_cancel(tid) }
+        ti = ti + 1
+    }
+    list.free(p.timers)
     n = list.size(p.refs)
     i = 0
     while i < n {
@@ -1670,6 +1879,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
             manifest = mv
         }
         title = app_setting_(manifest, "name", base_name_(app))
+        app_name_ = own_(title)
         w = app_setting_int_(manifest, "width", 800)
         h = app_setting_int_(manifest, "height", 600)
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))

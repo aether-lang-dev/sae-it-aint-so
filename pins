@@ -15,6 +15,6 @@ AEB_REF=v0.325
 
 # Sibling checkouts, reached through the aether-ui and mqjs symlinks.
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=2d1653e88e4e2435dae34bf465cbae95b7ebc9db
+AETHER_UI_REF=e8482736ace7803804b0a4fd773e8c106123e37e
 MQUICKJS_AE_URL=https://github.com/aether-lang-dev/mquickjs-ae.git
 MQUICKJS_AE_REF=a6f5fb5c6f56bd96f6df4b7a44a93b39d3d615da

@@ -31,7 +31,7 @@
 exports(
     test_url, navigate, back, forward, reload,
     current_url, status_line, status_code, status_url,
-    click, button_exists, set_field, field_text, check, slide_to, pick,
+    click, button_exists, set_field, field_text, check, slide_to, slide_nth, pick,
     has_text, page_texts, widget_count, style_of,
     wait_for_url, wait_for_page, wait_for_text, wait_for_text_gone, wait_for_widget_count,
     assert_url, assert_page, assert_text, assert_no_text,
@@ -171,6 +171,33 @@ slide_to(v: int) {
     id = uidriver.widget_id_last_of("slider", "")
     spec.assert_gt(id, 0, "page has a slider")
     if id > 0 { uidriver.post_ok("/widget/${id}/set_value?v=${v}", "POST set_value") }
+}
+
+// Move the page's n-th slider (0 = the first) to `v`, firing its handler.
+slide_nth(n: int, v: int) {
+    id = nth_of_("slider", n)
+    spec.assert_gt(id, 0, "page has slider ${n}")
+    if id > 0 { uidriver.post_ok("/widget/${id}/set_value?v=${v}", "POST set_value") }
+}
+
+// The id of the n-th widget of `wtype` in the tree (0 = the first), or 0.
+nth_of_(wtype: string, n: int) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    found = 0
+    seen = 0
+    cnt = json.json_array_size(v)
+    i = 0
+    while i < cnt {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), wtype) == 1 {
+            if seen == n { found = uidriver.field_int(w, "id") }
+            seen = seen + 1
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return found
 }
 
 // Choose item `i` of the page's last drop-down (a ui.picker).

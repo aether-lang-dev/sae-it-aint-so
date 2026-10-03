@@ -53,6 +53,8 @@ The `ui` object (each builder returns its widget handle):
 | rebuilding | `clear(h)` empties a `vstack`/`hstack` the page made; `into(h, fn)` builds into it again |
 | inputs and indicators | `toggle(label, onChange(on))`, `slider(min, max, initial, onChange(v))`, `picker(onChange(i))` + `picker_add(h, item)`, `progressbar(f)` + `set_progress(h, f)`; `get_`/`set_toggle`, `get_`/`set_slider` |
 | styles | `styles(sheet)`, `add_class(h, name)`, `style_id(h, name)`: see below |
+| timers | `timer(ms, fn)` returns an id, `timer_cancel(id)`; a page's timers stop when it goes |
+| showing | `set_visible(h, on)`: hide a view and keep it (and its timers, vg scenes) alive |
 | reactive state | `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` |
 
 A page names only widgets it made: a handle below the page's first widget
@@ -65,6 +67,18 @@ A modifier at a page's top level has nothing to modify (the top of the stack
 is the browser's own content area), so it throws, where Aether would refuse
 to compile it. `site/calculator.ts` is the design doc's calculator example.
 Pages are not given `window()`: the browser owns the window.
+
+### Storage
+
+`storage.get(key)` (a string, or `null`), `storage.set(key, value)` and
+`storage.remove(key)`: values that outlive the page and the process, like
+`localStorage`. Each app (in app mode) or origin (in the browser) has its
+own, under `~/.sae/storage` (`$SAE_STORAGE_DIR` overrides it). Keys are
+letters, digits, `.`, `_` and `-`; a value is at most 1 MB. The file system
+stays the kernel's: a page reaches only these three calls.
+
+`SAE_TIME_SCALE=<n>` runs the clocks pages see (`Date.now`, `new Date()`,
+`performance.now`) n times fast, for specs that wait on timers.
 
 ### Styles: a CSS-alike
 
@@ -122,6 +136,8 @@ vg.scene("0 0 100 100", 300, 300, () => {
 Where a Cosyne app writes `c.circle(30, 40, 18).fill("#c44").onClick(f)`, a
 sae page writes `vg.circle(30, 40, 18, () => { vg.fill("#c44"); vg.on_click(f) })`.
 A shape outside `vg.scene()`, or a modifier outside a shape, throws.
+`vg.set_fill`, `set_stroke`, `set_opacity` and `set_text` change a shape
+after the scene is built.
 `site/vg.ts` is the demo, and `tests/spec_nav.ae` checks its colours
 through the driver's canvas pixel route.
 
@@ -218,7 +234,8 @@ sae's binary, the pages under `Contents/Resources/app`, where the binary finds
 them and starts in app mode with no arguments, and the non-system dylibs sae
 links (Homebrew's OpenSSL, nghttp2, pcre2) copied into `Contents/Frameworks`
 with their load paths rewritten, so it runs on a Mac without Homebrew. Signed
-ad hoc; not notarized. `apps/tasks` is the example;
+ad hoc; not notarized. `apps/tasks` is the small example and `examples/pomatez` a real app ported
+from Electron/Tauri (7.6 MB packaged);
 `SAE_TEST_APP=apps/tasks tests/run_spec.sh spec_app` its spec.
 
 ### Testing pages: saedriver
