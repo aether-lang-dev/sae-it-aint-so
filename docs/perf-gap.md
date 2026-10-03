@@ -20,15 +20,16 @@ both built `-Os` (upstream's default), macOS arm64:
 | Opcode `switch`, lazy scratch buffer | mquickjs-ae `d5c47c3` | 0.15 | 7.19× |
 | Inline `mem` casts, cheap deadline check | Aether 0.763 ([#2375](https://github.com/aether-lang-dev/aether/pull/2375)) | 0.35 | 3.40× |
 | Scratch on the stack, not `malloc` | mquickjs-ae `6652ee3` | 0.44 | 2.71× |
-| Hot loop never tests `block` | mquickjs-ae `0a23dd1` | **0.51** | **2.10×** |
+| Hot loop never tests `block` | mquickjs-ae `0a23dd1` | 0.51 | 2.10× |
+| Unchecked memory accessors in the VM | Aether 0.766 ([#2382](https://github.com/aether-lang-dev/aether/pull/2382)), mquickjs-ae `a6f5fb5` | **0.59** | **1.70×** |
 
-From about 6.7× slower to about 2× slower. Two page-shaped loops tell the same
+From about 6.7× slower to about 1.7× slower. Two page-shaped loops tell the same
 story:
 
 | Workload | Start | Now | C |
 |---|---|---|---|
-| build, sort and sum 20,000 records, ×40 | 3.28 s | 0.87 s | 0.31 s |
-| `s = (s + i) \| 0` for 2×10⁸ iterations | 12.7 s | 6.8 s | 3.1 s |
+| build, sort and sum 20,000 records, ×40 | 3.28 s | 0.67 s | 0.31 s |
+| `s = (s + i) \| 0` for 2×10⁸ iterations | 12.7 s | 4.5 s | 3.1 s |
 
 `-O2` changes nothing for the port (0–2%) and gives C 7–8%, so the comparison
 above is fair as it stands. (An earlier note here blamed part of the gap on
@@ -70,6 +71,15 @@ Clang folded that check into one compare tree over all the block values,
 loops: fast handlers go straight back to dispatch, and only a handler that
 needs a slow path leaves for the outer loop.
 
+**A null test on every memory access (~34% of the integer loop).** The VM
+reads its stack, frames and bytecode through `mem.get_long` and friends, and
+each kept the library's `if (!p) return 0` in front of the load, though every
+pointer the VM reads through is non-null by construction. Aether 0.766 added
+`_unchecked` accessors ([#2382](https://github.com/aether-lang-dev/aether/pull/2382)),
+which `vm.ae` now uses throughout. (The checks were the second item filed as
+[aether#2379](https://github.com/aether-lang-dev/aether/issues/2379); they
+turned out far bigger than the "few percent" the issue guessed.)
+
 **Ruled out:**
 
 - *Storing the frame's pc on every instruction.* Removing the store changed
@@ -92,7 +102,7 @@ heap. It was present before any of the performance work. Fixed in mquickjs-ae
 
 ## What is left
 
-The port is now about 2× slower than C. What separates them is mostly how
+The port is now about 1.7× slower than C. What separates them is mostly how
 the interpreter loop can be written:
 
 - **Computed goto.** Bellard's VM ends each opcode handler with
@@ -101,20 +111,18 @@ the interpreter loop can be written:
   express that, so the port has a loop and a `switch`. Proposed as
   [aether#2378](https://github.com/aether-lang-dev/aether/issues/2378), with
   plain `switch` as the fallback wherever the C compiler lacks computed goto.
-- **Null checks in the memory accessors.** Every inlined `mem.get_*` keeps
-  the library's `if (!p) return 0` before the load, including the VM's stack
-  and bytecode reads, where the pointer is known to be non-null. Also
-  `bits_of_float` / `float_from_bits` are still calls.
-  [aether#2379](https://github.com/aether-lang-dev/aether/issues/2379).
+- **The checked accessors outside the VM.** The tag, string and property
+  modules the opcode handlers call still use the checked forms. Moving the
+  hot ones over is mquickjs-ae work, not an Aether change.
 
-Both are Aether changes. Nothing in sae's design depends on them, and sae
-gets them by moving to a newer Aether.
+Computed goto is an Aether change. Nothing in sae's design depends on it,
+and sae gets it by moving to a newer Aether.
 
 ## How it was measured
 
 - **Machine:** Mac mini, Apple Silicon, macOS 27.
-- **Aether:** 0.763.0 built from source, since it was not yet on GitHub
-  releases.
+- **Aether:** 0.763.0, then 0.766.0, built from source before each was on
+  GitHub releases.
 - **Builds:** mquickjs-ae built with aeb; upstream with its own Makefile
   (`make mqjs` for `-Os`, `make CONFIG_SMALL= mqjs` for `-O2`).
 - **Benchmarks:** mquickjs-ae `scripts/bench.sh --octane`, and each binary

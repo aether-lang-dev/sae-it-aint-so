@@ -3,8 +3,9 @@
 # that needs it (or that re-verified sae against it), as the other Aether
 # repos do with their own pins.
 
-# Aether release. Floor 0.760.0: mquickjs-ae needs it (its ci-pins).
-AE_PIN=0.762.0
+# Aether release. Floor 0.766.0: mquickjs-ae's VM uses its _unchecked mem
+# accessors (#2382), and the page veto needs its nested hide fix (#2381).
+AE_PIN=0.766.0
 
 # aeb, by commit: no aeb release has these yet. b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
@@ -16,4 +17,4 @@ AEB_REF=ebcb508561ae71902b5c8e24efc08198c59db620
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 AETHER_UI_REF=03bdf905213f050aee18f80acf94a61911568051
 MQUICKJS_AE_URL=https://github.com/aether-lang-dev/mquickjs-ae.git
-MQUICKJS_AE_REF=d5c47c372888503a18e2a0769b7ed6708055f65e
+MQUICKJS_AE_REF=a6f5fb5c6f56bd96f6df4b7a44a93b39d3d615da
