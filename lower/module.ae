@@ -136,6 +136,12 @@ struct Lx {
     fn_scbase: ptr   // per function: sc_names length at its start
     fn_vars: ptr     // std.strarr: var/param names, all functions, stacked
     fn_varbase: ptr  // per function: fn_vars length at its start
+    catch_names: ptr // std.strarr: catch parameter names seen, all functions, stacked
+    catch_base: ptr  // per function: catch_names length at its start
+    catch_open: ptr  // std.strarr: "<fn depth>|<name>" of the catch blocks being parsed
+    sealed: string   // "seal except" names of the page, as ",a,b,", or "" (none)
+    hides: ptr       // std.strarr: "hide" names in force, stacked by function
+    hide_base: ptr   // per function: hides length at its start
 }
 
 ch_(x: *Lx, i: int) -> int {
@@ -634,6 +640,8 @@ fn_push_(x: *Lx, is_arrow: int) {
     iv_push_(x.fn_args as *IVec, 0)
     iv_push_(x.fn_scbase as *IVec, strarr.size(x.sc_names))
     iv_push_(x.fn_varbase as *IVec, strarr.size(x.fn_vars))
+    iv_push_(x.catch_base as *IVec, strarr.size(x.catch_names))
+    iv_push_(x.hide_base as *IVec, strarr.size(x.hides))
     // A closure created inside a loop: every enclosing loop contains it.
     lc = x.lp_closure as *IVec
     i = 0
@@ -656,6 +664,10 @@ fn_pop_(x: *Lx) -> int {
     iv_pop_(x.fn_scbase as *IVec)
     vb = iv_pop_(x.fn_varbase as *IVec)
     strarr_truncate_(x.fn_vars, vb)
+    cb = iv_pop_(x.catch_base as *IVec)
+    strarr_truncate_(x.catch_names, cb)
+    hb = iv_pop_(x.hide_base as *IVec)
+    strarr_truncate_(x.hides, hb)
     if is_arrow == 1 && used_this == 1 && fn_depth_(x) > 0 {
         iv_set_(x.fn_this as *IVec, fn_depth_(x) - 1, 1)
     }
@@ -976,7 +988,77 @@ erase_tokens_(x: *Lx, i: int, j: int) {
 // ---------------------------------------------------------------------------
 // Statements
 
+// ---------------------------------------------------------------------------
+// Seals: "seal except a, b" as a page's first statement, "hide a, b" as a
+// function's (or the page's). The capability objects a page reaches are
+// then checked by name where they are used. docs/app-capabilities.md.
+
+const CAPS = ",ui,vg,http,fs,shell,storage,browserContext,"
+
+// The text of string token i, without its quotes.
+str_inner_(x: *Lx, i: int) -> string {
+    t = tk_text_(x, i)
+    if string.length(t) < 2 { return "" }
+    return string.substring(t, 1, string.length(t) - 1)
+}
+
+// "a, b" -> each name, trimmed, into `out` (a strarr); or as ",a,b," text.
+names_of_(list: string) -> string {
+    out = ","
+    parts = string.split(list, ",")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        nm = string.trim(string.string_array_get(parts, i))
+        if nm != "" { out = string.concat(out, string.concat(nm, ",")) }
+        i = i + 1
+    }
+    return out
+}
+
+// A directive at token i (a string statement): seal or hide. A seal only
+// counts as the page's first statement.
+directive_(x: *Lx, i: int, page_top: int) {
+    if tk_kind_(x, i) != T_STR { return }
+    d = str_inner_(x, i)
+    if string.starts_with(d, "seal except ") == 1 {
+        if page_top == 0 {
+            fail_at_(x, tk_start_(x, i), "\"seal except\" belongs at the top of a page; a function says \"hide\"")
+            return
+        }
+        x.sealed = names_of_(string.substring(d, 12, string.length(d)))
+        return
+    }
+    if string.starts_with(d, "hide ") == 1 {
+        ns = names_of_(string.substring(d, 5, string.length(d)))
+        parts = string.split(ns, ",")
+        n = string.string_array_size(parts)
+        k = 0
+        while k < n {
+            nm = string.string_array_get(parts, k)
+            if nm != "" { _h = strarr.push_copy(x.hides, nm) }
+            k = k + 1
+        }
+    }
+}
+
+// A capability name used at token i: refused if the page's seal leaves it
+// out or a hide covers it, unless the code bound that name itself.
+cap_check_(x: *Lx, i: int) {
+    nm = tk_text_(x, i)
+    if string.contains(CAPS, ",${nm},") == 0 { return }
+    if name_in_(x.fn_vars, 0, nm) == 1 || name_in_(x.sc_names, 0, nm) == 1 { return }
+    if name_in_(x.hides, 0, nm) == 1 {
+        fail_at_(x, tk_start_(x, i), "${nm} is hidden here (a \"hide\" directive)")
+        return
+    }
+    if x.sealed != "" && string.contains(x.sealed, ",${nm},") == 0 {
+        fail_at_(x, tk_start_(x, i), "${nm} is sealed out of this page (\"seal except\" does not list it)")
+    }
+}
+
 parse_program_(x: *Lx) {
+    directive_(x, x.pos, 1)
     while tk_kind_(x, x.pos) != T_EOF && x.err == "" {
         parse_statement_(x)
     }
@@ -1203,14 +1285,43 @@ parse_statement_(x: *Lx) {
                         unsupported_(x, x.pos, "a destructuring catch parameter")
                         return
                     }
+                    // MicroQuickJS refuses a second catch parameter of the
+                    // same name in one function ("catch variable already
+                    // exists"), legal as it is. A repeat is renamed, and the
+                    // name re-bound at the top of its block:
+                    //   catch (e) {   ->   catch (e$7) { var e = e$7;
+                    // so the block reads as written. (e becomes a var of the
+                    // function, visible after the catch.)
+                    pi = x.pos
+                    cname = tk_text_(x, pi)
+                    cbase = 0
+                    if fn_depth_(x) > 0 { cbase = iv_top_(x.catch_base as *IVec) }
+                    repeat = name_in_(x.catch_names, cbase, cname)
                     advance_(x)
                     erase_annotation_(x)
                     expect_(x, ")")
+                    // Inside a catch of the same name, in this function, the
+                    // re-binding var would overwrite the outer one: refuse.
+                    open_key = "${fn_depth_(x)}|${cname}"
+                    if repeat == 1 && name_in_(x.catch_open, 0, open_key) == 1 {
+                        unsupported_(x, pi, "a catch inside a catch of the same name (rename one)")
+                        return
+                    }
+                    if repeat == 1 {
+                        x.tmp = x.tmp + 1
+                        nn = "${cname}$${x.tmp}"
+                        edit_(x, tk_start_(x, pi), tk_end_(x, pi), nn)
+                        if at_(x, "{") == 1 { insert_(x, tk_end_(x, x.pos), " var ${cname} = ${nn};") }
+                    } else {
+                        _cn = strarr.push_copy(x.catch_names, cname)
+                    }
+                    _co = strarr.push_copy(x.catch_open, open_key)
+                    parse_block_body_(x)
+                    strarr_truncate_(x.catch_open, strarr.size(x.catch_open) - 1)
                 } else {
                     unsupported_(x, x.pos, "catch without a parameter")
                     return
                 }
-                parse_block_body_(x)
             }
             if at_(x, "finally") == 1 {
                 advance_(x)
@@ -1711,6 +1822,7 @@ parse_function_(x: *Lx, is_decl: int, is_method: int) {
         expect_(x, "{")
     }
     if pro != "" { insert_(x, tk_end_(x, x.pos), pro) }
+    directive_(x, x.pos + 1, 0)
     parse_block_body_(x)
     block_pop_(x)
     fn_pop_(x)
@@ -1745,6 +1857,7 @@ parse_arrow_(x: *Lx) {
     advance_(x)
     if at_(x, "{") == 1 {
         if pro != "" { insert_(x, tk_end_(x, x.pos), pro) }
+        directive_(x, x.pos + 1, 0)
         parse_block_body_(x)
     } else {
         insert_(x, tk_start_(x, x.pos), "{${pro} return ")
@@ -2092,6 +2205,7 @@ parse_primary_(x: *Lx) {
             unsupported_(x, i, "super")
             return
         }
+        cap_check_(x, i)
         advance_(x)
         return
     }
@@ -2334,6 +2448,12 @@ lx_new_(src: string) -> *Lx {
     x.fn_scbase = iv_new_()
     x.fn_vars = strarr.new()
     x.fn_varbase = iv_new_()
+    x.catch_names = strarr.new()
+    x.catch_base = iv_new_()
+    x.catch_open = strarr.new()
+    x.sealed = ""
+    x.hides = strarr.new()
+    x.hide_base = iv_new_()
     return x
 }
 
@@ -2362,6 +2482,11 @@ lx_free_(x: *Lx) {
     iv_free_(x.fn_scbase as *IVec)
     strarr.free(x.fn_vars)
     iv_free_(x.fn_varbase as *IVec)
+    strarr.free(x.catch_names)
+    iv_free_(x.catch_base as *IVec)
+    strarr.free(x.catch_open)
+    strarr.free(x.hides)
+    iv_free_(x.hide_base as *IVec)
     heap.free(x)
 }
 

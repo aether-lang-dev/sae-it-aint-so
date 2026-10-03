@@ -78,6 +78,22 @@ sae_stdlib_main(argc: int, argv: ptr) -> int {
     cfunc(ht, "get", 2, "sae_http_get")
     cfunc(ht, "post", 4, "sae_http_post")
     cfunc(ht, "cancel", 1, "sae_http_cancel")
+    cfunc(ht, "request", 2, "sae_http_request")
+
+    fo = statics_of(object(g, "fs"))
+    cfunc(fo, "read_text", 1, "sae_fs_read_text")
+    cfunc(fo, "readFileSync", 2, "sae_fs_read_text")
+    cfunc(fo, "write_text", 2, "sae_fs_write_text")
+    cfunc(fo, "writeFileSync", 2, "sae_fs_write_text")
+    cfunc(fo, "exists", 1, "sae_fs_exists")
+    cfunc(fo, "existsSync", 1, "sae_fs_exists")
+    cfunc(fo, "list", 1, "sae_fs_list")
+    cfunc(fo, "readdirSync", 1, "sae_fs_list")
+    cfunc(fo, "mkdir", 1, "sae_fs_mkdir")
+    cfunc(fo, "remove", 1, "sae_fs_remove")
+
+    sho = statics_of(object(g, "shell"))
+    cfunc(sho, "open", 1, "sae_shell_open")
 
     st = statics_of(object(g, "storage"))
     cfunc(st, "get", 1, "sae_storage_get")

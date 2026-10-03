@@ -1,0 +1,67 @@
+// spec_app_caps.ae — an app's capability grants (app.json), each edge.
+//   SAE_TEST_APP=tests/apps/caps SAE_APPDATA_DIR=$PWD/target/caps-appdata \
+//     SAE_SHELL_LOG=$PWD/target/caps-shell.log tests/run_spec.sh spec_app_caps
+import std.spec
+import std.string
+import std.fs
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+tmp_dir() -> string {
+    t = os_getenv("TMPDIR")
+    if t == null { return "/tmp" }
+    while string.ends_with(t, "/") == 1 { t = string.substring(t, 0, string.length(t) - 1) }
+    return t
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "app capabilities") {
+        spec.it("fs.write within $APPDATA: mkdir, write, read back, list") callback {
+            b.click("write appdata")
+            b.assert_text("write appdata: hello from a sae app", "round trip")
+            appdata = os_getenv("SAE_APPDATA_DIR")
+            body, _e = fs.read("${appdata}/notes/a.txt")
+            spec.assert_str_eq(body, "hello from a sae app", "on disk, in the app's folder")
+            b.click("list appdata")
+            b.assert_text("list appdata: a.txt", "listed")
+        }
+        spec.it("fs.read within its grant") callback {
+            _m = fs.mkdir_p("${tmp_dir()}/sae-caps-read")
+            _w = fs.write("${tmp_dir()}/sae-caps-read/hello.txt", "readable")
+            b.click("read temp")
+            b.assert_text("read temp: readable", "read")
+        }
+        spec.it("a read grant is not a write grant") callback {
+            b.click("write temp")
+            spec.assert_contains(b.page_texts(), "write temp: refused: fs.write_text: ", "refused")
+            spec.assert_contains(b.page_texts(), "outside this app's fs.write grant", "naming the grant")
+        }
+        spec.it("outside every grant is refused, even by climbing out with ..") callback {
+            b.click("read outside")
+            spec.assert_contains(b.page_texts(), "read outside: refused: fs.read_text: outside this app's fs.read grant: ", "refused")
+            b.click("climb out")
+            spec.assert_contains(b.page_texts(), "climb out: refused: fs.read_text: outside this app's fs.read grant: ", "refused")
+            spec.assert_false(string.contains(b.page_texts(), "localhost"), "and nothing of /etc/hosts shown")
+        }
+        spec.it("fs.remove within the write grant") callback {
+            b.click("remove")
+            b.assert_text("remove: exists=false", "removed")
+        }
+        spec.it("shell.open: a listed prefix opens, another is refused") callback {
+            b.click("open allowed")
+            b.assert_text("open allowed: opened", "opened")
+            lg, _e = fs.read(os_getenv("SAE_SHELL_LOG"))
+            spec.assert_contains(lg, "https://example.com/page", "handed to the system")
+            b.click("open other")
+            spec.assert_contains(b.page_texts(), "open other: refused: shell.open: this app may not open https://evil.example.net/", "refused")
+        }
+        spec.it("http.request: PATCH with a header, and the response's headers") callback {
+            b.click("patch")
+            b.assert_text("patch: 200 PATCH x-test=hi body=b1 answer=forty-two", "round trip")
+        }
+    }
+    return spec.run_summary(fw)
+}

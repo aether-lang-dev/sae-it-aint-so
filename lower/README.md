@@ -70,3 +70,23 @@ print exactly its `// expect:` lines and keep its line count.
 `lower/tests/err/*.ts` must fail with the `// error: line:col: message` they
 state. Without the per-iteration wraps, `letloop.ts` prints `for 3` three
 times; that is the bug the wrap exists to prevent.
+
+## Directives: seal and hide
+
+A page's first statement may be `"seal except ui, http";`: the page may then
+name no other capability object (`ui`, `vg`, `http`, `fs`, `shell`,
+`storage`, `browserContext`). A function's first statement may be
+`"hide fs, http";`: those names are refused in that function and every
+function inside it. A name the code binds itself (a parameter `fs`) is
+its own, not the capability. Violations are lowering errors:
+`page.ts:3:1: http is sealed out of this page`. See
+`../docs/app-capabilities.md`.
+
+## catch parameters
+
+MicroQuickJS refuses a second `catch (e)` in one function ("catch variable
+already exists"), as upstream's C does, though the language allows it. The
+lowerer renames a repeat and re-binds the name at the top of its block
+(`catch (e$3) { var e = e$3; ...`), so `e` becomes a function variable,
+visible after the catch. A catch inside a catch of the same name would
+then overwrite the outer one, so that alone is refused: rename one.

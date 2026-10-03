@@ -92,18 +92,48 @@ timer asks the inbox for them and runs the callbacks on the UI thread, where
 the JS engine lives. A reply for a page that has since been left is
 dropped.
 
-Where a page may reach is the kernel's decision, behind the page veto: in
-the browser, the page's own origin; in an app, the URL prefixes `app.json`
-lists under `"http"` (Tauri's allowlist):
+`http.request({ method, url, headers, body, contentType }, (res) => ...)`
+takes any method and request headers; `res.headers` holds the response's,
+with lowercased names.
 
-```json
-{ "name": "My app", "http": ["https://api.example.com/"] }
-```
+Where a page may reach is the kernel's decision, behind the page veto: in
+the browser, the page's own origin; in an app, the URL prefixes its
+`app.json` grants under `capabilities.http` (below).
 
 Anything else is refused: the callback gets `res.ok` false and the reason in
 `res.error`. Callbacks, not promises: mquickjs-ae has no `Promise` yet
 and a callback is what the UI thread
 hand-off needs.
+
+### App capabilities: fs, shell, and what each page may name
+
+An app can be granted what a web page never gets, as narrowly as it can
+say it, in `app.json`; the kernel enforces it on every call:
+
+```json
+"capabilities": {
+  "http":  ["https://api.github.com/"],
+  "shell": { "open": ["https://github.com/"] },
+  "fs":    { "read": ["$DOCUMENTS/notes/"], "write": ["$APPDATA/"] }
+}
+```
+
+- `fs.read_text`, `write_text`, `exists`, `list`, `mkdir`, `remove` (and
+  Node's `readFileSync`, `writeFileSync`, `existsSync`, `readdirSync`):
+  synchronous, within the granted folders. Every path is resolved first
+  (symlinks, `..`), so it cannot climb out; a refusal throws, naming the
+  grant. `$APPDATA` is the app's own folder.
+- `shell.open(url)`: hands a URL to the system (the default browser), for
+  the granted prefixes.
+- A web page has no `fs` and no `shell` at all.
+
+And what each piece of code may *name*, after Aether's `hide` /
+`seal except`: a page that starts `"seal except ui, storage";` may use no
+other capability object, and a function that starts `"hide fs";` (with
+every function inside it) may not name `fs`. The lowerer refuses a
+violation when the page loads, with its line and column. A seal is an audit
+line, not the boundary; the grants are. `docs/app-capabilities.md` has the
+whole design.
 
 ### Storage
 

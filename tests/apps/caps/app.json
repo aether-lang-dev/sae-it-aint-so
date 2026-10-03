@@ -1,0 +1,8 @@
+{
+  "name": "Caps test",
+  "capabilities": {
+    "http":  ["http://127.0.0.1:8091/api/"],
+    "shell": { "open": ["https://example.com/"] },
+    "fs":    { "read": ["$TEMP/sae-caps-read/"], "write": ["$APPDATA/"] }
+  }
+}

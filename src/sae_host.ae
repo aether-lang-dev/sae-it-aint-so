@@ -26,6 +26,7 @@ import vg
 import vg.live
 import std.json
 import std.actors
+import std.dir
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -76,6 +77,7 @@ extern JS_GetPropertyUint32(ctx: ptr, obj: long, idx: int) -> long
 
 const JS_DUMP_LONG = 1
 const JS_EVAL_RETVAL = 1   // JS_Parse: the script's value is its last expression's
+const JS_EVAL_JSON = 8     // JS_Parse: parse JSON, the value is the object
 const FRAME_CF_CTOR = 65536
 const STACK_MAX = 64
 const PAGE_MEM_DEFAULT = 1048576
@@ -849,6 +851,13 @@ js_num_(ctx: ptr, v: long) -> float {
     return mem.get_float64(p.scratch, 0)
 }
 
+// A string property of the object held in obj_r, or dflt when it is missing.
+js_prop_str_(ctx: ptr, obj_r: ptr, name: string, dflt: string) -> string {
+    v = JS_GetPropertyStr(ctx, mem.get_long(obj_r, 0), name)
+    if v == sae_js_undefined() || v == sae_js_null() { return dflt }
+    return js_str_(ctx, v)
+}
+
 // Object.keys(obj), the object held in `obj_r`. The keys function is fetched
 // after the stack check and pushed straight away, so nothing allocates
 // between reading it and the engine rooting it.
@@ -1109,7 +1118,7 @@ sae_ui_timer_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 @c_callback
 sae_http_get(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    return http_start_(ctx, "GET", own_(arg_str_(ctx, argv, argc, 0)), "", "", held_fn_(ctx, argv, argc, 1))
+    return http_start_(ctx, "GET", own_(arg_str_(ctx, argv, argc, 0)), "", "", null, held_fn_(ctx, argv, argc, 1))
 }
 
 // http.cancel(id): what req.cancel() calls. The request may still run to
@@ -1126,7 +1135,120 @@ sae_http_post(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     return http_start_(ctx, "POST", own_(arg_str_(ctx, argv, argc, 0)),
                        own_(arg_str_(ctx, argv, argc, 1)), own_(arg_str_(ctx, argv, argc, 2)),
-                       held_fn_(ctx, argv, argc, 3))
+                       null, held_fn_(ctx, argv, argc, 3))
+}
+
+// http.request({ method, url, headers, body, contentType }, (res) => ...):
+// any method, request headers; res.headers holds the response's, lowercased.
+@c_callback
+sae_http_request(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    if argc < 2 { return sae_throw_type_error(ctx, "http.request(options, fn)") }
+    opt_r = tmp_ref_(ctx, arg_(argv, 0))
+    method = js_prop_str_(ctx, opt_r, "method", "GET")
+    url = js_prop_str_(ctx, opt_r, "url", "")
+    body = js_prop_str_(ctx, opt_r, "body", "")
+    ctype = js_prop_str_(ctx, opt_r, "contentType", "")
+    hdrs = null
+    hv = JS_GetPropertyStr(ctx, mem.get_long(opt_r, 0), "headers")
+    if hv != sae_js_undefined() && hv != sae_js_null() {
+        h_r = tmp_ref_(ctx, hv)
+        keys = object_keys_(ctx, h_r)
+        if sae_js_is_exception(keys) == 0 {
+            k_r = tmp_ref_(ctx, keys)
+            hdrs = strarr.new()
+            n = js_length_(ctx, mem.get_long(k_r, 0))
+            i = 0
+            while i < n {
+                name = js_str_(ctx, JS_GetPropertyUint32(ctx, mem.get_long(k_r, 0), i))
+                val = js_str_(ctx, JS_GetPropertyStr(ctx, mem.get_long(h_r, 0), name))
+                strarr.push_copy(hdrs, "${name}: ${val}")
+                i = i + 1
+            }
+            tmp_unref_(ctx, k_r)
+        }
+        tmp_unref_(ctx, h_r)
+    }
+    tmp_unref_(ctx, opt_r)
+    if url == "" { return sae_throw_type_error(ctx, "http.request: options.url is missing") }
+    return http_start_(ctx, string.to_upper(method), url, body, ctype, hdrs, held_fn_(ctx, argv, argc, 1))
+}
+
+// --- the page API: fs (app mode, within the app's grants) ---
+//
+// Synchronous, for the small files an app keeps. Every path is resolved
+// (symlinks, "..") before it is checked against capabilities.fs in app.json;
+// a page in the browser has no fs at all. See docs/app-capabilities.md.
+
+@c_callback
+sae_fs_read_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 0, "fs.read_text")
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    text, err = pfs_read_(p)
+    if err != "" { return sae_throw_type_error(ctx, "fs.read_text: ${err}") }
+    return JS_NewString(ctx, text)
+}
+
+@c_callback
+sae_fs_write_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 1, "fs.write_text")
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    err = pfs_write_(p, own_(arg_str_(ctx, argv, argc, 1)))
+    if err != "" { return sae_throw_type_error(ctx, "fs.write_text: ${err}") }
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_fs_exists(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 0, "fs.exists")
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    return sae_js_bool(pfs_exists_(p))
+}
+
+@c_callback
+sae_fs_list(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 0, "fs.list")
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    names, err = pfs_list_(p)
+    if err != "" { return sae_throw_type_error(ctx, "fs.list: ${err}") }
+    // A JSON array, parsed back on the JS side: the names are strings only.
+    return json_value_(ctx, names)
+}
+
+@c_callback
+sae_fs_mkdir(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 1, "fs.mkdir")
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    err = pfs_mkdir_(p)
+    if err != "" { return sae_throw_type_error(ctx, "fs.mkdir: ${err}") }
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_fs_remove(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 1, "fs.remove")
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    err = pfs_remove_(p)
+    if err != "" { return sae_throw_type_error(ctx, "fs.remove: ${err}") }
+    return sae_js_undefined()
+}
+
+// shell.open(url): hand a URL to the system (the default browser for https:),
+// if capabilities.shell.open lists a prefix of it. App mode only.
+@c_callback
+sae_shell_open(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    url = own_(arg_str_(ctx, argv, argc, 0))
+    why = shell_refusal_(url)
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    shell_open_(url)
+    return sae_js_undefined()
 }
 
 // --- the page API: storage ---
@@ -1448,8 +1570,10 @@ struct HttpJob {
     url: string
     body: string
     ctype: string
+    headers: ptr     // strarr of "Name: value", or null
     status: int
     resp: string
+    resp_headers: string
     err: string
 }
 
@@ -1508,7 +1632,6 @@ var http_next_ = 0
 var http_waits_: ptr = null     // std.list of *HttpWait
 var http_ids_ = 0
 var http_timer_ = 0
-var http_allow_: ptr = null     // app mode: strarr of allowed URL prefixes
 
 http_do_(jp: ptr) {
     j = jp as *HttpJob
@@ -1519,7 +1642,20 @@ http_do_(jp: ptr) {
     }
     client.set_timeout(req, 15s)
     client.set_follow_redirects(req, 5)
-    if j.method == "POST" {
+    if j.headers != null {
+        nh = strarr.size(j.headers)
+        hi = 0
+        while hi < nh {
+            line = strarr.get(j.headers, hi)
+            c = string.index_of(line, ": ")
+            if c > 0 {
+                _sh = client.set_header(req, string.string_substring(line, 0, c),
+                                        string.string_substring(line, c + 2, string.length(line)))
+            }
+            hi = hi + 1
+        }
+    }
+    if j.body != "" || j.method == "POST" || j.method == "PUT" || j.method == "PATCH" {
         ct = j.ctype
         if ct == "" { ct = "text/plain" }
         _sb = client.set_body(req, string.bytes(j.body), ct)
@@ -1532,6 +1668,7 @@ http_do_(jp: ptr) {
     }
     j.status = client.response_status(resp)
     j.resp = own_(client.response_body(resp))
+    j.resp_headers = own_(client.response_headers(resp))
     client.response_free(resp)
 }
 
@@ -1539,15 +1676,8 @@ http_do_(jp: ptr) {
 http_refusal_(page_url: string, url: string) -> string {
     if is_http_(url) == 0 { return "http.get/post takes an http(s) URL: ${url}" }
     if app_dir_ != "" {
-        if http_allow_ != null {
-            n = strarr.size(http_allow_)
-            i = 0
-            while i < n {
-                if string.string_starts_with(url, strarr.get(http_allow_, i)) == 1 { return "" }
-                i = i + 1
-            }
-        }
-        return "this app may not reach ${url} (app.json \"http\" lists what it may)"
+        if prefix_in_(cap_http_, url) == 1 { return "" }
+        return "this app may not reach ${url} (app.json capabilities.http lists what it may)"
     }
     if is_http_(page_url) == 1 {
         po = string.string_substring(page_url, 0, origin_end_(page_url))
@@ -1557,7 +1687,7 @@ http_refusal_(page_url: string, url: string) -> string {
     return "a page may reach only its own origin: ${url}"
 }
 
-http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: string, ref: ptr) -> long {
+http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: string, headers: ptr, ref: ptr) -> long {
     p = page_of_(ctx)
     if ref == null { return sae_throw_type_error(ctx, "http: the last argument must be a function") }
     url = resolve_(p.url, url_arg)
@@ -1569,8 +1699,10 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     j.url = own_(url)
     j.body = body
     j.ctype = ctype
+    j.headers = headers
     j.status = 0
     j.resp = ""
+    j.resp_headers = ""
     j.err = http_refusal_(p.url, url)
     w = heap.new(HttpWait)
     w.id = j.id
@@ -1602,7 +1734,7 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
 // ready.
 http_helpers_(ctx: ptr, p: *Page) -> int {
     if p.http_res != null { return 1 }
-    rs = "(function (ok, status, text, error) { return { ok: ok, status: status, text: text, error: error, json: function () { return JSON.parse(this.text); } }; })"
+    rs = "(function (ok, status, text, error, raw) { var h = {}; var ls = raw.split(/\\r?\\n/); for (var i = 1; i < ls.length; i++) { var c = ls[i].indexOf(':'); if (c > 0) h[ls[i].slice(0, c).trim().toLowerCase()] = ls[i].slice(c + 1).trim(); } return { ok: ok, status: status, text: text, error: error, headers: h, json: function () { return JSON.parse(this.text); } }; })"
     qs = "(function (id) { return { id: id, cancel: function () { http.cancel(id); } }; })"
     rf = JS_Run(ctx, JS_Parse(ctx, rs, string.length(rs), "sae:http", JS_EVAL_RETVAL))
     if sae_js_is_exception(rf) != 0 { return 0 }
@@ -1680,7 +1812,7 @@ http_deliver_(j: *HttpJob) {
                 cur = (b as *Browser).page
                 if cur != null && cur == w.page && (cur as *Page).seq == w.seq {
                     p = cur as *Page
-                    r = call_http_(p, w.ref, j.status, j.resp, j.err)
+                    r = call_http_(p, w.ref, j.status, j.resp, j.err, j.resp_headers)
                     if sae_js_is_exception(r) != 0 { report_exception_(p.ctx, "an http callback") }
                 }
             }
@@ -1697,24 +1829,231 @@ http_deliver_(j: *HttpJob) {
 // to fn. Each value is pushed as soon as it exists, so it is rooted on the
 // engine stack before the next allocation can move anything; the functions
 // are read from their roots last.
-call_http_(p: *Page, ref: ptr, status: int, text: string, err: string) -> long {
+call_http_(p: *Page, ref: ptr, status: int, text: string, err: string, raw_headers: string) -> long {
     ctx = p.ctx
     if http_helpers_(ctx, p) == 0 { return sae_js_exception() }
-    if JS_StackCheck(ctx, 9) != 0 { return sae_js_exception() }
+    if JS_StackCheck(ctx, 10) != 0 { return sae_js_exception() }
     ok = 0
     if err == "" && status >= 200 && status < 300 { ok = 1 }
+    JS_PushArg(ctx, JS_NewString(ctx, raw_headers))
     JS_PushArg(ctx, JS_NewString(ctx, err))
     JS_PushArg(ctx, JS_NewString(ctx, text))
     JS_PushArg(ctx, JS_NewInt32(ctx, status))
     JS_PushArg(ctx, sae_js_bool(ok))
     JS_PushArg(ctx, mem.get_long(p.http_res, 0))
     JS_PushArg(ctx, sae_js_null())
-    res = JS_Call(ctx, 4)
+    res = JS_Call(ctx, 5)
     if sae_js_is_exception(res) != 0 { return res }
     JS_PushArg(ctx, res)
     JS_PushArg(ctx, mem.get_long(ref, 0))
     JS_PushArg(ctx, sae_js_null())
     return JS_Call(ctx, 1)
+}
+
+// --- capabilities (the kernel side; docs/app-capabilities.md) ---
+
+var cap_http_: ptr = null    // strarr: URL prefixes http may reach (app mode)
+var cap_open_: ptr = null    // strarr: URL prefixes shell.open may hand on
+var cap_read_: ptr = null    // strarr: resolved directory prefixes fs may read
+var cap_write_: ptr = null   // strarr: ... and write (also readable)
+
+// 1 if `s` starts with one of the prefixes in `l`.
+prefix_in_(l: ptr, s: string) -> int {
+    if l == null { return 0 }
+    n = strarr.size(l)
+    i = 0
+    while i < n {
+        if string.string_starts_with(s, strarr.get(l, i)) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// The app's own data folder: $SAE_APPDATA_DIR, else the platform's place.
+app_data_dir_() -> string {
+    d = env_("SAE_APPDATA_DIR")
+    if d != "" { return d }
+    if os.platform() == "darwin" { return "${env_("HOME")}/Library/Application Support/${app_name_}" }
+    return "${env_("HOME")}/.local/share/${app_name_}"
+}
+
+// $APPDATA, $HOME, $DOCUMENTS, $DOWNLOADS, $DESKTOP, $TEMP at the front of a
+// path, expanded.
+expand_root_(s: string) -> string {
+    h = env_("HOME")
+    if string.string_starts_with(s, "$APPDATA") == 1 {
+        d = app_data_dir_()
+        _m = fs.mkdir_p(d)
+        return string.concat(d, string.string_substring(s, 8, string.length(s)))
+    }
+    if string.string_starts_with(s, "$HOME") == 1 { return string.concat(h, string.string_substring(s, 5, string.length(s))) }
+    if string.string_starts_with(s, "$DOCUMENTS") == 1 { return string.concat("${h}/Documents", string.string_substring(s, 10, string.length(s))) }
+    if string.string_starts_with(s, "$DOWNLOADS") == 1 { return string.concat("${h}/Downloads", string.string_substring(s, 10, string.length(s))) }
+    if string.string_starts_with(s, "$DESKTOP") == 1 { return string.concat("${h}/Desktop", string.string_substring(s, 8, string.length(s))) }
+    if string.string_starts_with(s, "$TEMP") == 1 {
+        t = env_("TMPDIR")
+        if t == "" { t = "/tmp" }
+        while string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
+        return string.concat(t, string.string_substring(s, 5, string.length(s)))
+    }
+    return s
+}
+
+// A path made absolute (relative ones are in $APPDATA) and resolved:
+// symlinks and ".." gone, so a prefix check means what it says. A path that
+// does not exist yet resolves through its parent.
+resolve_path_(raw: string) -> string {
+    p = expand_root_(raw)
+    if string.string_starts_with(p, "/") == 0 { p = "${app_data_dir_()}/${p}" }
+    rp, _k, err = fs.realpath(p)
+    if err == "" { return own_(rp) }
+    par = dir_of_(p)
+    base = string.string_substring(p, string.length(par), string.length(p))
+    if par == "" { return p }
+    rpar, _k2, perr = fs.realpath(par)
+    if perr != "" { return p }
+    if string.string_ends_with(rpar, "/") == 1 { return string.concat(rpar, base) }
+    return "${rpar}/${base}"
+}
+
+// A grant root as a directory prefix ending in "/", resolved.
+grant_root_(raw: string) -> string {
+    r = resolve_path_(raw)
+    if string.string_ends_with(r, "/") == 0 { r = string.concat(r, "/") }
+    return r
+}
+
+within_(l: ptr, p: string) -> int {
+    if prefix_in_(l, p) == 1 { return 1 }
+    // A grant root itself ("/x/" grants "/x").
+    return prefix_in_(l, string.concat(p, "/"))
+}
+
+// The resolved path fs may use, or why not. write: 1 for a change.
+pfs_path_(raw: string, write: int, what: string) -> (string, string) {
+    if app_dir_ == "" { return "", "${what}: fs is not available to a web page" }
+    p = resolve_path_(raw)
+    if write == 1 {
+        if within_(cap_write_, p) == 1 { return p, "" }
+        return "", "${what}: outside this app's fs.write grant: ${p}"
+    }
+    if within_(cap_read_, p) == 1 || within_(cap_write_, p) == 1 { return p, "" }
+    return "", "${what}: outside this app's fs.read grant: ${p}"
+}
+
+pfs_read_(p: string) -> (string, string) {
+    t, err = fs.read(p)
+    if err != "" { return "", err }
+    return t, ""
+}
+
+pfs_write_(p: string, text: string) -> string {
+    return fs.write_atomic(p, string.bytes(text))
+}
+
+pfs_exists_(p: string) -> int { return fs.exists(p) }
+
+pfs_mkdir_(p: string) -> string {
+    _m = fs.mkdir_p(p)
+    if fs.exists(p) == 0 { return "could not create ${p}" }
+    return ""
+}
+
+pfs_remove_(p: string) -> string {
+    kind, _sz, _mt, serr = fs.file_stat(p)
+    if serr != "" { return "no such file: ${p}" }
+    if kind == 2 {
+        e = fs.delete_dir(p)
+        return e
+    }
+    e2 = fs.delete(p)
+    return e2
+}
+
+// The names in a directory, as a JSON array string.
+pfs_list_(p: string) -> (string, string) {
+    l, lerr = dir.list(p)
+    if lerr != "" { return "", lerr }
+    out = "["
+    n = dir.list_count(l)
+    i = 0
+    while i < n {
+        if i > 0 { out = string.concat(out, ",") }
+        out = string.concat(out, json_quote_(dir.list_get(l, i)))
+        i = i + 1
+    }
+    return string.concat(out, "]"), ""
+}
+
+json_quote_(s: string) -> string {
+    out = "\""
+    i = 0
+    while i < string.length(s) {
+        c = string.char_at(s, i)
+        if c == 34 { out = string.concat(out, "\\\"") }
+        else if c == 92 { out = string.concat(out, "\\\\") }
+        else if c < 32 { out = string.concat(out, " ") }
+        else { out = string.concat(out, string.from_char(c)) }
+        i = i + 1
+    }
+    return string.concat(out, "\"")
+}
+
+// A JSON text made into a JS value (JSON.parse, from the host). With
+// JS_EVAL_JSON, JS_Parse returns the value itself; there is nothing to run.
+json_value_(ctx: ptr, text: string) -> long {
+    return JS_Parse(ctx, text, string.length(text), "sae:json", JS_EVAL_JSON)
+}
+
+shell_refusal_(url: string) -> string {
+    if app_dir_ == "" { return "shell.open: not available to a web page" }
+    if prefix_in_(cap_open_, url) == 1 { return "" }
+    return "shell.open: this app may not open ${url} (app.json capabilities.shell.open lists what it may)"
+}
+
+// Opens a URL with the system's handler. SAE_SHELL_LOG=<file> records it
+// there instead, for specs.
+shell_open_(url: string) {
+    lg = env_("SAE_SHELL_LOG")
+    if lg != "" {
+        prev, _e = fs.read(lg)
+        _w = fs.write_atomic(lg, string.bytes("${prev}${url}\n"))
+        return
+    }
+    ui.open_url(url)
+}
+
+// An array of strings from a JSON manifest, appended to a strarr; roots
+// (for fs) resolved as grant roots.
+grants_from_(v: ptr, key: string, into_l: ptr, roots: int) {
+    if v == null { return }
+    a = json.json_object_get_raw(v, key)
+    if a == null { return }
+    n = json.json_array_size(a)
+    i = 0
+    while i < n {
+        sv, serr = json.get_string(json.json_array_get_raw(a, i))
+        if serr == "" {
+            if roots == 1 { strarr.push_copy(into_l, grant_root_(sv)) } else { strarr.push_copy(into_l, sv) }
+        }
+        i = i + 1
+    }
+}
+
+read_capabilities_(manifest: ptr) {
+    cap_http_ = strarr.new()
+    cap_open_ = strarr.new()
+    cap_read_ = strarr.new()
+    cap_write_ = strarr.new()
+    if manifest == null { return }
+    caps = json.json_object_get_raw(manifest, "capabilities")
+    if caps == null { return }
+    grants_from_(caps, "http", cap_http_, 0)
+    sh = json.json_object_get_raw(caps, "shell")
+    grants_from_(sh, "open", cap_open_, 0)
+    fsg = json.json_object_get_raw(caps, "fs")
+    grants_from_(fsg, "read", cap_read_, 1)
+    grants_from_(fsg, "write", cap_write_, 1)
 }
 
 // --- storage (the kernel side of the storage page API) ---
@@ -2220,19 +2559,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         w = app_setting_int_(manifest, "width", 800)
         h = app_setting_int_(manifest, "height", 600)
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
-        http_allow_ = strarr.new()
-        if manifest != null {
-            al = json.json_object_get_raw(manifest, "http")
-            if al != null {
-                na = json.json_array_size(al)
-                ai = 0
-                while ai < na {
-                    sv, serr = json.get_string(json.json_array_get_raw(al, ai))
-                    if serr == "" { strarr.push_copy(http_allow_, sv) }
-                    ai = ai + 1
-                }
-            }
-        }
+        read_capabilities_(manifest)
         build_content_(b, mem.long_to_ptr(root))
     } else {
         build_chrome_(b, root)

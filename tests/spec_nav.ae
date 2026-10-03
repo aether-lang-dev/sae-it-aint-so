@@ -279,6 +279,11 @@ main() {
             sleep(900)
             spec.assert_false(b.console_contains("a cancelled request's callback ran"), "not run")
         }
+        spec.it("a web page has no fs and no shell") callback {
+            b.click("Try fs and shell")
+            b.assert_text("denied: fs.read_text: fs is not available to a web page | shell.open: not available to a web page",
+                "both refused")
+        }
         spec.it("a reply for a page that has gone is dropped") callback {
             b.click("Slow, then leave")
             b.assert_page(HOME, "200 ", "left")

@@ -46,6 +46,8 @@ serve_page_(req: ptr, res: ptr, ud: ptr) {
 //   GET  /api/echo?msg=x   -> "echo: x"
 //   POST /api/echo         -> "posted: <body>"
 //   GET  /api/json         -> {"n":42,"items":["a","b","c"]}
+//   any  /api/headers      -> "<METHOD> x-test=<X-Test header> body=<body>",
+//                             with an X-Answer: forty-two response header
 //   GET  /api/slow?ms=n    -> "slow done", after n milliseconds
 api_echo_get_(req: ptr, res: ptr, ud: ptr) {
     m = http.http_get_query_param(req, "msg")
@@ -65,6 +67,15 @@ api_json_(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 200)
     http.response_set_header(res, "Content-Type", "application/json")
     http.response_set_body(res, "{\"n\":42,\"items\":[\"a\",\"b\",\"c\"]}")
+}
+
+api_headers_(req: ptr, res: ptr, ud: ptr) {
+    t = http.http_get_header(req, "X-Test")
+    if t == null { t = "" }
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "X-Answer", "forty-two")
+    http.response_set_body(res, "${http.request_method(req)} x-test=${t} body=${http.request_body(req)}")
 }
 
 api_slow_(req: ptr, res: ptr, ud: ptr) {
@@ -109,6 +120,10 @@ main() {
     http.server_get(server, "/api/echo", api_echo_get_, 0)
     http.server_post(server, "/api/echo", api_echo_post_, 0)
     http.server_get(server, "/api/json", api_json_, 0)
+    http.http_server_add_route(server, "GET", "/api/headers", api_headers_, 0)
+    http.http_server_add_route(server, "PATCH", "/api/headers", api_headers_, 0)
+    http.http_server_add_route(server, "PUT", "/api/headers", api_headers_, 0)
+    http.http_server_add_route(server, "DELETE", "/api/headers", api_headers_, 0)
     http.server_get(server, "/api/slow", api_slow_, 0)
 
     // One route per page file (routes are exact paths, no wildcard).
