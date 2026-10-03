@@ -65,6 +65,11 @@ extern aether_ui_vstack_create(spacing: int) -> int
 extern aether_ui_surface_flush_deferred_impl()
 extern JS_NewFloat64(ctx: ptr, d: float) -> long
 extern aether_ui_widget_count_impl() -> int
+extern aether_ui_test_server_banner_handle() -> int
+extern aether_ui_current_sheet_set_impl(sheet: ptr)
+extern JS_GetGlobalObject(ctx: ptr) -> long
+extern JS_GetPropertyStr(ctx: ptr, obj: long, name: string) -> long
+extern JS_GetPropertyUint32(ctx: ptr, obj: long, idx: int) -> long
 
 const JS_DUMP_LONG = 1
 const FRAME_CF_CTOR = 65536
@@ -116,6 +121,10 @@ struct Page {
     // address bar, the status line, the driver's banner or a past page's.
     first_handle: int
     stacks: ptr      // std.list: the vstack/hstack handles this page made
+    root: int        // the page's own stack in the content area: its widgets
+                     //   go in it, its styles stop at it, it goes with the page
+    sheet: ptr       // the page's AeCS sheet (ui.styles), or null
+    sheet_strs: ptr  // std.list: selector and family strings the sheet borrows
 }
 
 page_of_(ctx: ptr) -> *Page {
@@ -228,8 +237,11 @@ container_(ctx: ptr, argv: ptr, argc: int, handle: int) -> long {
 
 // Is `h` a widget this page made? (See Page.first_handle.)
 owned_(p: *Page, h: int) -> int {
-    if h >= p.first_handle { return 1 }
-    return 0
+    if h < p.first_handle { return 0 }
+    // The driver's banner is made lazily, on its first request, so in a
+    // sae-driver build it can land among the first page's handles.
+    if h == aether_ui_test_server_banner_handle() { return 0 }
+    return 1
 }
 
 // Is `h` a vstack or hstack this page made?
@@ -616,6 +628,362 @@ call2_num_(ctx: ptr, ref: ptr, a: float, b: float) -> long {
     return JS_Call(ctx, 2)
 }
 
+// Call a held JS function with one number argument.
+call1_num_(ctx: ptr, ref: ptr, a: float) -> long {
+    if JS_StackCheck(ctx, 3) != 0 { return sae_js_exception() }
+    JS_PushArg(ctx, JS_NewFloat64(ctx, a))
+    JS_PushArg(ctx, mem.get_long(ref, 0))
+    JS_PushArg(ctx, sae_js_null())
+    return JS_Call(ctx, 1)
+}
+
+// Hold argument i if it is a function, for a widget's change handler;
+// null when the page passed none.
+held_fn_(ctx: ptr, argv: ptr, argc: int, i: int) -> ptr {
+    if argc <= i { return null }
+    if JS_IsFunction(ctx, arg_(argv, i)) == 0 { return null }
+    return hold_(ctx, arg_(argv, i))
+}
+
+// Run a widget's change handler with one number.
+fire_num_(ctx: ptr, ref: ptr, v: float, what: string) {
+    if ref == null { return }
+    r = call1_num_(ctx, ref, v)
+    if sae_js_is_exception(r) != 0 { report_exception_(ctx, what) }
+}
+
+// The handle argument of a get_/set_ function, or 0 (and a pending throw)
+// when it is not a widget this page made.
+own_arg_(ctx: ptr, argv: ptr, argc: int) -> int {
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return 0 }
+    return h
+}
+
+// --- the page API: inputs and indicators (aether-ui's names) ---
+
+// toggle(label, onChange(on)): a checkbox; on is 1 or 0.
+@c_callback
+sae_ui_toggle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    label = own_(arg_str_(ctx, argv, argc, 0))
+    ref = held_fn_(ctx, argv, argc, 1)
+    long t = now_ns_()
+    h = ui.toggle(mem.long_to_ptr(top_(p)), label, |on: int| { fire_num_(ctx, ref, on, "a toggle handler") })
+    ui_done_(p, t)
+    return JS_NewInt32(ctx, h)
+}
+
+// slider(min, max, initial, onChange(value))
+@c_callback
+sae_ui_slider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    ref = held_fn_(ctx, argv, argc, 3)
+    long t = now_ns_()
+    h = ui.slider(mem.long_to_ptr(top_(p)), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 1.0),
+                  arg_num_(ctx, argv, argc, 2, 0.0), |v: float| { fire_num_(ctx, ref, v, "a slider handler") })
+    ui_done_(p, t)
+    return JS_NewInt32(ctx, h)
+}
+
+// picker(onChange(index)): a drop-down; fill it with picker_add.
+@c_callback
+sae_ui_picker(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    ref = held_fn_(ctx, argv, argc, 0)
+    long t = now_ns_()
+    h = ui.picker(mem.long_to_ptr(top_(p)), |i: int| { fire_num_(ctx, ref, i, "a picker handler") })
+    ui_done_(p, t)
+    return JS_NewInt32(ctx, h)
+}
+
+@c_callback
+sae_ui_picker_add(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "picker_add(h, item): h is not a widget this page made") }
+    ui.picker_add(null, h, arg_str_(ctx, argv, argc, 1))
+    return sae_js_undefined()
+}
+
+// progressbar(fraction): 0 to 1.
+@c_callback
+sae_ui_progressbar(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    long t = now_ns_()
+    h = ui.progressbar(mem.long_to_ptr(top_(p)), arg_num_(ctx, argv, argc, 0, 0.0))
+    ui_done_(p, t)
+    return JS_NewInt32(ctx, h)
+}
+
+@c_callback
+sae_ui_set_progress(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "set_progress(h, f): h is not a widget this page made") }
+    ui.set_progress(h, arg_num_(ctx, argv, argc, 1, 0.0))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_ui_set_toggle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "set_toggle(h, on): h is not a widget this page made") }
+    ui.set_toggle(h, arg_int_(ctx, argv, argc, 1, 0))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_ui_get_toggle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "get_toggle(h): h is not a widget this page made") }
+    return JS_NewInt32(ctx, ui.get_toggle(h))
+}
+
+@c_callback
+sae_ui_set_slider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "set_slider(h, v): h is not a widget this page made") }
+    ui.set_slider(h, arg_num_(ctx, argv, argc, 1, 0.0))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_ui_get_slider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "get_slider(h): h is not a widget this page made") }
+    return JS_NewFloat64(ctx, ui.get_slider(h))
+}
+
+// --- the page API: styles (a CSS-alike, after Swiby and Tsyne) ---
+//
+//   styles({
+//     root:   { font_family: "monospace", font_size: 12 },
+//     label:  { color: 0x5C458A },             // Tsyne's kind names work
+//     button: { color: "#5C458A", font_weight: "bold" },
+//     container: { background_color: 0xD6CFE6 },
+//     "header.text": { color: 0x6030BF },      // AeCS: class.kind
+//     "#status": { color: 0x224488 },          // and #id
+//   })
+//
+// Tsyne's styles() shape and property names, over aether-ui's AeCS cascade
+// (#id, class.kind, class, kind, container, root). The sheet styles the
+// page's widgets, those already built and those built later, never the
+// browser's chrome; it is dropped when the page is left.
+
+// A temporary GC root for a value held across allocations.
+tmp_ref_(ctx: ptr, v: long) -> ptr {
+    ref = malloc(sae_gcref_size())
+    slot = JS_AddGCRef(ctx, ref)
+    mem.set_long(slot, 0, v)
+    return ref
+}
+
+tmp_unref_(ctx: ptr, ref: ptr) {
+    JS_DeleteGCRef(ctx, ref)
+    free(ref)
+}
+
+// An owned copy of a JS value as a string.
+js_str_(ctx: ptr, v: long) -> string {
+    p = page_of_(ctx)
+    return own_(JS_ToCStringLen(ctx, p.scratch, v, p.cbuf))
+}
+
+js_num_(ctx: ptr, v: long) -> float {
+    p = page_of_(ctx)
+    if JS_ToNumber(ctx, p.scratch, v) != 0 { return 0.0 }
+    return mem.get_float64(p.scratch, 0)
+}
+
+// Object.keys(obj), the object held in `obj_r`. The keys function is fetched
+// after the stack check and pushed straight away, so nothing allocates
+// between reading it and the engine rooting it.
+object_keys_(ctx: ptr, obj_r: ptr) -> long {
+    if JS_StackCheck(ctx, 3) != 0 { return sae_js_exception() }
+    objc = JS_GetPropertyStr(ctx, JS_GetGlobalObject(ctx), "Object")
+    kf = JS_GetPropertyStr(ctx, objc, "keys")
+    JS_PushArg(ctx, mem.get_long(obj_r, 0))
+    JS_PushArg(ctx, kf)
+    JS_PushArg(ctx, sae_js_null())
+    return JS_Call(ctx, 1)
+}
+
+js_length_(ctx: ptr, arr: long) -> int {
+    p = page_of_(ctx)
+    lv = JS_GetPropertyStr(ctx, arr, "length")
+    if JS_ToInt32(ctx, p.scratch, lv) != 0 { return 0 }
+    return mem.get_int(p.scratch, 0)
+}
+
+// A colour: 0xRRGGBB, or "#rrggbb" / "#rgb". -1 when it is neither.
+js_colour_(ctx: ptr, v: long) -> int {
+    if JS_IsString(ctx, v) == 0 { return js_num_(ctx, v) as int }
+    s = js_str_(ctx, v)
+    n = string.length(s)
+    if n < 1 || string.char_at(s, 0) != 35 { return 0 - 1 }
+    hex = string.substring(s, 1, n)
+    if string.length(hex) == 3 {
+        r = string.substring(hex, 0, 1)
+        g = string.substring(hex, 1, 2)
+        bl = string.substring(hex, 2, 3)
+        hex = "${r}${r}${g}${g}${bl}${bl}"
+    }
+    if string.length(hex) != 6 { return 0 - 1 }
+    v2 = 0
+    i = 0
+    while i < 6 {
+        c = string.char_at(hex, i)
+        d = 0 - 1
+        if c >= 48 && c <= 57 { d = c - 48 }
+        if c >= 97 && c <= 102 { d = c - 87 }
+        if c >= 65 && c <= 70 { d = c - 55 }
+        if d < 0 { return 0 - 1 }
+        v2 = v2 * 16 + d
+        i = i + 1
+    }
+    return v2
+}
+
+// Tsyne's kind names, as aether-ui calls the same widgets. "header.label"
+// maps its kind part too.
+selector_(sel: string) -> string {
+    kind = sel
+    prefix = ""
+    dot = string.index_of(sel, ".")
+    if dot > 0 {
+        prefix = string.substring(sel, 0, dot + 1)
+        kind = string.substring(sel, dot + 1, string.length(sel))
+    }
+    k = kind
+    if string.equals(kind, "label") == 1 { k = "text" }
+    if string.equals(kind, "entry") == 1 { k = "textfield" }
+    if string.equals(kind, "checkbox") == 1 { k = "toggle" }
+    if string.equals(kind, "select") == 1 { k = "picker" }
+    if string.equals(kind, "separator") == 1 { k = "divider" }
+    return "${prefix}${k}"
+}
+
+// One rule: each property of the object in rule_r, by name. Returns "" or
+// a message naming the first property it could not use.
+style_rule_(ctx: ptr, p: *Page, sel: string, rule_r: ptr) -> string {
+    keys = object_keys_(ctx, rule_r)
+    if sae_js_is_exception(keys) != 0 { return "a rule must be an object" }
+    keys_r = tmp_ref_(ctx, keys)
+    n = js_length_(ctx, mem.get_long(keys_r, 0))
+    bw = 0.0 - 1.0
+    bc = 0 - 1
+    bad = ""
+    i = 0
+    while i < n {
+        name = js_str_(ctx, JS_GetPropertyUint32(ctx, mem.get_long(keys_r, 0), i))
+        v = JS_GetPropertyStr(ctx, mem.get_long(rule_r, 0), name)
+        if string.equals(name, "color") == 1 {
+            c = js_colour_(ctx, v)
+            if c < 0 { bad = "${sel} { color }: not 0xRRGGBB or \"#rrggbb\"" } else { ui.st_color(p.sheet, sel, c) }
+        } else if string.equals(name, "background_color") == 1 || string.equals(name, "background") == 1 {
+            c = js_colour_(ctx, v)
+            if c < 0 { bad = "${sel} { ${name} }: not 0xRRGGBB or \"#rrggbb\"" } else { ui.st_bg(p.sheet, sel, c) }
+        } else if string.equals(name, "font_size") == 1 {
+            ui.st_font_size(p.sheet, sel, js_num_(ctx, v))
+        } else if string.equals(name, "font_weight") == 1 || string.equals(name, "font_style") == 1 {
+            w = js_str_(ctx, v)
+            if string.contains(w, "bold") == 1 { ui.st_weight(p.sheet, sel, 1) } else { ui.st_weight(p.sheet, sel, 0) }
+        } else if string.equals(name, "font_family") == 1 {
+            fam = js_str_(ctx, v)
+            list.add(p.sheet_strs, fam)
+            ui.st_font_family(p.sheet, sel, fam)
+        } else if string.equals(name, "opacity") == 1 {
+            ui.st_opacity(p.sheet, sel, js_num_(ctx, v))
+        } else if string.equals(name, "border_radius") == 1 {
+            ui.st_radius(p.sheet, sel, js_num_(ctx, v))
+        } else if string.equals(name, "border_width") == 1 {
+            bw = js_num_(ctx, v)
+        } else if string.equals(name, "border_color") == 1 {
+            bc = js_colour_(ctx, v)
+        } else if string.equals(name, "hover_color") == 1 {
+            ui.st_hover(p.sheet, sel, js_colour_(ctx, v))
+        } else if string.equals(name, "active_color") == 1 {
+            ui.st_active(p.sheet, sel, js_colour_(ctx, v))
+        } else if bad == "" {
+            bad = "${sel} { ${name} }: not a style property sae knows"
+        }
+        i = i + 1
+    }
+    if bw >= 0.0 || bc >= 0 {
+        if bw < 0.0 { bw = 1.0 }
+        if bc < 0 { bc = 0 }
+        ui.st_border(p.sheet, sel, bw, bc)
+    }
+    tmp_unref_(ctx, keys_r)
+    return bad
+}
+
+@c_callback
+sae_ui_styles(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    if argc < 1 { return sae_throw_type_error(ctx, "styles(sheet): sheet is missing") }
+    obj_r = tmp_ref_(ctx, arg_(argv, 0))
+    keys = object_keys_(ctx, obj_r)
+    if sae_js_is_exception(keys) != 0 {
+        tmp_unref_(ctx, obj_r)
+        return sae_throw_type_error(ctx, "styles(sheet): sheet must be an object")
+    }
+    keys_r = tmp_ref_(ctx, keys)
+    rule_r = tmp_ref_(ctx, sae_js_undefined())
+    if p.sheet == null { p.sheet = ui.create_styles() }
+    n = js_length_(ctx, mem.get_long(keys_r, 0))
+    bad = ""
+    i = 0
+    while i < n {
+        sel = selector_(js_str_(ctx, JS_GetPropertyUint32(ctx, mem.get_long(keys_r, 0), i)))
+        list.add(p.sheet_strs, sel)
+        raw = js_str_(ctx, JS_GetPropertyUint32(ctx, mem.get_long(keys_r, 0), i))
+        mem.set_long(rule_r, 0, JS_GetPropertyStr(ctx, mem.get_long(obj_r, 0), raw))
+        e = style_rule_(ctx, p, sel, rule_r)
+        if bad == "" { bad = e }
+        i = i + 1
+    }
+    tmp_unref_(ctx, rule_r)
+    tmp_unref_(ctx, keys_r)
+    tmp_unref_(ctx, obj_r)
+    // The page's widgets only: what it built so far, and (as the current
+    // sheet) what it builds next.
+    aether_ui_current_sheet_set_impl(p.sheet)
+    ui.apply_styles(p.root, p.sheet)
+    if bad != "" { return sae_throw_type_error(ctx, "styles: ${bad}") }
+    return sae_js_undefined()
+}
+
+// add_class(h, "header"): opt a widget into "header" and "header.kind" rules.
+@c_callback
+sae_ui_add_class(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "add_class(h, name): h is not a widget this page made") }
+    ui.add_css_class(h, own_(arg_str_(ctx, argv, argc, 1)))
+    return sae_js_undefined()
+}
+
+// style_id(h, "status"): name a widget for "#status" rules.
+@c_callback
+sae_ui_style_id(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "style_id(h, name): h is not a widget this page made") }
+    ui.style_id(h, own_(arg_str_(ctx, argv, argc, 1)))
+    return sae_js_undefined()
+}
+
 // vg.scene(viewBox, w, h, block): a vector-graphics canvas w x h px under
 // the current ui container, drawing the viewBox.
 @c_callback
@@ -965,11 +1333,15 @@ page_new_(b: *Browser, url: string) -> *Page {
     p.vg_stack = malloc(STACK_MAX * 8)
     p.vg_depth = 0
     p.vg_nodes = list.new()
-    p.first_handle = aether_ui_widget_count_impl() + 1
     p.stacks = list.new()
+    p.sheet = null
+    p.sheet_strs = list.new()
     p.ctx = sae_new_context(p.mem_block, b.page_mem)
     JS_SetContextOpaque(p.ctx, p)
-    push_(p, b.content)
+    p.root = ui.vstack(mem.long_to_ptr(b.content), 4)
+    // After the root: it is the browser's, like the content area it sits in.
+    p.first_handle = aether_ui_widget_count_impl() + 1
+    push_(p, p.root)
     return p
 }
 
@@ -985,6 +1357,13 @@ page_free_(p: *Page) {
     list.free(p.refs)
     list.free(p.vg_nodes)
     list.free(p.stacks)
+    // The page's sheet styles only its own widgets: un-set it before the
+    // next page builds, then free it (free_styles refuses the current one).
+    if p.sheet != null {
+        aether_ui_current_sheet_set_impl(null)
+        ui.free_styles(p.sheet)
+    }
+    list.free(p.sheet_strs)
     free(p.vg_stack)
     JS_FreeContext(p.ctx)
     free(p.mem_block)

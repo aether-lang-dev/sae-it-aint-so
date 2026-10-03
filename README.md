@@ -51,6 +51,8 @@ The `ui` object (each builder returns its widget handle):
 | modifiers (inside a block) | `margin(t, r, b, l)`, `bg_color(r, g, b, a)`, `onclick(fn)` |
 | reading and writing | `get_text(h)`, `set_text(h, s)`: synchronous, no `await` |
 | rebuilding | `clear(h)` empties a `vstack`/`hstack` the page made; `into(h, fn)` builds into it again |
+| inputs and indicators | `toggle(label, onChange(on))`, `slider(min, max, initial, onChange(v))`, `picker(onChange(i))` + `picker_add(h, item)`, `progressbar(f)` + `set_progress(h, f)`; `get_`/`set_toggle`, `get_`/`set_slider` |
+| styles | `styles(sheet)`, `add_class(h, name)`, `style_id(h, name)`: see below |
 | reactive state | `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` |
 
 A page names only widgets it made: a handle below the page's first widget
@@ -63,6 +65,34 @@ A modifier at a page's top level has nothing to modify (the top of the stack
 is the browser's own content area), so it throws, where Aether would refuse
 to compile it. `site/calculator.ts` is the design doc's calculator example.
 Pages are not given `window()`: the browser owns the window.
+
+### Styles: a CSS-alike
+
+After Swiby's stylesheets (its banking demo's themes) and Tsyne's
+`styles()`, over aether-ui's AeCS cascade:
+
+```ts
+ui.styles({
+  root:   { font_family: "monospace" },
+  label:  { color: 0x5C458A },                  // a kind (Tsyne's names work)
+  button: { color: "#5C458A", font_weight: "bold" },
+  container: { background_color: 0xD6CFE6 },    // any vstack/hstack
+  "header.label": { color: 0x6030BF },          // a class on a kind
+  "#balance": { color: "#224488" },             // one widget: style_id(h, "balance")
+});
+```
+
+Rules apply most specific first: `#id`, then `class.kind`, `class`, kind,
+`container`, `root`. Properties: `color`, `background_color`, `font_size`,
+`font_weight` / `font_style` (`"bold"` or not), `font_family`, `opacity`,
+`border_radius`, `border_width`, `border_color`, `hover_color`,
+`active_color`. Colours are `0xRRGGBB`, `"#rrggbb"` or `"#rgb"`. An unknown
+property or a malformed colour throws, naming it.
+
+A sheet styles the page's widgets, those already built and those built
+after, and never the browser's chrome. Calling `styles()` again restyles the
+page in place, which is how `site/banking.ts` switches themes. The sheet is
+dropped when the page is left.
 
 ### Vector graphics: `vg`
 

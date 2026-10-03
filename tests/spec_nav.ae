@@ -171,6 +171,81 @@ main() {
         }
     }
 
+    spec.describe(fw, "inputs and indicators") {
+        spec.it("a checkbox's handler, and reading it back") callback {
+            b.click("Widget interactions")
+            b.assert_page("Widget Interactions", "200 ", "widgets page")
+            b.check("Enable feature")
+            b.assert_text("Checkbox: on (callbacks: 1)", "checked")
+            b.check("Enable feature")
+            b.assert_text("Checkbox: off (callbacks: 2)", "unchecked")
+            b.click("Verify Checkbox")
+            spec.assert_true(b.wait_for_console("checkbox reads 0"), "get_toggle reads it")
+            b.click("Check the box from code")
+            b.click("Verify Checkbox")
+            spec.assert_true(b.wait_for_console("checkbox reads 1"), "set_toggle sets it")
+        }
+        spec.it("a drop-down's handler gets the index") callback {
+            b.pick(2)
+            b.assert_text("Selected: Blue (index 2)", "picked Blue")
+        }
+        spec.it("a slider's handler, and a progress bar it drives") callback {
+            b.slide_to(80)
+            b.assert_text("Slider: 80", "slid to 80")
+            spec.assert_contains(uidriver.get_body("/widgets"), "\"value\":0.8", "the progress bar follows")
+            b.click("Slider to 0")
+            b.assert_text("Slider: 0", "set from code")
+            b.click("Read Slider")
+            spec.assert_true(b.wait_for_console("slider reads 0"), "get_slider reads it")
+        }
+        spec.it("a text field read on demand") callback {
+            b.set_field("hello")
+            b.click("Read Entry")
+            b.assert_text("Entry: hello", "read")
+            b.click("Back to Home")
+            b.assert_page(HOME, "200 ", "home")
+        }
+    }
+
+    spec.describe(fw, "styles, the CSS-alike") {
+        spec.it("kind, class and #id rules reach the platform") callback {
+            b.click("Banking (styles)")
+            b.assert_page("Current account", "200 ", "banking page")
+            spec.assert_str_eq(b.style_of("text", "Current account", "fg"), "#6030bf", "header.label colour")
+            spec.assert_str_eq(b.style_of("text", "Current account", "fontWeight"), "bold", "header.label weight")
+            spec.assert_str_eq(b.style_of("text", "Balance: 1250 EUR", "fg"), "#224488", "#balance colour, as \"#rrggbb\"")
+            spec.assert_str_eq(b.style_of("button", "Send", "fg"), "#5c458a", "button colour")
+            spec.assert_str_eq(b.style_of("text", "Theme:", "fontFamily"), "monospace", "root font family")
+        }
+        spec.it("the browser's chrome is not styled") callback {
+            spec.assert_str_eq(b.style_of("button", "Back", "fg"), "", "chrome Back")
+            spec.assert_str_eq(b.style_of("textfield", "", "fontFamily"), "monospace", "the page's own field is")
+            spec.assert_str_eq(b.style_of("text", b.status_line(), "fg"), "", "the status line")
+        }
+        spec.it("the page still works under its styles") callback {
+            b.set_field("250")
+            b.click("Send")
+            b.assert_text("Balance: 1000 EUR", "sent")
+            b.assert_text("Sent 250 EUR", "status")
+            spec.assert_str_eq(b.style_of("text", "Balance: 1000 EUR", "fg"), "#224488", "set_text keeps the style")
+        }
+        spec.it("a new sheet restyles the page in place (Swiby's theme switch)") callback {
+            b.pick(1)
+            spec.assert_true(b.wait_for_console("theme green"), "picked green")
+            spec.assert_str_eq(b.style_of("text", "Current account", "fg"), "#a3bf30", "header.label colour")
+            spec.assert_true(string.equals(b.style_of("text", "Current account", "fontWeight"), "bold") == 0,
+                "un-bolded")
+            spec.assert_str_eq(b.style_of("text", "Balance: 1000 EUR", "fg"), "#406030", "#balance colour")
+            spec.assert_str_eq(b.style_of("text", "Theme:", "fontFamily"), "serif", "root font family")
+        }
+        spec.it("styles go with the page") callback {
+            b.click("Back to Home")
+            b.assert_page(HOME, "200 ", "home")
+            spec.assert_str_eq(b.style_of("text", HOME, "fg"), "", "home is unstyled")
+            spec.assert_str_eq(b.style_of("text", HOME, "fontFamily"), "", "no family either")
+        }
+    }
+
     spec.describe(fw, "vector graphics") {
         spec.it("draws, and a shape's on_click runs JS that repaints it") callback {
             b.click("Vector graphics")

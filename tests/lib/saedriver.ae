@@ -31,8 +31,8 @@
 exports(
     test_url, navigate, back, forward, reload,
     current_url, status_line, status_code, status_url,
-    click, button_exists, set_field, field_text,
-    has_text, page_texts, widget_count,
+    click, button_exists, set_field, field_text, check, slide_to, pick,
+    has_text, page_texts, widget_count, style_of,
     wait_for_url, wait_for_page, wait_for_text, wait_for_text_gone, wait_for_widget_count,
     assert_url, assert_page, assert_text, assert_no_text,
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
@@ -139,6 +139,28 @@ field_text() -> string {
     return uidriver.widget_text_by_id(uidriver.widget_id_last_of("textfield", ""))
 }
 
+// Click the page's checkbox labelled `label` (a ui.toggle), firing its
+// handler as a click would.
+check(label: string) {
+    id = uidriver.widget_id_last_of("toggle", label)
+    spec.assert_gt(id, 0, string.concat("page has a checkbox: ", label))
+    if id > 0 { uidriver.post_ok("/widget/${id}/toggle", "POST toggle") }
+}
+
+// Move the page's last slider to `v`, firing its handler as a drag would.
+slide_to(v: int) {
+    id = uidriver.widget_id_last_of("slider", "")
+    spec.assert_gt(id, 0, "page has a slider")
+    if id > 0 { uidriver.post_ok("/widget/${id}/set_value?v=${v}", "POST set_value") }
+}
+
+// Choose item `i` of the page's last drop-down (a ui.picker).
+pick(i: int) {
+    id = uidriver.widget_id_last_of("picker", "")
+    spec.assert_gt(id, 0, "page has a drop-down")
+    if id > 0 { uidriver.post_ok("/widget/${id}/set_value?v=${i}", "POST set_value") }
+}
+
 set_text_of(id: int, text: string) {
     uidriver.post_ok("/widget/${id}/set_text?v=${url_encode(text)}", "POST set_text")
 }
@@ -166,6 +188,26 @@ page_texts() -> string {
 has_text(text: string) -> int {
     all = string.concat("\n", page_texts())
     return string.contains(all, string.concat("\n", string.concat(text, "\n")))
+}
+
+// A style field the backend reports for the page's last widget of `wtype`
+// reading `text` ("fg", "bg", "fontWeight", "fontFamily"): what the
+// platform shows, not what the sheet asked for. "" when it has none.
+style_of(wtype: string, text: string, field: string) -> string {
+    id = uidriver.widget_id_last_of(wtype, text)
+    if id == 0 { return "" }
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return "" }
+    out = ""
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if uidriver.field_int(w, "id") == id { out = uidriver.field_str(w, field) }
+        i = i + 1
+    }
+    json.json_free(v)
+    return out
 }
 
 // How many widgets exist, chrome included: a page that leaks widgets

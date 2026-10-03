@@ -51,7 +51,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 (cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 lower/run-tests.sh                           # 34 lowerer tests
-tests/run_spec.sh                            # spec_nav: 21 specs, ~8 s
+tests/run_spec.sh                            # spec_nav: 30 specs, ~10 s
 tests/check_page_veto.sh                     # page veto present and enforced
 ```
 
