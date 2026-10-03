@@ -6,7 +6,7 @@ pages by clicking real buttons and asserts on the widget tree the driver
 reports. Needs `AETHER_UI_WITH_DRIVER=1 ./build.sh` and target/pageserver
 (see README). Exit status is the number of failed checks.
 """
-import json, os, subprocess, sys, time, urllib.request
+import json, os, struct, subprocess, sys, time, urllib.request, zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE_PORT, DRIVER_PORT = 8091, 9334
@@ -30,6 +30,43 @@ def click(label):
     req = urllib.request.Request(
         f"http://127.0.0.1:{DRIVER_PORT}/widget/{ids[-1]}/click", method="POST")
     urllib.request.urlopen(req).read()
+
+
+def screenshot_pixel(x, y):
+    """The (r, g, b) at window point (x, y) of the driver's PNG screenshot.
+    The canvas pixel route reads 0 on macOS, so decode the screenshot: an
+    8-bit RGBA, non-interlaced PNG, which is what every backend sends."""
+    png = urllib.request.urlopen(f"http://127.0.0.1:{DRIVER_PORT}/screenshot").read()
+    pos, idat, w = 8, b"", 0
+    while pos < len(png):
+        n, kind = struct.unpack(">I4s", png[pos:pos + 8])
+        data = png[pos + 8:pos + 8 + n]
+        if kind == b"IHDR":
+            w, h, depth, ctype = struct.unpack(">IIBB", data[:10])
+            assert depth == 8 and ctype == 6, "expected 8-bit RGBA"
+        elif kind == b"IDAT":
+            idat += data
+        pos += 12 + n
+    raw, stride, prev, row = zlib.decompress(idat), w * 4, None, None
+    for r in range(y + 1):
+        f, line = raw[r * (stride + 1)], bytearray(raw[r * (stride + 1) + 1:(r + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - 4] if i >= 4 else 0
+            b_ = prev[i] if prev else 0
+            c = prev[i - 4] if prev and i >= 4 else 0
+            if f == 1: line[i] = (line[i] + a) & 255
+            elif f == 2: line[i] = (line[i] + b_) & 255
+            elif f == 3: line[i] = (line[i] + (a + b_) // 2) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b_ - c), abs(a - c), abs(a + b_ - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b_ if pb <= pc else c)) & 255
+        prev, row = line, line
+    return tuple(row[x * 4:x * 4 + 3])
+
+
+def near(rgb, hexcolor, tol=24):
+    want = tuple(int(hexcolor[i:i + 2], 16) for i in (1, 3, 5))
+    return all(abs(a - b) <= tol for a, b in zip(rgb, want))
 
 
 def wait_for(pred, what, timeout=3.0):
@@ -151,6 +188,30 @@ def main():
         click("Home")
         check("Home from form", on_page("Welcome to Sae it ain't so", "200 "))
 
+        click("Vector graphics")
+        check("vg page loads", on_page("Vector graphics", "200 "))
+        canvas = [w for w in widgets() if w["type"] == "canvas"][-1]
+        # The scene is 300x300 for viewBox 0..100, centred in the canvas
+        # widget; the circle's centre is viewBox (30, 40).
+        cx = (canvas["w"] - 300) // 2 + 90
+        cy = 120
+        at = lambda: screenshot_pixel(canvas["x"] + cx, canvas["y"] + cy)
+        check("vg circle draws red (#cc4444)", lambda: near(at(), "#cc4444"))
+        urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{DRIVER_PORT}/canvas/1/click?x={cx}&y={cy}", method="POST")).read()
+        check("clicking the circle runs its JS handler: it turns green (#33aa33)",
+              lambda: near(at(), "#33aa33"))
+        click("Blue circle")
+        check("vg.set_fill from a ui button repaints: blue (#3366cc)", lambda: near(at(), "#3366cc"))
+        click("Home")
+        check("Home from vg", on_page("Welcome to Sae it ain't so", "200 "))
+
+        click("Vector graphics misuse")
+        check("a vg shape outside vg.scene throws; earlier widgets stay",
+              lambda: "Before the vg misuse" in texts() and "Never reached" not in texts()
+              and "This page failed: see the console." in texts())
+        click("Back")
+
         click("Modifier misuse")
         check("a top-level modifier throws; earlier widgets stay",
               lambda: "Before the misuse" in texts() and "Never reached" not in texts()
@@ -175,7 +236,9 @@ def main():
     out = open(f"{ROOT}/target/test_nav.log").read()
     global fails
     for want in ("count 1", "count 2", "count 3", "ReferenceError",
-                 "margin() must be called inside a container's block"):
+                 "margin() must be called inside a container's block",
+                 "circle clicked at 30,40; 1 so far",
+                 "vg.circle() must be called inside vg.scene()"):
         ok = want in out
         print(("ok   " if ok else "FAIL ") + f"console shows {want!r}")
         if not ok:

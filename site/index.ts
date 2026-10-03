@@ -11,6 +11,8 @@ const links: Link[] = [
   { label: "Counter", href: "/counter" },
   { label: "Calculator", href: "/calculator" },
   { label: "Form", href: "/form" },
+  { label: "Vector graphics", href: "/vg" },
+  { label: "Vector graphics misuse", href: "/vgmisuse" },
   { label: "Modifier misuse", href: "/misuse" },
   { label: "A page that is not there", href: "/nowhere" },
   { label: "Old home (302 to /)", href: "/old-home" },

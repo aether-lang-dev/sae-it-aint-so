@@ -22,6 +22,8 @@ import std.strarr
 import std.string
 import std.http.client
 import lower
+import vg
+import vg.live
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -60,6 +62,8 @@ extern putchar(c: int) -> int
 extern fputs(s: string, stream: ptr) -> int
 extern fflush(stream: ptr) -> int
 extern aether_ui_vstack_create(spacing: int) -> int
+extern aether_ui_surface_flush_deferred_impl()
+extern JS_NewFloat64(ctx: ptr, d: float) -> long
 
 const JS_DUMP_LONG = 1
 const FRAME_CF_CTOR = 65536
@@ -101,6 +105,11 @@ struct Page {
     cbuf: ptr        // JSCStringBuf for JS_ToCStringLen
     ui_ns: long      // time spent inside ui builders (excludes nested page blocks)
     ui_calls: int
+    // AeVG: a second stack, of vg nodes. vg.scene pushes its root, each
+    // shape with a block pushes itself; fill/stroke/... act on the top.
+    vg_stack: ptr    // STACK_MAX node pointers
+    vg_depth: int
+    vg_nodes: ptr    // std.list: the nodes handed to the page (handle = index + 1)
 }
 
 page_of_(ctx: ptr) -> *Page {
@@ -428,6 +437,236 @@ sae_ui_text_bound(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return JS_NewInt32(ctx, h)
 }
 
+// --- the page API: vg (AeVG vector graphics) ---
+//
+// The AeVG DSL, with trailing blocks as last arguments, as in `ui`:
+//
+//   vg.scene("0 0 100 100", 400, 300, () => {
+//     const c = vg.circle(30, 40, 18, () => { vg.fill("#c44"); vg.on_click(...) })
+//   })
+//
+// AeVG is a port of Tsyne's Cosyne CVG, so this is Cosyne for sae pages, in
+// the block form rather than Cosyne's fluent `.fill()` chains. A shape
+// returns a handle for vg.set_fill(h, ...) and friends.
+
+vg_top_(p: *Page) -> ptr {
+    return mem.get_ptr(p.vg_stack, (p.vg_depth - 1) * 8)
+}
+
+vg_push_(p: *Page, node: ptr) -> int {
+    if p.vg_depth >= STACK_MAX { return 0 }
+    mem.set_ptr(p.vg_stack, p.vg_depth * 8, node)
+    p.vg_depth = p.vg_depth + 1
+    return 1
+}
+
+vg_node_of_(p: *Page, h: int) -> ptr {
+    if h < 1 || h > list.size(p.vg_nodes) { return null }
+    n, _ = list.get(p.vg_nodes, h - 1)
+    return n
+}
+
+// Register a node, run the shape's block (if the page gave one at fn_at)
+// with it on top, and return its handle.
+vg_shape_done_(ctx: ptr, argv: ptr, argc: int, fn_at: int, node: ptr) -> long {
+    p = page_of_(ctx)
+    list.add(p.vg_nodes, node)
+    h = list.size(p.vg_nodes)
+    if argc > fn_at {
+        fnv = arg_(argv, fn_at)
+        if JS_IsFunction(ctx, fnv) == 0 {
+            return sae_throw_type_error(ctx, "a vg shape's block must be a function")
+        }
+        if vg_push_(p, node) == 0 { return sae_throw_type_error(ctx, "vg shapes nested too deeply") }
+        r = call0_(ctx, fnv)
+        p.vg_depth = p.vg_depth - 1
+        if sae_js_is_exception(r) != 0 { return r }
+    }
+    return JS_NewInt32(ctx, h)
+}
+
+// A shape needs an open scene; a modifier needs an open shape (the scene
+// root is not one).
+vg_scene_open_(ctx: ptr) -> int {
+    return page_of_(ctx).vg_depth >= 1
+}
+
+vg_shape_open_(ctx: ptr) -> int {
+    return page_of_(ctx).vg_depth >= 2
+}
+
+// Repaint a scene after a change made outside a vg click (a ui button, a
+// timer): clear, re-flush the shapes with their current style, present.
+vg_repaint_(node: ptr) {
+    scene = vg.node_scene(node)
+    cid = vg.scene_canvas(scene)
+    if cid == 0 { return }
+    ui.canvas_clear(cid)
+    live.vg_flush_live(scene, cid, 0.0)
+    ui.canvas_redraw(cid)
+}
+
+// Call a held JS function with two number arguments. Each number is pushed
+// as soon as it exists, so it is rooted on the engine stack before the next
+// allocation can move anything.
+call2_num_(ctx: ptr, ref: ptr, a: float, b: float) -> long {
+    if JS_StackCheck(ctx, 4) != 0 { return sae_js_exception() }
+    JS_PushArg(ctx, JS_NewFloat64(ctx, b))
+    JS_PushArg(ctx, JS_NewFloat64(ctx, a))
+    JS_PushArg(ctx, mem.get_long(ref, 0))
+    JS_PushArg(ctx, sae_js_null())
+    return JS_Call(ctx, 2)
+}
+
+// vg.scene(viewBox, w, h, block): a vector-graphics canvas w x h px under
+// the current ui container, drawing the viewBox.
+@c_callback
+sae_vg_scene(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    p = page_of_(ctx)
+    vb = own_(arg_str_(ctx, argv, argc, 0))
+    long t = os.now_monotonic_ns()
+    root = live.vg(mem.long_to_ptr(top_(p)), vb, arg_int_(ctx, argv, argc, 1, 100), arg_int_(ctx, argv, argc, 2, 100))
+    ui_done_(p, t)
+    return vg_shape_done_(ctx, argv, argc, 3, root)
+}
+
+@c_callback
+sae_vg_circle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.circle() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.circle(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0))
+    return vg_shape_done_(ctx, argv, argc, 3, n)
+}
+
+@c_callback
+sae_vg_rect(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rect() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.rect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
+    return vg_shape_done_(ctx, argv, argc, 4, n)
+}
+
+@c_callback
+sae_vg_rrect(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rrect() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.rrect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0), arg_num_(ctx, argv, argc, 4, 0.0))
+    return vg_shape_done_(ctx, argv, argc, 5, n)
+}
+
+@c_callback
+sae_vg_line(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.line() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.line(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
+    return vg_shape_done_(ctx, argv, argc, 4, n)
+}
+
+@c_callback
+sae_vg_path(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.path() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    d = own_(arg_str_(ctx, argv, argc, 0))
+    n = vg.path(vg_top_(p), d)
+    return vg_shape_done_(ctx, argv, argc, 1, n)
+}
+
+@c_callback
+sae_vg_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    s = own_(arg_str_(ctx, argv, argc, 2))
+    n = vg.text(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), s)
+    return vg_shape_done_(ctx, argv, argc, 3, n)
+}
+
+// vg.g(block): a group; its block's shapes nest under it.
+@c_callback
+sae_vg_g(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.g() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.g(vg_top_(p))
+    return vg_shape_done_(ctx, argv, argc, 0, n)
+}
+
+@c_callback
+sae_vg_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.fill() must be called inside a shape's block") }
+    vg.fill(vg_top_(page_of_(ctx)), arg_str_(ctx, argv, argc, 0))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_vg_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.stroke() must be called inside a shape's block") }
+    c = own_(arg_str_(ctx, argv, argc, 0))
+    vg.stroke(vg_top_(page_of_(ctx)), c, arg_num_(ctx, argv, argc, 1, 1.0))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_vg_opacity(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.opacity() must be called inside a shape's block") }
+    vg.opacity(vg_top_(page_of_(ctx)), arg_num_(ctx, argv, argc, 0, 1.0))
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_vg_transform(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.transform() must be called inside a shape's block") }
+    t = own_(arg_str_(ctx, argv, argc, 0))
+    vg.transform(vg_top_(page_of_(ctx)), t)
+    return sae_js_undefined()
+}
+
+// vg.on_click(fn(x, y)): x and y are where the click landed, in the scene's
+// viewBox coordinates.
+@c_callback
+sae_vg_on_click(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.on_click() must be called inside a shape's block") }
+    if argc < 1 || JS_IsFunction(ctx, arg_(argv, 0)) == 0 {
+        return sae_throw_type_error(ctx, "vg.on_click(fn): fn must be a function")
+    }
+    ref = hold_(ctx, arg_(argv, 0))
+    node = vg_top_(page_of_(ctx))
+    scene = vg.node_scene(node)
+    // AeVG hands the handler canvas pixels; a page thinks in its viewBox.
+    // The mapping is read at click time, since a resize replaces it.
+    vg.on_click(node, |x: float, y: float| {
+        r = call2_num_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y))
+        if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a vg click handler") }
+    })
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_vg_set_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if n == null { return sae_throw_type_error(ctx, "vg.set_fill(h, color): h is not a vg shape") }
+    vg.element_set_fill(vg.node_element(n), arg_str_(ctx, argv, argc, 1))
+    vg_repaint_(n)
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_vg_set_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if n == null { return sae_throw_type_error(ctx, "vg.set_stroke(h, color, width): h is not a vg shape") }
+    c = own_(arg_str_(ctx, argv, argc, 1))
+    vg.element_set_stroke(vg.node_element(n), c, arg_num_(ctx, argv, argc, 2, 1.0))
+    vg_repaint_(n)
+    return sae_js_undefined()
+}
+
+@c_callback
+sae_vg_set_opacity(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if n == null { return sae_throw_type_error(ctx, "vg.set_opacity(h, value): h is not a vg shape") }
+    vg.element_set_opacity(vg.node_element(n), arg_num_(ctx, argv, argc, 1, 1.0))
+    vg_repaint_(n)
+    return sae_js_undefined()
+}
+
 // --- the page API: browserContext ---
 
 @c_callback
@@ -600,6 +839,9 @@ page_new_(b: *Browser, url: string) -> *Page {
     p.cbuf = malloc(sae_cstringbuf_size())
     p.ui_ns = 0
     p.ui_calls = 0
+    p.vg_stack = malloc(STACK_MAX * 8)
+    p.vg_depth = 0
+    p.vg_nodes = list.new()
     p.ctx = sae_new_context(p.mem_block, b.page_mem)
     JS_SetContextOpaque(p.ctx, p)
     push_(p, b.content)
@@ -616,6 +858,8 @@ page_free_(p: *Page) {
         i = i + 1
     }
     list.free(p.refs)
+    list.free(p.vg_nodes)
+    free(p.vg_stack)
     JS_FreeContext(p.ctx)
     free(p.mem_block)
     free(p.stack)
@@ -694,6 +938,11 @@ load_(b: *Browser, url: string) {
     long run_ns = mem.get_long(times, 8)
     free(times)
     b.last_ok = ok
+    // vg scenes record their shapes while the page builds and draw once it
+    // is done (AeVG's deferred mode, so a shape's trailing fill() is known
+    // before it paints). Aether's window() drains that after its block; a
+    // page loads into an already-running window, so drain it here.
+    aether_ui_surface_flush_deferred_impl()
     if ok == 0 {
         ui.text(mem.long_to_ptr(b.content), "This page failed: see the console.")
     }

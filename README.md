@@ -57,8 +57,39 @@ is the browser's own content area), so it throws, where Aether would refuse
 to compile it. `site/calculator.ts` is the design doc's calculator example.
 Pages are not given `window()`: the browser owns the window.
 
+### Vector graphics: `vg`
+
+`vg` is aether-ui's AeVG, the Aether port of Tsyne's Cosyne vector graphics
+(CVG), in the same shape as `ui`: a scene or shape takes its block as the
+last argument, and modifiers inside the block apply to it.
+
+```ts
+let circle = 0;
+vg.scene("0 0 100 100", 300, 300, () => {
+  circle = vg.circle(30, 40, 18, () => {
+    vg.fill("#cc4444");
+    vg.on_click((x, y) => vg.set_fill(circle, "#33aa33"));
+  });
+  vg.rect(58, 22, 34, 34, () => { vg.fill("#3366cc"); vg.stroke("#003366", 1); });
+  vg.text(55, 90, "AeVG", () => vg.fill("#222"));
+});
+```
+
+| | |
+|---|---|
+| scene | `scene(viewBox, w, h, fn)`: a `w` x `h` px canvas under the current `ui` container, drawing the `"x y w h"` viewBox |
+| shapes (each returns a handle) | `circle(cx, cy, r, fn?)`, `rect(x, y, w, h, fn?)`, `rrect(x, y, w, h, r, fn?)`, `line(x1, y1, x2, y2, fn?)`, `path(d, fn?)`, `text(x, y, s, fn?)`, `g(fn)` |
+| modifiers (inside a shape's block) | `fill(color)`, `stroke(color, width)`, `opacity(v)`, `transform(t)`, `on_click(fn(x, y))` (viewBox coordinates) |
+| later, from anywhere | `set_fill(h, color)`, `set_stroke(h, color, width)`, `set_opacity(h, v)`: change a shape and repaint |
+
+Where a Cosyne app writes `c.circle(30, 40, 18).fill("#c44").onClick(f)`, a
+sae page writes `vg.circle(30, 40, 18, () => { vg.fill("#c44"); vg.on_click(f) })`.
+A shape outside `vg.scene()`, or a modifier outside a shape, throws.
+`site/vg.ts` is the demo, and `tests/test_nav.py` checks its colours in
+driver screenshots.
+
 A page reaches only what `gen/sae_spec.ae` registers: the language builtins,
-`print`/`console`, `ui`, and `browserContext`. There is no `load()`, no file
+`print`/`console`, `ui`, `vg`, and `browserContext`. There is no `load()`, no file
 system and no process access.
 
 `browserContext` is Tsyne's: `changePage(url)`, `back()`, `forward()`,
@@ -74,9 +105,15 @@ status line under the toolbar shows the status and final URL.
 
 ## Build and run
 
-Sibling checkouts are reached through symlinks at the repo root:
-`aether-ui -> ../aether-ui`, `mqjs -> ../mquickjs-ae`, and `ui`/`ae` into
-those two.
+The sibling checkouts are reached through symlinks at the repo root:
+
+| link | points to | why |
+|---|---|---|
+| `aether-ui` | `../aether-ui` | the toolkit; its `backend/` is compiled into sae |
+| `mqjs` | `../mquickjs-ae` | the engine; `.build.ae` takes its source list from `mqjs/gen/mqjssources` |
+| `ui` | `aether-ui/ui` | so `import ui` resolves: aetherc looks up imports from the project root |
+| `vg` | `aether-ui/vg` | the same for AeVG (`import vg`, `import vg.live`) |
+| `ae` | `mqjs/ae` | the same for the engine's ~170 files, which `import ae.<module>`. Not the `ae` tool |
 
 ```sh
 ./build.sh                     # target/build/bin/sae

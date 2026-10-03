@@ -13,14 +13,14 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 
 | Path | What |
 |---|---|
-| `src/sae_host.ae` | The browser: window and chrome, history, fetch, one `Page` (JSContext + handle stack) per load, and every page-API host function (`sae_ui_*`, `sae_bc_*`) |
+| `src/sae_host.ae` | The browser: window and chrome, history, fetch, one `Page` (JSContext, a `ui` handle stack and a `vg` node stack) per load, and every page-API host function (`sae_ui_*`, `sae_vg_*`, `sae_bc_*`) |
 | `src/sae_rom.c` | The C that must be C: the generated ROM table, JSValue macro constants, the log sink, `main()` |
 | `gen/sae_spec.ae` | The page API's ROM entries, built on mquickjs-ae's genengine (core-only mode 2). **This list is the sandbox boundary**: a page reaches only what is registered here |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`) |
 | `tools/saelower.ae` | CLI for the lowerer |
 | `site/` | The demo/test site; `tests/test_nav.py` drives it |
-| `aether-ui`, `mqjs`, `ui`, `ae` | Symlinks into the sibling checkouts (`../aether-ui`, `../mquickjs-ae`) |
+| `aether-ui`, `mqjs`, `ui`, `vg`, `ae` | Symlinks into the sibling checkouts (`../aether-ui`, `../mquickjs-ae`); the README's "Build and run" says why each exists |
 
 ## Adding a page-API function
 
@@ -44,7 +44,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 (cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 lower/run-tests.sh                           # 34 lowerer tests
-python3 tests/test_nav.py                    # 33 driver checks
+python3 tests/test_nav.py                    # 41 driver checks
 ```
 
 Toolchain: Aether 0.760+ as a dev tree (`$SAE_AETHER_HOME`, default
