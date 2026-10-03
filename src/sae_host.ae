@@ -24,6 +24,7 @@ import std.http.client
 import lower
 import vg
 import vg.live
+import std.json
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -81,6 +82,11 @@ const NAV_GO = 1
 const NAV_BACK = 2
 const NAV_FORWARD = 3
 const NAV_RELOAD = 4
+
+// App mode (`sae --app <dir>`, or a packaged .app): the folder of pages the
+// app is made of, "" in browser mode. Its pages are app:/<path> URLs, mapped
+// onto <dir>/<path>.ts or .js the way tools/pageserver maps a site.
+var app_dir_ = ""
 
 // The browser: chrome widgets, history, and the page currently shown.
 struct Browser {
@@ -1246,6 +1252,34 @@ js_date_constructor(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 // --- URLs and fetching ---
 
+is_app_(u: string) -> int {
+    return string.string_starts_with(u, "app:")
+}
+
+// The file an app: URL names: app:/about is <app>/about.ts (or .js), app:/ is
+// the index, and a path that already ends in .ts or .js is taken as it is.
+app_file_(url: string) -> string {
+    path = string.string_substring(url, 4, string.length(url))
+    if path == "" || path == "/" { path = "/index" }
+    if string.string_ends_with(path, "/") == 1 { path = string.concat(path, "index") }
+    stem = string.concat(app_dir_, path)
+    if string.string_ends_with(stem, ".ts") == 1 || string.string_ends_with(stem, ".js") == 1 { return stem }
+    if fs.exists("${stem}.ts") == 1 { return "${stem}.ts" }
+    return "${stem}.js"
+}
+
+// Read an app page. A missing one is the app's own 404 page, as the dev page
+// server serves it, when the app has one.
+fetch_app_(url: string) -> (int, string, string, string) {
+    f = app_file_(url)
+    src, ferr = fs.read(f)
+    if ferr == "" { return 200, src, own_(url), "" }
+    nf = app_file_("app:/404")
+    src2, ferr2 = fs.read(nf)
+    if ferr2 == "" { return 404, src2, own_(url), "" }
+    return 0, "", own_(url), "no such page in this app: ${url}"
+}
+
 is_http_(u: string) -> int {
     if string.string_starts_with(u, "http://") == 1 { return 1 }
     if string.string_starts_with(u, "https://") == 1 { return 1 }
@@ -1279,6 +1313,11 @@ dir_of_(s: string) -> string {
 // same way against the file system.
 resolve_(base: string, href: string) -> string {
     if is_http_(href) == 1 { return own_(href) }
+    if is_app_(href) == 1 { return own_(href) }
+    if is_app_(base) == 1 {
+        if string.string_starts_with(href, "/") == 1 { return string.concat("app:", href) }
+        return string.concat(dir_of_(base), href)
+    }
     if is_http_(base) == 1 {
         oe = origin_end_(base)
         if string.string_starts_with(href, "/") == 1 {
@@ -1296,6 +1335,7 @@ resolve_(base: string, href: string) -> string {
 // status (200 for a file read), final_url is where redirects ended, and err
 // is "" unless nothing could be fetched at all.
 fetch_(url: string) -> (int, string, string, string) {
+    if is_app_(url) == 1 { return fetch_app_(url) }
     if is_http_(url) == 0 {
         src, ferr = fs.read(url)
         if ferr != "" { return 0, "", url, ferr }
@@ -1476,7 +1516,15 @@ run_nav_(b: *Browser) {
     kind = b.pending_kind
     url = b.pending_url
     b.pending_kind = NAV_NONE
-    if kind == NAV_GO { go_(b, url) }
+    if kind == NAV_GO {
+        // An app's pages navigate only among themselves (Tauri's default).
+        if app_dir_ != "" && is_app_(url) == 0 {
+            println("sae: this app navigates only to its own pages; refused ${url}")
+            fflush(sae_stdout())
+            return
+        }
+        go_(b, url)
+    }
     if kind == NAV_BACK {
         if b.hist_index > 0 {
             b.hist_index = b.hist_index - 1
@@ -1526,6 +1574,11 @@ build_chrome_(b: *Browser, root: int) {
     })
     b.status = ui.text(rctx, "")
     ui.divider(rctx)
+    build_content_(b, rctx)
+}
+
+// The scrolling area pages build into. In app mode it is all there is.
+build_content_(b: *Browser, rctx: ptr) {
     scroller = ui.scrollview(rctx)
     b.content = ui.vstack(mem.long_to_ptr(scroller), 4)
 }
@@ -1547,15 +1600,83 @@ browser_new_() -> *Browser {
     return b
 }
 
+// --- app mode ---
+//
+// `sae --app <dir>`, or a binary that finds its pages beside it in a macOS
+// .app bundle (Contents/Resources/app): no browser chrome, the window titled
+// and sized for the app, pages loaded from <dir> as app: URLs. The optional
+// <dir>/app.json:
+//   { "name": "Banking", "start": "/", "width": 800, "height": 600 }
+
+// The pages a packaged binary carries: <exe dir>/../Resources/app (the .app
+// layout tools/saepack.sh makes), or "" when there are none.
+bundled_app_dir_(exe: string) -> string {
+    d = string.concat(dir_of_(exe), "../Resources/app")
+    if fs.exists("${d}/app.json") == 1 { return d }
+    if fs.exists("${d}/index.ts") == 1 { return d }
+    if fs.exists("${d}/index.js") == 1 { return d }
+    return ""
+}
+
+// A string or int setting from app.json, or the default.
+app_setting_(v: ptr, key: string, dflt: string) -> string {
+    if v == null { return dflt }
+    f = json.json_object_get_raw(v, key)
+    if f == null { return dflt }
+    sv, serr = json.get_string(f)
+    if serr != "" { return dflt }
+    return own_(sv)
+}
+
+app_setting_int_(v: ptr, key: string, dflt: int) -> int {
+    if v == null { return dflt }
+    f = json.json_object_get_raw(v, key)
+    if f == null { return dflt }
+    return json.json_get_int(f)
+}
+
+// The last path component, for an app's default name.
+base_name_(d: string) -> string {
+    t = d
+    while string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
+    return string.string_substring(t, string.length(dir_of_(t)), string.length(t))
+}
+
+// sae <url | page>             the browser
+// sae --app <dir>              an app, without browser chrome
+// sae (in a packaged .app)     the app bundled beside the binary
 @c_callback
-sae_main(start_url: string) -> int {
-    if start_url == "" {
-        println("usage: sae <url | page.js>")
+sae_main(arg1: string, arg2: string, exe: string) -> int {
+    app = ""
+    start_url = arg1
+    if arg1 == "--app" { app = arg2 }
+    if arg1 == "" { app = bundled_app_dir_(exe) }
+    if app == "" && start_url == "" {
+        println("usage: sae <url | page.js>   or   sae --app <dir>")
         return 2
     }
+    title = "Sae it ain't so"
+    w = 800
+    h = 600
     b = browser_new_()
     root = aether_ui_vstack_create(6)
-    build_chrome_(b, root)
+    if app != "" {
+        while string.string_ends_with(app, "/") == 1 { app = string.string_substring(app, 0, string.length(app) - 1) }
+        app_dir_ = own_(app)
+        manifest = null
+        mtext, merr = fs.read("${app}/app.json")
+        if merr == "" {
+            mv, _jerr = json.parse(mtext)
+            manifest = mv
+        }
+        title = app_setting_(manifest, "name", base_name_(app))
+        w = app_setting_int_(manifest, "width", 800)
+        h = app_setting_int_(manifest, "height", 600)
+        start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
+        build_content_(b, mem.long_to_ptr(root))
+    } else {
+        build_chrome_(b, root)
+    }
     go_(b, start_url)
 
     if env_("SAE_NO_WINDOW") != "" {
@@ -1568,7 +1689,7 @@ sae_main(start_url: string) -> int {
         pn, _ = string.to_int(port)
         ui.enable_test_server_root(pn, root)
     }
-    ui.window_run("Sae it ain't so", 800, 600, root)
+    ui.window_run(title, w, h, root)
     if b.page != null { page_free_(b.page as *Page) }
     return 0
 }

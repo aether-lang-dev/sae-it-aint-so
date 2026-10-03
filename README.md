@@ -197,6 +197,30 @@ curl -s -X POST localhost:9333/widget/9/click
 The driver build is a separate binary because the control server must not
 ship in `sae`.
 
+### App mode: a folder of pages as an installable app
+
+Tauri's model, on sae: the same engine without the browser chrome, the pages
+bundled with it. `sae --app <dir>` opens `<dir>` as an app: no address bar,
+no Back/Forward/Reload, the window titled and sized from `<dir>/app.json`:
+
+```json
+{ "name": "Sae Tasks", "start": "/", "width": 480, "height": 420 }
+```
+
+(all optional). Pages are `app:` URLs, mapped like the dev page server maps
+a site: `app:/about` is `<dir>/about.ts` (or `.js`), `app:/` the index, a
+missing page the app's own `404.ts` if it has one. `browserContext` works as
+in the browser, and an app navigates only among its own pages: anything else
+is refused and the page stays.
+
+`tools/saepack.sh <dir>` packages it as a macOS `.app` (into `target/apps/`):
+sae's binary, the pages under `Contents/Resources/app`, where the binary finds
+them and starts in app mode with no arguments, and the non-system dylibs sae
+links (Homebrew's OpenSSL, nghttp2, pcre2) copied into `Contents/Frameworks`
+with their load paths rewritten, so it runs on a Mac without Homebrew. Signed
+ad hoc; not notarized. `apps/tasks` is the example;
+`SAE_TEST_APP=apps/tasks tests/run_spec.sh spec_app` its spec.
+
 ### Testing pages: saedriver
 
 Tsyne tests pages with `TsyneBrowserTest`; sae's equivalent is

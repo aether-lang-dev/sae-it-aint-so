@@ -3,6 +3,7 @@
 # createBrowser() + cleanup(), as a launcher.
 #
 #   tests/run_spec.sh [spec] [site-dir]     (defaults: spec_nav, site/)
+#   SAE_TEST_APP=<dir> tests/run_spec.sh <spec>   app mode: sae-driver --app <dir>
 #
 # Starts target/pageserver on the site directory and sae-driver (built with
 # `AETHER_UI_WITH_DRIVER=1 ./build.sh`) pointed at it, on the AetherUIDriver
@@ -41,10 +42,17 @@ if curl -s -o /dev/null "http://127.0.0.1:$DRIVER_PORT/widgets"; then
 fi
 
 LOG="$ROOT/target/$SPEC.log"
-"$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
-SERVER=$!
-AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
-    "http://127.0.0.1:$SITE_PORT/" >"$LOG" 2>&1 &
+if [ -n "${SAE_TEST_APP:-}" ]; then
+    # App mode: sae-driver --app <dir>, no page server.
+    SERVER=""
+    AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
+        --app "$(cd "$SAE_TEST_APP" && pwd)" >"$LOG" 2>&1 &
+else
+    "$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
+    SERVER=$!
+    AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
+        "http://127.0.0.1:$SITE_PORT/" >"$LOG" 2>&1 &
+fi
 SAE=$!
 trap 'kill $SAE $SERVER 2>/dev/null || true' EXIT INT TERM
 

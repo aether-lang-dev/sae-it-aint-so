@@ -128,11 +128,30 @@ button_exists(label: string) -> int {
 // Set the page's last text field, firing its handler as typing would.
 set_field(text: string) {
     id = uidriver.widget_id_last_of("textfield", "")
-    if id == uidriver.widget_id_of("textfield", "") {
-        spec.fail("the page has no text field (only the address bar)")
+    if id == 0 || is_address_bar_(id) == 1 {
+        spec.fail("the page has no text field")
         return
     }
     set_text_of(id, text)
+}
+
+// The browser's address bar is the text field with the "address" placeholder;
+// in app mode there is none.
+is_address_bar_(id: int) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    r = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if uidriver.field_int(w, "id") == id {
+            if string.equals(uidriver.field_str(w, "placeholder"), "address") == 1 { r = 1 }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
 }
 
 field_text() -> string {

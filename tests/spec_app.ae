@@ -1,0 +1,53 @@
+// spec_app.ae — app mode: `sae-driver --app apps/tasks`, the browser without
+// its chrome, a folder of pages packaged as an app (tools/saepack.sh).
+//   SAE_TEST_APP=apps/tasks tests/run_spec.sh spec_app
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "app mode") {
+        spec.it("has no browser chrome: no address bar, no Back/Forward/Reload/Go") callback {
+            b.assert_text("Tasks", "the app's start page")
+            spec.assert_eq(uidriver.widget_id_of("button", "Forward"), 0, "no Forward")
+            spec.assert_eq(uidriver.widget_id_of("button", "Reload"), 0, "no Reload")
+            spec.assert_eq(uidriver.widget_id_of("button", "Go"), 0, "no Go")
+            spec.assert_false(string.contains(uidriver.get_body("/widgets"), "\"placeholder\":\"address\""),
+                "no address bar")
+        }
+        spec.it("runs the app: add a task, finish one") callback {
+            b.assert_text("2 tasks", "two to start")
+            b.set_field("Write the spec")
+            b.click("Add")
+            b.assert_text("3 tasks", "added")
+            b.assert_text("Write the spec", "listed")
+            b.click("Done")
+            b.assert_text("2 tasks", "one done")
+        }
+        spec.it("navigates among its own pages, as app: URLs") callback {
+            b.click("About")
+            b.assert_text("This page is app:/about", "the about page, at app:/about")
+            b.click("Back")
+            b.assert_text("Tasks", "browserContext.back() returns")
+            b.click("About")
+            b.assert_text("This page is app:/about", "about again")
+        }
+        spec.it("refuses to navigate outside the app, and stays put") callback {
+            b.click("Open the web")
+            spec.assert_true(b.wait_for_console("refused https://example.com/"), "refused")
+            b.assert_text("This page is app:/about", "still on the about page")
+        }
+        spec.it("a missing page is the app's own 404 page") callback {
+            b.click("A page that is not there")
+            b.assert_text("Not in this app", "the app's 404 page")
+            b.assert_text("app:/nowhere", "naming the URL")
+            b.click("Tasks")
+            b.assert_text("2 tasks", "home")
+        }
+    }
+    return spec.run_summary(fw)
+}

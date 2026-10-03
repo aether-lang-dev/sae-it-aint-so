@@ -104,9 +104,9 @@ JSValue sae_throw_type_error(JSContext *ctx, const char *msg)
 }
 size_t sae_cstringbuf_size(void) { return sizeof(JSCStringBuf); }
 
-int sae_main(const char *page_path); /* src/sae_host.ae */
+int sae_main(const char *arg1, const char *arg2, const char *exe); /* src/sae_host.ae */
 
 int main(int argc, char **argv)
 {
-    return sae_main(argc > 1 ? argv[1] : "");
+    return sae_main(argc > 1 ? argv[1] : "", argc > 2 ? argv[2] : "", argv[0]);
 }
