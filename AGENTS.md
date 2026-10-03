@@ -27,7 +27,11 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 ## Adding a page-API function
 
 1. A `@c_callback` host function in `src/sae_host.ae` with the C signature
-   `(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long`.
+   `(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long`, whose first
+   line is the page veto (copy the `hide fs, os, client, ...` line from any
+   other one; "The page veto" in that file says why). If it needs something
+   the veto hides, add a narrow kernel helper (as `now_ns_` wraps the clock)
+   rather than dropping the line.
 2. Its ROM entry in `gen/sae_spec.ae`.
 3. Its prototype in `src/sae_rom.c` (`SAE_JSFN(...)`), or the ROM table will
    not compile.
@@ -48,6 +52,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 lower/run-tests.sh                           # 34 lowerer tests
 tests/run_spec.sh                            # spec_nav: 17 specs, ~7 s
+tests/check_page_veto.sh                     # page veto present and enforced
 ```
 
 Toolchain: Aether 0.760+ as a dev tree (`$SAE_AETHER_HOME`, default

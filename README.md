@@ -92,6 +92,19 @@ A page reaches only what `gen/sae_spec.ae` registers: the language builtins,
 `print`/`console`, `ui`, `vg`, and `browserContext`. There is no `load()`, no file
 system and no process access.
 
+Behind that, the host's page-facing functions are walled off from the rest
+of the browser (the "kernel": fetching, the file system, the environment,
+the lowerer, the engine's parse/run calls). Each one opens with the same
+`hide` line (Aether's compile-time `hide`, `aether/docs/hide-and-seal.md`),
+so it cannot name `fs`, `os`, `client` or the page-lifecycle functions; what
+it needs from the kernel goes through a few named helpers. A file read added
+to, say, `vg.set_fill`'s host function is a compile error, at any depth.
+`tests/check_page_veto.sh` checks that every page-reachable function has
+the line and that the compiler enforces it (nested blocks need Aether with
+[aether#2381](https://github.com/aether-lang-dev/aether/pull/2381)). The
+list starts with the file system and its neighbours and grows from there;
+the end state is `seal except`, an explicit whitelist per function.
+
 `browserContext` is Tsyne's: `changePage(url)`, `back()`, `forward()`,
 `reload()` and `currentUrl`. A URL resolves against the page that asked
 (`/about` is origin-relative). Navigation happens on the next turn of the

@@ -134,6 +134,12 @@ env_(name: string) -> string {
 
 us_(ns: long) -> long { return ns / 1000 }
 
+// The clocks, for page-API functions, which cannot name `os` (see "The page
+// veto" below).
+now_ns_() -> long { return os.now_monotonic_ns() }
+now_ms_() -> long { return os.now_monotonic_ms() }
+now_unix_ms_() -> long { return os.now_unix_ms() }
+
 arg_(argv: ptr, i: int) -> long {
     return mem.get_long(argv, i * 8)
 }
@@ -221,12 +227,35 @@ ui_done_(p: *Page, t: long) {
     p.ui_calls = p.ui_calls + 1
 }
 
+// --- The page veto ---
+//
+// Every function a page can reach (everything gen/sae_spec.ae registers,
+// listed in src/sae_rom.c's SAE_JSFN prototypes) opens with the same `hide`
+// line. It takes the kernel out of that function's scope: the file system,
+// the environment and clocks (`os`), the network (`client`), the lowerer,
+// the page-lifecycle functions that fetch, parse and run pages, and the
+// engine's raw parse/run/context calls. Naming any of them in a page-API
+// function, at any depth (an `if` body, a nested block, a closure), is a
+// compile error.
+//
+// What a page-API function may use of the kernel, it reaches through named
+// helpers: `request_nav_` (navigation, deferred to the event loop),
+// `resolve_` (URL arithmetic), `now_ns_`/`now_ms_`/`now_unix_ms_` (clocks).
+//
+// This is Aether's compile-time `hide` (aether/docs/hide-and-seal.md):
+// it stops a page-facing function from naming the kernel, not a helper it
+// calls from doing so, so the helpers stay few and narrow. The list grows;
+// the end state is `seal except`, a whitelist per function.
+// tests/check_page_veto.sh fails if a page-API function lacks the line, or
+// if the compiler does not enforce it.
+
 // --- the page API: ui (named in gen/sae_spec.ae) ---
 
 @c_callback
 sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     h = ui.vstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
     ui_done_(p, t)
     return container_(ctx, argv, argc, h)
@@ -234,8 +263,9 @@ sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_hstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     h = ui.hstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
     ui_done_(p, t)
     return container_(ctx, argv, argc, h)
@@ -243,9 +273,10 @@ sae_ui_hstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     h = ui.text(mem.long_to_ptr(top_(p)), label)
     ui_done_(p, t)
     return JS_NewInt32(ctx, h)
@@ -253,8 +284,9 @@ sae_ui_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_divider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     h = ui.divider(mem.long_to_ptr(top_(p)))
     ui_done_(p, t)
     return JS_NewInt32(ctx, h)
@@ -262,6 +294,7 @@ sae_ui_divider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_btn(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
     if argc < 2 || JS_IsFunction(ctx, arg_(argv, 1)) == 0 {
@@ -272,7 +305,7 @@ sae_ui_btn(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
         r = call0_(ctx, mem.get_long(ref, 0))
         if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a click handler") }
     }
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     h = ui.btn(mem.long_to_ptr(top_(p)), label, on_press)
     ui_done_(p, t)
     return JS_NewInt32(ctx, h)
@@ -311,9 +344,10 @@ call1_str_(ctx: ptr, ref: ptr, s: string) -> long {
 // button on top, for onclick/bg_color/margin.
 @c_callback
 sae_ui_button(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     h = ui.button(mem.long_to_ptr(top_(p)), label)
     ui_done_(p, t)
     return container_(ctx, argv, argc, h)
@@ -321,8 +355,9 @@ sae_ui_button(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_scroll(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     sv = ui.scrollview(mem.long_to_ptr(top_(p)))
     h = ui.vstack(mem.long_to_ptr(sv), 0)
     ui_done_(p, t)
@@ -338,6 +373,7 @@ sae_ui_scroll(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_spacer(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     h = ui.spacer(mem.long_to_ptr(top_(p)))
     return JS_NewInt32(ctx, h)
@@ -346,6 +382,7 @@ sae_ui_spacer(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // textfield(placeholder, onChange?): onChange(text) on every edit.
 @c_callback
 sae_ui_textfield(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     placeholder = own_(arg_str_(ctx, argv, argc, 0))
     has_fn = 0
@@ -360,7 +397,7 @@ sae_ui_textfield(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
             if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a textfield handler") }
         }
     }
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     h = ui.textfield(mem.long_to_ptr(top_(p)), placeholder, on_change)
     ui_done_(p, t)
     return JS_NewInt32(ctx, h)
@@ -369,12 +406,14 @@ sae_ui_textfield(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // get_text(handle): synchronous, in-process (Tsyne needed an await here).
 @c_callback
 sae_ui_get_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     h = arg_int_(ctx, argv, argc, 0, 0)
     return JS_NewString(ctx, ui.get_text(h))
 }
 
 @c_callback
 sae_ui_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     h = arg_int_(ctx, argv, argc, 0, 0)
     ui.set_text(h, arg_str_(ctx, argv, argc, 1))
     return sae_js_undefined()
@@ -382,6 +421,7 @@ sae_ui_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_onclick(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     target = modifier_target_(ctx, "onclick")
     if target == 0 { return sae_throw_type_error(ctx, "onclick() must be called inside a widget's block") }
     if argc < 1 || JS_IsFunction(ctx, arg_(argv, 0)) == 0 {
@@ -397,6 +437,7 @@ sae_ui_onclick(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_margin(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     target = modifier_target_(ctx, "margin")
     if target == 0 { return sae_throw_type_error(ctx, "margin() must be called inside a container's block") }
     top = arg_int_(ctx, argv, argc, 0, 0)
@@ -406,6 +447,7 @@ sae_ui_margin(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_ui_bg_color(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     target = modifier_target_(ctx, "bg_color")
     if target == 0 { return sae_throw_type_error(ctx, "bg_color() must be called inside a widget's block") }
     ui.bg_color(mem.long_to_ptr(target), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 1.0))
@@ -416,22 +458,25 @@ sae_ui_bg_color(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // writes it, and every text_bound to it updates.
 @c_callback
 sae_ui_state(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     return JS_NewInt32(ctx, ui.ui_state(arg_num_(ctx, argv, argc, 0, 0.0)))
 }
 
 @c_callback
 sae_ui_set(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     ui.ui_set(arg_int_(ctx, argv, argc, 0, 0), arg_num_(ctx, argv, argc, 1, 0.0))
     return sae_js_undefined()
 }
 
 @c_callback
 sae_ui_text_bound(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     st = arg_int_(ctx, argv, argc, 0, 0)
     prefix = own_(arg_str_(ctx, argv, argc, 1))
     suffix = own_(arg_str_(ctx, argv, argc, 2))
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     h = ui.text_bound(mem.long_to_ptr(top_(p)), st, prefix, suffix)
     ui_done_(p, t)
     return JS_NewInt32(ctx, h)
@@ -522,9 +567,10 @@ call2_num_(ctx: ptr, ref: ptr, a: float, b: float) -> long {
 // the current ui container, drawing the viewBox.
 @c_callback
 sae_vg_scene(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     vb = own_(arg_str_(ctx, argv, argc, 0))
-    long t = os.now_monotonic_ns()
+    long t = now_ns_()
     root = live.vg(mem.long_to_ptr(top_(p)), vb, arg_int_(ctx, argv, argc, 1, 100), arg_int_(ctx, argv, argc, 2, 100))
     ui_done_(p, t)
     return vg_shape_done_(ctx, argv, argc, 3, root)
@@ -532,6 +578,7 @@ sae_vg_scene(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_circle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.circle() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.circle(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0))
@@ -540,6 +587,7 @@ sae_vg_circle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_rect(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rect() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.rect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
@@ -548,6 +596,7 @@ sae_vg_rect(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_rrect(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rrect() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.rrect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0), arg_num_(ctx, argv, argc, 4, 0.0))
@@ -556,6 +605,7 @@ sae_vg_rrect(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_line(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.line() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.line(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
@@ -564,6 +614,7 @@ sae_vg_line(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_path(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.path() must be called inside vg.scene()") }
     p = page_of_(ctx)
     d = own_(arg_str_(ctx, argv, argc, 0))
@@ -573,6 +624,7 @@ sae_vg_path(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text() must be called inside vg.scene()") }
     p = page_of_(ctx)
     s = own_(arg_str_(ctx, argv, argc, 2))
@@ -583,6 +635,7 @@ sae_vg_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // vg.g(block): a group; its block's shapes nest under it.
 @c_callback
 sae_vg_g(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.g() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.g(vg_top_(p))
@@ -591,6 +644,7 @@ sae_vg_g(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.fill() must be called inside a shape's block") }
     vg.fill(vg_top_(page_of_(ctx)), arg_str_(ctx, argv, argc, 0))
     return sae_js_undefined()
@@ -598,6 +652,7 @@ sae_vg_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.stroke() must be called inside a shape's block") }
     c = own_(arg_str_(ctx, argv, argc, 0))
     vg.stroke(vg_top_(page_of_(ctx)), c, arg_num_(ctx, argv, argc, 1, 1.0))
@@ -606,6 +661,7 @@ sae_vg_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_opacity(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.opacity() must be called inside a shape's block") }
     vg.opacity(vg_top_(page_of_(ctx)), arg_num_(ctx, argv, argc, 0, 1.0))
     return sae_js_undefined()
@@ -613,6 +669,7 @@ sae_vg_opacity(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_transform(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.transform() must be called inside a shape's block") }
     t = own_(arg_str_(ctx, argv, argc, 0))
     vg.transform(vg_top_(page_of_(ctx)), t)
@@ -623,6 +680,7 @@ sae_vg_transform(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // viewBox coordinates.
 @c_callback
 sae_vg_on_click(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.on_click() must be called inside a shape's block") }
     if argc < 1 || JS_IsFunction(ctx, arg_(argv, 0)) == 0 {
         return sae_throw_type_error(ctx, "vg.on_click(fn): fn must be a function")
@@ -641,6 +699,7 @@ sae_vg_on_click(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_set_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_fill(h, color): h is not a vg shape") }
     vg.element_set_fill(vg.node_element(n), arg_str_(ctx, argv, argc, 1))
@@ -650,6 +709,7 @@ sae_vg_set_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_set_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_stroke(h, color, width): h is not a vg shape") }
     c = own_(arg_str_(ctx, argv, argc, 1))
@@ -660,6 +720,7 @@ sae_vg_set_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_vg_set_opacity(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_opacity(h, value): h is not a vg shape") }
     vg.element_set_opacity(vg.node_element(n), arg_num_(ctx, argv, argc, 1, 1.0))
@@ -671,6 +732,7 @@ sae_vg_set_opacity(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_bc_change_page(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     b = browser_of_(ctx)
     href = arg_str_(ctx, argv, argc, 0)
     request_nav_(b, NAV_GO, resolve_(page_of_(ctx).url, href))
@@ -679,24 +741,28 @@ sae_bc_change_page(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 sae_bc_back(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     request_nav_(browser_of_(ctx), NAV_BACK, "")
     return sae_js_undefined()
 }
 
 @c_callback
 sae_bc_forward(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     request_nav_(browser_of_(ctx), NAV_FORWARD, "")
     return sae_js_undefined()
 }
 
 @c_callback
 sae_bc_reload(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     request_nav_(browser_of_(ctx), NAV_RELOAD, "")
     return sae_js_undefined()
 }
 
 @c_callback
 sae_bc_current_url(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     return JS_NewString(ctx, page_of_(ctx).url)
 }
 
@@ -707,6 +773,7 @@ sae_bc_current_url(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // interleave with the host's own println output.
 @c_callback
 js_print(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     out = sae_stdout()
     i = 0
     while i < argc {
@@ -726,20 +793,23 @@ js_print(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 @c_callback
 js_date_now(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    return JS_NewInt64(ctx, os.now_unix_ms())
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    return JS_NewInt64(ctx, now_unix_ms_())
 }
 
 @c_callback
 js_performance_now(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    return JS_NewInt64(ctx, os.now_monotonic_ms())
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    return JS_NewInt64(ctx, now_ms_())
 }
 
 @c_callback
 js_date_constructor(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     ac = argc & (0 - 1 - FRAME_CF_CTOR)
     float val = 0.0
     if ac == 0 {
-        long ms = os.now_unix_ms()
+        long ms = now_unix_ms_()
         val = ms
     } else {
         if ac == 1 && JS_IsNumber(ctx, arg_(argv, 0)) != 0 {
