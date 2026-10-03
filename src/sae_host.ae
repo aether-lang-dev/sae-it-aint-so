@@ -64,6 +64,7 @@ extern fflush(stream: ptr) -> int
 extern aether_ui_vstack_create(spacing: int) -> int
 extern aether_ui_surface_flush_deferred_impl()
 extern JS_NewFloat64(ctx: ptr, d: float) -> long
+extern aether_ui_widget_count_impl() -> int
 
 const JS_DUMP_LONG = 1
 const FRAME_CF_CTOR = 65536
@@ -110,6 +111,11 @@ struct Page {
     vg_stack: ptr    // STACK_MAX node pointers
     vg_depth: int
     vg_nodes: ptr    // std.list: the nodes handed to the page (handle = index + 1)
+    // Widget handles are never reused, so every widget this page made has a
+    // handle at least first_handle. A page may name only those: not the
+    // address bar, the status line, the driver's banner or a past page's.
+    first_handle: int
+    stacks: ptr      // std.list: the vstack/hstack handles this page made
 }
 
 page_of_(ctx: ptr) -> *Page {
@@ -220,6 +226,24 @@ container_(ctx: ptr, argv: ptr, argc: int, handle: int) -> long {
     return JS_NewInt32(ctx, handle)
 }
 
+// Is `h` a widget this page made? (See Page.first_handle.)
+owned_(p: *Page, h: int) -> int {
+    if h >= p.first_handle { return 1 }
+    return 0
+}
+
+// Is `h` a vstack or hstack this page made?
+own_stack_(p: *Page, h: int) -> int {
+    n = list.size(p.stacks)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.stacks, i)
+        if mem.ptr_to_long(v) == h { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
 // Account a builder call's native time to the page, so the timing report
 // can split engine time from widget-creation time.
 ui_done_(p: *Page, t: long) {
@@ -258,6 +282,7 @@ sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     long t = now_ns_()
     h = ui.vstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
     ui_done_(p, t)
+    list.add(p.stacks, mem.long_to_ptr(h))
     return container_(ctx, argv, argc, h)
 }
 
@@ -268,6 +293,7 @@ sae_ui_hstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     long t = now_ns_()
     h = ui.hstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
     ui_done_(p, t)
+    list.add(p.stacks, mem.long_to_ptr(h))
     return container_(ctx, argv, argc, h)
 }
 
@@ -408,6 +434,7 @@ sae_ui_textfield(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 sae_ui_get_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "get_text(h): h is not a widget this page made") }
     return JS_NewString(ctx, ui.get_text(h))
 }
 
@@ -415,8 +442,34 @@ sae_ui_get_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 sae_ui_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "set_text(h, s): h is not a widget this page made") }
     ui.set_text(h, arg_str_(ctx, argv, argc, 1))
     return sae_js_undefined()
+}
+
+// clear(h): empty a vstack or hstack the page made, so it can be built
+// again with into(). Tsyne pages could not do this (its dynamic-demo logs
+// instead of redrawing its list).
+@c_callback
+sae_ui_clear(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "clear(h): h is not a vstack or hstack this page made") }
+    ui.clear_children(h)
+    return sae_js_undefined()
+}
+
+// into(h, block): run block with a stack the page made as the parent, so
+// its widgets land there, the way the stack's own block did.
+@c_callback
+sae_ui_into(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "into(h, fn): h is not a vstack or hstack this page made") }
+    if argc < 2 { return sae_throw_type_error(ctx, "into(h, fn): fn is missing") }
+    return container_(ctx, argv, argc, h)
 }
 
 @c_callback
@@ -912,6 +965,8 @@ page_new_(b: *Browser, url: string) -> *Page {
     p.vg_stack = malloc(STACK_MAX * 8)
     p.vg_depth = 0
     p.vg_nodes = list.new()
+    p.first_handle = aether_ui_widget_count_impl() + 1
+    p.stacks = list.new()
     p.ctx = sae_new_context(p.mem_block, b.page_mem)
     JS_SetContextOpaque(p.ctx, p)
     push_(p, b.content)
@@ -929,6 +984,7 @@ page_free_(p: *Page) {
     }
     list.free(p.refs)
     list.free(p.vg_nodes)
+    list.free(p.stacks)
     free(p.vg_stack)
     JS_FreeContext(p.ctx)
     free(p.mem_block)

@@ -30,6 +30,8 @@ sae_stdlib_main(argc: int, argv: ptr) -> int {
     cfunc(u, "textfield", 2, "sae_ui_textfield")
     cfunc(u, "get_text", 1, "sae_ui_get_text")
     cfunc(u, "set_text", 2, "sae_ui_set_text")
+    cfunc(u, "clear", 1, "sae_ui_clear")
+    cfunc(u, "into", 2, "sae_ui_into")
     cfunc(u, "onclick", 1, "sae_ui_onclick")
     cfunc(u, "margin", 4, "sae_ui_margin")
     cfunc(u, "bg_color", 4, "sae_ui_bg_color")

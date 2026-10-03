@@ -128,6 +128,49 @@ main() {
         }
     }
 
+    spec.describe(fw, "pages ported from Tsyne") {
+        spec.it("scrolling: a hundred lines in a scroll block") callback {
+            b.click("Scrolling")
+            b.assert_page("Scrolling Demo", "200 ", "scrolling page")
+            b.assert_text("Line 100: This is a line of text to demonstrate scrolling. Scroll down to see more!",
+                "the last line was built")
+            b.click("Back to Home")
+            b.assert_page(HOME, "200 ", "home")
+        }
+        spec.it("dynamic: a counter updated in place with set_text") callback {
+            b.click("Dynamic updates")
+            b.assert_page("Dynamic Updates Demo", "200 ", "dynamic page")
+            b.click("+")
+            b.click("+")
+            b.click("-")
+            b.assert_text("Count: 1", "+ + - is 1")
+            b.click("Reset")
+            b.assert_text("Count: 0", "reset")
+        }
+        spec.it("dynamic: a list rebuilt in place with clear and into") callback {
+            b.assert_text("  3. Initial Item 3", "the initial list")
+            b.set_field("Milk")
+            b.click("Add Item")
+            b.assert_text("  4. Milk", "added from the field")
+            b.click("Remove Last")
+            spec.assert_true(b.wait_for_text_gone("  4. Milk"), "removed")
+            b.assert_text("  3. Initial Item 3", "the rest stay")
+            b.click("Clear All")
+            b.assert_text("(no items)", "cleared")
+            b.assert_no_text("  1. Initial Item 1", "nothing left")
+            spec.assert_true(b.wait_for_console("items: 0"), "the page saw it")
+        }
+        spec.it("dynamic: a page cannot rewrite the browser's own widgets") callback {
+            b.click("Try to rewrite the browser")
+            spec.assert_true(b.wait_for_console("refused "), "the page reports")
+            spec.assert_true(b.console_contains("refused all "), "every handle below the page's own was refused")
+            spec.assert_str_eq(b.current_url(), b.test_url("/dynamic"), "the address bar is untouched")
+            spec.assert_true(string.starts_with(b.status_line(), "200 ") == 1, "the status line is untouched")
+            b.click("Back to Home")
+            b.assert_page(HOME, "200 ", "home")
+        }
+    }
+
     spec.describe(fw, "vector graphics") {
         spec.it("draws, and a shape's on_click runs JS that repaints it") callback {
             b.click("Vector graphics")

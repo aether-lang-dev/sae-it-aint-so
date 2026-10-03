@@ -30,6 +30,8 @@ SAE_JSFN(sae_ui_spacer);
 SAE_JSFN(sae_ui_textfield);
 SAE_JSFN(sae_ui_get_text);
 SAE_JSFN(sae_ui_set_text);
+SAE_JSFN(sae_ui_clear);
+SAE_JSFN(sae_ui_into);
 SAE_JSFN(sae_ui_onclick);
 SAE_JSFN(sae_ui_margin);
 SAE_JSFN(sae_ui_bg_color);

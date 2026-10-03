@@ -50,7 +50,14 @@ The `ui` object (each builder returns its widget handle):
 | widgets | `text(s)`, `btn(label, onPress)`, `divider()`, `spacer()`, `textfield(placeholder, onChange(text))` |
 | modifiers (inside a block) | `margin(t, r, b, l)`, `bg_color(r, g, b, a)`, `onclick(fn)` |
 | reading and writing | `get_text(h)`, `set_text(h, s)`: synchronous, no `await` |
+| rebuilding | `clear(h)` empties a `vstack`/`hstack` the page made; `into(h, fn)` builds into it again |
 | reactive state | `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` |
+
+A page names only widgets it made: a handle below the page's first widget
+(the address bar, the status line, the browser's own content area, a
+previous page's widgets) makes `get_text`, `set_text`, `clear` and `into`
+throw. Without that, `set_text` on the address bar's handle would let a page
+show any URL it liked.
 
 A modifier at a page's top level has nothing to modify (the top of the stack
 is the browser's own content area), so it throws, where Aether would refuse
