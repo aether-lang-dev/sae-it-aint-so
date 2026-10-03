@@ -1899,21 +1899,53 @@ expand_root_(s: string) -> string {
     return s
 }
 
+// An absolute path with "." and ".." taken out lexically, so nothing that
+// follows can climb above what the path names.
+normalize_path_(p: string) -> string {
+    out = ""
+    n = string.length(p)
+    i = 0
+    while i <= n {
+        j = i
+        while j < n && string.char_at(p, j) != 47 { j = j + 1 }
+        seg = string.string_substring(p, i, j)
+        if seg == ".." {
+            k = string.length(out) - 1
+            while k > 0 && string.char_at(out, k) != 47 { k = k - 1 }
+            if k < 0 { k = 0 }
+            out = string.string_substring(out, 0, k)
+        } else if seg != "" && seg != "." {
+            out = "${out}/${seg}"
+        }
+        i = j + 1
+    }
+    if out == "" { return "/" }
+    return out
+}
+
 // A path made absolute (relative ones are in $APPDATA) and resolved:
-// symlinks and ".." gone, so a prefix check means what it says. A path that
-// does not exist yet resolves through its parent.
+// symlinks and ".." gone, so a prefix check means what it says. ".." is
+// taken out first; then the longest part that exists is resolved (its
+// symlinks followed) and the rest, which does not exist yet, appended.
 resolve_path_(raw: string) -> string {
     p = expand_root_(raw)
     if string.string_starts_with(p, "/") == 0 { p = "${app_data_dir_()}/${p}" }
-    rp, _k, err = fs.realpath(p)
-    if err == "" { return own_(rp) }
-    par = dir_of_(p)
-    base = string.string_substring(p, string.length(par), string.length(p))
-    if par == "" { return p }
-    rpar, _k2, perr = fs.realpath(par)
-    if perr != "" { return p }
-    if string.string_ends_with(rpar, "/") == 1 { return string.concat(rpar, base) }
-    return "${rpar}/${base}"
+    cur = normalize_path_(p)
+    rest = ""
+    while cur != "/" && cur != "" {
+        rp, _k, err = fs.realpath(cur)
+        if err == "" {
+            if rest == "" { return own_(rp) }
+            if string.string_ends_with(rp, "/") == 1 { return string.concat(rp, rest) }
+            return "${rp}/${rest}"
+        }
+        par = dir_of_(cur)
+        base = string.string_substring(cur, string.length(par), string.length(cur))
+        if rest == "" { rest = base } else { rest = "${base}/${rest}" }
+        cur = string.string_substring(par, 0, string.length(par) - 1)
+        if cur == "" { cur = "/" }
+    }
+    return "/${rest}"
 }
 
 // A grant root as a directory prefix ending in "/", resolved.

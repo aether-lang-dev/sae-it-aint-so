@@ -37,9 +37,11 @@ Two layers, after Tauri v2's capabilities and Aether's `hide` /
   browser for `https:`, Mail for `mailto:`).
 - **`fs.read` / `fs.write`**: directory prefixes, with `$APPDATA` (the app's
   own folder, created on first use), `$HOME`, `$DOCUMENTS`, `$DOWNLOADS`,
-  `$DESKTOP` and `$TEMP` expanded. Every path is made absolute and resolved
-  (symlinks, `..`) before it is checked, so a path cannot climb out of its
-  root. `write` covers create, overwrite, remove and mkdir.
+  `$DESKTOP` and `$TEMP` expanded. Every path is made absolute, its `.` and
+  `..` taken out, and the longest part of it that exists resolved (symlinks
+  followed) before it is checked, so a path cannot climb out of its root,
+  not even through directories that do not exist yet (`fs.mkdir(
+  "$APPDATA/../x/y")` is refused). `write` covers create, overwrite, remove and mkdir.
 - **Refusal is an exception** for synchronous calls (`fs`), naming the
   capability and the path: `fs.read_text: outside this app's fs.read
   grant: /etc/passwd`.

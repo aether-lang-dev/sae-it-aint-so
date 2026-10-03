@@ -15,6 +15,13 @@ tmp_dir() -> string {
     return t
 }
 
+// Where "$APPDATA/../sae-caps-climbed" would land.
+climbed_() -> string {
+    d = os_getenv("SAE_APPDATA_DIR")
+    if d == null { return "/nonexistent" }
+    return "${d}/../sae-caps-climbed"
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -45,6 +52,9 @@ main() {
             b.click("climb out")
             spec.assert_contains(b.page_texts(), "climb out: refused: fs.read_text: outside this app's fs.read grant: ", "refused")
             spec.assert_false(string.contains(b.page_texts(), "localhost"), "and nothing of /etc/hosts shown")
+            b.click("mkdir climb")
+            spec.assert_contains(b.page_texts(), "mkdir climb: refused: fs.mkdir: outside this app's fs.write grant: ", "refused")
+            spec.assert_false(fs.exists(climbed_()) == 1, "nothing made beside the app's folder")
         }
         spec.it("fs.remove within the write grant") callback {
             b.click("remove")

@@ -22,7 +22,9 @@ attempt("list appdata", () => fs.list("$APPDATA/notes").join(","));
 attempt("read temp", () => fs.read_text("$TEMP/sae-caps-read/hello.txt"));
 attempt("write temp", () => { fs.write_text("$TEMP/sae-caps-read/x.txt", "no"); return "written"; });
 attempt("read outside", () => fs.read_text("/etc/hosts"));
-attempt("climb out", () => fs.read_text("$APPDATA/../../../../../../etc/hosts"));
+attempt("climb out", () => fs.read_text("$APPDATA/../../../../../../../../../../../../../../../../etc/hosts"));
+// Through directories that do not exist yet: ".." must not survive to mkdir.
+attempt("mkdir climb", () => { fs.mkdir("$APPDATA/../sae-caps-climbed/x"); return "made"; });
 attempt("remove", () => { fs.remove("$APPDATA/notes/a.txt"); return `exists=${fs.exists("$APPDATA/notes/a.txt")}`; });
 attempt("open allowed", () => { shell.open("https://example.com/page"); return "opened"; });
 attempt("open other", () => { shell.open("https://evil.example.net/"); return "opened"; });
