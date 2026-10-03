@@ -1,8 +1,8 @@
 # Sae it ain't so
 
-A fat-UI browser. It fetches **pages** and renders them as real native
-widgets, where a page is a small program (layout plus the logic behind it),
-not markup. Tsyne-alike: this is Tsyne's browser mode rebuilt on the Aether
+A this-fat-UI browser. It fetches **pages** and renders them as real native
+widgets or vector graphics, where a page is a small program (layout plus the logic behind it),
+not markup. [Tsyne](https://github.com/tsyne/tsyne)-alike: this is [Tsyne's browser](https://github.com/tsyne/tsyne/blob/main/core/src/browser.ts) mode rebuilt on the Aether
 stack, as proposed in `aether-ui/docs/design/tsyne-migrated.md`.
 
 One native binary links three things:
