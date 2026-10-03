@@ -74,6 +74,10 @@ sae_stdlib_main(argc: int, argv: ptr) -> int {
     cfunc(v, "set_stroke", 3, "sae_vg_set_stroke")
     cfunc(v, "set_opacity", 2, "sae_vg_set_opacity")
 
+    ht = statics_of(object(g, "http"))
+    cfunc(ht, "get", 2, "sae_http_get")
+    cfunc(ht, "post", 4, "sae_http_post")
+
     st = statics_of(object(g, "storage"))
     cfunc(st, "get", 1, "sae_storage_get")
     cfunc(st, "set", 2, "sae_storage_set")

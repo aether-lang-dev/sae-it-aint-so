@@ -42,14 +42,14 @@ if curl -s -o /dev/null "http://127.0.0.1:$DRIVER_PORT/widgets"; then
 fi
 
 LOG="$ROOT/target/$SPEC.log"
+# The page server runs in both modes: in app mode it is the API an app may
+# call (its /api/ routes).
+"$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
+SERVER=$!
 if [ -n "${SAE_TEST_APP:-}" ]; then
-    # App mode: sae-driver --app <dir>, no page server.
-    SERVER=""
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
         --app "$(cd "$SAE_TEST_APP" && pwd)" >"$LOG" 2>&1 &
 else
-    "$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
-    SERVER=$!
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
         "http://127.0.0.1:$SITE_PORT/" >"$LOG" 2>&1 &
 fi

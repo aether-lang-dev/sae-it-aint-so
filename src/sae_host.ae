@@ -25,6 +25,7 @@ import lower
 import vg
 import vg.live
 import std.json
+import std.actors
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -88,6 +89,8 @@ const NAV_RELOAD = 4
 // onto <dir>/<path>.ts or .js the way tools/pageserver maps a site.
 var app_dir_ = ""
 var app_name_ = ""
+var page_seq_ = 0
+var browser_: ptr = null   // the one browser, for completions that arrive later
 
 // The browser: chrome widgets, history, and the page currently shown.
 struct Browser {
@@ -133,6 +136,7 @@ struct Page {
     sheet: ptr       // the page's AeCS sheet (ui.styles), or null
     sheet_strs: ptr  // std.list: selector and family strings the sheet borrows
     timers: ptr      // std.list: the ui.timer ids this page started (0 once cancelled)
+    seq: int         // which load this is: an http reply for an older page is dropped
 }
 
 page_of_(ctx: ptr) -> *Page {
@@ -1074,6 +1078,36 @@ sae_ui_timer_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return sae_js_undefined()
 }
 
+// --- the page API: http, on Aether's actor core ---
+//
+//   http.get(url, (status, body, err) => ...)
+//   http.post(url, body, contentType, (status, body, err) => ...)
+//
+// The request runs on an Aether actor (an HttpFetcher, one of a small pool),
+// on the scheduler's threads, so the UI thread never waits on the network.
+// Each finished job goes to the HttpInbox actor; while any are in flight a
+// UI timer asks the inbox for them and runs the page's callback on the UI
+// thread, where the JS engine lives. A reply for a page that has since gone
+// is dropped. err is "" on success; status is 0 when nothing came back.
+//
+// Where a page may reach: in the browser, its own origin; in an app, the
+// origins app.json lists under "http" (Tauri's allowlist). The rest is an
+// err, delivered the same way.
+
+@c_callback
+sae_http_get(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    return http_start_(ctx, "GET", own_(arg_str_(ctx, argv, argc, 0)), "", "", held_fn_(ctx, argv, argc, 1))
+}
+
+@c_callback
+sae_http_post(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    return http_start_(ctx, "POST", own_(arg_str_(ctx, argv, argc, 0)),
+                       own_(arg_str_(ctx, argv, argc, 1)), own_(arg_str_(ctx, argv, argc, 2)),
+                       held_fn_(ctx, argv, argc, 3))
+}
+
 // --- the page API: storage ---
 //
 // storage.get(key) / set(key, value) / remove(key): string values that
@@ -1385,6 +1419,233 @@ js_date_constructor(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 // --- URLs and fetching ---
 
+// --- http (the kernel side of the http page API) ---
+
+struct HttpJob {
+    id: int
+    method: string
+    url: string
+    body: string
+    ctype: string
+    status: int
+    resp: string
+    err: string
+}
+
+// A request a page is waiting on: which page (by load), and its callback.
+struct HttpWait {
+    id: int
+    page: ptr
+    seq: int
+    ref: ptr
+}
+
+message HttpRun { job: ptr }
+message HttpDone { job: ptr }
+message HttpTake {}
+
+// Does the blocking request, on a scheduler thread, then hands the job to
+// the inbox. One job at a time per fetcher; the pool gives concurrency.
+actor HttpFetcher {
+    receive {
+        HttpRun(job) -> {
+            http_do_(job)
+            ib = actors.whereis("sae-http-inbox")
+            ib ! HttpDone { job: job }
+        }
+    }
+}
+
+// Finished jobs, until the UI thread takes them. http_done_ is touched only
+// in these handlers, so the actor serializes every access to it.
+var http_done_: ptr = null
+
+actor HttpInbox {
+    receive {
+        HttpDone(job) -> {
+            if http_done_ == null { http_done_ = list.new() }
+            list.add(http_done_, job)
+        }
+        HttpTake() -> {
+            long r = 0
+            if http_done_ != null {
+                if list.size(http_done_) > 0 {
+                    j, _ = list.get(http_done_, 0)
+                    list.list_remove(http_done_, 0)
+                    r = mem.ptr_to_long(j)
+                }
+            }
+            reply r
+        }
+    }
+}
+
+const HTTP_FETCHERS = 4
+
+var http_pool_: ptr = null      // std.list of the fetchers, spawned on first use
+var http_next_ = 0
+var http_waits_: ptr = null     // std.list of *HttpWait
+var http_ids_ = 0
+var http_timer_ = 0
+var http_allow_: ptr = null     // app mode: strarr of allowed URL prefixes
+
+http_do_(jp: ptr) {
+    j = jp as *HttpJob
+    req = client.request(j.method, j.url)
+    if req == null {
+        j.err = "not a valid URL"
+        return
+    }
+    client.set_timeout(req, 15s)
+    client.set_follow_redirects(req, 5)
+    if j.method == "POST" {
+        ct = j.ctype
+        if ct == "" { ct = "text/plain" }
+        _sb = client.set_body(req, string.bytes(j.body), ct)
+    }
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if err != "" {
+        j.err = own_(err)
+        return
+    }
+    j.status = client.response_status(resp)
+    j.resp = own_(client.response_body(resp))
+    client.response_free(resp)
+}
+
+// "" if a page at page_url may reach url, else why not.
+http_refusal_(page_url: string, url: string) -> string {
+    if is_http_(url) == 0 { return "http.get/post takes an http(s) URL: ${url}" }
+    if app_dir_ != "" {
+        if http_allow_ != null {
+            n = strarr.size(http_allow_)
+            i = 0
+            while i < n {
+                if string.string_starts_with(url, strarr.get(http_allow_, i)) == 1 { return "" }
+                i = i + 1
+            }
+        }
+        return "this app may not reach ${url} (app.json \"http\" lists what it may)"
+    }
+    if is_http_(page_url) == 1 {
+        po = string.string_substring(page_url, 0, origin_end_(page_url))
+        uo = string.string_substring(url, 0, origin_end_(url))
+        if po == uo { return "" }
+    }
+    return "a page may reach only its own origin: ${url}"
+}
+
+http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: string, ref: ptr) -> long {
+    p = page_of_(ctx)
+    if ref == null { return sae_throw_type_error(ctx, "http: the last argument must be a function") }
+    url = resolve_(p.url, url_arg)
+    if http_waits_ == null { http_waits_ = list.new() }
+    http_ids_ = http_ids_ + 1
+    j = heap.new(HttpJob)
+    j.id = http_ids_
+    j.method = method
+    j.url = own_(url)
+    j.body = body
+    j.ctype = ctype
+    j.status = 0
+    j.resp = ""
+    j.err = http_refusal_(p.url, url)
+    w = heap.new(HttpWait)
+    w.id = j.id
+    w.page = p as ptr
+    w.seq = p.seq
+    w.ref = ref
+    list.add(http_waits_, w as ptr)
+    if j.err != "" {
+        // Refused: no request, but the answer comes the same way, later.
+        ib0 = http_inbox_()
+        ib0 ! HttpDone { job: j as ptr }
+    } else {
+        f = http_fetcher_()
+        f ! HttpRun { job: j as ptr }
+    }
+    if http_timer_ == 0 { http_timer_ = ui.timer(20, || { http_poll_() }) }
+    return JS_NewInt32(ctx, j.id)
+}
+
+http_inbox_() -> ptr {
+    ib = actors.whereis("sae-http-inbox")
+    if ib == null {
+        ib = spawn(HttpInbox())
+        actors.register("sae-http-inbox", ib)
+    }
+    return ib
+}
+
+http_fetcher_() -> ptr {
+    _ib = http_inbox_()
+    if http_pool_ == null {
+        http_pool_ = list.new()
+        k = 0
+        while k < HTTP_FETCHERS {
+            list.add(http_pool_, spawn(HttpFetcher()))
+            k = k + 1
+        }
+    }
+    f, _ = list.get(http_pool_, http_next_ % HTTP_FETCHERS)
+    http_next_ = http_next_ + 1
+    return f
+}
+
+// On the UI thread: take every finished job and run its page's callback.
+http_poll_() {
+    ib = http_inbox_()
+    while true {
+        jl = ib ? HttpTake {}
+        if jl == 0 { break }
+        http_deliver_(mem.long_to_ptr(jl) as *HttpJob)
+    }
+    if list.size(http_waits_) == 0 {
+        ui.timer_cancel(http_timer_)
+        http_timer_ = 0
+    }
+}
+
+http_deliver_(j: *HttpJob) {
+    n = list.size(http_waits_)
+    i = 0
+    while i < n {
+        wv, _ = list.get(http_waits_, i)
+        w = wv as *HttpWait
+        if w.id == j.id {
+            list.list_remove(http_waits_, i)
+            b = browser_
+            if b != null {
+                cur = (b as *Browser).page
+                if cur != null && cur == w.page && (cur as *Page).seq == w.seq {
+                    p = cur as *Page
+                    r = call3_http_(p.ctx, w.ref, j.status, j.resp, j.err)
+                    if sae_js_is_exception(r) != 0 { report_exception_(p.ctx, "an http callback") }
+                }
+            }
+            heap.free(w)
+            heap.free(j)
+            return
+        }
+        i = i + 1
+    }
+    heap.free(j)
+}
+
+// fn(status, body, err): each argument pushed as soon as it exists, so it is
+// rooted on the engine stack before the next allocation can move anything;
+// the function is read from its root last.
+call3_http_(ctx: ptr, ref: ptr, status: int, body: string, err: string) -> long {
+    if JS_StackCheck(ctx, 5) != 0 { return sae_js_exception() }
+    JS_PushArg(ctx, JS_NewString(ctx, err))
+    JS_PushArg(ctx, JS_NewString(ctx, body))
+    JS_PushArg(ctx, JS_NewInt32(ctx, status))
+    JS_PushArg(ctx, mem.get_long(ref, 0))
+    JS_PushArg(ctx, sae_js_null())
+    return JS_Call(ctx, 3)
+}
+
 // --- storage (the kernel side of the storage page API) ---
 
 const STORAGE_MAX = 1048576
@@ -1574,6 +1835,8 @@ page_new_(b: *Browser, url: string) -> *Page {
     p.sheet = null
     p.sheet_strs = list.new()
     p.timers = list.new()
+    page_seq_ = page_seq_ + 1
+    p.seq = page_seq_
     p.ctx = sae_new_context(p.mem_block, b.page_mem)
     JS_SetContextOpaque(p.ctx, p)
     p.root = ui.vstack(mem.long_to_ptr(b.content), 4)
@@ -1868,6 +2131,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     w = 800
     h = 600
     b = browser_new_()
+    browser_ = b as ptr
     root = aether_ui_vstack_create(6)
     if app != "" {
         while string.string_ends_with(app, "/") == 1 { app = string.string_substring(app, 0, string.length(app) - 1) }
@@ -1883,6 +2147,19 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         w = app_setting_int_(manifest, "width", 800)
         h = app_setting_int_(manifest, "height", 600)
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
+        http_allow_ = strarr.new()
+        if manifest != null {
+            al = json.json_object_get_raw(manifest, "http")
+            if al != null {
+                na = json.json_array_size(al)
+                ai = 0
+                while ai < na {
+                    sv, serr = json.get_string(json.json_array_get_raw(al, ai))
+                    if serr == "" { strarr.push_copy(http_allow_, sv) }
+                    ai = ai + 1
+                }
+            }
+        }
         build_content_(b, mem.long_to_ptr(root))
     } else {
         build_chrome_(b, root)

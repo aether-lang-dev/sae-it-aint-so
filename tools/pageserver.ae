@@ -42,6 +42,37 @@ serve_page_(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, body)
 }
 
+// A small API for pages that use http.get / http.post (spec_http):
+//   GET  /api/echo?msg=x   -> "echo: x"
+//   POST /api/echo         -> "posted: <body>"
+//   GET  /api/slow?ms=n    -> "slow done", after n milliseconds
+api_echo_get_(req: ptr, res: ptr, ud: ptr) {
+    m = http.http_get_query_param(req, "msg")
+    if m == null { m = "" }
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "echo: ${m}")
+}
+
+api_echo_post_(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "posted: ${http.request_body(req)}")
+}
+
+api_slow_(req: ptr, res: ptr, ud: ptr) {
+    ms = 1000
+    q = http.http_get_query_param(req, "ms")
+    if q != null {
+        v, verr = string.to_int(q)
+        if verr == "" { ms = v }
+    }
+    sleep(ms)
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "slow done")
+}
+
 redirect_home_(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 302)
     http.response_set_header(res, "Location", "/")
@@ -68,6 +99,9 @@ main() {
     }
     http.server_get(server, "/", serve_page_, site)
     http.server_get(server, "/old-home", redirect_home_, 0)
+    http.server_get(server, "/api/echo", api_echo_get_, 0)
+    http.server_post(server, "/api/echo", api_echo_post_, 0)
+    http.server_get(server, "/api/slow", api_slow_, 0)
 
     // One route per page file (routes are exact paths, no wildcard).
     l, lerr = dir.list(site.dir)

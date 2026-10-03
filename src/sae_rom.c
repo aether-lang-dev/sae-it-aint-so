@@ -49,6 +49,8 @@ SAE_JSFN(sae_ui_timer);
 SAE_JSFN(sae_ui_set_visible);
 SAE_JSFN(sae_ui_timer_cancel);
 SAE_JSFN(sae_storage_get);
+SAE_JSFN(sae_http_get);
+SAE_JSFN(sae_http_post);
 SAE_JSFN(sae_storage_set);
 SAE_JSFN(sae_storage_remove);
 SAE_JSFN(sae_ui_onclick);

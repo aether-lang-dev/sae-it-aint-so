@@ -246,6 +246,37 @@ main() {
         }
     }
 
+    spec.describe(fw, "http, on Aether's actor core") {
+        spec.it("GET and POST reach the page's own origin") callback {
+            b.click("HTTP from a page")
+            b.assert_page("HTTP from a page", "200 ", "http page")
+            b.click("GET echo")
+            b.assert_text("get: 200 echo: hello", "GET")
+            b.click("POST echo")
+            b.assert_text("post: 200 posted: a body", "POST")
+        }
+        spec.it("the UI stays live while a request is out (it runs on an actor)") callback {
+            b.click("Slow GET")
+            b.assert_text("slow: waiting", "sent")
+            b.click("Click me")
+            b.click("Click me")
+            b.assert_text("clicks: 2", "clicks handled during the request")
+            b.assert_text("slow: waiting", "and the request is still out")
+            b.assert_text("slow: 200 slow done", "then it lands")
+        }
+        spec.it("another origin is refused, through the callback") callback {
+            b.click("Other origin")
+            b.assert_text("refused: 0 a page may reach only its own origin: https://example.com/", "refused")
+        }
+        spec.it("a reply for a page that has gone is dropped") callback {
+            b.click("Slow, then leave")
+            b.assert_page(HOME, "200 ", "left")
+            sleep(1200)
+            spec.assert_false(b.console_contains("this callback must not run"), "not run")
+            b.assert_text(HOME, "and the browser is fine")
+        }
+    }
+
     spec.describe(fw, "vector graphics") {
         spec.it("draws, and a shape's on_click runs JS that repaints it") callback {
             b.click("Vector graphics")

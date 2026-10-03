@@ -1,0 +1,22 @@
+// spec_app_net.ae — an app reaches only the origins its app.json lists.
+//   SAE_TEST_APP=tests/apps/net tests/run_spec.sh spec_app_net
+import std.spec
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "app mode: http allowlist") {
+        spec.it("a listed prefix is reachable") callback {
+            b.click("Allowed")
+            b.assert_text("allowed: 200 echo: app", "the API answered")
+        }
+        spec.it("anything else is refused, through the callback") callback {
+            b.click("Not listed")
+            b.assert_text("other: 0 this app may not reach http://127.0.0.1:8091/old-home (app.json \"http\" lists what it may)",
+                "refused with the reason")
+        }
+    }
+    return spec.run_summary(fw)
+}

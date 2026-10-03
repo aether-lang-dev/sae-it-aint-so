@@ -15,6 +15,7 @@ const links: Link[] = [
   { label: "Scrolling", href: "/scrolling" },
   { label: "Widget interactions", href: "/widgets" },
   { label: "Banking (styles)", href: "/banking" },
+  { label: "HTTP from a page", href: "/http" },
   { label: "Vector graphics", href: "/vg" },
   { label: "Vector graphics misuse", href: "/vgmisuse" },
   { label: "Modifier misuse", href: "/misuse" },
