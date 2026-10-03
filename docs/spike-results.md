@@ -48,7 +48,7 @@ in mquickjs-ae without touching sae, and nothing in sae's design depends on it.
 ## With the lowerer in the loop
 
 Each page is lowered in-process before it is parsed, so there are now two
-parses per page. Per-load timings from `tests/test_nav.py` (localhost HTTP),
+parses per page. Per-load timings from the navigation spec (localhost HTTP),
 microseconds:
 
 | Page | fetch | lower | parse | run (widgets / js) |

@@ -19,7 +19,9 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`) |
 | `tools/saelower.ae` | CLI for the lowerer |
-| `site/` | The demo/test site; `tests/test_nav.py` drives it |
+| `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
+| `tests/lib/saedriver.ae` | The browser-test driver: Tsyne's TsyneBrowserTest verbs (navigate, back, forward, reload, current_url, assert_url, screenshot) plus page, vg and console queries, on aether-ui's uidriver |
+| `tests/run_spec.sh` | Starts the page server and sae-driver, runs a spec, stops both |
 | `aether-ui`, `mqjs`, `ui`, `vg`, `ae` | Symlinks into the sibling checkouts (`../aether-ui`, `../mquickjs-ae`); the README's "Build and run" says why each exists |
 
 ## Adding a page-API function
@@ -29,7 +31,8 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 2. Its ROM entry in `gen/sae_spec.ae`.
 3. Its prototype in `src/sae_rom.c` (`SAE_JSFN(...)`), or the ROM table will
    not compile.
-4. A page in `site/` and checks in `tests/test_nav.py`.
+4. A page in `site/` and an `it` in `tests/spec_nav.ae`. If the spec needs a
+   new kind of question, add a verb to `tests/lib/saedriver.ae`.
 
 JS functions a widget keeps for later are held with `hold_()` (a GC root,
 released with the page). Anything that allocates in the engine can move
@@ -44,7 +47,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 (cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 lower/run-tests.sh                           # 34 lowerer tests
-python3 tests/test_nav.py                    # 41 driver checks
+tests/run_spec.sh                            # spec_nav: 17 specs, ~7 s
 ```
 
 Toolchain: Aether 0.760+ as a dev tree (`$SAE_AETHER_HOME`, default

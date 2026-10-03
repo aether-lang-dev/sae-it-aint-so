@@ -1,0 +1,178 @@
+// spec_nav.ae — sae's navigation spec: walks the demo site in site/ by
+// clicking real buttons, the way a person would, and asserts on what the
+// chrome and the pages show. Run it with tests/run_spec.sh, which starts
+// the page server and sae-driver (see saedriver.ae).
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+const HOME: string = "Welcome to Sae it ain't so"
+
+go_home(msg: string) {
+    b.click("Home")
+    b.assert_page(HOME, "200 ", msg)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "loading and the chrome") {
+        spec.it("home loads, and the page sees its own URL") callback {
+            b.assert_page(string.concat("You are at ", b.test_url("/")), "200 ", "home")
+            b.assert_url(b.test_url("/"), "status line")
+            spec.assert_str_eq(b.current_url(), b.test_url("/"), "address field")
+        }
+        spec.it("a page link changes page") callback {
+            b.click("About")
+            b.assert_url(b.test_url("/about"), "about")
+            b.assert_text("About", "about page")
+        }
+        spec.it("Back, then Forward") callback {
+            b.back()
+            b.assert_page(HOME, "200 ", "back to home")
+            b.forward()
+            b.assert_page("About", string.concat("200 ", b.test_url("/about")), "forward to about")
+            go_home("home again")
+        }
+        spec.it("typing an address and pressing Go navigates") callback {
+            b.navigate(b.test_url("/about"))
+            b.assert_page("About", string.concat("200 ", b.test_url("/about")), "navigate")
+        }
+        spec.it("Reload reloads the same page") callback {
+            b.reload()
+            b.assert_page("About", string.concat("200 ", b.test_url("/about")), "reload")
+            go_home("home after reload")
+        }
+    }
+
+    spec.describe(fw, "HTTP outcomes") {
+        spec.it("an unknown path shows the site's 404 page") callback {
+            b.click("A page that is not there")
+            b.assert_page("404: no such page", "404 ", "404 page")
+            spec.assert_eq(b.status_code(), 404, "status code")
+            go_home("home from 404")
+        }
+        spec.it("a 302 is followed") callback {
+            b.click("Old home (302 to /)")
+            b.assert_page(HOME, string.concat("200 ", b.test_url("/")), "302 to /")
+        }
+    }
+
+    spec.describe(fw, "broken pages") {
+        spec.it("a page that throws keeps what it built and says so") callback {
+            b.click("A page that throws")
+            b.assert_text("This page failed: see the console.", "failure notice")
+            b.assert_text("Before the error", "before the throw")
+            b.assert_text("Inside the block", "inside the block")
+            b.assert_no_text("Never reached", "after the throw")
+            b.back()
+            b.assert_page(HOME, "200 ", "Back after a broken page")
+        }
+        spec.it("a page outside the dialect says where, and builds nothing") callback {
+            b.click("A page outside the dialect")
+            b.assert_text("This page could not be read:", "notice")
+            spec.assert_contains(b.page_texts(), "unsupported:3:1: class is not in the page dialect",
+                "where")
+            b.assert_no_text("You should not see this", "nothing built")
+            b.back()
+            b.assert_page(HOME, "200 ", "Back from the unreadable page")
+        }
+        spec.it("a modifier outside a container throws; earlier widgets stay") callback {
+            b.click("Modifier misuse")
+            b.assert_text("This page failed: see the console.", "failure notice")
+            b.assert_text("Before the misuse", "before")
+            b.assert_no_text("Never reached", "after")
+            spec.assert_true(b.wait_for_console("margin() must be called inside a container's block"),
+                "console says why")
+            b.back()
+            b.assert_page(HOME, "200 ", "Back from misuse")
+        }
+    }
+
+    spec.describe(fw, "page state and handlers") {
+        spec.it("the counter's handler runs per click") callback {
+            b.click("Counter")
+            b.assert_page("Counter page", "200 ", "counter")
+            b.click("Increment")
+            b.click("Increment")
+            b.click("Increment")
+            spec.assert_true(b.wait_for_console("count 3"), "console counts to 3")
+            go_home("home from counter")
+        }
+        spec.it("the calculator (the design doc's example)") callback {
+            b.click("Calculator")
+            b.assert_page(" 0", "200 ", "calculator")
+            b.click("4")
+            b.click("2")
+            b.assert_text(" 42", "4 2 shows 42 (state bound to text)")
+            b.click("C")
+            b.assert_text(" 0", "C clears")
+            b.click("7"); b.click("+"); b.click("3"); b.click("=")
+            b.assert_text(" 10", "7 + 3 = 10")
+            b.click("C")
+            b.click("6"); b.click("*"); b.click("7"); b.click("=")
+            b.assert_text(" 42", "6 * 7 = 42 (the row's op, captured per iteration)")
+            go_home("home from calculator")
+        }
+        spec.it("a text field's handler, get_text, and a scroll block") callback {
+            b.click("Form")
+            b.assert_page("echo: ", "200 ", "form")
+            b.set_field("Ada Lovelace & co")
+            b.assert_text("echo: Ada Lovelace & co", "handler gets the text, encoded and back")
+            b.click("Read")
+            b.assert_text("read: Ada Lovelace & co", "get_text reads the field")
+            b.assert_text("row 29", "scroll block built its rows")
+            go_home("home from form")
+        }
+    }
+
+    spec.describe(fw, "vector graphics") {
+        spec.it("draws, and a shape's on_click runs JS that repaints it") callback {
+            b.click("Vector graphics")
+            b.assert_page("Vector graphics", "200 ", "vg page")
+            // The circle's centre is viewBox (30, 40) in a 100x100 viewBox.
+            x = b.vg_px_x(30.0, 100.0, 100.0)
+            y = b.vg_px_y(40.0, 100.0, 100.0)
+            spec.assert_true(b.wait_for_vg_pixel(x, y, 0xcc4444), "circle draws red")
+            b.vg_click(x, y)
+            spec.assert_true(b.wait_for_vg_pixel(x, y, 0x33aa33), "clicked: green")
+            spec.assert_true(b.wait_for_console("circle clicked at 30,40; 1 so far"),
+                "the handler got viewBox coordinates")
+            b.click("Blue circle")
+            spec.assert_true(b.wait_for_vg_pixel(x, y, 0x3366cc), "vg.set_fill from a ui button: blue")
+            go_home("home from vg")
+        }
+        spec.it("a vg shape outside vg.scene throws; earlier widgets stay") callback {
+            b.click("Vector graphics misuse")
+            b.assert_text("This page failed: see the console.", "failure notice")
+            b.assert_text("Before the vg misuse", "before")
+            b.assert_no_text("Never reached", "after")
+            spec.assert_true(b.wait_for_console("vg.circle() must be called inside vg.scene()"),
+                "console says why")
+            b.back()
+            b.assert_page(HOME, "200 ", "back")
+        }
+    }
+
+    spec.describe(fw, "teardown") {
+        spec.it("five round trips leave the widget census where it started") callback {
+            baseline = b.widget_count()
+            i = 0
+            while i < 5 {
+                b.click("About")
+                b.assert_page("About", "200 ", "about")
+                go_home("home")
+                i = i + 1
+            }
+            spec.assert_true(b.wait_for_widget_count(baseline),
+                "widget census back to the home page's (no leak)")
+        }
+        spec.it("a screenshot saves a PNG") callback {
+            spec.assert_str_eq(b.screenshot("../target/spec_nav.png"), "", "screenshot")
+        }
+    }
+
+    return spec.run_summary(fw)
+}

@@ -85,8 +85,8 @@ vg.scene("0 0 100 100", 300, 300, () => {
 Where a Cosyne app writes `c.circle(30, 40, 18).fill("#c44").onClick(f)`, a
 sae page writes `vg.circle(30, 40, 18, () => { vg.fill("#c44"); vg.on_click(f) })`.
 A shape outside `vg.scene()`, or a modifier outside a shape, throws.
-`site/vg.ts` is the demo, and `tests/test_nav.py` checks its colours in
-driver screenshots.
+`site/vg.ts` is the demo, and `tests/spec_nav.ae` checks its colours
+through the driver's canvas pixel route.
 
 A page reaches only what `gen/sae_spec.ae` registers: the language builtins,
 `print`/`console`, `ui`, `vg`, and `browserContext`. There is no `load()`, no file
@@ -97,7 +97,7 @@ system and no process access.
 (`/about` is origin-relative). Navigation happens on the next turn of the
 event loop, after the page's JS returns, so a click handler can navigate away
 from the page its button is on. Leaving a page clears its widget subtree and
-frees its context; `tests/test_nav.py` checks the widget census stays flat.
+frees its context; `tests/spec_nav.ae` checks the widget census stays flat.
 
 Pages come over HTTP (10 s timeout, up to 5 redirects followed) or from a
 file. A non-200 page still runs, so a server's own 404 page renders; the
@@ -145,8 +145,40 @@ curl -s -X POST localhost:9333/widget/9/click
 ```
 
 The driver build is a separate binary because the control server must not
-ship in `sae`. `python3 tests/test_nav.py` runs the navigation spec against
-it. `lower/run-tests.sh` runs the lowerer's tests (needs `target/saelower`).
+ship in `sae`.
+
+### Testing pages: saedriver
+
+Tsyne tests pages with `TsyneBrowserTest`; sae's equivalent is
+`tests/lib/saedriver.ae`, built on aether-ui's AetherUIDriver client
+(`aether-ui/tests/lib/uidriver.ae`). Specs are Aether programs using
+`std.spec`, and they drive the browser as a person would: through the
+address bar, the chrome's buttons and the page's own widgets.
+
+| Tsyne | saedriver |
+|---|---|
+| `getTestUrl(path)` | `test_url(path)` |
+| `navigate(url)` | `navigate(url)` (address bar, then Go) |
+| `back()`, `forward()`, `reload()` | the same, via the chrome's buttons |
+| `waitForNavigation()` | `wait_for_url(url)`, `wait_for_page(text, status)` |
+| `getCurrentUrl()`, `assertUrl(url)` | `current_url()`, `assert_url(url, msg)` |
+| `screenshot(path)` | `screenshot(path)` |
+| `addPages`, `createBrowser`, `cleanup` | `tests/run_spec.sh` |
+
+Beyond those: `click(label)`, `set_field(text)`, `has_text`, `assert_text`,
+`assert_no_text`, `status_code`, `widget_count` (for leak checks), the vg
+canvas (`vg_px_x`/`vg_px_y` map viewBox to pixels, `vg_click`, `vg_pixel`,
+`wait_for_vg_pixel`) and the page's console (`wait_for_console`). Waits poll
+for up to 3 s; nothing sleeps blind.
+
+```sh
+tests/run_spec.sh                 # tests/spec_nav.ae against site/
+tests/run_spec.sh my_spec ../my-site
+```
+
+The launcher starts `target/pageserver` on the site and `sae-driver` on port
+9222 (uidriver's), then runs the spec with both driver modules on
+`AETHER_LIB_DIR`. `lower/run-tests.sh` runs the lowerer's tests (needs `target/saelower`).
 
 ## Status
 

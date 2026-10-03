@@ -1,0 +1,401 @@
+// saedriver.ae — sae's browser-test driver: Tsyne's TsyneBrowserTest verbs,
+// built on aether-ui's generic AetherUIDriver client (tests/lib/uidriver.ae
+// in aether-ui).
+//
+// uidriver knows widgets; this module knows a browser. It speaks in pages
+// and URLs: navigate, back, forward, reload, the URL and status the chrome
+// shows, the text a page put up, the buttons and fields a page made, the
+// vg scene a page drew, and what the page printed to the console.
+//
+// Tsyne                          saedriver
+//   getTestUrl(path)               test_url(path)
+//   navigate(url)                  navigate(url)
+//   back() / forward() / reload()  back() / forward() / reload()
+//   waitForNavigation()            wait_for_url(url) / wait_for_page(text, status)
+//   getCurrentUrl()                current_url()
+//   assertUrl(url)                 assert_url(url, msg)
+//   screenshot(path)               screenshot(path)
+//   (the page's own UI)            click(label), set_field(text), has_text(t), ...
+//
+// Tsyne's addPages()/createBrowser()/cleanup() — start a test page server,
+// start a browser, stop both — are tests/run_spec.sh here: specs are Aether
+// programs, and the launcher owns the processes. It starts target/pageserver
+// on a site directory and sae-driver on uidriver's fixed port, and tells
+// this module where they are:
+//   SAE_TEST_BASE  the page server's origin (default http://127.0.0.1:8091)
+//   SAE_TEST_LOG   the file sae-driver's stdout and stderr go to
+//
+// Navigation is deferred to the next event-loop turn and fetches over HTTP,
+// so nothing here sleeps blind: the verbs act, and the waits poll.
+
+exports(
+    test_url, navigate, back, forward, reload,
+    current_url, status_line, status_code, status_url,
+    click, button_exists, set_field, field_text,
+    has_text, page_texts, widget_count,
+    wait_for_url, wait_for_page, wait_for_text, wait_for_text_gone, wait_for_widget_count,
+    assert_url, assert_page, assert_text, assert_no_text,
+    vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
+    screenshot, console_contains, wait_for_console, url_encode
+)
+
+import std.string
+import std.os
+import std.os (os_getenv)
+import std.fs
+import std.json
+import std.spec
+import uidriver
+
+const TRIES: int = 60     // x POLL_MS: how long a wait waits (3 s)
+const POLL_MS: int = 50
+
+// ─── Where things are ────────────────────────────────────────────
+
+site_base() -> string {
+    b = os_getenv("SAE_TEST_BASE")
+    if b == null { return "http://127.0.0.1:8091" }
+    if string.length(b) == 0 { return "http://127.0.0.1:8091" }
+    return b
+}
+
+// The URL of `path` on the test page server ("/about" -> http://.../about).
+test_url(path: string) -> string { return string.concat(site_base(), path) }
+
+// ─── Navigation: the chrome's own controls ───────────────────────
+
+// Type `url` into the address field and press Go, as a person would.
+navigate(url: string) {
+    set_text_of(uidriver.widget_id_of("textfield", ""), url)
+    chrome("Go")
+}
+
+back() { chrome("Back") }
+forward() { chrome("Forward") }
+reload() { chrome("Reload") }
+
+// The chrome is built before any page, so its buttons are the first with
+// their labels; a page's own "Back" button comes later in the tree.
+chrome(label: string) {
+    id = uidriver.widget_id_of("button", label)
+    spec.assert_gt(id, 0, string.concat("chrome has a button: ", label))
+    uidriver.click_widget(id)
+}
+
+// What the address field shows.
+current_url() -> string {
+    return uidriver.widget_text_by_id(uidriver.widget_id_of("textfield", ""))
+}
+
+// The chrome's status line: "<HTTP status> <final URL>", e.g.
+// "200 http://127.0.0.1:8091/about" or "404 http://.../nope".
+status_line() -> string {
+    return uidriver.widget_text_by_id(uidriver.widget_id_of("text", ""))
+}
+
+status_code() -> int {
+    s = status_line()
+    sp = string.index_of(s, " ")
+    if sp <= 0 { return 0 }
+    n, err = string.to_int(string.substring(s, 0, sp))
+    if string.length(err) > 0 { return 0 }
+    return n
+}
+
+// The URL the last load ended at, after redirects.
+status_url() -> string {
+    s = status_line()
+    sp = string.index_of(s, " ")
+    if sp < 0 { return "" }
+    return string.substring(s, sp + 1, string.length(s))
+}
+
+// ─── The page's own widgets ──────────────────────────────────────
+
+// Click the page's button labelled `label`. Page widgets follow the
+// chrome's, so the last match is the page's when both have one.
+click(label: string) {
+    id = uidriver.widget_id_last_of("button", label)
+    spec.assert_gt(id, 0, string.concat("page has a button: ", label))
+    if id > 0 { uidriver.click_widget(id) }
+}
+
+button_exists(label: string) -> int {
+    if uidriver.widget_id_last_of("button", label) > 0 { return 1 }
+    return 0
+}
+
+// Set the page's last text field, firing its handler as typing would.
+set_field(text: string) {
+    id = uidriver.widget_id_last_of("textfield", "")
+    if id == uidriver.widget_id_of("textfield", "") {
+        spec.fail("the page has no text field (only the address bar)")
+        return
+    }
+    set_text_of(id, text)
+}
+
+field_text() -> string {
+    return uidriver.widget_text_by_id(uidriver.widget_id_last_of("textfield", ""))
+}
+
+set_text_of(id: int, text: string) {
+    uidriver.post_ok("/widget/${id}/set_text?v=${url_encode(text)}", "POST set_text")
+}
+
+// Every text widget's content, one per line, the status line first. For
+// failure messages, and for has_text.
+page_texts() -> string {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return "" }
+    out = ""
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "text") == 1 {
+            out = string.concat(out, string.concat(uidriver.field_str(w, "text"), "\n"))
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return out
+}
+
+// 1 when some text widget reads exactly `text`.
+has_text(text: string) -> int {
+    all = string.concat("\n", page_texts())
+    return string.contains(all, string.concat("\n", string.concat(text, "\n")))
+}
+
+// How many widgets exist, chrome included: a page that leaks widgets
+// across navigations shows here.
+widget_count() -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    n = json.json_array_size(v)
+    json.json_free(v)
+    return n
+}
+
+// ─── Waits (1 = it happened, 0 = timed out) ──────────────────────
+
+// The last load ended at `url` with status 200.
+wait_for_url(url: string) -> int {
+    return wait_for_page("", string.concat("200 ", url))
+}
+
+// The status line starts with `status_prefix` ("200 ", "404 ", or a full
+// "200 <url>") and, unless `text` is "", the page shows `text`. This is
+// waitForNavigation: a page is loaded when the chrome says so and the
+// page's widgets are up.
+wait_for_page(text: string, status_prefix: string) -> int {
+    i = 0
+    while i < TRIES {
+        if string.starts_with(status_line(), status_prefix) == 1 {
+            if string.length(text) == 0 { return 1 }
+            if has_text(text) == 1 { return 1 }
+        }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+wait_for_text(text: string) -> int {
+    i = 0
+    while i < TRIES {
+        if has_text(text) == 1 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+wait_for_text_gone(text: string) -> int {
+    i = 0
+    while i < TRIES {
+        if has_text(text) == 0 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+wait_for_widget_count(n: int) -> int {
+    i = 0
+    while i < TRIES {
+        if widget_count() == n { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+// ─── Assertions (poll first, then fail the `it` with what was there) ─
+
+assert_url(url: string, msg: string) {
+    if wait_for_url(url) == 0 {
+        spec.fail(string.concat(msg, string.concat(": status line is ", status_line())))
+    }
+}
+
+assert_page(text: string, status_prefix: string, msg: string) {
+    if wait_for_page(text, status_prefix) == 0 {
+        spec.fail(string.concat(msg, string.concat(": page shows\n", page_texts())))
+    }
+}
+
+assert_text(text: string, msg: string) {
+    if wait_for_text(text) == 0 {
+        spec.fail(string.concat(msg, string.concat(": page shows\n", page_texts())))
+    }
+}
+
+assert_no_text(text: string, msg: string) {
+    if has_text(text) == 1 {
+        spec.fail(string.concat(msg, string.concat(": page still shows ", text)))
+    }
+}
+
+// ─── Vector graphics (the vg page API) ───────────────────────────
+
+// The widget id of the page's vg canvas (the last canvas), or 0.
+vg_canvas() -> int { return uidriver.widget_id_last_of("canvas", "") }
+
+// The driver's /canvas/{handle} routes take the canvas's handle, not its
+// widget id, and /widgets doesn't carry it. Handles count up, so the live
+// canvas with the highest handle is the newest: the current page's.
+vg_handle() -> int {
+    best = 0
+    k = 1
+    while k <= 64 {
+        if uidriver.get_status("/canvas/${k}/debug") == 200 { best = k }
+        k = k + 1
+    }
+    return best
+}
+
+// A vg scene's viewBox scales uniformly to fit the canvas and is centred
+// in it. These map a viewBox point to canvas pixels, the frame the canvas
+// routes use.
+vg_px_x(vb_x: float, vb_w: float, vb_h: float) -> int {
+    cw = uidriver.widget_int_field_by_id(vg_canvas(), "w") * 1.0
+    ch = uidriver.widget_int_field_by_id(vg_canvas(), "h") * 1.0
+    s = fit_scale(cw, ch, vb_w, vb_h)
+    return ((cw - vb_w * s) / 2.0 + vb_x * s) as int
+}
+
+vg_px_y(vb_y: float, vb_w: float, vb_h: float) -> int {
+    cw = uidriver.widget_int_field_by_id(vg_canvas(), "w") * 1.0
+    ch = uidriver.widget_int_field_by_id(vg_canvas(), "h") * 1.0
+    s = fit_scale(cw, ch, vb_w, vb_h)
+    return ((ch - vb_h * s) / 2.0 + vb_y * s) as int
+}
+
+fit_scale(cw: float, ch: float, vb_w: float, vb_h: float) -> float {
+    sx = cw / vb_w
+    sy = ch / vb_h
+    if sx < sy { return sx }
+    return sy
+}
+
+// Click the vg canvas at canvas pixel (x, y): runs the on_click handler
+// of whatever shape is there.
+vg_click(x: int, y: int) {
+    uidriver.post_ok("/canvas/${vg_handle()}/click?x=${x}&y=${y}", "POST canvas click")
+}
+
+// The 0xAARRGGBB colour the canvas draws at canvas pixel (x, y).
+vg_pixel(x: int, y: int) -> int {
+    c = vg_canvas()
+    w = uidriver.widget_int_field_by_id(c, "w")
+    h = uidriver.widget_int_field_by_id(c, "h")
+    body = uidriver.get_body("/canvas/${vg_handle()}/pixel?x=${x}&y=${y}&w=${w}&h=${h}")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    p = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return p
+}
+
+// 1 when the pixel at (x, y) is within `tol` of #rrggbb on every channel.
+vg_pixel_near(x: int, y: int, rgb: int, tol: int) -> int {
+    p = vg_pixel(x, y)
+    if near(p >> 16, rgb >> 16, tol) == 0 { return 0 }
+    if near(p >> 8, rgb >> 8, tol) == 0 { return 0 }
+    return near(p, rgb, tol)
+}
+
+near(a: int, b: int, tol: int) -> int {
+    d = (a & 255) - (b & 255)
+    if d < 0 { d = 0 - d }
+    if d <= tol { return 1 }
+    return 0
+}
+
+wait_for_vg_pixel(x: int, y: int, rgb: int) -> int {
+    i = 0
+    while i < TRIES {
+        if vg_pixel_near(x, y, rgb, 24) == 1 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+// ─── Screenshot and console ──────────────────────────────────────
+
+// Save the window as a PNG. The body is binary, which the string-typed
+// HTTP client can't carry, so curl fetches it. Returns "" or an error.
+screenshot(path: string) -> string {
+    _out, err = os.exec("curl -sf -o '${path}' '${uidriver.url_of("/screenshot")}'")
+    return err
+}
+
+// 1 when sae-driver has printed `text` (a page's console.log, an error the
+// host reports) since the launcher started it.
+console_contains(text: string) -> int {
+    p = os_getenv("SAE_TEST_LOG")
+    if p == null { return 0 }
+    body, err = fs.read(p)
+    if string.length(err) > 0 { return 0 }
+    return string.contains(body, text)
+}
+
+wait_for_console(text: string) -> int {
+    i = 0
+    while i < TRIES {
+        if console_contains(text) == 1 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+// Percent-encode everything outside RFC 3986's unreserved set plus ':'
+// and '/', so a URL or arbitrary text survives a query parameter.
+url_encode(s: string) -> string {
+    out = ""
+    n = string.length(s)
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        keep = 0
+        if c >= 97 { if c <= 122 { keep = 1 } }   // a-z
+        if c >= 65 { if c <= 90 { keep = 1 } }    // A-Z
+        if c >= 48 { if c <= 58 { keep = 1 } }    // 0-9 and ':'
+        if c == 45 || c == 46 || c == 95 || c == 126 || c == 47 { keep = 1 }  // - . _ ~ /
+        if keep == 1 {
+            out = string.concat(out, string.from_char(c))
+        } else {
+            hx = string.to_upper(string.from_int_radix(c & 255, 16))
+            if string.length(hx) < 2 { hx = string.concat("0", hx) }
+            out = string.concat(out, string.concat("%", hx))
+        }
+        i = i + 1
+    }
+    return out
+}
