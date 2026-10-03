@@ -7,11 +7,11 @@
 # accessors (#2382), and the page veto needs its nested hide fix (#2381).
 AE_PIN=0.766.0
 
-# aeb, by commit: no aeb release has these yet. b0cc057 gives each
+# aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
 # ebcb508 is needed on macOS (nodes without `return 0` reported FAILED, a
-# changed imported module did not relink). Move to a tag once one has them.
-AEB_REF=ebcb508561ae71902b5c8e24efc08198c59db620
+# changed imported module did not relink).
+AEB_REF=v0.325
 
 # Sibling checkouts, reached through the aether-ui and mqjs symlinks.
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
