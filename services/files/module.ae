@@ -1,0 +1,219 @@
+// services/files — the one place sae touches the file system on a page's
+// behalf (the page API's `fs` object, app mode). See docs/architecture.md.
+//
+// What this module can reach is its imports, and nothing else: std.fs and
+// std.dir for the work, std.string and std.strarr to hold grants. It cannot
+// name the environment (std.os), the network, the UI or the engine; the
+// kernel hands it what it needs (configure, grant_read, grant_write).
+// tests/check_layers.sh holds the import list to that.
+//
+// Every operation takes the page's path as written, resolves it to where it
+// leads (resolve), and checks the result against the app's grants before
+// touching anything. A refusal is a message naming the call, the grant and
+// the resolved path; the caller (the page-API gate) throws it.
+
+import std.fs
+import std.dir
+import std.string
+import std.strarr
+
+exports (configure, grant_read, grant_write, resolve, path,
+         read_text, write_text, exists, list_json, mkdir, remove)
+
+var enabled_: int = 0        // 0 in the browser: pages there get no fs
+var app_data_: string = ""   // $APPDATA, and where relative paths go
+var home_: string = ""
+var temp_: string = ""
+var reads_: ptr = null       // strarr: resolved directory prefixes ending in "/"
+var writes_: ptr = null      // ... that may also be changed
+
+// Set up for an app (enabled 1) or a web page (0), with the roots the
+// $-prefixes expand to. The kernel reads them from the environment.
+configure(enabled: int, app_data: string, home: string, temp: string) {
+    enabled_ = enabled
+    app_data_ = string.copy(app_data)
+    home_ = string.copy(home)
+    temp_ = string.copy(temp)
+    reads_ = strarr.new()
+    writes_ = strarr.new()
+}
+
+// A read grant: everything under `root` ($APPDATA/, $DOCUMENTS/notes/, ...).
+// A root that cannot be resolved grants nothing.
+grant_read(root: string) { add_root_(reads_, root) }
+
+// A write grant: create, overwrite, remove and mkdir under `root` (and read).
+grant_write(root: string) { add_root_(writes_, root) }
+
+add_root_(l: ptr, raw: string) {
+    if l == null { return }
+    r = resolve(raw)
+    if r == "" { return }
+    if string.string_ends_with(r, "/") == 0 { r = string.concat(r, "/") }
+    strarr.push_copy(l, r)
+}
+
+// $APPDATA, $HOME, $DOCUMENTS, $DOWNLOADS, $DESKTOP, $TEMP at the front of a
+// path, expanded.
+expand_(s: string) -> string {
+    if string.string_starts_with(s, "$APPDATA") == 1 {
+        _m = fs.mkdir_p(app_data_)
+        return string.concat(app_data_, string.string_substring(s, 8, string.length(s)))
+    }
+    if string.string_starts_with(s, "$HOME") == 1 { return string.concat(home_, string.string_substring(s, 5, string.length(s))) }
+    if string.string_starts_with(s, "$DOCUMENTS") == 1 { return string.concat("${home_}/Documents", string.string_substring(s, 10, string.length(s))) }
+    if string.string_starts_with(s, "$DOWNLOADS") == 1 { return string.concat("${home_}/Downloads", string.string_substring(s, 10, string.length(s))) }
+    if string.string_starts_with(s, "$DESKTOP") == 1 { return string.concat("${home_}/Desktop", string.string_substring(s, 8, string.length(s))) }
+    if string.string_starts_with(s, "$TEMP") == 1 { return string.concat(temp_, string.string_substring(s, 5, string.length(s))) }
+    return s
+}
+
+// A path made absolute (relative ones are in $APPDATA) and resolved to where
+// it leads, so a prefix check means what it says. It is walked a component
+// at a time, as the kernel walks it: "." is dropped, ".." goes to the parent
+// of what is resolved so far (which has no symlinks left in it), and a
+// symlink is followed to where it points. A component that does not exist
+// yet is kept as written, and a ".." after it removes it again. Taking ".."
+// out as text first would be wrong: with link -> /elsewhere/dir,
+// "$APPDATA/link/../x" is /elsewhere/x. A path that cannot be resolved (a
+// dangling symlink, a loop) gives "", which no grant covers. Aether's
+// std.sandbox resolves paths the same way (runtime/aether_sandbox_path.h).
+resolve(raw: string) -> string {
+    p = expand_(raw)
+    if string.string_starts_with(p, "/") == 0 { p = "${app_data_}/${p}" }
+    res = ""
+    n = string.length(p)
+    i = 0
+    while i <= n {
+        j = i
+        while j < n && string.char_at(p, j) != 47 { j = j + 1 }
+        seg = string.string_substring(p, i, j)
+        if seg == ".." {
+            k = string.length(res) - 1
+            while k > 0 && string.char_at(res, k) != 47 { k = k - 1 }
+            if k < 0 { k = 0 }
+            res = string.string_substring(res, 0, k)
+        } else if seg != "" && seg != "." {
+            res = "${res}/${seg}"
+            if fs.fs_is_symlink(res) == 1 {
+                rp, _k, err = fs.realpath(res)
+                if err != "" { return "" }
+                res = string.copy(rp)
+                if res == "/" { res = "" }
+            }
+        }
+        i = j + 1
+    }
+    if res == "" { return "/" }
+    return res
+}
+
+prefix_in_(l: ptr, s: string) -> int {
+    if l == null { return 0 }
+    n = strarr.size(l)
+    i = 0
+    while i < n {
+        if string.string_starts_with(s, strarr.get(l, i)) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+within_(l: ptr, p: string) -> int {
+    if prefix_in_(l, p) == 1 { return 1 }
+    // A grant root itself ("/x/" grants "/x").
+    return prefix_in_(l, string.concat(p, "/"))
+}
+
+// The resolved path a call may use, or why not: (path, "") or ("", reason).
+// write is 1 for a change. `what` names the page's call in the reason.
+path(raw: string, write: int, what: string) -> (string, string) {
+    if enabled_ == 0 { return "", "${what}: fs is not available to a web page" }
+    p = resolve(raw)
+    if p == "" { return "", "${what}: cannot resolve ${raw} (a dangling symlink, or a loop)" }
+    if write == 1 {
+        if within_(writes_, p) == 1 { return p, "" }
+        return "", "${what}: outside this app's fs.write grant: ${p}"
+    }
+    if within_(reads_, p) == 1 || within_(writes_, p) == 1 { return p, "" }
+    return "", "${what}: outside this app's fs.read grant: ${p}"
+}
+
+// The operations: each checks first, then acts. (text, "") or ("", error).
+
+read_text(raw: string) -> (string, string) {
+    p, why = path(raw, 0, "fs.read_text")
+    if why != "" { return "", why }
+    t, err = fs.read(p)
+    if err != "" { return "", "fs.read_text: ${err}" }
+    return t, ""
+}
+
+write_text(raw: string, text: string) -> string {
+    p, why = path(raw, 1, "fs.write_text")
+    if why != "" { return why }
+    err = fs.write_atomic(p, string.bytes(text))
+    if err != "" { return "fs.write_text: ${err}" }
+    return ""
+}
+
+// (1 or 0, "") or (0, reason).
+exists(raw: string) -> (int, string) {
+    p, why = path(raw, 0, "fs.exists")
+    if why != "" { return 0, why }
+    return fs.exists(p), ""
+}
+
+// The names in a directory, as a JSON array of strings.
+list_json(raw: string) -> (string, string) {
+    p, why = path(raw, 0, "fs.list")
+    if why != "" { return "", why }
+    l, lerr = dir.list(p)
+    if lerr != "" { return "", "fs.list: ${lerr}" }
+    out = "["
+    n = dir.list_count(l)
+    i = 0
+    while i < n {
+        if i > 0 { out = string.concat(out, ",") }
+        out = string.concat(out, quote_(dir.list_get(l, i)))
+        i = i + 1
+    }
+    return string.concat(out, "]"), ""
+}
+
+mkdir(raw: string) -> string {
+    p, why = path(raw, 1, "fs.mkdir")
+    if why != "" { return why }
+    _m = fs.mkdir_p(p)
+    if fs.exists(p) == 0 { return "fs.mkdir: could not create ${p}" }
+    return ""
+}
+
+remove(raw: string) -> string {
+    p, why = path(raw, 1, "fs.remove")
+    if why != "" { return why }
+    kind, _sz, _mt, serr = fs.file_stat(p)
+    if serr != "" { return "fs.remove: no such file: ${p}" }
+    if kind == 2 {
+        e = fs.delete_dir(p)
+        if e != "" { return "fs.remove: ${e}" }
+        return ""
+    }
+    e2 = fs.delete(p)
+    if e2 != "" { return "fs.remove: ${e2}" }
+    return ""
+}
+
+quote_(s: string) -> string {
+    out = "\""
+    i = 0
+    while i < string.length(s) {
+        c = string.char_at(s, i)
+        if c == 34 { out = string.concat(out, "\\\"") }
+        else if c == 92 { out = string.concat(out, "\\\\") }
+        else if c < 32 { out = string.concat(out, " ") }
+        else { out = string.concat(out, string.from_char(c)) }
+        i = i + 1
+    }
+    return string.concat(out, "\"")
+}

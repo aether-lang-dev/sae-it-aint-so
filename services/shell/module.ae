@@ -1,0 +1,62 @@
+// services/shell — the one place sae hands a URL to the system (the page
+// API's `shell.open`, app mode). See docs/architecture.md.
+//
+// It imports exactly one UI name, ui.open_url (AppKit's NSWorkspace on
+// macOS), and two file calls for the spec log. tests/check_layers.sh fails
+// if any other module in sae names open_url, so this is the only route to
+// it: a build without this module has no way to open a URL at all.
+//
+// A URL is opened only if the app's grants (capabilities.shell.open in
+// app.json, handed in by the kernel) list a prefix of it. A web page in the
+// browser has no shell.
+
+import ui (open_url)
+import std.fs (read, write_atomic)
+import std.string
+import std.strarr
+
+exports (configure, grant, refusal, open)
+
+var enabled_: int = 0     // 0 in the browser
+var log_: string = ""     // SAE_SHELL_LOG: record URLs here instead (specs)
+var prefixes_: ptr = null // strarr: URL prefixes the app may open
+
+// Set up for an app (enabled 1) or a web page (0). `log`, when not "",
+// is a file the URLs are appended to instead of being opened.
+configure(enabled: int, log: string) {
+    enabled_ = enabled
+    log_ = string.copy(log)
+    prefixes_ = strarr.new()
+}
+
+// A URL prefix the app may open ("https://github.com/").
+grant(prefix: string) {
+    if prefixes_ != null { strarr.push_copy(prefixes_, prefix) }
+}
+
+// Why `url` may not be opened, or "".
+refusal(url: string) -> string {
+    if enabled_ == 0 { return "shell.open: not available to a web page" }
+    if prefixes_ != null {
+        n = strarr.size(prefixes_)
+        i = 0
+        while i < n {
+            if string.string_starts_with(url, strarr.get(prefixes_, i)) == 1 { return "" }
+            i = i + 1
+        }
+    }
+    return "shell.open: this app may not open ${url} (app.json capabilities.shell.open lists what it may)"
+}
+
+// Open `url` if the grants allow it; "" or why not.
+open(url: string) -> string {
+    why = refusal(url)
+    if why != "" { return why }
+    if log_ != "" {
+        prev, _e = read(log_)
+        _w = write_atomic(log_, string.bytes("${prev}${url}\n"))
+        return ""
+    }
+    open_url(url)
+    return ""
+}

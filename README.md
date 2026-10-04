@@ -233,6 +233,14 @@ the line and that the compiler enforces it (nested blocks need Aether with
 list starts with the file system and its neighbours and grows from there;
 the end state is `seal except`, an explicit whitelist per function.
 
+The effects a page can ask for live in their own modules,
+`services/files` and `services/shell`, each able to reach only its imports:
+only `services/shell` can name the system URL opener.
+`tests/check_layers.sh` holds each service to its import list.
+[docs/architecture.md](docs/architecture.md) has the layers (kernel,
+services, gate, page host, guest), how each line is held, and what comes
+next.
+
 `browserContext` is Tsyne's: `changePage(url)`, `back()`, `forward()`,
 `reload()` and `currentUrl`. A URL resolves against the page that asked
 (`/about` is origin-relative). Navigation happens on the next turn of the

@@ -26,7 +26,8 @@ import vg
 import vg.live
 import std.json
 import std.actors
-import std.dir
+import services.files
+import services.shell
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -1222,47 +1223,44 @@ sae_http_request(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return http_start_(ctx, string.to_upper(method), url, body, ctype, hdrs, held_fn_(ctx, argv, argc, 1))
 }
 
-// --- the page API: fs (app mode, within the app's grants) ---
+// --- the page API: fs and shell (app mode, within the app's grants) ---
 //
-// Synchronous, for the small files an app keeps. Every path is resolved
-// (symlinks, "..") before it is checked against capabilities.fs in app.json;
-// a page in the browser has no fs at all. See docs/app-capabilities.md.
+// Gates onto services/files and services/shell (docs/architecture.md): each
+// takes the page's arguments, calls the service, and throws its refusal or
+// error. The services resolve and check every path and URL against
+// capabilities in app.json; a page in the browser gets a refusal from both.
+// See docs/app-capabilities.md.
 
 @c_callback
 sae_fs_read_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 0, "fs.read_text")
-    if why != "" { return sae_throw_type_error(ctx, why) }
-    text, err = pfs_read_(p)
-    if err != "" { return sae_throw_type_error(ctx, "fs.read_text: ${err}") }
+    text, err = files.read_text(own_(arg_str_(ctx, argv, argc, 0)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
     return JS_NewString(ctx, text)
 }
 
 @c_callback
 sae_fs_write_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 1, "fs.write_text")
-    if why != "" { return sae_throw_type_error(ctx, why) }
-    err = pfs_write_(p, own_(arg_str_(ctx, argv, argc, 1)))
-    if err != "" { return sae_throw_type_error(ctx, "fs.write_text: ${err}") }
+    p = own_(arg_str_(ctx, argv, argc, 0))
+    err = files.write_text(p, own_(arg_str_(ctx, argv, argc, 1)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
     return sae_js_undefined()
 }
 
 @c_callback
 sae_fs_exists(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 0, "fs.exists")
+    yes, why = files.exists(own_(arg_str_(ctx, argv, argc, 0)))
     if why != "" { return sae_throw_type_error(ctx, why) }
-    return sae_js_bool(pfs_exists_(p))
+    return sae_js_bool(yes)
 }
 
 @c_callback
 sae_fs_list(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 0, "fs.list")
-    if why != "" { return sae_throw_type_error(ctx, why) }
-    names, err = pfs_list_(p)
-    if err != "" { return sae_throw_type_error(ctx, "fs.list: ${err}") }
+    names, err = files.list_json(own_(arg_str_(ctx, argv, argc, 0)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
     // A JSON array, parsed back on the JS side: the names are strings only.
     return json_value_(ctx, names)
 }
@@ -1270,20 +1268,16 @@ sae_fs_list(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 @c_callback
 sae_fs_mkdir(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 1, "fs.mkdir")
-    if why != "" { return sae_throw_type_error(ctx, why) }
-    err = pfs_mkdir_(p)
-    if err != "" { return sae_throw_type_error(ctx, "fs.mkdir: ${err}") }
+    err = files.mkdir(own_(arg_str_(ctx, argv, argc, 0)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
     return sae_js_undefined()
 }
 
 @c_callback
 sae_fs_remove(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    p, why = pfs_path_(own_(arg_str_(ctx, argv, argc, 0)), 1, "fs.remove")
-    if why != "" { return sae_throw_type_error(ctx, why) }
-    err = pfs_remove_(p)
-    if err != "" { return sae_throw_type_error(ctx, "fs.remove: ${err}") }
+    err = files.remove(own_(arg_str_(ctx, argv, argc, 0)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
     return sae_js_undefined()
 }
 
@@ -1292,10 +1286,8 @@ sae_fs_remove(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 @c_callback
 sae_shell_open(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    url = own_(arg_str_(ctx, argv, argc, 0))
-    why = shell_refusal_(url)
+    why = shell.open(own_(arg_str_(ctx, argv, argc, 0)))
     if why != "" { return sae_throw_type_error(ctx, why) }
-    shell_open_(url)
     return sae_js_undefined()
 }
 
@@ -1901,9 +1893,7 @@ call_http_(p: *Page, ref: ptr, status: int, text: string, err: string, raw_heade
 // --- capabilities (the kernel side; docs/app-capabilities.md) ---
 
 var cap_http_: ptr = null    // strarr: URL prefixes http may reach (app mode)
-var cap_open_: ptr = null    // strarr: URL prefixes shell.open may hand on
-var cap_read_: ptr = null    // strarr: resolved directory prefixes fs may read
-var cap_write_: ptr = null   // strarr: ... and write (also readable)
+// The fs and shell grants live in services/files and services/shell.
 
 // 1 if `s` starts with one of the prefixes in `l`.
 prefix_in_(l: ptr, s: string) -> int {
@@ -1925,180 +1915,15 @@ app_data_dir_() -> string {
     return "${env_("HOME")}/.local/share/${app_name_}"
 }
 
-// $APPDATA, $HOME, $DOCUMENTS, $DOWNLOADS, $DESKTOP, $TEMP at the front of a
-// path, expanded.
-expand_root_(s: string) -> string {
-    h = env_("HOME")
-    if string.string_starts_with(s, "$APPDATA") == 1 {
-        d = app_data_dir_()
-        _m = fs.mkdir_p(d)
-        return string.concat(d, string.string_substring(s, 8, string.length(s)))
-    }
-    if string.string_starts_with(s, "$HOME") == 1 { return string.concat(h, string.string_substring(s, 5, string.length(s))) }
-    if string.string_starts_with(s, "$DOCUMENTS") == 1 { return string.concat("${h}/Documents", string.string_substring(s, 10, string.length(s))) }
-    if string.string_starts_with(s, "$DOWNLOADS") == 1 { return string.concat("${h}/Downloads", string.string_substring(s, 10, string.length(s))) }
-    if string.string_starts_with(s, "$DESKTOP") == 1 { return string.concat("${h}/Desktop", string.string_substring(s, 8, string.length(s))) }
-    if string.string_starts_with(s, "$TEMP") == 1 {
-        t = env_("TMPDIR")
-        if t == "" { t = "/tmp" }
-        while string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
-        return string.concat(t, string.string_substring(s, 5, string.length(s)))
-    }
-    return s
-}
-
-// A path made absolute (relative ones are in $APPDATA) and resolved to where
-// it leads, so a prefix check means what it says. It is walked a component
-// at a time, as the kernel walks it: "." is dropped, ".." goes to the parent
-// of what is resolved so far (which has no symlinks left in it), and a
-// symlink is followed to where it points. A component that does not exist
-// yet is kept as written, and a ".." after it removes it again. Taking ".."
-// out as text first would be wrong: with link -> /elsewhere/dir,
-// "$APPDATA/link/../x" is /elsewhere/x. A path that cannot be resolved (a
-// dangling symlink, a loop) gives "", which no grant covers. Aether's
-// std.sandbox resolves paths the same way (runtime/aether_sandbox_path.h).
-resolve_path_(raw: string) -> string {
-    p = expand_root_(raw)
-    if string.string_starts_with(p, "/") == 0 { p = "${app_data_dir_()}/${p}" }
-    res = ""
-    n = string.length(p)
-    i = 0
-    while i <= n {
-        j = i
-        while j < n && string.char_at(p, j) != 47 { j = j + 1 }
-        seg = string.string_substring(p, i, j)
-        if seg == ".." {
-            k = string.length(res) - 1
-            while k > 0 && string.char_at(res, k) != 47 { k = k - 1 }
-            if k < 0 { k = 0 }
-            res = string.string_substring(res, 0, k)
-        } else if seg != "" && seg != "." {
-            res = "${res}/${seg}"
-            if fs.fs_is_symlink(res) == 1 {
-                rp, _k, err = fs.realpath(res)
-                if err != "" { return "" }
-                res = own_(rp)
-                if res == "/" { res = "" }
-            }
-        }
-        i = j + 1
-    }
-    if res == "" { return "/" }
-    return res
-}
-
-// A grant root as a directory prefix ending in "/", resolved.
-grant_root_(raw: string) -> string {
-    r = resolve_path_(raw)
-    if r == "" { return "" }
-    if string.string_ends_with(r, "/") == 0 { r = string.concat(r, "/") }
-    return r
-}
-
-within_(l: ptr, p: string) -> int {
-    if prefix_in_(l, p) == 1 { return 1 }
-    // A grant root itself ("/x/" grants "/x").
-    return prefix_in_(l, string.concat(p, "/"))
-}
-
-// The resolved path fs may use, or why not. write: 1 for a change.
-pfs_path_(raw: string, write: int, what: string) -> (string, string) {
-    if app_dir_ == "" { return "", "${what}: fs is not available to a web page" }
-    p = resolve_path_(raw)
-    if p == "" { return "", "${what}: cannot resolve ${raw} (a dangling symlink, or a loop)" }
-    if write == 1 {
-        if within_(cap_write_, p) == 1 { return p, "" }
-        return "", "${what}: outside this app's fs.write grant: ${p}"
-    }
-    if within_(cap_read_, p) == 1 || within_(cap_write_, p) == 1 { return p, "" }
-    return "", "${what}: outside this app's fs.read grant: ${p}"
-}
-
-pfs_read_(p: string) -> (string, string) {
-    t, err = fs.read(p)
-    if err != "" { return "", err }
-    return t, ""
-}
-
-pfs_write_(p: string, text: string) -> string {
-    return fs.write_atomic(p, string.bytes(text))
-}
-
-pfs_exists_(p: string) -> int { return fs.exists(p) }
-
-pfs_mkdir_(p: string) -> string {
-    _m = fs.mkdir_p(p)
-    if fs.exists(p) == 0 { return "could not create ${p}" }
-    return ""
-}
-
-pfs_remove_(p: string) -> string {
-    kind, _sz, _mt, serr = fs.file_stat(p)
-    if serr != "" { return "no such file: ${p}" }
-    if kind == 2 {
-        e = fs.delete_dir(p)
-        return e
-    }
-    e2 = fs.delete(p)
-    return e2
-}
-
-// The names in a directory, as a JSON array string.
-pfs_list_(p: string) -> (string, string) {
-    l, lerr = dir.list(p)
-    if lerr != "" { return "", lerr }
-    out = "["
-    n = dir.list_count(l)
-    i = 0
-    while i < n {
-        if i > 0 { out = string.concat(out, ",") }
-        out = string.concat(out, json_quote_(dir.list_get(l, i)))
-        i = i + 1
-    }
-    return string.concat(out, "]"), ""
-}
-
-json_quote_(s: string) -> string {
-    out = "\""
-    i = 0
-    while i < string.length(s) {
-        c = string.char_at(s, i)
-        if c == 34 { out = string.concat(out, "\\\"") }
-        else if c == 92 { out = string.concat(out, "\\\\") }
-        else if c < 32 { out = string.concat(out, " ") }
-        else { out = string.concat(out, string.from_char(c)) }
-        i = i + 1
-    }
-    return string.concat(out, "\"")
-}
-
 // A JSON text made into a JS value (JSON.parse, from the host). With
 // JS_EVAL_JSON, JS_Parse returns the value itself; there is nothing to run.
 json_value_(ctx: ptr, text: string) -> long {
     return JS_Parse(ctx, text, string.length(text), "sae:json", JS_EVAL_JSON)
 }
 
-shell_refusal_(url: string) -> string {
-    if app_dir_ == "" { return "shell.open: not available to a web page" }
-    if prefix_in_(cap_open_, url) == 1 { return "" }
-    return "shell.open: this app may not open ${url} (app.json capabilities.shell.open lists what it may)"
-}
-
-// Opens a URL with the system's handler. SAE_SHELL_LOG=<file> records it
-// there instead, for specs.
-shell_open_(url: string) {
-    lg = env_("SAE_SHELL_LOG")
-    if lg != "" {
-        prev, _e = fs.read(lg)
-        _w = fs.write_atomic(lg, string.bytes("${prev}${url}\n"))
-        return
-    }
-    ui.open_url(url)
-}
-
-// An array of strings from a JSON manifest, appended to a strarr; roots
-// (for fs) resolved as grant roots.
-grants_from_(v: ptr, key: string, into_l: ptr, roots: int) {
+// The strings of a JSON array `key` in object `v` (none if absent), each
+// handed to `add`.
+grants_from_(v: ptr, key: string, add: fn) {
     if v == null { return }
     a = json.json_object_get_raw(v, key)
     if a == null { return }
@@ -2106,33 +1931,28 @@ grants_from_(v: ptr, key: string, into_l: ptr, roots: int) {
     i = 0
     while i < n {
         sv, serr = json.get_string(json.json_array_get_raw(a, i))
-        if serr == "" {
-            if roots == 1 {
-                // A root that cannot be resolved grants nothing.
-                gr = grant_root_(sv)
-                if gr != "" { strarr.push_copy(into_l, gr) }
-            } else {
-                strarr.push_copy(into_l, sv)
-            }
-        }
+        if serr == "" { call(add, sv) }
         i = i + 1
     }
 }
 
+// The app's grants from app.json "capabilities", handed to the services
+// that enforce them (http's stay here, with the actors that make requests).
 read_capabilities_(manifest: ptr) {
     cap_http_ = strarr.new()
-    cap_open_ = strarr.new()
-    cap_read_ = strarr.new()
-    cap_write_ = strarr.new()
+    t = env_("TMPDIR")
+    if t == "" { t = "/tmp" }
+    while string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
+    files.configure(1, app_data_dir_(), env_("HOME"), t)
+    shell.configure(1, env_("SAE_SHELL_LOG"))
     if manifest == null { return }
     caps = json.json_object_get_raw(manifest, "capabilities")
     if caps == null { return }
-    grants_from_(caps, "http", cap_http_, 0)
-    sh = json.json_object_get_raw(caps, "shell")
-    grants_from_(sh, "open", cap_open_, 0)
+    grants_from_(caps, "http", |u: string| { strarr.push_copy(cap_http_, u) })
+    grants_from_(json.json_object_get_raw(caps, "shell"), "open", |u: string| { shell.grant(u) })
     fsg = json.json_object_get_raw(caps, "fs")
-    grants_from_(fsg, "read", cap_read_, 1)
-    grants_from_(fsg, "write", cap_write_, 1)
+    grants_from_(fsg, "read", |r: string| { files.grant_read(r) })
+    grants_from_(fsg, "write", |r: string| { files.grant_write(r) })
 }
 
 // --- storage (the kernel side of the storage page API) ---
