@@ -48,15 +48,6 @@ ae_bin_() -> string {
     return "ae"
 }
 
-// contrib.quickjs's C, from the Aether tree sae builds against: the dev tree
-// (SAE_AETHER_HOME), else the installed toolchain's share/aether.
-quickjs_c_() -> string {
-    root = aether_root_()
-    if string.length(root) > 0 { return "${root}/contrib/quickjs/aether_quickjs.c" }
-    home = os.getenv("AETHER_HOME")
-    return "${home}/share/aether/contrib/quickjs/aether_quickjs.c"
-}
-
 aeb(cap) {
     bldr.build() {
         c.program() {
@@ -70,12 +61,9 @@ aeb(cap) {
             // themselves get none of these.
             aether_caps("fs,os,net")
 
-            // The engine: contrib.quickjs's C (QuickJS's amalgamation, which
-            // scripts/fetch-quickjs-amalgamation.sh fetches into that tree).
-            // aeb's c.program does not yet follow a module's @source, so it
-            // is named here.
-            sources(quickjs_c_())
-
+            // The engine, contrib.quickjs, comes with the import: aeb
+            // compiles the C its module ships (@source) and the amalgamation
+            // that C includes (fetched into the Aether tree by build.sh).
             aether_source("src/sae_host.ae")
             sources("src/sae_rom.c")
 

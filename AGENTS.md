@@ -64,8 +64,8 @@ tests/check_layers.sh                        # services held to their imports
 ```
 
 Toolchain: Aether main (for contrib.quickjs) as a dev tree (`$SAE_AETHER_HOME`, default
-`../aether`, built with `make compiler ae stdlib`) and aeb at `ebcb508` or
-later, installed privately under `target/toolchain`:
+`../aether`, built with `make compiler ae stdlib`) and aeb at `350dfc4` or
+later (it compiles the C contrib.quickjs ships), installed privately under `target/toolchain`:
 
 ```sh
 make -C ../aeb install PREFIX=$PWD/target/toolchain
