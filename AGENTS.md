@@ -1,7 +1,7 @@
 # Notes for agents working on sae
 
 "Sae it ain't so": a fat-UI browser. Pages are small programs in a TypeScript
-dialect, fetched over HTTP, lowered to ES5 in-process, run on QuickJS (Aether's contrib.quickjs), and
+dialect (modern TypeScript), fetched over HTTP, its types erased in-process, run on QuickJS (Aether's contrib.quickjs), and
 rendered as native aether-ui widgets. The design is
 `../aether-ui/docs/design/tsyne-migrated.md`; the measurements that justified
 building it are `docs/spike-results.md`. Read `README.md` and
@@ -56,12 +56,14 @@ run the page's promise jobs.
 AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 (cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
 ../aether/build/ae build tools/saelower.ae -o target/saelower
-lower/run-tests.sh                           # 34 lowerer tests
-tests/run_spec.sh                            # spec_nav: 30 specs, ~10 s
+../aether/build/ae build tools/saejs.ae -o target/saejs
+lower/run-tests.sh                           # 29 lowerer tests
+tests/run_spec.sh                            # spec_nav: 40 specs
 tests/check_page_veto.sh                     # page veto present and enforced
+tests/check_layers.sh                        # services held to their imports
 ```
 
-Toolchain: Aether 0.760+ as a dev tree (`$SAE_AETHER_HOME`, default
+Toolchain: Aether main (for contrib.quickjs) as a dev tree (`$SAE_AETHER_HOME`, default
 `../aether`, built with `make compiler ae stdlib`) and aeb at `ebcb508` or
 later, installed privately under `target/toolchain`:
 

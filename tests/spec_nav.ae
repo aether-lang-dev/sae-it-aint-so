@@ -77,7 +77,7 @@ main() {
         spec.it("a page outside the dialect says where, and builds nothing") callback {
             b.click("A page outside the dialect")
             b.assert_text("This page could not be read:", "notice")
-            spec.assert_contains(b.page_texts(), "unsupported:3:1: class is not in the page dialect",
+            spec.assert_contains(b.page_texts(), "unsupported:4:1: enum is not erasable TypeScript",
                 "where")
             b.assert_no_text("You should not see this", "nothing built")
             b.back()
@@ -98,6 +98,17 @@ main() {
             b.assert_no_text("You should not see this", "none of it ran")
             b.back()
             b.assert_page(HOME, "200 ", "Back from the unreadable page")
+        }
+        spec.it("modern TypeScript runs as written: a class, and an await on http") callback {
+            b.click("Modern TypeScript")
+            b.assert_text("clicks: 0", "a class with a private field")
+            b.click("Bump")
+            b.click("Bump")
+            b.assert_text("clicks: 2", "its getter")
+            b.click("Load")
+            b.assert_text("loaded: n=42 first=a others=bc missing=none", "await on http, destructuring, ?. and ??")
+            b.click("Home")
+            b.assert_page(HOME, "200 ", "home")
         }
         spec.it("a page that loops forever is stopped; the browser carries on") callback {
             b.click("A page that loops forever")

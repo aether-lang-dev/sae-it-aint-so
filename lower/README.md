@@ -1,7 +1,7 @@
 # lower: the page dialect
 
-`lower` turns a page written in sae's dialect into the ES5 subset that
-QuickJS (sae's engine) runs unchanged. The browser runs it in-process on every page
+`lower` turns a page written in sae's dialect into the JavaScript that
+QuickJS (sae's engine) runs. The browser runs it in-process on every page
 (`src/sae_host.ae`); `target/saelower` runs it from the command line, so a
 server can lower pages ahead of time.
 
@@ -11,75 +11,45 @@ target/saelower page.ts > page.js
 lower/run-tests.sh
 ```
 
-It is a source-to-source tool that never re-prints the program. It tokenizes,
-parses enough of the grammar to know what each token is, and records edits
-against the source text. TypeScript is overwritten with spaces, so lines and
-columns stay put. ES2015 forms are rewritten in place, keeping their line
-breaks, so a line number in an engine error is a line of the `.ts` the author
-wrote. `lower/run-tests.sh` checks the line count for every test page.
+It erases TypeScript and does nothing else. It tokenizes, parses the grammar
+enough to know what each token is, and overwrites the TypeScript with spaces
+(the ts-blank-space approach), so every line and column stays where the
+author wrote it: a position in an engine error is a position in the `.ts`.
+The JavaScript is passed through untouched. `lower/run-tests.sh` checks the
+line count for every test page.
 
 ## The dialect
 
-**TypeScript:** what `tsc --erasableSyntaxOnly` (TS 5.8) accepts. Check pages
-with real `tsc --noEmit --erasableSyntaxOnly`; the lowerer erases types, it
-does not check them.
+Modern TypeScript, as `tsc --erasableSyntaxOnly` (TS 5.8) accepts it, over
+modern JavaScript (ES2023), with two exceptions: a page is a script, so no
+`import`/`export`; and no decorators (QuickJS does not run them yet).
+Check pages with `tsc --noEmit --erasableSyntaxOnly`; the lowerer erases
+types, it does not check them.
 
-| Erased | Refused |
+**JavaScript, run as written:** classes (fields, `#private`, `static`,
+static blocks, getters and setters, `extends`/`super`, `#x in o`),
+`async`/`await` and promises, generators and `yield*`, `for await`,
+destructuring (nested, defaults, rest, in parameters, catch and assignment),
+spread in arrays, calls, `new` and objects, computed keys, optional
+chaining (`a?.b`, `f?.()`, `a?.[k]`), `??`, `**`, `&&=`/`||=`/`??=`,
+template literals and tagged templates, BigInt, `catch {}` without a
+binding, `let`/`const` with their own scopes, arrows with lexical
+`this` and `arguments`.
+
+The browser runs a page's pending promise jobs after its first run and
+after every handler, timer and http callback, so `await` in a page works,
+including on a promise an http callback resolves.
+
+| TypeScript, erased | Refused |
 |---|---|
-| annotations on variables, parameters and return types | `enum` |
-| `interface`, `type` aliases, `declare ...` | `namespace` / `module` |
+| annotations on variables, parameters, fields and return types | `enum` |
+| `interface`, `type` aliases, `declare ...` (statements and class members) | `namespace` / `module` |
 | `as T`, `as const`, `satisfies T`, `<T>expr` | parameter properties (`constructor(private x)`) |
-| non-null `x!`, definite `let x!: T`, optional `p?` | |
-| type parameters and type arguments (`f<T>()`, `new Map<K, V>()`) | |
-| `this:` parameters, overload signatures, `import type` / `export type` | |
-
-**ES2015, rewritten to ES5:**
-
-| Form | Becomes |
-|---|---|
-| arrow functions | `(function (...) { ... })`, plus `.bind(this)` when the arrow (or an arrow inside it) uses `this` |
-| `let` / `const` | `var`. When a loop's head or body declares one and a closure is created in the loop, each iteration runs in its own function (`(function (i) { ... }).call(this, i)`), so the closure sees that iteration's binding. A `let` without an initializer gets `= void 0`. |
-| template literals | `("a" + (x) + "b")`, one quoted piece per line |
-| shorthand properties and methods | `{ a: a, f: function () { ... } }` |
-| destructuring declarations, including `for (const [a, b] of xs)` heads (one level: renames, defaults, array holes, array rest) | a temporary and one `var` per binding; in a for head, the bindings open each iteration and the per-iteration wrap takes them as parameters |
-| default and rest parameters | `if (p === undefined) p = ...;` / `var r = Array.prototype.slice.call(arguments, n);` at the top of the body |
-| `0b` / `0o` literals, numeric separators | decimal |
-| trailing commas in parameter and argument lists | removed |
-
-`for...of` is passed through: the engine runs it natively.
-
-Spread in arrays and calls is lowered to `concat` and `apply`:
-`[a, ...b]` becomes `[].concat([a], $sae_spread(b))` and `o.m(...b)`
-becomes `o.m.apply(o, [].concat($sae_spread(b)))`, the receiver named by
-repeating the path. `$sae_spread` (appended to the page's last line when a
-spread is used) takes a string's characters, an array as it is, or any
-array-like (`arguments`).
-Strings spread into UTF-16 units, not code points as ES2015's do.
-
-**Refused**, each with a `line:col` error: `class`, `async`/`await`,
-generators, object spread (`{...o}`), spread in a call to anything but a
-name or a dotted path (`f(1)(...a)`, `new F(...a)`), optional chaining
-(`?.`), `??`, `**`, `&&=`/`||=`/`??=`, computed keys, tagged templates,
-destructuring assignment and parameters, nested patterns, BigInt, `import`
-and `export` (a page is a script).
-
-Four uses are refused because lowering would change what they mean:
-
-- a `let`/`const` declared again in an inner block of the same function
-  (both would become the same `var`);
-- `break`, `continue` or `return` inside a loop body that has to be wrapped
-  per iteration;
-- assigning a loop variable inside such a body (each iteration gets a copy);
-- `arguments` inside an arrow function.
-
-## Tests
-
-`lower/tests/run/*.ts` are lowered and run on sae's engine (`target/saejs`, from
-`tools/saejs.ae`). Each must
-print exactly its `// expect:` lines and keep its line count.
-`lower/tests/err/*.ts` must fail with the `// error: line:col: message` they
-state. Without the per-iteration wraps, `letloop.ts` prints `for 3` three
-times; that is the bug the wrap exists to prevent.
+| non-null `x!`, definite `let x!: T` and `field!: T`, optional `p?` and `field?` | decorators |
+| type parameters and type arguments (`f<T>()`, `new Map<K, V>()`, `class C<T>`) | `import` / `export` (except `import type` / `export type`, erased) |
+| `public`, `private`, `protected`, `readonly`, `override`, `abstract` | |
+| `implements I, J`; `abstract` classes and members; index signatures | |
+| `this:` parameters, overload signatures (functions and methods) | |
 
 ## Directives: seeks and hide
 
@@ -91,14 +61,22 @@ top of the page`. `lower_source` keeps the list for the host
 (`page_seeks()`), which checks it against the page's grants before running
 it. A function's first statement may be `"hide fs, http";`: those names are
 refused in that function and every function inside it. A name the code
-binds itself (a parameter `fs`) is its own, not the capability. See
-`../docs/app-capabilities.md`.
+binds itself (a parameter, variable, class or catch binding called `fs`) is
+its own, not the capability. See `../docs/app-capabilities.md`.
 
-## catch parameters
+## Tests
 
-MicroQuickJS refuses a second `catch (e)` in one function ("catch variable
-already exists"), as upstream's C does, though the language allows it. The
-lowerer renames a repeat and re-binds the name at the top of its block
-(`catch (e$3) { var e = e$3; ...`), so `e` becomes a function variable,
-visible after the catch. A catch inside a catch of the same name would
-then overwrite the outer one, so that alone is refused: rename one.
+`lower/tests/run/*.ts` are lowered and run on sae's engine (`target/saejs`,
+from `tools/saejs.ae`): each must print exactly its `// expect:` lines and
+keep its line count. `modern.ts` covers the JavaScript above and
+`ts_classes.ts` the TypeScript erased inside classes. `lower/tests/err/*.ts`
+must fail with the `// error: line:col: message` they state.
+
+## History
+
+Until sae moved from mquickjs-ae (an ES5-subset engine) to QuickJS, this
+lowerer also rewrote ES2015 to ES5: arrows to functions, `let` to `var`
+with each loop iteration wrapped in a function, templates to concatenation,
+destructuring to temporaries, spread to `concat`/`apply`, and it refused
+classes, async, generators and the rest. All of that went with the engine
+that needed it.

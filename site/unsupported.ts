@@ -1,3 +1,4 @@
-// Uses a class, which the page dialect does not have (yet).
+// Uses an enum, TypeScript that cannot be erased (it generates code), so it
+// is outside the page dialect.
 ui.text("You should not see this");
-class Widget {}
+enum Colour { Red, Green }

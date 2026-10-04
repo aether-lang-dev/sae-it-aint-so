@@ -14,7 +14,7 @@ cannot yet, and at run time as a backstop.
 | **Services** | one module per effect a page can ask for: `files`, `shell`, later `storage`, `net`, `ui` | one effect each, checked against the grants | only their own imports |
 | **Gate** (the page ABI) | one function per page-API call: unpack the JS arguments, check the page owns any handles, call the service, pack the result or throw the refusal | nothing | the services and engine values |
 | **Page host** | one QuickJS runtime per page (contrib.quickjs): heap cap, time limit per entry, timers, handle ownership; the only code that enters JavaScript | nothing | the gate |
-| **Guest** | the page: TypeScript lowered to ES5, run by QuickJS | what its page API objects offer | the objects `api_register_` installs for its mode |
+| **Guest** | the page: modern TypeScript, its types erased, run by QuickJS | what its page API objects offer | the objects `api_register_` installs for its mode |
 
 Authority flows one way: the kernel configures the services (roots, grants)
 and the guest can only ask, through the gate, for what a service will do.

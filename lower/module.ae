@@ -1,25 +1,20 @@
-// lower: the sae page dialect to ES5, which QuickJS (sae's engine) runs.
+// lower: the sae page dialect to the JavaScript QuickJS (sae's engine) runs.
 //
-// The dialect is TypeScript restricted to `--erasableSyntaxOnly`, over ES5
-// plus a written list of ES2015 forms. Lowering never re-prints the program.
-// It tokenizes, parses enough of the grammar to know what each token is, and
-// records edits against the source text:
+// The dialect is TypeScript restricted to `--erasableSyntaxOnly`, over
+// modern JavaScript (ES2023: classes, async/await, generators, destructuring,
+// spread, optional chaining, ...), which QuickJS runs as written. Lowering
+// never re-prints the program. It tokenizes, parses the grammar enough to
+// know what each token is, and erases the TypeScript by overwriting it with
+// spaces (the ts-blank-space approach), so every line AND column stays where
+// the author wrote it. Nothing else is rewritten.
 //
-//   - TypeScript is erased by overwriting it with spaces (the ts-blank-space
-//     approach), so every line AND column stays where the author wrote it.
-//   - ES2015 forms are rewritten in place, keeping line breaks where they
-//     were, so an engine error's line points at the line the author wrote.
+// It also holds a page to what it may name: the "seeks" lines at its top
+// unlock fs, http and shell, and a "hide" at the top of a function takes
+// names away from it (docs/app-capabilities.md).
 //
-// Rewritten forms: arrow functions (with `.bind(this)` when they use
-// `this`), let/const (to var, with each loop iteration wrapped in a function
-// when a closure in the body could see a per-iteration binding), template
-// literals, shorthand properties and methods, destructuring declarations,
-// default and rest parameters, 0b/0o literals and numeric separators,
-// spread in arrays and in calls to a name or dotted path.
-//
-// Anything else outside ES5 is an error naming line and column: classes,
-// async/await, generators, object spread, optional chaining, `??`, `**`, computed
-// keys, enum, namespace, parameter properties, import/export.
+// Refused, each with an error naming line and column: import/export (a page
+// is a script), and the TypeScript that is not erasable (enum, namespace,
+// parameter properties), and decorators.
 
 import std.string
 import std.strbuilder
@@ -33,7 +28,7 @@ extern realloc(p: ptr, n: long) -> ptr
 extern free(p: ptr)
 
 // Part of sae's bytecode cache key: bump it whenever output changes.
-const LOWER_VERSION = "lower-1"
+const LOWER_VERSION = "lower-2"
 
 // ---------------------------------------------------------------------------
 // A growable int vector.
@@ -120,31 +115,15 @@ struct Lx {
     er: ptr          // std.strarr of owned replacement strings
     ei: ptr          // per edit: its index in er (edits can be rolled back)
     seq: int
-    tmp: int         // counter for _sae$N temporaries
-    for_bind: string // bindings of a for-head destructuring pattern, or ""
-    // contexts
-    fn_arrow: ptr    // per function: 1 if an arrow
-    fn_this: ptr     // per function: uses `this` (arrows: lexically)
-    fn_args: ptr     // per function: uses `arguments`
-    lp_fn: ptr       // per loop: function depth it belongs to
-    lp_closure: ptr  // per loop: a closure is created inside it
-    lp_let: ptr      // per loop: let/const declared in its head or body
-    lp_jump: ptr     // per loop: break/continue/return would cross a wrap
-    lp_switch: ptr   // per loop: switch nesting inside it
-    lp_args: ptr     // per loop: `arguments` used inside it
-    sc_names: ptr    // std.strarr: let/const names of enclosing blocks
+    // scopes
+    sc_names: ptr    // std.strarr: let/const/class names of enclosing blocks
     sc_mark: ptr     // *IVec: sc_names length at each block start
-    fn_scbase: ptr   // per function: sc_names length at its start
-    fn_vars: ptr     // std.strarr: var/param names, all functions, stacked
+    fn_vars: ptr     // std.strarr: var/function/parameter names, stacked
     fn_varbase: ptr  // per function: fn_vars length at its start
-    catch_names: ptr // std.strarr: catch parameter names seen, all functions, stacked
-    catch_base: ptr  // per function: catch_names length at its start
-    catch_open: ptr  // std.strarr: "<fn depth>|<name>" of the catch blocks being parsed
-    sealed: string   // objects the page's "seeks" lines unlock, as ",fs,http,"
+        sealed: string   // objects the page's "seeks" lines unlock, as ",fs,http,"
     sought: string   // the privileges it seeks, as ",local-filesystem,outgoing-http,"
     hides: ptr       // std.strarr: "hide" names in force, stacked by function
     hide_base: ptr   // per function: hides length at its start
-    spread: int      // 1 once a spread was lowered: append $sae_spread
 }
 
 ch_(x: *Lx, i: int) -> int {
@@ -628,59 +607,25 @@ is_ident_tok_(x: *Lx, i: int) -> int {
     return 0
 }
 
-fresh_tmp_(x: *Lx) -> string {
-    t = "_sae$${x.tmp}"
-    x.tmp = x.tmp + 1
-    return t
-}
-
 // ---------------------------------------------------------------------------
-// Context stacks: functions, loops, block scopes
+// Scopes: which names the page's code binds itself (a parameter called fs is
+// its own, not the capability), and which a "hide" takes away.
 
-fn_push_(x: *Lx, is_arrow: int) {
-    iv_push_(x.fn_arrow as *IVec, is_arrow)
-    iv_push_(x.fn_this as *IVec, 0)
-    iv_push_(x.fn_args as *IVec, 0)
-    iv_push_(x.fn_scbase as *IVec, strarr.size(x.sc_names))
+fn_push_(x: *Lx) {
     iv_push_(x.fn_varbase as *IVec, strarr.size(x.fn_vars))
-    iv_push_(x.catch_base as *IVec, strarr.size(x.catch_names))
     iv_push_(x.hide_base as *IVec, strarr.size(x.hides))
-    // A closure created inside a loop: every enclosing loop contains it.
-    lc = x.lp_closure as *IVec
-    i = 0
-    while i < lc.len {
-        iv_set_(lc, i, 1)
-        i = i + 1
-    }
 }
 
-fn_depth_(x: *Lx) -> int {
-    return (x.fn_arrow as *IVec).len
-}
-
-// Pop a function context. Returns whether it used `this`; an arrow that did
-// passes the use up, since its `this` is its parent's.
-fn_pop_(x: *Lx) -> int {
-    is_arrow = iv_pop_(x.fn_arrow as *IVec)
-    used_this = iv_pop_(x.fn_this as *IVec)
-    iv_pop_(x.fn_args as *IVec)
-    iv_pop_(x.fn_scbase as *IVec)
+fn_pop_(x: *Lx) {
     vb = iv_pop_(x.fn_varbase as *IVec)
     strarr_truncate_(x.fn_vars, vb)
-    cb = iv_pop_(x.catch_base as *IVec)
-    strarr_truncate_(x.catch_names, cb)
     hb = iv_pop_(x.hide_base as *IVec)
     strarr_truncate_(x.hides, hb)
-    if is_arrow == 1 && used_this == 1 && fn_depth_(x) > 0 {
-        iv_set_(x.fn_this as *IVec, fn_depth_(x) - 1, 1)
-    }
-    return used_this
 }
 
 strarr_truncate_(a: ptr, n: int) {
-    // strarr has no truncate; overwrite the tail with "" and track length
-    // through the base indices instead. Entries past a popped base are
-    // cleared so a later lookup cannot see them.
+    // strarr has no truncate; overwrite the tail with "" so a later lookup
+    // cannot see it.
     i = n
     sz = strarr.size(a)
     while i < sz {
@@ -689,72 +634,10 @@ strarr_truncate_(a: ptr, n: int) {
     }
 }
 
-note_this_(x: *Lx) {
-    if fn_depth_(x) > 0 { iv_set_(x.fn_this as *IVec, fn_depth_(x) - 1, 1) }
-}
-
-lp_push_(x: *Lx) {
-    iv_push_(x.lp_fn as *IVec, fn_depth_(x))
-    iv_push_(x.lp_closure as *IVec, 0)
-    iv_push_(x.lp_let as *IVec, 0)
-    iv_push_(x.lp_jump as *IVec, 0)
-    iv_push_(x.lp_switch as *IVec, 0)
-    iv_push_(x.lp_args as *IVec, 0)
-}
-
-lp_pop_(x: *Lx) {
-    iv_pop_(x.lp_fn as *IVec)
-    iv_pop_(x.lp_closure as *IVec)
-    iv_pop_(x.lp_let as *IVec)
-    iv_pop_(x.lp_jump as *IVec)
-    iv_pop_(x.lp_switch as *IVec)
-    iv_pop_(x.lp_args as *IVec)
-}
-
-// Index of the innermost loop belonging to the current function, or -1.
-lp_here_(x: *Lx) -> int {
-    lf = x.lp_fn as *IVec
-    if lf.len == 0 { return -1 }
-    i = lf.len - 1
-    if iv_get_(lf, i) == fn_depth_(x) { return i }
-    return -1
-}
-
-note_let_(x: *Lx) {
-    i = lp_here_(x)
-    if i >= 0 { iv_set_(x.lp_let as *IVec, i, 1) }
-}
-
-// A break/continue that leaves the innermost loop (or a return leaving all of
-// this function's loops) cannot cross a wrapping function.
-note_jump_(x: *Lx, all: int, is_break: int) {
-    lf = x.lp_fn as *IVec
-    i = lf.len - 1
-    while i >= 0 {
-        if iv_get_(lf, i) != fn_depth_(x) { return }
-        if all == 0 && is_break == 1 && iv_get_(x.lp_switch as *IVec, i) > 0 { return }
-        iv_set_(x.lp_jump as *IVec, i, 1)
-        if all == 0 { return }
-        i = i - 1
-    }
-}
-
-note_args_(x: *Lx) {
-    if fn_depth_(x) > 0 { iv_set_(x.fn_args as *IVec, fn_depth_(x) - 1, 1) }
-    lf = x.lp_fn as *IVec
-    i = lf.len - 1
-    while i >= 0 {
-        if iv_get_(lf, i) != fn_depth_(x) { return }
-        iv_set_(x.lp_args as *IVec, i, 1)
-        i = i - 1
-    }
-}
-
 block_push_(x: *Lx) {
     iv_push_(x.sc_mark as *IVec, strarr.size(x.sc_names))
 }
 
-// strarr cannot shrink, so a popped block's names are blanked out.
 block_pop_(x: *Lx) {
     m = iv_pop_(x.sc_mark as *IVec)
     strarr_truncate_(x.sc_names, m)
@@ -770,36 +653,14 @@ name_in_(a: ptr, from: int, name: string) -> int {
     return 0
 }
 
-fn_scbase_(x: *Lx) -> int {
-    if fn_depth_(x) == 0 { return 0 }
-    return iv_top_(x.fn_scbase as *IVec)
-}
-
-fn_varbase_(x: *Lx) -> int {
-    if fn_depth_(x) == 0 { return 0 }
-    return iv_top_(x.fn_varbase as *IVec)
-}
-
-// let/const name declared at token i. Lowering to var merges every same-name
-// binding in one function, so a let that shadows another binding there would
-// silently become the same variable: refuse it.
-declare_let_(x: *Lx, i: int) {
-    name = tk_text_(x, i)
-    if name_in_(x.sc_names, fn_scbase_(x), name) == 1 || name_in_(x.fn_vars, fn_varbase_(x), name) == 1 {
-        fail_at_(x, tk_start_(x, i), "'${name}' is declared again in an inner block of the same function; rename one (lowering to var would merge them)")
-        return
+// The name at token i is bound here: in the current block (let, const,
+// class, catch) or function (var, function, parameter).
+declare_(x: *Lx, i: int, fnwide: int) {
+    if fnwide == 1 {
+        _v = strarr.push_copy(x.fn_vars, tk_text_(x, i))
+    } else {
+        _s = strarr.push_copy(x.sc_names, tk_text_(x, i))
     }
-    _r = strarr.push_copy(x.sc_names, name)
-    note_let_(x)
-}
-
-declare_var_(x: *Lx, i: int) {
-    name = tk_text_(x, i)
-    if name_in_(x.sc_names, fn_scbase_(x), name) == 1 {
-        fail_at_(x, tk_start_(x, i), "'${name}' is also a let/const of an enclosing block; rename one")
-        return
-    }
-    _r = strarr.push_copy(x.fn_vars, name)
 }
 
 // ---------------------------------------------------------------------------
@@ -1208,12 +1069,19 @@ parse_statement_(x: *Lx) {
             advance_(x)
             return
         }
+        if tk_is_(x, i, "@") == 1 {
+            unsupported_(x, i, "a decorator")
+            return
+        }
     }
 
     if k == T_IDENT {
         dk = ts_decl_kind_(x, i)
         if dk == 4 {
-            unsupported_(x, i, "class")
+            // abstract class: the class stays, `abstract` goes
+            blank_(x, tk_start_(x, i), tk_end_(x, i))
+            advance_(x)
+            parse_class_(x, 1)
             return
         }
         if dk == 5 {
@@ -1246,11 +1114,11 @@ parse_statement_(x: *Lx) {
             return
         }
         if tk_is_(x, i, "async") == 1 && tk_is_(x, i + 1, "function") == 1 && tk_nlb_(x, i + 1) == 0 {
-            unsupported_(x, i, "async")
+            parse_function_(x, 1, 0)
             return
         }
         if tk_is_(x, i, "class") == 1 {
-            unsupported_(x, i, "class")
+            parse_class_(x, 1)
             return
         }
         if tk_is_(x, i, "import") == 1 && at_off_(x, 1, "(") == 0 && at_off_(x, 1, ".") == 0 {
@@ -1297,12 +1165,12 @@ parse_statement_(x: *Lx) {
             expect_(x, "(")
             parse_expr_(x)
             expect_(x, ")")
-            parse_loop_body_(x, "")
+            parse_statement_(x)
             return
         }
         if tk_is_(x, i, "do") == 1 {
             advance_(x)
-            parse_loop_body_(x, "")
+            parse_statement_(x)
             expect_(x, "while")
             expect_(x, "(")
             parse_expr_(x)
@@ -1312,7 +1180,6 @@ parse_statement_(x: *Lx) {
         }
         if tk_is_(x, i, "return") == 1 {
             advance_(x)
-            note_jump_(x, 1, 0)
             if at_(x, ";") == 0 && at_(x, "}") == 0 && tk_nlb_(x, x.pos) == 0 && tk_kind_(x, x.pos) != T_EOF {
                 parse_expr_(x)
             }
@@ -1320,15 +1187,8 @@ parse_statement_(x: *Lx) {
             return
         }
         if tk_is_(x, i, "break") == 1 || tk_is_(x, i, "continue") == 1 {
-            is_break = tk_is_(x, i, "break")
             advance_(x)
-            if is_ident_tok_(x, x.pos) == 1 && tk_nlb_(x, x.pos) == 0 {
-                // a labelled jump may leave any loop: treat as leaving all
-                advance_(x)
-                note_jump_(x, 1, is_break)
-            } else {
-                note_jump_(x, 0, is_break)
-            }
+            if is_ident_tok_(x, x.pos) == 1 && tk_nlb_(x, x.pos) == 0 { advance_(x) }
             semi_(x)
             return
         }
@@ -1343,49 +1203,15 @@ parse_statement_(x: *Lx) {
             parse_block_body_(x)
             if at_(x, "catch") == 1 {
                 advance_(x)
+                block_push_(x)
                 if at_(x, "(") == 1 {
                     advance_(x)
-                    if is_ident_tok_(x, x.pos) == 0 {
-                        unsupported_(x, x.pos, "a destructuring catch parameter")
-                        return
-                    }
-                    // MicroQuickJS refuses a second catch parameter of the
-                    // same name in one function ("catch variable already
-                    // exists"), legal as it is. A repeat is renamed, and the
-                    // name re-bound at the top of its block:
-                    //   catch (e) {   ->   catch (e$7) { var e = e$7;
-                    // so the block reads as written. (e becomes a var of the
-                    // function, visible after the catch.)
-                    pi = x.pos
-                    cname = tk_text_(x, pi)
-                    cbase = 0
-                    if fn_depth_(x) > 0 { cbase = iv_top_(x.catch_base as *IVec) }
-                    repeat = name_in_(x.catch_names, cbase, cname)
-                    advance_(x)
+                    parse_binding_(x, 0)
                     erase_annotation_(x)
                     expect_(x, ")")
-                    // Inside a catch of the same name, in this function, the
-                    // re-binding var would overwrite the outer one: refuse.
-                    open_key = "${fn_depth_(x)}|${cname}"
-                    if repeat == 1 && name_in_(x.catch_open, 0, open_key) == 1 {
-                        unsupported_(x, pi, "a catch inside a catch of the same name (rename one)")
-                        return
-                    }
-                    if repeat == 1 {
-                        x.tmp = x.tmp + 1
-                        nn = "${cname}$${x.tmp}"
-                        edit_(x, tk_start_(x, pi), tk_end_(x, pi), nn)
-                        if at_(x, "{") == 1 { insert_(x, tk_end_(x, x.pos), " var ${cname} = ${nn};") }
-                    } else {
-                        _cn = strarr.push_copy(x.catch_names, cname)
-                    }
-                    _co = strarr.push_copy(x.catch_open, open_key)
-                    parse_block_body_(x)
-                    strarr_truncate_(x.catch_open, strarr.size(x.catch_open) - 1)
-                } else {
-                    unsupported_(x, x.pos, "catch without a parameter")
-                    return
                 }
+                parse_block_body_(x)
+                block_pop_(x)
             }
             if at_(x, "finally") == 1 {
                 advance_(x)
@@ -1398,7 +1224,6 @@ parse_statement_(x: *Lx) {
             expect_(x, "(")
             parse_expr_(x)
             expect_(x, ")")
-            lp_sw_(x, 1)
             expect_(x, "{")
             block_push_(x)
             while at_(x, "}") == 0 && tk_kind_(x, x.pos) != T_EOF && x.err == "" {
@@ -1415,7 +1240,6 @@ parse_statement_(x: *Lx) {
             }
             block_pop_(x)
             expect_(x, "}")
-            lp_sw_(x, -1)
             return
         }
         // label:
@@ -1431,111 +1255,21 @@ parse_statement_(x: *Lx) {
     semi_(x)
 }
 
-lp_sw_(x: *Lx, d: int) {
-    i = lp_here_(x)
-    if i >= 0 { iv_set_(x.lp_switch as *IVec, i, iv_get_(x.lp_switch as *IVec, i) + d) }
-}
-
 is_reserved_(x: *Lx, i: int) -> int {
     if tk_is_(x, i, "default") == 1 || tk_is_(x, i, "case") == 1 { return 1 }
     return 0
 }
 
-// The body of a loop. head_vars names the loop-head let/const bindings
-// (comma separated) or "". If the body (or head) declares let/const and a
-// closure is created inside, each iteration runs in its own function so the
-// closure sees that iteration's bindings, as ES2015 promises.
-parse_loop_body_(x: *Lx, head_vars: string) {
-    lp_push_(x)
-    li = (x.lp_fn as *IVec).len - 1
-    if head_vars != "" { iv_set_(x.lp_let as *IVec, li, 1) }
-    b0 = x.pos
-    s = tk_start_(x, x.pos)
-    is_block = at_(x, "{")
-    parse_statement_(x)
-    b1 = x.pos
-    e = x.last_end
-    needs = 0
-    if iv_get_(x.lp_let as *IVec, li) == 1 && iv_get_(x.lp_closure as *IVec, li) == 1 { needs = 1 }
-    if needs == 1 && x.err == "" {
-        if iv_get_(x.lp_jump as *IVec, li) == 1 {
-            fail_at_(x, s, "this loop body declares let/const used by a closure, and also breaks, continues or returns out of the loop; per-iteration bindings cannot be lowered with that (move the closure into a helper function)")
-        } else if iv_get_(x.lp_args as *IVec, li) == 1 {
-            fail_at_(x, s, "this loop body declares let/const used by a closure and also uses `arguments`; that cannot be lowered")
-        } else {
-            check_head_assign_(x, b0, b1, head_vars)
-            params = head_vars
-            cargs = "this"
-            if params != "" { cargs = "this, ${params}" }
-            if is_block == 1 {
-                insert_(x, s, "(function (${params}) ")
-                insert_(x, e, ").call(${cargs});")
-            } else {
-                insert_(x, s, "(function (${params}) { ")
-                insert_(x, e, " }).call(${cargs});")
-            }
-        }
-    }
-    lp_pop_(x)
-}
-
-// A wrapped iteration gets the head variables as copies, so an assignment
-// to one inside the body would be lost.
-check_head_assign_(x: *Lx, b0: int, b1: int, head_vars: string) {
-    if head_vars == "" { return }
-    i = b0
-    while i < b1 && x.err == "" {
-        if is_ident_tok_(x, i) == 1 && (i == 0 || tk_is_(x, i - 1, ".") == 0) && list_has_(head_vars, tk_text_(x, i)) == 1 {
-            assigned = 0
-            if tk_is_(x, i + 1, "=") == 1 || tk_is_(x, i + 1, "+=") == 1 || tk_is_(x, i + 1, "-=") == 1 || tk_is_(x, i + 1, "*=") == 1 || tk_is_(x, i + 1, "/=") == 1 { assigned = 1 }
-            if tk_is_(x, i + 1, "++") == 1 || tk_is_(x, i + 1, "--") == 1 { assigned = 1 }
-            if i > 0 && (tk_is_(x, i - 1, "++") == 1 || tk_is_(x, i - 1, "--") == 1) { assigned = 1 }
-            if assigned == 1 {
-                fail_at_(x, tk_start_(x, i), "'${tk_text_(x, i)}' is a loop variable captured per iteration; assigning it inside the body cannot be lowered")
-            }
-        }
-        i = i + 1
-    }
-}
-
-// Is name an element of the comma-separated list?
-list_has_(lst: string, name: string) -> int {
-    n = string.length(lst)
-    s = 0
-    i = 0
-    while i <= n {
-        if i == n || string.string_char_at_n(lst, n, i) == 44 {
-            if string.string_substring(lst, s, i) == name { return 1 }
-            s = i + 1
-        }
-        i = i + 1
-    }
-    return 0
-}
-
 parse_for_(x: *Lx) {
     advance_(x)    // for
-    if at_(x, "await") == 1 {
-        unsupported_(x, x.pos, "for await")
-        return
-    }
+    if at_(x, "await") == 1 { advance_(x) }
     expect_(x, "(")
     block_push_(x)
-    head_vars = ""
-    // A let in this head belongs to this loop (marked by parse_loop_body_),
-    // not to the enclosing one, so keep the enclosing loop's mark as it was.
-    outer = lp_here_(x)
-    outer_let = 0
-    if outer >= 0 { outer_let = iv_get_(x.lp_let as *IVec, outer) }
     if at_(x, "let") == 1 || at_(x, "const") == 1 || at_(x, "var") == 1 {
-        is_let = 1
-        if at_(x, "var") == 1 { is_let = 0 }
-        head_vars = parse_var_decl_(x, 1)
-        if is_let == 0 { head_vars = "" }
+        parse_var_decl_(x, 1)
     } else if at_(x, ";") == 0 {
         parse_expr_no_in_(x)
     }
-    if outer >= 0 { iv_set_(x.lp_let as *IVec, outer, outer_let) }
     if at_(x, "of") == 1 || at_(x, "in") == 1 {
         advance_(x)
         parse_assign_(x)
@@ -1546,212 +1280,114 @@ parse_for_(x: *Lx) {
         if at_(x, ")") == 0 { parse_expr_(x) }
     }
     expect_(x, ")")
-    // a copy: storing "" into the field frees the string it held
-    bind = string.concat(x.for_bind, "")
-    x.for_bind = ""
-    if bind != "" {
-        // `{ var a = t[0], b = t[1]; BODY }`. The wrap (if the body needs
-        // one) goes inside, around BODY, and takes a and b as parameters, so
-        // each iteration's closures get their own copies.
-        insert_(x, tk_start_(x, x.pos), "{ var ${bind}; ")
-    }
-    parse_loop_body_(x, head_vars)
-    if bind != "" { insert_(x, x.last_end, " }") }
+    parse_statement_(x)
     block_pop_(x)
 }
 
 // var/let/const declarations. in_for: inside a for head (no 'in' operator,
-// and an initializer is optional before 'of'/'in'). Returns the bound names
-// as a comma-separated list (for the loop-wrapping logic).
-parse_var_decl_(x: *Lx, in_for: int) -> string {
-    kw = x.pos
-    is_let = 0
-    if tk_is_(x, kw, "let") == 1 {
-        is_let = 1
-        edit_(x, tk_start_(x, kw), tk_end_(x, kw), "var")
-    } else if tk_is_(x, kw, "const") == 1 {
-        is_let = 1
-        edit_(x, tk_start_(x, kw), tk_end_(x, kw), "var  ")
-    }
+// and an initializer is optional before 'of'/'in').
+parse_var_decl_(x: *Lx, in_for: int) {
+    fnwide = 0
+    if at_(x, "var") == 1 { fnwide = 1 }
     advance_(x)
-    names = ""
     while x.err == "" {
-        if at_(x, "{") == 1 || at_(x, "[") == 1 {
-            bound = parse_destructure_decl_(x, is_let, in_for)
-            if names == "" { names = bound } else { if bound != "" { names = "${names},${bound}" } }
-        } else {
-            if is_ident_tok_(x, x.pos) == 0 {
-                fail_at_(x, tk_start_(x, x.pos), "expected a variable name")
-                return names
-            }
-            ni = x.pos
-            if is_let == 1 { declare_let_(x, ni) } else { declare_var_(x, ni) }
-            nm = tk_text_(x, ni)
-            if names == "" { names = nm } else { names = "${names},${nm}" }
+        parse_binding_(x, fnwide)
+        if at_(x, "!") == 1 {
+            // definite assignment: let x!: number
+            blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
             advance_(x)
-            if at_(x, "!") == 1 {
-                blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
-                advance_(x)
-            }
-            erase_annotation_(x)
-            if at_(x, "=") == 1 {
-                advance_(x)
-                if in_for == 1 { parse_assign_no_in_(x) } else { parse_assign_(x) }
-            } else if is_let == 1 && in_for == 0 {
-                // A let without an initializer is fresh (undefined) on every
-                // pass through it; a var would keep the last value.
-                insert_(x, x.last_end, " = void 0")
-            }
+        }
+        erase_annotation_(x)
+        if at_(x, "=") == 1 {
+            advance_(x)
+            if in_for == 1 { parse_assign_no_in_(x) } else { parse_assign_(x) }
         }
         if at_(x, ",") == 0 { break }
         advance_(x)
     }
-    return names
 }
 
-// `{ a, b: c, d = 1 }` or `[a, , b = 2, ...rest]` bound from an initializer.
-// The pattern becomes a temporary; the bindings follow the initializer.
-// A one-level pattern at the cursor ({...} or [...]), bound from `tmp`.
-// Replaces the pattern with tmp, declares the names, appends ", name = ..."
-// bindings to `tail`, and returns the names comma-separated.
-parse_pattern_(x: *Lx, is_let: int, tmp: string, tail: ptr) -> string {
-    op_i = x.pos
-    cl_i = tk_mate_(x, op_i)
-    is_obj = at_(x, "{")
-    names = ""
-    i = op_i + 1
-    idx = 0
-    while i < cl_i && x.err == "" {
-        if tk_is_(x, i, ",") == 1 {
-            if is_obj == 0 { idx = idx + 1 }
-            i = i + 1
-        } else {
-            rest = 0
-            if tk_is_(x, i, "...") == 1 {
-                rest = 1
-                i = i + 1
-            }
-            key = ""
-            key_kind = T_IDENT
-            target = -1
-            if is_obj == 1 {
-                kk = tk_kind_(x, i)
-                if kk != T_IDENT && kk != T_STR && kk != T_NUM {
-                    unsupported_(x, i, "this destructuring key")
-                    return names
-                }
-                key = tk_text_(x, i)
-                key_kind = kk
-                if tk_is_(x, i + 1, ":") == 1 {
-                    if is_ident_tok_(x, i + 2) == 0 {
-                        unsupported_(x, i + 2, "a nested destructuring pattern")
-                        return names
-                    }
-                    target = i + 2
-                    i = i + 3
-                } else {
-                    if kk != T_IDENT {
-                        unsupported_(x, i, "this destructuring key")
-                        return names
-                    }
-                    target = i
-                    i = i + 1
-                }
+// A binding: a name, or a destructuring pattern ([a, , ...b], {a, b: c,
+// [k]: d = 1, ...rest}), nested to any depth. Its names are bound in the
+// current block (fnwide 0) or function (fnwide 1).
+parse_binding_(x: *Lx, fnwide: int) {
+    if x.err != "" { return }
+    if is_ident_tok_(x, x.pos) == 1 {
+        declare_(x, x.pos, fnwide)
+        advance_(x)
+        return
+    }
+    if at_(x, "[") == 1 {
+        advance_(x)
+        while at_(x, "]") == 0 && x.err == "" {
+            if at_(x, ",") == 1 {
+                advance_(x)
             } else {
-                if is_ident_tok_(x, i) == 0 {
-                    unsupported_(x, i, "a nested destructuring pattern")
-                    return names
+                if at_(x, "...") == 1 { advance_(x) }
+                parse_binding_(x, fnwide)
+                if at_(x, "=") == 1 {
+                    advance_(x)
+                    parse_assign_(x)
                 }
-                target = i
-                i = i + 1
-            }
-            if is_let == 1 { declare_let_(x, target) } else { declare_var_(x, target) }
-            tname = tk_text_(x, target)
-            if names == "" { names = tname } else { names = "${names},${tname}" }
-            access = ""
-            if rest == 1 {
-                if is_obj == 1 {
-                    unsupported_(x, target, "an object rest pattern")
-                    return names
-                }
-                access = "${tmp}.slice(${idx})"
-            } else if is_obj == 1 {
-                if key_kind == T_STR || key_kind == T_NUM {
-                    access = "${tmp}[${key}]"
-                } else {
-                    access = "${tmp}.${key}"
-                }
-            } else {
-                access = "${tmp}[${idx}]"
-            }
-            if tk_is_(x, i, "=") == 1 {
-                // default: the raw text of a simple expression
-                ds = i + 1
-                de = ds
-                depth = 0
-                while de < cl_i {
-                    if depth == 0 && tk_is_(x, de, ",") == 1 { break }
-                    if tk_is_(x, de, "(") == 1 || tk_is_(x, de, "[") == 1 || tk_is_(x, de, "{") == 1 { depth = depth + 1 }
-                    if tk_is_(x, de, ")") == 1 || tk_is_(x, de, "]") == 1 || tk_is_(x, de, "}") == 1 { depth = depth - 1 }
-                    kd = tk_kind_(x, de)
-                    if tk_is_(x, de, "=>") == 1 || (kd >= T_TPL_FULL && kd <= T_TPL_TAIL) {
-                        unsupported_(x, de, "an arrow or template in a destructuring default")
-                        return names
-                    }
-                    de = de + 1
-                }
-                dtext = string.string_substring(x.src, tk_start_(x, ds), tk_end_(x, de - 1))
-                strbuilder.append(tail, ", ${tname} = ${access} === undefined ? (${dtext}) : ${access}")
-                i = de
-            } else {
-                strbuilder.append(tail, ", ${tname} = ${access}")
+                if at_(x, ",") == 1 { advance_(x) } else { break }
             }
         }
+        expect_(x, "]")
+        return
     }
-    replace_keep_lines_(x, tk_start_(x, op_i), tk_end_(x, cl_i), tmp)
-    x.pos = cl_i + 1
-    x.last_end = tk_end_(x, cl_i)
-    return names
-}
-
-parse_destructure_decl_(x: *Lx, is_let: int, in_for: int) -> string {
-    tmp = fresh_tmp_(x)
-    tail = strbuilder.new(64)
-    names = parse_pattern_(x, is_let, tmp, tail)
-    if x.err != "" { return names }
-    if in_for == 1 {
-        // for (const [a, b] of xs): the bindings go at the top of each
-        // iteration; parse_for_ places them (x.for_bind).
-        bind = strbuilder.finish(tail)
-        x.for_bind = string.string_substring(bind, 2, string.length(bind))
-        return names
+    if at_(x, "{") == 1 {
+        advance_(x)
+        while at_(x, "}") == 0 && x.err == "" {
+            if at_(x, "...") == 1 {
+                advance_(x)
+                parse_binding_(x, fnwide)
+            } else if at_(x, "[") == 1 {
+                // computed key: [expr]: binding
+                advance_(x)
+                parse_assign_(x)
+                expect_(x, "]")
+                expect_(x, ":")
+                parse_binding_(x, fnwide)
+            } else {
+                ki = x.pos
+                kk = tk_kind_(x, ki)
+                if kk != T_IDENT && kk != T_STR && kk != T_NUM {
+                    fail_at_(x, tk_start_(x, ki), "expected a property name in a destructuring pattern")
+                    return
+                }
+                advance_(x)
+                if at_(x, ":") == 1 {
+                    advance_(x)
+                    parse_binding_(x, fnwide)
+                } else {
+                    if kk != T_IDENT {
+                        fail_at_(x, tk_start_(x, ki), "a string or number key needs ': name'")
+                        return
+                    }
+                    declare_(x, ki, fnwide)
+                }
+            }
+            if at_(x, "=") == 1 {
+                advance_(x)
+                parse_assign_(x)
+            }
+            if at_(x, ",") == 1 { advance_(x) } else { break }
+        }
+        expect_(x, "}")
+        return
     }
-    erase_annotation_(x)
-    if at_(x, "=") == 0 {
-        fail_at_(x, tk_start_(x, x.pos), "a destructuring declaration needs an initializer")
-        return names
-    }
-    advance_(x)
-    parse_assign_(x)
-    insert_(x, x.last_end, strbuilder.finish(tail))
-    return names
+    fail_at_(x, tk_start_(x, x.pos), "expected a name or a destructuring pattern")
 }
 
 // ---------------------------------------------------------------------------
-// Functions
+// Functions and classes
 
-// Parameters, starting at '('. Records erasures; returns the prologue to
-// insert at the top of the body (defaults and rest), and the parameter
-// names (comma separated) through declare_var_.
-parse_params_(x: *Lx) -> string {
-    op_i = x.pos
-    cl_i = tk_mate_(x, op_i)
+// Parameters, starting at '('. Erases their TypeScript; binds their names.
+parse_params_(x: *Lx) {
+    cl_i = tk_mate_(x, x.pos)
     expect_(x, "(")
-    pro = strbuilder.new(32)
-    idx = 0
-    prev_comma = -1
     while x.pos < cl_i && x.err == "" {
-        if at_(x, "this") == 1 && tk_is_(x, x.pos + 1, ":") == 1 {
+        if at_(x, "this") == 1 && (tk_is_(x, x.pos + 1, ":") == 1 || tk_is_(x, x.pos + 1, ",") == 1 || x.pos + 1 == cl_i) {
             // TS `this` parameter: erase it and its comma
             blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
             advance_(x)
@@ -1761,192 +1397,123 @@ parse_params_(x: *Lx) -> string {
                 advance_(x)
             }
         } else {
-            if at_(x, "public") == 1 || at_(x, "private") == 1 || at_(x, "protected") == 1 || at_(x, "readonly") == 1 {
+            if at_(x, "public") == 1 || at_(x, "private") == 1 || at_(x, "protected") == 1 || at_(x, "readonly") == 1 || at_(x, "override") == 1 {
                 fail_at_(x, tk_start_(x, x.pos), "parameter properties are not erasable TypeScript (--erasableSyntaxOnly)")
-                return ""
+                return
             }
-            if at_(x, "{") == 1 || at_(x, "[") == 1 {
-                unsupported_(x, x.pos, "a destructuring parameter")
-                return ""
+            if at_(x, "@") == 1 {
+                unsupported_(x, x.pos, "a decorator")
+                return
             }
-            if at_(x, "...") == 1 {
-                rs = x.pos
+            if at_(x, "...") == 1 { advance_(x) }
+            parse_binding_(x, 1)
+            if at_(x, "?") == 1 {
+                blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
                 advance_(x)
-                if is_ident_tok_(x, x.pos) == 0 {
-                    unsupported_(x, x.pos, "a destructuring rest parameter")
-                    return ""
-                }
-                nm = tk_text_(x, x.pos)
-                declare_var_(x, x.pos)
-                advance_(x)
-                if at_(x, ":") == 1 {
-                    // skipped, not erased: the blank below covers it
-                    j = skip_type_(x, x.pos + 1)
-                    if j < 0 {
-                        fail_at_(x, tk_start_(x, x.pos + 1), "cannot read this type annotation")
-                        return ""
-                    }
-                    x.pos = j
-                    x.last_end = tk_end_(x, j - 1)
-                }
-                // blank the preceding comma too: ES5 has no trailing comma
-                bs = tk_start_(x, rs)
-                if prev_comma >= 0 { bs = tk_start_(x, prev_comma) }
-                blank_(x, bs, x.last_end)
-                strbuilder.append(pro, " var ${nm} = Array.prototype.slice.call(arguments, ${idx});")
-                if at_(x, ",") == 1 {
-                    fail_at_(x, tk_start_(x, x.pos), "a rest parameter must be last")
-                    return ""
-                }
-            } else {
-                if is_ident_tok_(x, x.pos) == 0 {
-                    fail_at_(x, tk_start_(x, x.pos), "expected a parameter name")
-                    return ""
-                }
-                nm = tk_text_(x, x.pos)
-                declare_var_(x, x.pos)
-                advance_(x)
-                if at_(x, "?") == 1 {
-                    blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
-                    advance_(x)
-                }
-                erase_annotation_(x)
-                if at_(x, "=") == 1 {
-                    ds = tk_start_(x, x.pos)
-                    advance_(x)
-                    vs = tk_start_(x, x.pos)
-                    n0 = nedits_(x)
-                    parse_assign_(x)
-                    if nedits_(x) != n0 {
-                        fail_at_(x, vs, "this default value needs lowering itself; compute it in the body instead")
-                        return ""
-                    }
-                    vtext = string.string_substring(x.src, vs, x.last_end)
-                    blank_(x, ds, x.last_end)
-                    strbuilder.append(pro, " if (${nm} === undefined) ${nm} = ${vtext};")
-                }
             }
-            idx = idx + 1
-            if at_(x, ",") == 1 {
-                prev_comma = x.pos
+            erase_annotation_(x)
+            if at_(x, "=") == 1 {
                 advance_(x)
-                if x.pos == cl_i {
-                    // trailing comma (ES2017)
-                    blank_(x, tk_start_(x, prev_comma), tk_end_(x, prev_comma))
-                }
+                parse_assign_(x)
             }
+            if at_(x, ",") == 1 { advance_(x) }
         }
     }
     expect_(x, ")")
-    return strbuilder.finish(pro)
 }
 
-// function [name] [<T>] (params) [: R] { body }  — at 'function'.
-// is_decl: a declaration (name required). method_name_tok: >= 0 when called
-// for an object-literal method (starts at the '(' or '<').
-parse_function_(x: *Lx, is_decl: int, is_method: int) {
-    fstart = x.pos
+// [async] function [*] [name] [<T>] (params) [: R] { body }, at its first
+// token; or, for a method (is_method 1), from just after its name (at '('
+// or '<'). A declaration or method without a body (an overload signature,
+// an abstract method) is erased whole, from `from` (its first token).
+// Returns 1 if it was erased.
+parse_function_at_(x: *Lx, is_decl: int, is_method: int, from: int) -> int {
     ne0 = nedits_(x)
     if is_method == 0 {
+        if at_(x, "async") == 1 { advance_(x) }
         advance_(x)   // function
-        if at_(x, "*") == 1 {
-            unsupported_(x, x.pos, "a generator function")
-            return
-        }
+        if at_(x, "*") == 1 { advance_(x) }
         if is_ident_tok_(x, x.pos) == 1 {
-            if is_decl == 1 { declare_var_(x, x.pos) }
+            if is_decl == 1 { declare_(x, x.pos, 1) }
             advance_(x)
         } else if is_decl == 1 {
             fail_at_(x, tk_start_(x, x.pos), "expected a function name")
-            return
+            return 0
         }
     }
     if at_(x, "<") == 1 {
         j = skip_type_params_(x, x.pos)
         if j < 0 {
             fail_at_(x, tk_start_(x, x.pos), "cannot read these type parameters")
-            return
+            return 0
         }
         erase_tokens_(x, x.pos, j)
     }
-    fn_push_(x, 0)
+    fn_push_(x)
     block_push_(x)
-    pro = parse_params_(x)
+    parse_params_(x)
     erase_annotation_(x)
     if at_(x, "{") == 0 {
-        // an overload signature (no body): erase the whole declaration
-        if is_decl == 1 && x.err == "" {
-            block_pop_(x)
-            fn_pop_(x)
+        block_pop_(x)
+        fn_pop_(x)
+        if (is_decl == 1 || is_method == 1) && x.err == "" {
+            // an overload signature or abstract method: no body, erased whole
             if at_(x, ";") == 1 { advance_(x) }
             edits_truncate_(x, ne0)
-            blank_(x, tk_start_(x, fstart), x.last_end)
-            return
+            blank_(x, tk_start_(x, from), x.last_end)
+            return 1
         }
         expect_(x, "{")
+        return 0
     }
-    if pro != "" { insert_(x, tk_end_(x, x.pos), pro) }
     directive_(x, x.pos + 1, 0)
     parse_block_body_(x)
     block_pop_(x)
     fn_pop_(x)
+    return 0
 }
 
-// An arrow function. At its first token: an identifier (single parameter),
-// '(' or '<'.
+parse_function_(x: *Lx, is_decl: int, is_method: int) {
+    _e = parse_function_at_(x, is_decl, is_method, x.pos)
+}
+
+// An arrow function, at its first token: `async`, an identifier (single
+// parameter), '(' or '<'.
 parse_arrow_(x: *Lx) {
-    s = tk_start_(x, x.pos)
-    insert_(x, s, "(function ")
-    fn_push_(x, 1)
+    if at_(x, "async") == 1 && tk_is_(x, x.pos + 1, "=>") == 0 { advance_(x) }
+    fn_push_(x)
     block_push_(x)
-    pro = ""
     if is_ident_tok_(x, x.pos) == 1 {
-        nm = tk_text_(x, x.pos)
-        declare_var_(x, x.pos)
-        edit_(x, tk_start_(x, x.pos), tk_end_(x, x.pos), "(${nm})")
+        declare_(x, x.pos, 1)
         advance_(x)
     } else {
         if at_(x, "<") == 1 {
             j = skip_type_params_(x, x.pos)
             erase_tokens_(x, x.pos, j)
         }
-        pro = parse_params_(x)
+        parse_params_(x)
         erase_annotation_(x)
     }
-    if at_(x, "=>") == 0 {
-        expect_(x, "=>")
-        return
-    }
-    blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
-    advance_(x)
+    if expect_(x, "=>") == 0 { return }
     if at_(x, "{") == 1 {
-        if pro != "" { insert_(x, tk_end_(x, x.pos), pro) }
         directive_(x, x.pos + 1, 0)
         parse_block_body_(x)
     } else {
-        insert_(x, tk_start_(x, x.pos), "{${pro} return ")
         parse_assign_(x)
-        insert_(x, x.last_end, "; }")
     }
     block_pop_(x)
-    used_args = iv_top_(x.fn_args as *IVec)
-    if used_args == 1 {
-        fail_at_(x, s, "`arguments` inside an arrow function refers to the enclosing function's; that cannot be lowered")
-    }
-    used_this = fn_pop_(x)
-    if used_this == 1 {
-        insert_(x, x.last_end, ").bind(this)")
-    } else {
-        insert_(x, x.last_end, ")")
-    }
+    fn_pop_(x)
 }
 
 // Is the token at i the start of an arrow function?
 arrow_ahead_(x: *Lx, i: int) -> int {
-    if is_ident_tok_(x, i) == 1 && tk_is_(x, i + 1, "=>") == 1 && tk_nlb_(x, i + 1) == 0 {
-        if tk_is_(x, i, "async") == 1 { return 0 }
-        return 1
+    if tk_is_(x, i, "async") == 1 && tk_nlb_(x, i + 1) == 0 {
+        if is_ident_tok_(x, i + 1) == 1 && tk_is_(x, i + 2, "=>") == 1 { return 1 }
+        if tk_is_(x, i + 1, "(") == 1 || tk_is_(x, i + 1, "<") == 1 {
+            if arrow_ahead_(x, i + 1) == 1 { return 1 }
+        }
     }
+    if is_ident_tok_(x, i) == 1 && tk_is_(x, i + 1, "=>") == 1 && tk_nlb_(x, i + 1) == 0 { return 1 }
     if tk_is_(x, i, "<") == 1 {
         j = skip_type_params_(x, i)
         if j < 0 || tk_is_(x, j, "(") == 0 { return 0 }
@@ -1963,6 +1530,166 @@ arrow_ahead_(x: *Lx, i: int) -> int {
     return 0
 }
 
+// TypeScript-only member and parameter modifiers, erased in a class body.
+ts_modifier_(x: *Lx, i: int) -> int {
+    if tk_is_(x, i, "public") == 1 || tk_is_(x, i, "private") == 1 || tk_is_(x, i, "protected") == 1 { return 1 }
+    if tk_is_(x, i, "readonly") == 1 || tk_is_(x, i, "override") == 1 || tk_is_(x, i, "abstract") == 1 { return 1 }
+    if tk_is_(x, i, "declare") == 1 { return 1 }
+    return 0
+}
+
+// Is the token at i a member's key (rather than a modifier word used as
+// one, as in `static() {}` or a field named `readonly`)?
+member_key_follows_(x: *Lx, i: int) -> int {
+    j = i + 1
+    if tk_is_(x, j, "(") == 1 || tk_is_(x, j, "=") == 1 || tk_is_(x, j, ";") == 1 || tk_is_(x, j, ":") == 1 { return 1 }
+    if tk_is_(x, j, "?") == 1 || tk_is_(x, j, "!") == 1 || tk_is_(x, j, "<") == 1 || tk_is_(x, j, "}") == 1 { return 1 }
+    if tk_nlb_(x, j) == 1 { return 1 }
+    return 0
+}
+
+// class [name] [<T>] [extends E [<A>]] [implements I, J] { members }, at
+// `class`. is_decl binds the name in the current block.
+parse_class_(x: *Lx, is_decl: int) {
+    advance_(x)   // class
+    if is_ident_tok_(x, x.pos) == 1 && at_(x, "extends") == 0 && at_(x, "implements") == 0 {
+        if is_decl == 1 { declare_(x, x.pos, 0) }
+        advance_(x)
+    }
+    if at_(x, "<") == 1 {
+        j = skip_type_params_(x, x.pos)
+        if j < 0 {
+            fail_at_(x, tk_start_(x, x.pos), "cannot read these type parameters")
+            return
+        }
+        erase_tokens_(x, x.pos, j)
+    }
+    if at_(x, "extends") == 1 {
+        advance_(x)
+        parse_call_member_(x)
+        if at_(x, "<") == 1 {
+            j = skip_type_args_(x, x.pos)
+            if j > 0 { erase_tokens_(x, x.pos, j) }
+        }
+    }
+    if at_(x, "implements") == 1 {
+        j = x.pos
+        while tk_is_(x, j, "{") == 0 && tk_kind_(x, j) != T_EOF { j = j + 1 }
+        erase_tokens_(x, x.pos, j)
+    }
+    expect_(x, "{")
+    while at_(x, "}") == 0 && tk_kind_(x, x.pos) != T_EOF && x.err == "" {
+        parse_member_(x)
+    }
+    expect_(x, "}")
+}
+
+// One class member.
+parse_member_(x: *Lx) {
+    from = x.pos
+    ne_start = nedits_(x)
+    if at_(x, ";") == 1 {
+        advance_(x)
+        return
+    }
+    if at_(x, "@") == 1 {
+        unsupported_(x, x.pos, "a decorator")
+        return
+    }
+    // static { ... }
+    if at_(x, "static") == 1 && at_off_(x, 1, "{") == 1 {
+        advance_(x)
+        fn_push_(x)
+        parse_block_body_(x)
+        fn_pop_(x)
+        return
+    }
+    // modifiers, TS ones erased; `declare` and `abstract` members erased whole
+    erase_whole = 0
+    while x.err == "" {
+        if ts_modifier_(x, x.pos) == 1 && member_key_follows_(x, x.pos) == 0 {
+            if at_(x, "declare") == 1 || at_(x, "abstract") == 1 { erase_whole = 1 }
+            blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+            advance_(x)
+        } else if (at_(x, "static") == 1 || at_(x, "accessor") == 1) && member_key_follows_(x, x.pos) == 0 {
+            advance_(x)
+        } else {
+            break
+        }
+    }
+    // index signature: [key: T]: U;
+    if at_(x, "[") == 1 && is_ident_tok_(x, x.pos + 1) == 1 && tk_is_(x, x.pos + 2, ":") == 1 {
+        j = skip_decl_(x, x.pos)
+        erase_tokens_(x, from, j)
+        return
+    }
+    is_method_kw = 0
+    if (at_(x, "async") == 1 || at_(x, "get") == 1 || at_(x, "set") == 1) && member_key_follows_(x, x.pos) == 0 {
+        advance_(x)
+        is_method_kw = 1
+    }
+    if at_(x, "*") == 1 {
+        advance_(x)
+        is_method_kw = 1
+    }
+    if parse_prop_key_(x) == 0 { return }
+    if at_(x, "?") == 1 || at_(x, "!") == 1 {
+        blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+        advance_(x)
+    }
+    if at_(x, "(") == 1 || at_(x, "<") == 1 {
+        erased = parse_function_at_(x, 0, 1, from)
+        if erased == 1 {
+            // erased whole: drop the modifier blanks made before it too
+            edits_truncate_(x, ne_start)
+            blank_(x, tk_start_(x, from), x.last_end)
+        } else if erase_whole == 1 && x.err == "" {
+            fail_at_(x, tk_start_(x, from), "an abstract or declare method cannot have a body")
+        }
+        return
+    }
+    if is_method_kw == 1 {
+        expect_(x, "(")
+        return
+    }
+    // a field
+    erase_annotation_(x)
+    if at_(x, "=") == 1 {
+        advance_(x)
+        fn_push_(x)
+        parse_assign_(x)
+        fn_pop_(x)
+    }
+    if at_(x, ";") == 1 { advance_(x) } else { semi_(x) }
+    if erase_whole == 1 && x.err == "" {
+        edits_truncate_(x, ne_start)
+        blank_(x, tk_start_(x, from), x.last_end)
+    }
+}
+
+// A property key in an object literal or class body: a name, #private,
+// string, number, or [computed]. 1 if one was read.
+parse_prop_key_(x: *Lx) -> int {
+    if at_(x, "#") == 1 && is_ident_tok_(x, x.pos + 1) == 1 {
+        advance_(x)
+        advance_(x)
+        return 1
+    }
+    if at_(x, "[") == 1 {
+        advance_(x)
+        parse_assign_(x)
+        expect_(x, "]")
+        return 1
+    }
+    k = tk_kind_(x, x.pos)
+    if k == T_IDENT || k == T_STR || k == T_NUM {
+        advance_(x)
+        return 1
+    }
+    fail_at_(x, tk_start_(x, x.pos), "expected a property name")
+    return 0
+}
+
 // ---------------------------------------------------------------------------
 // Expressions
 
@@ -1974,8 +1701,8 @@ parse_expr_(x: *Lx) {
     }
 }
 
-// The no-'in' variants for a for(;;) head share the code through a flag
-// kept on the cursor: 'in' is never a binary operator while it is set.
+// The no-'in' variants for a for(;;) head share the code through a flag:
+// 'in' is never a binary operator while it is set.
 parse_expr_no_in_(x: *Lx) {
     parse_assign_inner_(x, 1)
     while at_(x, ",") == 1 && x.err == "" {
@@ -1996,7 +1723,8 @@ is_assign_op_(x: *Lx) -> int {
     if tk_kind_(x, x.pos) != T_PUNCT { return 0 }
     if at_(x, "=") == 1 || at_(x, "+=") == 1 || at_(x, "-=") == 1 || at_(x, "*=") == 1 || at_(x, "/=") == 1 { return 1 }
     if at_(x, "%=") == 1 || at_(x, "<<=") == 1 || at_(x, ">>=") == 1 || at_(x, ">>>=") == 1 { return 1 }
-    if at_(x, "&=") == 1 || at_(x, "|=") == 1 || at_(x, "^=") == 1 { return 1 }
+    if at_(x, "&=") == 1 || at_(x, "|=") == 1 || at_(x, "^=") == 1 || at_(x, "**=") == 1 { return 1 }
+    if at_(x, "&&=") == 1 || at_(x, "||=") == 1 || at_(x, "??=") == 1 { return 1 }
     return 0
 }
 
@@ -2006,29 +1734,18 @@ parse_assign_inner_(x: *Lx, no_in: int) {
         parse_arrow_(x)
         return
     }
-    if at_(x, "async") == 1 && (arrow_ahead_(x, x.pos + 1) == 1 || at_off_(x, 1, "function") == 1) {
-        unsupported_(x, x.pos, "async")
-        return
-    }
     if at_(x, "yield") == 1 {
-        unsupported_(x, x.pos, "yield")
+        advance_(x)
+        if at_(x, "*") == 1 { advance_(x) }
+        if tk_nlb_(x, x.pos) == 0 && at_(x, ")") == 0 && at_(x, "]") == 0 && at_(x, "}") == 0 && at_(x, ",") == 0 && at_(x, ";") == 0 && at_(x, ":") == 0 && tk_kind_(x, x.pos) != T_EOF {
+            parse_assign_inner_(x, no_in)
+        }
         return
     }
-    lhs = x.pos
     parse_conditional_(x, no_in)
     if is_assign_op_(x) == 1 {
-        if tk_is_(x, lhs, "[") == 1 || tk_is_(x, lhs, "{") == 1 {
-            if at_(x, "=") == 1 && tk_mate_(x, lhs) == x.pos - 1 {
-                unsupported_(x, lhs, "destructuring assignment")
-                return
-            }
-        }
         advance_(x)
         parse_assign_inner_(x, no_in)
-        return
-    }
-    if at_(x, "&&=") == 1 || at_(x, "||=") == 1 || at_(x, "??=") == 1 || at_(x, "**=") == 1 {
-        unsupported_(x, x.pos, "the '${tk_text_(x, x.pos)}' operator")
     }
 }
 
@@ -2052,6 +1769,7 @@ binop_prec_(x: *Lx, no_in: int) -> int {
         return 0
     }
     if k != T_PUNCT { return 0 }
+    if at_(x, "??") == 1 { return 1 }
     if at_(x, "||") == 1 { return 1 }
     if at_(x, "&&") == 1 { return 2 }
     if at_(x, "|") == 1 { return 3 }
@@ -2062,7 +1780,7 @@ binop_prec_(x: *Lx, no_in: int) -> int {
     if at_(x, "<<") == 1 || at_(x, ">>") == 1 || at_(x, ">>>") == 1 { return 8 }
     if at_(x, "+") == 1 || at_(x, "-") == 1 { return 9 }
     if at_(x, "*") == 1 || at_(x, "/") == 1 || at_(x, "%") == 1 { return 10 }
-    if at_(x, "??") == 1 || at_(x, "**") == 1 { return 11 }
+    if at_(x, "**") == 1 { return 11 }
     return 0
 }
 
@@ -2071,10 +1789,6 @@ parse_binary_(x: *Lx, min_prec: int, no_in: int) {
     while x.err == "" {
         p = binop_prec_(x, no_in)
         if p == 0 || p <= min_prec { return }
-        if p == 11 {
-            unsupported_(x, x.pos, "the '${tk_text_(x, x.pos)}' operator")
-            return
-        }
         if at_(x, "as") == 1 || at_(x, "satisfies") == 1 {
             s = tk_start_(x, x.pos)
             if tk_is_(x, x.pos + 1, "const") == 1 {
@@ -2091,7 +1805,8 @@ parse_binary_(x: *Lx, min_prec: int, no_in: int) {
             x.last_end = tk_end_(x, j - 1)
         } else {
             advance_(x)
-            parse_binary_(x, p, no_in)
+            // ** is right-associative: a ** b ** c is a ** (b ** c)
+            if p == 11 { parse_binary_(x, 10, no_in) } else { parse_binary_(x, p, no_in) }
         }
     }
 }
@@ -2123,12 +1838,25 @@ parse_unary_(x: *Lx) {
             parse_unary_(x)
             return
         }
-        if at_(x, "await") == 1 && tk_nlb_(x, x.pos + 1) == 0 && tk_kind_(x, x.pos + 1) != T_PUNCT {
-            unsupported_(x, x.pos, "await")
+        if at_(x, "await") == 1 && tk_nlb_(x, x.pos + 1) == 0 && starts_expr_(x, x.pos + 1) == 1 {
+            advance_(x)
+            parse_unary_(x)
             return
         }
     }
     parse_postfix_(x)
+}
+
+// Can an expression start at token i? (So `await x` is an await, and an
+// identifier named await is not.)
+starts_expr_(x: *Lx, i: int) -> int {
+    k = tk_kind_(x, i)
+    if k == T_EOF { return 0 }
+    if k != T_PUNCT { return 1 }
+    if tk_is_(x, i, "(") == 1 || tk_is_(x, i, "[") == 1 || tk_is_(x, i, "{") == 1 { return 1 }
+    if tk_is_(x, i, "!") == 1 || tk_is_(x, i, "~") == 1 || tk_is_(x, i, "+") == 1 || tk_is_(x, i, "-") == 1 { return 1 }
+    if tk_is_(x, i, "++") == 1 || tk_is_(x, i, "--") == 1 || tk_is_(x, i, "<") == 1 || tk_is_(x, i, "#") == 1 { return 1 }
+    return 0
 }
 
 parse_postfix_(x: *Lx) {
@@ -2136,11 +1864,11 @@ parse_postfix_(x: *Lx) {
     while x.err == "" {
         if (at_(x, "++") == 1 || at_(x, "--") == 1) && tk_nlb_(x, x.pos) == 0 {
             advance_(x)
-        } else if at_(x, "!") == 1 && tk_nlb_(x, x.pos) == 0 {
+        } else if at_(x, "!") == 1 && tk_nlb_(x, x.pos) == 0 && at_off_(x, 1, "=") == 0 {
             // TS non-null assertion
             blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
             advance_(x)
-            parse_call_member_tail_(x, 0 - 1)
+            parse_call_member_tail_(x)
         } else {
             return
         }
@@ -2151,7 +1879,10 @@ parse_call_member_(x: *Lx) {
     if at_(x, "new") == 1 {
         advance_(x)
         if at_(x, ".") == 1 {
-            unsupported_(x, x.pos, "new.target")
+            // new.target
+            advance_(x)
+            advance_(x)
+            parse_call_member_tail_(x)
             return
         }
         // the constructor: a member expression without calls
@@ -2159,6 +1890,7 @@ parse_call_member_(x: *Lx) {
         while x.err == "" {
             if at_(x, ".") == 1 {
                 advance_(x)
+                if at_(x, "#") == 1 { advance_(x) }
                 advance_(x)
             } else if at_(x, "[") == 1 {
                 advance_(x)
@@ -2172,34 +1904,39 @@ parse_call_member_(x: *Lx) {
             j = skip_type_args_(x, x.pos)
             if j > 0 && tk_is_(x, j, "(") == 1 { erase_tokens_(x, x.pos, j) }
         }
-        if at_(x, "(") == 1 { parse_args_(x, 0 - 1) }
-        parse_call_member_tail_(x, 0 - 1)
+        if at_(x, "(") == 1 { parse_args_(x) }
+        parse_call_member_tail_(x)
         return
     }
-    start = x.pos
     parse_primary_(x)
-    parse_call_member_tail_(x, start)
+    parse_call_member_tail_(x)
 }
 
-// callee: the token the member chain starts at, or -1 if unknown.
-parse_call_member_tail_(x: *Lx, callee: int) {
+parse_call_member_tail_(x: *Lx) {
     while x.err == "" {
-        if at_(x, ".") == 1 {
+        if at_(x, ".") == 1 || at_(x, "?.") == 1 {
+            opt = at_(x, "?.")
             advance_(x)
-            if tk_kind_(x, x.pos) != T_IDENT {
-                fail_at_(x, tk_start_(x, x.pos), "expected a property name after '.'")
-                return
+            if opt == 1 && at_(x, "(") == 1 {
+                parse_args_(x)
+            } else if opt == 1 && at_(x, "[") == 1 {
+                advance_(x)
+                parse_expr_(x)
+                expect_(x, "]")
+            } else {
+                if at_(x, "#") == 1 { advance_(x) }
+                if tk_kind_(x, x.pos) != T_IDENT {
+                    fail_at_(x, tk_start_(x, x.pos), "expected a property name after '.'")
+                    return
+                }
+                advance_(x)
             }
-            advance_(x)
-        } else if at_(x, "?.") == 1 {
-            unsupported_(x, x.pos, "optional chaining (?.)")
-            return
         } else if at_(x, "[") == 1 {
             advance_(x)
             parse_expr_(x)
             expect_(x, "]")
         } else if at_(x, "(") == 1 {
-            parse_args_(x, callee)
+            parse_args_(x)
         } else if at_(x, "<") == 1 && tk_nlb_(x, x.pos) == 0 {
             // f<T>(...): type arguments, if what follows is a call
             j = skip_type_args_(x, x.pos)
@@ -2209,63 +1946,20 @@ parse_call_member_tail_(x: *Lx, callee: int) {
                 return
             }
         } else if tk_kind_(x, x.pos) == T_TPL_FULL || tk_kind_(x, x.pos) == T_TPL_HEAD {
-            unsupported_(x, x.pos, "a tagged template")
-            return
+            // a tagged template
+            parse_template_(x)
         } else {
             return
         }
     }
 }
 
-// The callee of a call with spread, tokens [s, e): a name or a dotted path
-// of names (f, o.m, a.b.m), so `this` can be named by repeating the path.
-// Returns the receiver's text ("void 0" for a plain name), or "" if the
-// callee is anything else.
-spread_receiver_(x: *Lx, s: int, e: int) -> string {
-    if s >= e { return "" }
-    i = s
-    while i < e {
-        if (i - s) % 2 == 0 {
-            if tk_kind_(x, i) != T_IDENT { return "" }
-        } else if tk_is_(x, i, ".") == 0 {
-            return ""
-        }
-        i = i + 1
-    }
-    if (e - s) % 2 == 0 { return "" }
-    if e - s == 1 { return "void 0" }
-    return string.string_substring(x.src, tk_start_(x, s), tk_end_(x, e - 3))
-}
-
-// Arguments of a call whose callee is tokens [callee, x.pos); callee < 0
-// for `new F(...)`, which cannot spread.
-parse_args_(x: *Lx, callee: int) {
-    if has_spread_(x, x.pos) == 1 {
-        recv = ""
-        if callee >= 0 { recv = spread_receiver_(x, callee, x.pos) }
-        if recv == "" {
-            unsupported_(x, x.pos, "spread arguments (...) except to a name or a.b.name")
-            return
-        }
-        // f(a, ...b) -> f.apply(void 0, [].concat([a], $sae_spread(b)))
-        o = x.pos
-        edit_(x, tk_start_(x, o), tk_end_(x, o), ".apply(${recv}, [].concat(")
-        advance_(x)
-        parse_spread_list_(x, ")")
-        if at_(x, ")") == 1 { edit_(x, tk_start_(x, x.pos), tk_end_(x, x.pos), "))") }
-        expect_(x, ")")
-        return
-    }
+parse_args_(x: *Lx) {
     expect_(x, "(")
     while at_(x, ")") == 0 && x.err == "" {
+        if at_(x, "...") == 1 { advance_(x) }
         parse_assign_(x)
-        if at_(x, ",") == 1 {
-            c = x.pos
-            advance_(x)
-            if at_(x, ")") == 1 { blank_(x, tk_start_(x, c), tk_end_(x, c)) }
-        } else {
-            break
-        }
+        if at_(x, ",") == 1 { advance_(x) } else { break }
     }
     expect_(x, ")")
 }
@@ -2274,12 +1968,7 @@ parse_primary_(x: *Lx) {
     if x.err != "" { return }
     i = x.pos
     k = tk_kind_(x, i)
-    if k == T_NUM {
-        lower_number_(x, i)
-        advance_(x)
-        return
-    }
-    if k == T_STR || k == T_REGEX {
+    if k == T_NUM || k == T_STR || k == T_REGEX {
         advance_(x)
         return
     }
@@ -2292,18 +1981,12 @@ parse_primary_(x: *Lx) {
             parse_function_(x, 0, 0)
             return
         }
-        if tk_is_(x, i, "class") == 1 {
-            unsupported_(x, i, "class")
+        if tk_is_(x, i, "async") == 1 && tk_is_(x, i + 1, "function") == 1 && tk_nlb_(x, i + 1) == 0 {
+            parse_function_(x, 0, 0)
             return
         }
-        if tk_is_(x, i, "this") == 1 {
-            note_this_(x)
-        }
-        if tk_is_(x, i, "arguments") == 1 {
-            note_args_(x)
-        }
-        if tk_is_(x, i, "super") == 1 {
-            unsupported_(x, i, "super")
+        if tk_is_(x, i, "class") == 1 {
+            parse_class_(x, 0)
             return
         }
         cap_check_(x, i)
@@ -2325,6 +2008,12 @@ parse_primary_(x: *Lx) {
             parse_object_(x)
             return
         }
+        if tk_is_(x, i, "#") == 1 && is_ident_tok_(x, i + 1) == 1 {
+            // #field in obj
+            advance_(x)
+            advance_(x)
+            return
+        }
     }
     if k == T_EOF {
         fail_at_(x, tk_start_(x, i), "unexpected end of the page")
@@ -2333,69 +2022,13 @@ parse_primary_(x: *Lx) {
     fail_at_(x, tk_start_(x, i), "unexpected '${tk_text_(x, i)}'")
 }
 
-// Does the bracketed list opening at token `open` have a top-level `...`?
-has_spread_(x: *Lx, open: int) -> int {
-    close = tk_mate_(x, open)
-    i = open + 1
-    while i < close {
-        if tk_is_(x, i, "...") == 1 { return 1 }
-        m = tk_mate_(x, i)
-        if m > i { i = m + 1 } else { i = i + 1 }
-    }
-    return 0
-}
-
-// The elements of a list with spread, from just after its opening bracket
-// to its closing one, as concat's arguments: `a` becomes `[a]` and `...b`
-// becomes `$sae_spread(b)`. The caller rewrites the brackets.
-parse_spread_list_(x: *Lx, close: string) {
-    x.spread = 1
-    while at_(x, close) == 0 && x.err == "" {
-        if at_(x, ",") == 1 {
-            unsupported_(x, x.pos, "a hole in a list with spread")
-            return
-        }
-        if at_(x, "...") == 1 {
-            d = x.pos
-            edit_(x, tk_start_(x, d), tk_end_(x, d), "$sae_spread(")
-            advance_(x)
-            parse_assign_(x)
-            insert_(x, x.last_end, ")")
-        } else {
-            insert_(x, tk_start_(x, x.pos), "[")
-            parse_assign_(x)
-            insert_(x, x.last_end, "]")
-        }
-        if at_(x, ",") == 1 {
-            c = x.pos
-            advance_(x)
-            if at_(x, close) == 1 { blank_(x, tk_start_(x, c), tk_end_(x, c)) }
-        } else {
-            break
-        }
-    }
-}
-
 parse_array_(x: *Lx) {
-    if has_spread_(x, x.pos) == 1 {
-        // [a, ...b, c] -> [].concat([a], $sae_spread(b), [c])
-        o = x.pos
-        edit_(x, tk_start_(x, o), tk_end_(x, o), "[].concat(")
-        advance_(x)
-        parse_spread_list_(x, "]")
-        if at_(x, "]") == 1 { edit_(x, tk_start_(x, x.pos), tk_end_(x, x.pos), ")") }
-        expect_(x, "]")
-        return
-    }
     expect_(x, "[")
     while at_(x, "]") == 0 && x.err == "" {
         if at_(x, ",") == 1 {
             advance_(x)
         } else {
-            if at_(x, "...") == 1 {
-                unsupported_(x, x.pos, "array spread (...)")
-                return
-            }
+            if at_(x, "...") == 1 { advance_(x) }
             parse_assign_(x)
             if at_(x, ",") == 1 { advance_(x) } else { break }
         }
@@ -2407,39 +2040,37 @@ parse_object_(x: *Lx) {
     expect_(x, "{")
     while at_(x, "}") == 0 && x.err == "" {
         i = x.pos
-        k = tk_kind_(x, i)
         if at_(x, "...") == 1 {
-            unsupported_(x, i, "object spread (...)")
-            return
-        }
-        if at_(x, "[") == 1 {
-            unsupported_(x, i, "a computed property key")
-            return
-        }
-        if at_(x, "*") == 1 || (at_(x, "async") == 1 && tk_is_(x, i + 1, ":") == 0 && tk_is_(x, i + 1, "(") == 0 && tk_is_(x, i + 1, ",") == 0) {
-            unsupported_(x, i, "a generator or async method")
-            return
-        }
-        if (at_(x, "get") == 1 || at_(x, "set") == 1) && tk_is_(x, i + 1, ":") == 0 && tk_is_(x, i + 1, "(") == 0 && tk_is_(x, i + 1, ",") == 0 && tk_is_(x, i + 1, "}") == 0 {
-            // an ES5 accessor: get name() { }
             advance_(x)
-            advance_(x)
-            parse_function_(x, 0, 1)
+            parse_assign_(x)
         } else {
-            if k != T_IDENT && k != T_STR && k != T_NUM {
-                fail_at_(x, tk_start_(x, i), "expected a property name")
-                return
+            is_method_kw = 0
+            if (at_(x, "async") == 1 || at_(x, "get") == 1 || at_(x, "set") == 1) && member_key_follows_(x, x.pos) == 0 && at_off_(x, 1, ",") == 0 {
+                advance_(x)
+                is_method_kw = 1
             }
-            if k == T_NUM { lower_number_(x, i) }
-            advance_(x)
-            if at_(x, ":") == 1 {
+            if at_(x, "*") == 1 {
+                advance_(x)
+                is_method_kw = 1
+            }
+            ki = x.pos
+            kk = tk_kind_(x, ki)
+            if parse_prop_key_(x) == 0 { return }
+            if at_(x, "(") == 1 || at_(x, "<") == 1 {
+                parse_function_(x, 0, 1)
+            } else if is_method_kw == 1 {
+                expect_(x, "(")
+                return
+            } else if at_(x, ":") == 1 {
                 advance_(x)
                 parse_assign_(x)
-            } else if at_(x, "(") == 1 || at_(x, "<") == 1 {
-                insert_(x, tk_end_(x, i), ": function")
-                parse_function_(x, 0, 1)
-            } else if (at_(x, ",") == 1 || at_(x, "}") == 1) && k == T_IDENT {
-                insert_(x, tk_end_(x, i), ": ${tk_text_(x, i)}")
+            } else if kk == T_IDENT && (at_(x, ",") == 1 || at_(x, "}") == 1 || at_(x, "=") == 1) {
+                // shorthand { a }, or { a = 1 } in a destructuring assignment
+                cap_check_(x, ki)
+                if at_(x, "=") == 1 {
+                    advance_(x)
+                    parse_assign_(x)
+                }
             } else {
                 fail_at_(x, tk_start_(x, x.pos), "expected ':' after a property name")
                 return
@@ -2450,119 +2081,26 @@ parse_object_(x: *Lx) {
     expect_(x, "}")
 }
 
-// A template literal, lowered to string concatenation with the same line
-// breaks: `a${x}b` becomes ("a" + (x) + "b").
+// A template literal (or a tagged template's): its substitutions are
+// expressions, parsed for their TypeScript and names; the rest stays.
 parse_template_(x: *Lx) {
-    i = x.pos
-    if tk_kind_(x, i) == T_TPL_FULL {
-        s = tk_start_(x, i)
-        e = tk_end_(x, i)
-        edit_(x, s, e, tpl_piece_(x, s + 1, e - 1))
+    if tk_kind_(x, x.pos) == T_TPL_FULL {
         advance_(x)
         return
     }
-    // HEAD: `...${
-    s = tk_start_(x, i)
-    e = tk_end_(x, i)
-    edit_(x, s, e, "(${tpl_piece_(x, s + 1, e - 2)} + (")
-    advance_(x)
+    advance_(x)   // HEAD
     while x.err == "" {
         parse_expr_(x)
-        j = x.pos
-        kj = tk_kind_(x, j)
+        kj = tk_kind_(x, x.pos)
         if kj == T_TPL_MID {
-            s = tk_start_(x, j)
-            e = tk_end_(x, j)
-            edit_(x, s, e, ") + ${tpl_piece_(x, s + 1, e - 2)} + (")
             advance_(x)
         } else if kj == T_TPL_TAIL {
-            s = tk_start_(x, j)
-            e = tk_end_(x, j)
-            edit_(x, s, e, ") + ${tpl_piece_(x, s + 1, e - 1)})")
             advance_(x)
             return
         } else {
-            fail_at_(x, tk_start_(x, j), "expected '}' to close a template substitution")
+            fail_at_(x, tk_start_(x, x.pos), "expected '}' to close a template substitution")
             return
         }
-    }
-}
-
-// The template characters [s, e) as a double-quoted string literal. A line
-// break inside becomes "\n" + a real line break + a new quoted piece, so
-// the output keeps the template's lines.
-tpl_piece_(x: *Lx, s: int, e: int) -> string {
-    sb = strbuilder.new(e - s + 8)
-    strbuilder.append_byte(sb, 34)
-    i = s
-    while i < e {
-        c = ch_(x, i)
-        if c == 92 {
-            d = ch_(x, i + 1)
-            if d == 96 || d == 36 {
-                strbuilder.append_byte(sb, d)
-            } else {
-                strbuilder.append_byte(sb, 92)
-                strbuilder.append_byte(sb, d)
-            }
-            i = i + 2
-        } else {
-            if c == 34 {
-                strbuilder.append_byte(sb, 92)
-                strbuilder.append_byte(sb, 34)
-            } else if c == 10 {
-                strbuilder.append(sb, "\\n\" +")
-                strbuilder.append_byte(sb, 10)
-                strbuilder.append_byte(sb, 34)
-            } else if c == 13 {
-                strbuilder.append(sb, "\\r")
-            } else {
-                strbuilder.append_byte(sb, c)
-            }
-            i = i + 1
-        }
-    }
-    strbuilder.append_byte(sb, 34)
-    return strbuilder.finish(sb)
-}
-
-// 0b1010, 0o17 and 1_000 are not ES5: rewrite them in decimal / without
-// separators. BigInt literals are refused.
-lower_number_(x: *Lx, i: int) {
-    s = tk_start_(x, i)
-    e = tk_end_(x, i)
-    c1 = ch_(x, s + 1)
-    if ch_(x, e - 1) == 110 {
-        unsupported_(x, i, "a BigInt literal")
-        return
-    }
-    has_sep = 0
-    j = s
-    while j < e {
-        if ch_(x, j) == 95 { has_sep = 1 }
-        j = j + 1
-    }
-    if ch_(x, s) == 48 && (c1 == 98 || c1 == 66 || c1 == 111 || c1 == 79) {
-        base = 2
-        if c1 == 111 || c1 == 79 { base = 8 }
-        long v = 0
-        j = s + 2
-        while j < e {
-            d = ch_(x, j)
-            if d != 95 { v = v * base + (d - 48) }
-            j = j + 1
-        }
-        edit_(x, s, e, "${v}")
-        return
-    }
-    if has_sep == 1 {
-        sb = strbuilder.new(e - s)
-        j = s
-        while j < e {
-            if ch_(x, j) != 95 { strbuilder.append_byte(sb, ch_(x, j)) }
-            j = j + 1
-        }
-        edit_(x, s, e, strbuilder.finish(sb))
     }
 }
 
@@ -2586,30 +2124,14 @@ lx_new_(src: string) -> *Lx {
     x.er = strarr.new()
     x.ei = iv_new_()
     x.seq = 0
-    x.tmp = 0
-    x.for_bind = ""
-    x.fn_arrow = iv_new_()
-    x.fn_this = iv_new_()
-    x.fn_args = iv_new_()
-    x.lp_fn = iv_new_()
-    x.lp_closure = iv_new_()
-    x.lp_let = iv_new_()
-    x.lp_jump = iv_new_()
-    x.lp_switch = iv_new_()
-    x.lp_args = iv_new_()
     x.sc_names = strarr.new()
     x.sc_mark = iv_new_()
-    x.fn_scbase = iv_new_()
     x.fn_vars = strarr.new()
     x.fn_varbase = iv_new_()
-    x.catch_names = strarr.new()
-    x.catch_base = iv_new_()
-    x.catch_open = strarr.new()
-    x.sealed = ","
+        x.sealed = ","
     x.sought = ","
     x.hides = strarr.new()
     x.hide_base = iv_new_()
-    x.spread = 0
     return x
 }
 
@@ -2624,32 +2146,14 @@ lx_free_(x: *Lx) {
     iv_free_(x.eq as *IVec)
     strarr.free(x.er)
     iv_free_(x.ei as *IVec)
-    iv_free_(x.fn_arrow as *IVec)
-    iv_free_(x.fn_this as *IVec)
-    iv_free_(x.fn_args as *IVec)
-    iv_free_(x.lp_fn as *IVec)
-    iv_free_(x.lp_closure as *IVec)
-    iv_free_(x.lp_let as *IVec)
-    iv_free_(x.lp_jump as *IVec)
-    iv_free_(x.lp_switch as *IVec)
-    iv_free_(x.lp_args as *IVec)
     strarr.free(x.sc_names)
     iv_free_(x.sc_mark as *IVec)
-    iv_free_(x.fn_scbase as *IVec)
     strarr.free(x.fn_vars)
     iv_free_(x.fn_varbase as *IVec)
-    strarr.free(x.catch_names)
-    iv_free_(x.catch_base as *IVec)
-    strarr.free(x.catch_open)
     strarr.free(x.hides)
     iv_free_(x.hide_base as *IVec)
     heap.free(x)
 }
-
-// What `...v` spreads: a string's characters, an array, or any array-like
-// (an engine's Array.prototype.slice may take only real arrays). Strings split
-// into UTF-16 units, not code points.
-const SPREAD_FN = "function $sae_spread(v) { if (typeof v === \"string\") return v.split(\"\"); if (Array.isArray(v)) return v; var r = []; for (var i = 0; i < v.length; i++) r.push(v[i]); return r; }"
 
 // The privileges the last page lowered seeks, as ",local-filesystem,", or
 // "," if none.
@@ -2669,11 +2173,6 @@ lower_source(src: string, name: string) -> (string, string) {
     if x.err == "" {
         out = apply_edits_(x)
         last_seeks_ = string.copy(x.sought)
-    }
-    // Spread's runtime half, hoisted, on the last line so no line moves.
-    if x.err == "" && x.spread == 1 {
-        if string.string_ends_with(out, "\n") == 0 { out = string.concat(out, "\n") }
-        out = string.concat(out, SPREAD_FN)
     }
     err = ""
     if x.err != "" { err = "${name}:${x.err_line}:${x.err_col}: ${x.err}" }

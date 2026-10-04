@@ -22,10 +22,11 @@ in-process call into aether-ui's `ui/module.ae` builders.
 
 ## A page
 
-Pages are written in a TypeScript dialect: TypeScript that erases
-(`--erasableSyntaxOnly`) over ES5 plus a written list of ES2015 forms. The
-browser lowers each page to ES5 in-process before the engine sees it; see
-`lower/README.md` for the dialect.
+Pages are written in modern TypeScript: what `tsc --erasableSyntaxOnly`
+accepts, over ES2023 (classes, async/await, destructuring, `?.`, `??`, ...).
+The browser erases the types in-process, keeping every line and column, and
+QuickJS runs the rest as written. A page is a script (no `import`/`export`),
+and decorators are not supported yet; see `lower/README.md` for the dialect.
 
 ```ts
 interface Link { label: string; href: string }
@@ -38,7 +39,9 @@ for (const link of links) {
 }
 ```
 
-Plain ES5 is valid dialect too, and passes through unchanged.
+Plain JavaScript is valid dialect too, and passes through unchanged.
+`site/modern.ts` shows a class, an `async` click handler awaiting an http
+request, destructuring, `?.` and `??` in one page.
 
 Container builders take their block as the last argument, the way Aether's
 trailing block works: `ui.vstack(4, fn)` makes the stack under the current
