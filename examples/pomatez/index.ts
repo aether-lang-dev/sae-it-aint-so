@@ -245,29 +245,37 @@ views.push(vstack(6, () => {
 
 // --- the Config view (Pomatez's Config route: four sliders and a switch) ---
 
-let valueTexts: number[] = [];
-const sliderRow = (label: string, min: number, max: number, get: () => number, set: (v: number) => void,
-                   unit: string): number => {
-  const value = text(`${label}: ${get()} ${unit}`);
-  valueTexts.push(value);
-  return slider(min, max, get(), (v: number) => {
-    const n = Math.round(v);
-    set(n);
-    set_text(value, `${label}: ${n} ${unit}`);
-    saveConfig();
-    if (!playing) resetPeriod();
-    render();
-  });
+// The rules, as data: each one a slider over one field of config. The view
+// and Restore defaults are both built from this table.
+interface Rule { label: string; key: string; min: number; max: number; unit: string }
+const RULES: Rule[] = [
+  { label: "Stay focus",     key: "stayFocus",     min: 1, max: 120, unit: "min" },
+  { label: "Short break",    key: "shortBreak",    min: 1, max: 60,  unit: "min" },
+  { label: "Long break",     key: "longBreak",     min: 1, max: 60,  unit: "min" },
+  { label: "Session rounds", key: "sessionRounds", min: 1, max: 10,  unit: "rounds" },
+];
+const ruleValue = (r: Rule): number => (config as any)[r.key];
+const ruleText = (r: Rule): string => `${r.label}: ${ruleValue(r)} ${r.unit}`;
+
+const configChanged = (): void => {
+  saveConfig();
+  if (!playing) resetPeriod();
+  render();
 };
 
-let sliders: number[] = [];
+let ruleRows: { value: number; slider: number }[] = [];
 let autoToggle = 0;
 views.push(vstack(6, () => {
   add_class(text("Rules"), "heading");
-  sliders.push(sliderRow("Stay focus", 1, 120, () => config.stayFocus, (v: number) => { config.stayFocus = v; }, "min"));
-  sliders.push(sliderRow("Short break", 1, 60, () => config.shortBreak, (v: number) => { config.shortBreak = v; }, "min"));
-  sliders.push(sliderRow("Long break", 1, 60, () => config.longBreak, (v: number) => { config.longBreak = v; }, "min"));
-  sliders.push(sliderRow("Session rounds", 1, 10, () => config.sessionRounds, (v: number) => { config.sessionRounds = v; }, "rounds"));
+  RULES.forEach((r: Rule) => {
+    const value = text(ruleText(r));
+    const s = slider(r.min, r.max, ruleValue(r), (v: number) => {
+      (config as any)[r.key] = Math.round(v);
+      set_text(value, ruleText(r));
+      configChanged();
+    });
+    ruleRows.push({ value: value, slider: s });
+  });
   autoToggle = toggle("Auto start work time", (on: number) => {
     config.autoStartWork = on === 1;
     saveConfig();
@@ -275,17 +283,12 @@ views.push(vstack(6, () => {
   if (config.autoStartWork) set_toggle(autoToggle, 1);
   btn("Restore defaults", () => {
     config = defaultConfig();
-    saveConfig();
-    const vals = [config.stayFocus, config.shortBreak, config.longBreak, config.sessionRounds];
-    const names = ["Stay focus", "Short break", "Long break", "Session rounds"];
-    const units = ["min", "min", "min", "rounds"];
-    sliders.forEach((s: number, i: number) => {
-      set_slider(s, vals[i]);
-      set_text(valueTexts[i], `${names[i]}: ${vals[i]} ${units[i]}`);
+    RULES.forEach((r: Rule, i: number) => {
+      set_slider(ruleRows[i].slider, ruleValue(r));
+      set_text(ruleRows[i].value, ruleText(r));
     });
     set_toggle(autoToggle, 0);
-    if (!playing) resetPeriod();
-    render();
+    configChanged();
   });
 }));
 
