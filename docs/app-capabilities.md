@@ -113,6 +113,11 @@ reading `app.json` sees what it may have.
 
 ## Not yet
 
+- An optional seek (`"seeks local-filesystem if granted"`): the page
+  loads either way, with `fs` absent when not granted, for pages that
+  feature-detect (`typeof fs`) and fall back. Today seeking is required: a
+  page that seeks what it cannot have is refused at load.
+
 - Per-call user consent ("Allow Gitify to read Documents?"), as macOS and
   Android ask at run time. The manifest is where that would hang.
 - `fs` on an actor for large files; file watching (macae's FSEvents).
