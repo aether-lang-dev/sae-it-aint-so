@@ -15,6 +15,14 @@ tmp_dir() -> string {
     return t
 }
 
+// The app's $APPDATA: SAE_APPDATA_DIR, else where sae puts "Caps test"'s.
+appdata_() -> string {
+    d = os_getenv("SAE_APPDATA_DIR")
+    if d != null { return d }
+    h = os_getenv("HOME")
+    return "${h}/Library/Application Support/Caps test"
+}
+
 // Where "$APPDATA/../sae-caps-climbed" would land.
 climbed_() -> string {
     d = os_getenv("SAE_APPDATA_DIR")
@@ -56,7 +64,7 @@ main() {
             spec.assert_contains(b.page_texts(), "mkdir climb: refused: fs.mkdir: outside this app's fs.write grant: ", "refused")
             spec.assert_false(fs.exists(climbed_()) == 1, "nothing made beside the app's folder")
             // link -> outside/deep, and dangling -> outside/new.txt
-            d = os_getenv("SAE_APPDATA_DIR")
+            d = appdata_()
             out = "${d}/../sae-caps-outside"
             _m = fs.mkdir_p("${out}/deep")
             _l1 = fs.symlink("${out}/deep", "${d}/link")
