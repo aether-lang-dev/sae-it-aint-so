@@ -13,9 +13,11 @@ class Tally {
   get summary(): string { return `${this.label}: ${this.#count}`; }
 }
 
-const fetchJson = (url: string): Promise<any> =>
-  new Promise((resolve, reject) =>
-    http.get(url, (res) => (res.ok ? resolve(res.json()) : reject(new Error(res.error || `HTTP ${res.status}`)))));
+const fetchJson = async (url: string): Promise<any> => {
+  const res = await http.fetch(url);
+  if (!res.ok) throw new Error(res.error || `HTTP ${res.status}`);
+  return res.json();
+};
 
 const tally = new Tally("clicks");
 const shown = text(tally.summary);

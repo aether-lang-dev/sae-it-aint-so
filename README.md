@@ -115,11 +115,18 @@ the browser, the page's own origin; in an app, the URL prefixes its
 `app.json` grants under `capabilities.http` (below).
 
 Anything else is refused: the callback gets `res.ok` false and the reason in
-`res.error`. Callbacks: the request runs on an actor and its answer comes
-back on the UI thread, where the callback runs. (QuickJS has promises, and
-after every handler, timer and http callback sae runs the page's pending
-promise jobs, so `await` inside a page works; an awaitable `http.fetch` is
-a natural later addition.)
+`res.error`. The request runs on an actor and its answer comes back on the
+UI thread, where the callback runs. Or await it: `http.fetch(url)` and
+`http.fetch(options)` return a promise of the same response object, from
+the same actors, refused the same way (`res.ok` false, never a rejection):
+
+```ts
+const res = await http.fetch({ method: "POST", url: "/api/notes", body: json });
+if (res.ok) render(res.json());
+```
+
+After every handler, timer and http callback sae runs the page's pending
+promise jobs, so an `await` carries on as soon as its answer is delivered.
 
 ### App capabilities: fs, shell, and what each page may name
 

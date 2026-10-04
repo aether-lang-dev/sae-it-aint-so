@@ -301,6 +301,10 @@ main() {
             b.click("POST echo")
             b.assert_text("post: 200 posted: a body", "POST")
         }
+        spec.it("http.fetch: the same requests, awaited, refused the same way") callback {
+            b.click("Fetch POST")
+            b.assert_text("fetch: 200 posted: awaited body | other origin ok=false", "awaited POST, then a refusal as res.ok false")
+        }
         spec.it("res.json() parses the body") callback {
             b.click("GET json")
             b.assert_text("json: n=42, 3 items, last c", "parsed")

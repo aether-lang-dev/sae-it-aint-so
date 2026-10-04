@@ -22,6 +22,13 @@ btn("GET echo", () =>
 btn("POST echo", () =>
   http.post("/api/echo", "a body", "text/plain", (res: Res) =>
     set_text(posted, `post: ${res.status} ${res.text}`)));
+// The same, awaited: http.fetch(options) is a promise of the same response.
+const fetched = text("fetch: (none)");
+btn("Fetch POST", async () => {
+  const res = await http.fetch({ method: "POST", url: "/api/echo", body: "awaited body", contentType: "text/plain" });
+  const other = await http.fetch("http://example.com/");
+  set_text(fetched, `fetch: ${res.status} ${res.text} | other origin ok=${other.ok}`);
+});
 btn("GET json", () =>
   http.get("/api/json", (res: Res) => {
     const data = res.json();

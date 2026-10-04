@@ -2241,6 +2241,11 @@ api_register_(p: *Page) {
     reg_(q, ht, "request", 2, sae_http_request)
     quickjs.set_global(q, "http", ht)
     quickjs.release(q, ht)
+    // http.fetch(url or options): the same request as a promise of the same
+    // response object, for `await`. It runs on the same actors; the promise
+    // resolves where a callback would have run.
+    hf, _hfe = quickjs.eval(q, "http.fetch = function (o) { return new Promise(function (resolve) { if (typeof o === 'string') http.get(o, resolve); else http.request(o, resolve); }); };", "sae:http")
+    quickjs.release(q, hf)
 
     if app_dir_ != "" {
         fo = quickjs.new_object(q)
