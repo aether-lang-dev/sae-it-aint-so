@@ -80,15 +80,17 @@ print exactly its `// expect:` lines and keep its line count.
 state. Without the per-iteration wraps, `letloop.ts` prints `for 3` three
 times; that is the bug the wrap exists to prevent.
 
-## Directives: seal and hide
+## Directives: seeks and hide
 
-A page's first statement may be `"seal except ui, http";`: the page may then
-name no other capability object (`ui`, `vg`, `http`, `fs`, `shell`,
-`storage`, `browserContext`). A function's first statement may be
-`"hide fs, http";`: those names are refused in that function and every
-function inside it. A name the code binds itself (a parameter `fs`) is
-its own, not the capability. Violations are lowering errors:
-`page.ts:3:1: http is sealed out of this page`. See
+A page's first statements may be `"seeks <privilege>";` lines
+(`local-filesystem`, `outgoing-http`, `open-urls`, one per line or several
+separated by commas). They unlock `fs`, `http` and `shell`, which a page may
+not name otherwise: `page.ts:3:1: fs needs "seeks local-filesystem" at the
+top of the page`. `lower_source` keeps the list for the host
+(`page_seeks()`), which checks it against the page's grants before running
+it. A function's first statement may be `"hide fs, http";`: those names are
+refused in that function and every function inside it. A name the code
+binds itself (a parameter `fs`) is its own, not the capability. See
 `../docs/app-capabilities.md`.
 
 ## catch parameters

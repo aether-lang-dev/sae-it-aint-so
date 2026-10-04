@@ -40,8 +40,11 @@ and the guest can only ask, through the gate, for what a service will do.
 4. **Grants, checked at run time by the services.** Every path is resolved
    to where it leads and every URL compared with the app's grants before
    anything is touched (`docs/app-capabilities.md`).
-5. **The page's own seal, checked by the lowerer.** `"seal except ui,
-   http";` at the top of a page limits what it may name.
+5. **What the page seeks, checked twice.** `"seeks local-filesystem";`
+   (and `outgoing-http`, `open-urls`) at the top of a page: the lowerer
+   refuses a page that names `fs`, `http` or `shell` without seeking it,
+   and the kernel refuses, before any of it runs, a page that seeks what
+   its context does not grant, saying what is missing.
 
 ### Shell: the URL opener
 

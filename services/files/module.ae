@@ -17,7 +17,7 @@ import std.dir
 import std.string
 import std.strarr
 
-exports (configure, grant_read, grant_write, resolve, path,
+exports (configure, grant_read, grant_write, granted, resolve, path,
          read_text, write_text, exists, list_json, mkdir, remove)
 
 var enabled_: int = 0        // 0 in the browser: pages there get no fs
@@ -44,6 +44,17 @@ grant_read(root: string) { add_root_(reads_, root) }
 
 // A write grant: create, overwrite, remove and mkdir under `root` (and read).
 grant_write(root: string) { add_root_(writes_, root) }
+
+// 1 if the app has any fs grant at all (a page that seeks fs is refused at
+// load without one).
+granted() -> int {
+    if enabled_ == 0 { return 0 }
+    n = 0
+    if reads_ != null { n = n + strarr.size(reads_) }
+    if writes_ != null { n = n + strarr.size(writes_) }
+    if n > 0 { return 1 }
+    return 0
+}
 
 add_root_(l: ptr, raw: string) {
     if l == null { return }

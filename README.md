@@ -135,12 +135,21 @@ say it, in `app.json`; the kernel enforces it on every call:
   the granted prefixes.
 - A web page has no `fs` and no `shell` at all.
 
-And what each piece of code may *name*, after Aether's `hide` /
-`seal except`: a page that starts `"seal except ui, storage";` may use no
-other capability object, and a function that starts `"hide fs";` (with
-every function inside it) may not name `fs`. The lowerer refuses a
-violation when the page loads, with its line and column. A seal is an audit
-line, not the boundary; the grants are. `docs/app-capabilities.md` has the
+A page says at its top which privileges it seeks, one per line:
+
+```ts
+"seeks local-filesystem";   // unlocks fs
+"seeks outgoing-http";      // unlocks http
+"seeks open-urls";          // unlocks shell.open
+```
+
+`ui`, `vg`, `storage` and `browserContext` every page has. A page that
+names `fs`, `http` or `shell` without seeking it is refused when it is read
+(`page:4:1: fs needs "seeks local-filesystem" at the top of the page`), and
+one that seeks what its context does not grant is refused before any of it
+runs, saying what is missing (`seeks local-filesystem, which a web page in
+the browser cannot have`). A function that starts `"hide fs";` (with every
+function inside it) may not name `fs`. `docs/app-capabilities.md` has the
 whole design.
 
 ### Storage

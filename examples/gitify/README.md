@@ -33,7 +33,7 @@ Sign in with a personal access token (scopes `notifications`, `read:user`,
 
 `app.json` grants `https://api.github.com/` for http and
 `https://github.com/` for `shell.open`, nothing else; the page starts with
-`"seal except ui, http, shell, storage"`. See
+`"seeks outgoing-http"` and `"seeks open-urls"`. See
 [docs/app-capabilities.md](../../docs/app-capabilities.md). An Enterprise
 host needs its own `api/v3/` prefix added to the grant.
 

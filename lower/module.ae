@@ -26,7 +26,7 @@ import std.strbuilder
 import std.strarr
 import std.mem
 
-exports (lower_source, LOWER_VERSION)
+exports (lower_source, page_seeks, LOWER_VERSION)
 
 extern malloc(n: long) -> ptr
 extern realloc(p: ptr, n: long) -> ptr
@@ -140,7 +140,8 @@ struct Lx {
     catch_names: ptr // std.strarr: catch parameter names seen, all functions, stacked
     catch_base: ptr  // per function: catch_names length at its start
     catch_open: ptr  // std.strarr: "<fn depth>|<name>" of the catch blocks being parsed
-    sealed: string   // "seal except" names of the page, as ",a,b,", or "" (none)
+    sealed: string   // objects the page's "seeks" lines unlock, as ",fs,http,"
+    sought: string   // the privileges it seeks, as ",local-filesystem,outgoing-http,"
     hides: ptr       // std.strarr: "hide" names in force, stacked by function
     hide_base: ptr   // per function: hides length at its start
     spread: int      // 1 once a spread was lowered: append $sae_spread
@@ -991,9 +992,10 @@ erase_tokens_(x: *Lx, i: int, j: int) {
 // Statements
 
 // ---------------------------------------------------------------------------
-// Seals: "seal except a, b" as a page's first statement, "hide a, b" as a
-// function's (or the page's). The capability objects a page reaches are
-// then checked by name where they are used. docs/app-capabilities.md.
+// What a page may name: "seeks <privilege>" lines at the top of the page
+// unlock fs, http and shell; "hide a, b" at the top of a function takes
+// names away from it. Checked by name where each object is used.
+// docs/app-capabilities.md.
 
 const CAPS = ",ui,vg,http,fs,shell,storage,browserContext,"
 
@@ -1018,17 +1020,75 @@ names_of_(list: string) -> string {
     return out
 }
 
-// A directive at token i (a string statement): seal or hide. A seal only
-// counts as the page's first statement.
+// The privileges a page can seek, by the name a page uses for each, and the
+// page-API object each one unlocks. ui, vg, storage and browserContext every
+// page has, so they are not sought.
+const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,"
+const PRIVILEGED = ",fs,http,shell,"
+
+// The object a privilege unlocks ("local-filesystem" -> "fs"), or "".
+object_of_(privilege: string) -> string {
+    at = string.index_of(SEEKABLE, ",${privilege}:")
+    if at < 0 { return "" }
+    from = at + string.length(privilege) + 2
+    to = from
+    while string.char_at(SEEKABLE, to) != 44 { to = to + 1 }
+    return string.substring(SEEKABLE, from, to)
+}
+
+// The privilege that unlocks an object ("fs" -> "local-filesystem").
+privilege_of_(obj: string) -> string {
+    at = string.index_of(SEEKABLE, ":${obj},")
+    if at < 0 { return "" }
+    k = at - 1
+    while string.char_at(SEEKABLE, k) != 44 { k = k - 1 }
+    return string.substring(SEEKABLE, k + 1, at)
+}
+
+// The "seeks" lines at the top of a page: string statements, one after
+// another, each naming one privilege or several separated by commas:
+//
+//     "seeks local-filesystem";
+//     "seeks outgoing-http";
+//
+// The page may then name the objects those unlock, and the kernel checks
+// them against what the context grants before the page runs.
+page_seeks_(x: *Lx) {
+    j = x.pos
+    while tk_kind_(x, j) == T_STR && x.err == "" {
+        d = str_inner_(x, j)
+        if string.starts_with(d, "seeks ") == 0 { return }
+        names = names_of_(string.substring(d, 6, string.length(d)))
+        parts = string.split(names, ",")
+        n = string.string_array_size(parts)
+        k = 0
+        while k < n {
+            nm = string.string_array_get(parts, k)
+            if nm != "" {
+                obj = object_of_(nm)
+                if obj == "" {
+                    fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls)")
+                    return
+                }
+                if string.contains(x.sought, ",${nm},") == 0 { x.sought = string.concat(x.sought, "${nm},") }
+                if string.contains(x.sealed, ",${obj},") == 0 { x.sealed = string.concat(x.sealed, "${obj},") }
+            }
+            k = k + 1
+        }
+        j = j + 1
+        if tk_is_(x, j, ";") == 1 { j = j + 1 }
+    }
+}
+
+// A directive at token i (a string statement) at the top of a function:
+// "hide a, b". A "seeks" line anywhere but the top of the page is an error.
 directive_(x: *Lx, i: int, page_top: int) {
     if tk_kind_(x, i) != T_STR { return }
     d = str_inner_(x, i)
-    if string.starts_with(d, "seal except ") == 1 {
+    if string.starts_with(d, "seeks ") == 1 {
         if page_top == 0 {
-            fail_at_(x, tk_start_(x, i), "\"seal except\" belongs at the top of a page; a function says \"hide\"")
-            return
+            fail_at_(x, tk_start_(x, i), "\"seeks\" belongs at the top of a page; a function says \"hide\"")
         }
-        x.sealed = names_of_(string.substring(d, 12, string.length(d)))
         return
     }
     if string.starts_with(d, "hide ") == 1 {
@@ -1054,13 +1114,15 @@ cap_check_(x: *Lx, i: int) {
         fail_at_(x, tk_start_(x, i), "${nm} is hidden here (a \"hide\" directive)")
         return
     }
-    if x.sealed != "" && string.contains(x.sealed, ",${nm},") == 0 {
-        fail_at_(x, tk_start_(x, i), "${nm} is sealed out of this page (\"seal except\" does not list it)")
+    // fs, http and shell need a "seeks" line; ui, vg, storage and
+    // browserContext every page has.
+    if string.contains(PRIVILEGED, ",${nm},") == 1 && string.contains(x.sealed, ",${nm},") == 0 {
+        fail_at_(x, tk_start_(x, i), "${nm} needs \"seeks ${privilege_of_(nm)}\" at the top of the page")
     }
 }
 
 parse_program_(x: *Lx) {
-    directive_(x, x.pos, 1)
+    page_seeks_(x)
     while tk_kind_(x, x.pos) != T_EOF && x.err == "" {
         parse_statement_(x)
     }
@@ -2543,7 +2605,8 @@ lx_new_(src: string) -> *Lx {
     x.catch_names = strarr.new()
     x.catch_base = iv_new_()
     x.catch_open = strarr.new()
-    x.sealed = ""
+    x.sealed = ","
+    x.sought = ","
     x.hides = strarr.new()
     x.hide_base = iv_new_()
     x.spread = 0
@@ -2588,6 +2651,12 @@ lx_free_(x: *Lx) {
 // into UTF-16 units, not code points.
 const SPREAD_FN = "function $sae_spread(v) { if (typeof v === \"string\") return v.split(\"\"); if (Array.isArray(v)) return v; var r = []; for (var i = 0; i < v.length; i++) r.push(v[i]); return r; }"
 
+// The privileges the last page lowered seeks, as ",local-filesystem,", or
+// "," if none.
+var last_seeks_: string = ""
+
+page_seeks() -> string { return last_seeks_ }
+
 // Lower one page. Returns (es5_source, error): error is "" on success, or
 // "name:line:col: message".
 lower_source(src: string, name: string) -> (string, string) {
@@ -2596,7 +2665,11 @@ lower_source(src: string, name: string) -> (string, string) {
     if x.err == "" { match_brackets_(x) }
     if x.err == "" { parse_program_(x) }
     out = ""
-    if x.err == "" { out = apply_edits_(x) }
+    last_seeks_ = ""
+    if x.err == "" {
+        out = apply_edits_(x)
+        last_seeks_ = string.copy(x.sought)
+    }
     // Spread's runtime half, hoisted, on the last line so no line moves.
     if x.err == "" && x.spread == 1 {
         if string.string_ends_with(out, "\n") == 0 { out = string.concat(out, "\n") }

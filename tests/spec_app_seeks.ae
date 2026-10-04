@@ -1,0 +1,21 @@
+// spec_app_seeks.ae — an app that seeks a privilege its app.json does not
+// grant is refused before any of it runs, naming the missing privilege.
+//   SAE_TEST_APP=tests/apps/seeks tests/run_spec.sh spec_app_seeks
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "seeks, in an app") {
+        spec.it("seeking what app.json does not grant is refused at load") callback {
+            b.assert_text("This page cannot run here:", "notice")
+            spec.assert_contains(b.page_texts(), "seeks local-filesystem, which this app's app.json does not grant", "why")
+            spec.assert_false(string.contains(b.page_texts(), "outgoing-http, which"), "http is granted, so not named")
+            b.assert_no_text("You should not see this", "none of it ran")
+        }
+    }
+    return spec.run_summary(fw)
+}

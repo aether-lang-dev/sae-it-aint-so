@@ -1921,6 +1921,43 @@ json_value_(ctx: ptr, text: string) -> long {
     return JS_Parse(ctx, text, string.length(text), "sae:json", JS_EVAL_JSON)
 }
 
+// 1 if this context can give a page the privilege `nm`. A web page in the
+// browser gets outgoing-http (to its own origin) and nothing else; an app
+// gets each only as far as app.json grants it.
+available_(nm: string) -> int {
+    if app_dir_ == "" {
+        if nm == "outgoing-http" { return 1 }
+        return 0
+    }
+    if nm == "outgoing-http" {
+        if cap_http_ != null && strarr.size(cap_http_) > 0 { return 1 }
+        return 0
+    }
+    if nm == "local-filesystem" { return files.granted() }
+    if nm == "open-urls" { return shell.granted() }
+    return 0
+}
+
+// Why a page that seeks `seeks` (",local-filesystem,...", from its "seeks"
+// lines) cannot run here, or "".
+seek_refusal_(url: string, seeks: string) -> string {
+    if seeks == "" { return "" }
+    missing = ""
+    parts = string.split(seeks, ",")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        nm = string.string_array_get(parts, i)
+        if nm != "" && available_(nm) == 0 {
+            if missing == "" { missing = nm } else { missing = "${missing}, ${nm}" }
+        }
+        i = i + 1
+    }
+    if missing == "" { return "" }
+    if app_dir_ == "" { return "${url} seeks ${missing}, which a web page in the browser cannot have" }
+    return "${url} seeks ${missing}, which this app's app.json does not grant"
+}
+
 // The strings of a JSON array `key` in object `v` (none if absent), each
 // handed to `add`.
 grants_from_(v: ptr, key: string, add: fn) {
@@ -2256,6 +2293,18 @@ load_(b: *Browser, url: string) {
         ui.text(mem.long_to_ptr(b.content), lerr)
         set_status_(b, "${status} ${final_url}")
         println("sae: ${lerr}")
+        b.last_ok = 0
+        return
+    }
+
+    // What the page seeks, against what this context grants: refused here,
+    // before any of its code runs, with the reason (docs/app-capabilities.md).
+    why = seek_refusal_(final_url, lower.page_seeks())
+    if why != "" {
+        ui.text(mem.long_to_ptr(b.content), "This page cannot run here:")
+        ui.text(mem.long_to_ptr(b.content), why)
+        set_status_(b, "${status} ${final_url}")
+        println("sae: ${why}")
         b.last_ok = 0
         return
     }

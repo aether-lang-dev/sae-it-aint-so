@@ -83,6 +83,22 @@ main() {
             b.back()
             b.assert_page(HOME, "200 ", "Back from the unreadable page")
         }
+        spec.it("a page that seeks the file system is refused before it runs") callback {
+            b.click("A page that seeks the file system")
+            b.assert_text("This page cannot run here:", "notice")
+            spec.assert_contains(b.page_texts(), "seeks local-filesystem, which a web page in the browser cannot have", "why")
+            b.assert_no_text("You should not see this", "none of it ran")
+            b.back()
+            b.assert_page(HOME, "200 ", "Back from the refused page")
+        }
+        spec.it("a page using what it did not seek is refused where it does") callback {
+            b.click("A page that uses what it did not seek")
+            b.assert_text("This page could not be read:", "notice")
+            spec.assert_contains(b.page_texts(), "unsought:4:1: fs needs \"seeks local-filesystem\" at the top of the page", "where")
+            b.assert_no_text("You should not see this", "none of it ran")
+            b.back()
+            b.assert_page(HOME, "200 ", "Back from the unreadable page")
+        }
         spec.it("a modifier outside a container throws; earlier widgets stay") callback {
             b.click("Modifier misuse")
             b.assert_text("This page failed: see the console.", "failure notice")
@@ -289,11 +305,6 @@ main() {
             spec.assert_contains(b.page_texts(), "cancel: request ", "the request object has an id")
             sleep(900)
             spec.assert_false(b.console_contains("a cancelled request's callback ran"), "not run")
-        }
-        spec.it("a web page has no fs and no shell") callback {
-            b.click("Try fs and shell")
-            b.assert_text("denied: fs.read_text: fs is not available to a web page | shell.open: not available to a web page",
-                "both refused")
         }
         spec.it("a reply for a page that has gone is dropped") callback {
             b.click("Slow, then leave")

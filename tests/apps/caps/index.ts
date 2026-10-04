@@ -1,3 +1,6 @@
+"seeks local-filesystem";
+"seeks outgoing-http";
+"seeks open-urls";
 // A test app for spec_app_caps: each button tries one grant, or one edge of
 // one, and shows what happened. See app.json and docs/app-capabilities.md.
 const { text, btn, set_text } = ui;

@@ -23,6 +23,8 @@ const links: Link[] = [
   { label: "Old home (302 to /)", href: "/old-home" },
   { label: "A page that throws", href: "/broken" },
   { label: "A page outside the dialect", href: "/unsupported" },
+  { label: "A page that seeks the file system", href: "/seeks_fs" },
+  { label: "A page that uses what it did not seek", href: "/unsought" },
 ];
 
 text("Welcome to Sae it ain't so");

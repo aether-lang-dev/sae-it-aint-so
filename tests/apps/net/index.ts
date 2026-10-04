@@ -1,3 +1,4 @@
+"seeks outgoing-http";
 // A test app for spec_app_net: app.json allows http://127.0.0.1:8091/api/
 // (the spec's page server) and nothing else.
 const { text, btn, set_text } = ui;

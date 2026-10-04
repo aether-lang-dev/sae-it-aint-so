@@ -1,4 +1,5 @@
-"seal except ui, http, shell, storage";   // all this app names (docs/app-capabilities.md)
+"seeks outgoing-http";   // GitHub's API (docs/app-capabilities.md)
+"seeks open-urls";       // a notification's page, in the browser
 // Gitify, as a sae app. Ported from gitify-app/gitify (MIT; see NOTICE.md):
 // your GitHub notifications, grouped by repository, to open, mark read or
 // mark done. Signs in with a personal access token, to github.com or a

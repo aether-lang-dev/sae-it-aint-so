@@ -15,7 +15,7 @@ import std.fs (read, write_atomic)
 import std.string
 import std.strarr
 
-exports (configure, grant, refusal, open)
+exports (configure, grant, granted, refusal, open)
 
 var enabled_: int = 0     // 0 in the browser
 var log_: string = ""     // SAE_SHELL_LOG: record URLs here instead (specs)
@@ -32,6 +32,13 @@ configure(enabled: int, log: string) {
 // A URL prefix the app may open ("https://github.com/").
 grant(prefix: string) {
     if prefixes_ != null { strarr.push_copy(prefixes_, prefix) }
+}
+
+// 1 if the app may open any URL at all.
+granted() -> int {
+    if enabled_ == 0 || prefixes_ == null { return 0 }
+    if strarr.size(prefixes_) > 0 { return 1 }
+    return 0
 }
 
 // Why `url` may not be opened, or "".

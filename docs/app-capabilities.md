@@ -7,13 +7,13 @@ everything a page can call. An app (`sae --app`, or a packaged `.app`) sits
 between: someone chose to install it, so it may be granted more, but only
 what it says it needs, and as narrowly as it can say it.
 
-Two layers, after Tauri v2's capabilities and Aether's `hide` /
-`seal except` (`aether/docs/hide-and-seal.md`):
+Two sides, after Tauri v2's capabilities, Android's `uses-permission` and
+Aether's `hide` (`aether/docs/hide-and-seal.md`):
 
-| Layer | Where | Enforced by | What it is |
+| Side | Where | Enforced by | What it is |
 |---|---|---|---|
-| **Grants** | `app.json` `"capabilities"` | the kernel, on every call | the security boundary: what the app may do at all |
-| **Seals** | a directive at the top of a page or a function | the lowerer, when the page loads | hygiene and an audit line: what this code may *name* |
+| **Grants** | `app.json` `"capabilities"` (an app), or the browser's fixed rules (a web page) | the kernel: at load, and on every call | the security boundary: what the code may do at all |
+| **Seeks** | `"seeks <privilege>"` lines at the top of a page | the lowerer (naming) and the kernel (at load) | what the page asks for, in words a person can read; the page fails to load, saying why, if it is not granted |
 
 ## Grants: `app.json`
 
@@ -70,33 +70,46 @@ documents, caches). Node names where they fit, so porting reads naturally:
 Large or slow work (a directory walk, a big read) belongs on an actor, as
 http does; that is a later addition.
 
-## Seals: what a page or function may name
+## Seeks: what a page asks for
 
-A page may start with a directive, the way a script says `"use strict"`:
+A page says at its top which privileges it seeks, one per line, the way a
+script says `"use strict"`:
 
 ```ts
-"seal except ui, http, storage";   // this page names nothing else
+"seeks outgoing-http";
+"seeks open-urls";
 
 function render(items) {
-  "hide http";                       // and this function not even that
+  "hide http";        // this function may not name http, though the page may
   ...
 }
 ```
 
-- `seal except a, b` at the top of a page: the page may use only those of
-  the API objects (`ui`, `vg`, `http`, `fs`, `shell`, `storage`,
-  `browserContext`). Naming another (`fs.read_text(...)`) is an error at load:
-  `page.ts:12:5: fs is sealed out of this page`.
-- `hide a, b` at the top of any function: those names are hidden in that
-  function and every function nested in it, as `hide` propagates to nested
-  blocks in Aether.
-- Seals narrow, never widen: a seal cannot grant what `app.json` withholds.
+| Privilege | Unlocks | A web page in the browser | An app |
+|---|---|---|---|
+| `local-filesystem` | `fs` | never | if `app.json` grants `fs` |
+| `outgoing-http` | `http` | yes, to the page's own origin | if `app.json` grants `http` |
+| `open-urls` | `shell.open` | never | if `app.json` grants `shell.open` |
 
-Like Aether's `hide`, a seal is **not** a security boundary: it stops code
-from naming a capability, not a function it calls from using it. What it
-gives is the one-line audit Aether's `seal except` gives a request handler:
-read the directive and you know what the page reaches for. The grants are
-the boundary.
+`ui`, `vg`, `storage` and `browserContext` every page has; they are not
+sought.
+
+- **Naming needs seeking.** A page that names `fs`, `http` or `shell`
+  without the line that unlocks it is refused when it is read, at the
+  line: `page.ts:12:5: fs needs "seeks local-filesystem" at the top of the
+  page`. A misspelt privilege is refused the same way.
+- **Seeking needs granting.** Before a page runs, the kernel compares what
+  it seeks with what its context grants, and refuses it with the reason if
+  anything is missing: `seeks local-filesystem, which a web page in the
+  browser cannot have`, or `seeks open-urls, which this app's app.json does
+  not grant`. None of the page runs; nothing fails halfway.
+- **Seeking never widens.** A page cannot grant itself anything; the grants
+  stay the boundary, checked again on every call.
+- `hide a, b` at the top of any function hides those names in that
+  function and every function nested in it, as `hide` does in Aether.
+
+A person reading a page's first lines sees what it reaches for; a person
+reading `app.json` sees what it may have.
 
 ## Not yet
 

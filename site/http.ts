@@ -1,3 +1,4 @@
+"seeks outgoing-http";
 // HTTP from a page: http.get / http.post. The requests run on Aether actors,
 // off the UI thread; each callback gets a response object back on it:
 //   res.ok, res.status, res.text, res.error, res.json()
@@ -44,13 +45,5 @@ btn("Slow, then cancel", () => {
 btn("Slow, then leave", () => {
   http.get("/api/slow?ms=700", (res: Res) => print("this callback must not run"));
   browserContext.changePage("/");
-});
-// A web page has no fs and no shell, whatever it asks.
-const denied = text("denied: (none)");
-btn("Try fs and shell", () => {
-  const out: string[] = [];
-  try { fs.read_text("/etc/hosts"); out.push("fs read!"); } catch (e) { out.push(e.message); }
-  try { shell.open("https://example.com/"); out.push("shell opened!"); } catch (e) { out.push(e.message); }
-  set_text(denied, `denied: ${out.join(" | ")}`);
 });
 btn("Home", () => browserContext.changePage("/"));

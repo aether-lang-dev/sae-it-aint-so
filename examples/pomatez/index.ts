@@ -1,4 +1,3 @@
-"seal except ui, vg, storage";   // all this app names (docs/app-capabilities.md)
 // Pomatez, as a sae app. Ported from zidoro/pomatez (MIT; see NOTICE.md):
 // "Stay Focused. Take a Break." A Pomodoro timer, its task list and its
 // settings, with Pomatez's rules: focus for 25 minutes, a 5-minute short

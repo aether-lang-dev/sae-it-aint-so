@@ -82,9 +82,38 @@ chrome(label: string) {
     uidriver.click_widget(id)
 }
 
-// What the address field shows.
+// What the address field shows: the text field with the "address"
+// placeholder (not whichever field comes first), read once the chrome has
+// filled it in after a load (up to about 2 s).
 current_url() -> string {
-    return uidriver.widget_text_by_id(uidriver.widget_id_of("textfield", ""))
+    tries = 0
+    while tries < 40 {
+        id = address_bar_id_()
+        if id > 0 {
+            t = uidriver.widget_text_by_id(id)
+            if string.length(t) > 0 { return t }
+        }
+        sleep(50)
+        tries = tries + 1
+    }
+    return ""
+}
+
+address_bar_id_() -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    cnt = json.json_array_size(v)
+    i = 0
+    while i < cnt {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "textfield") == 1 {
+            if string.equals(uidriver.field_str(w, "placeholder"), "address") == 1 { id = uidriver.field_int(w, "id") }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
 }
 
 // The chrome's status line: "<HTTP status> <final URL>", e.g.
