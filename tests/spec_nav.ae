@@ -99,9 +99,10 @@ main() {
             b.back()
             b.assert_page(HOME, "200 ", "Back from the unreadable page")
         }
-        spec.it("modern TypeScript runs as written: a class, and an await on http") callback {
+        spec.it("modern TypeScript runs as written: a class, an Error subclass, and an await on http") callback {
             b.click("Modern TypeScript")
             b.assert_text("clicks: 0", "a class with a private field")
+            b.assert_text("caught Overdrawn: overdrawn by 5", "an Error subclass thrown in a block keeps its class")
             b.click("Bump")
             b.click("Bump")
             b.assert_text("clicks: 2", "its getter")

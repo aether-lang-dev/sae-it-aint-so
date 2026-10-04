@@ -252,10 +252,10 @@ calln_(ctx: ptr, f: int, args: int) -> int {
     return 0
 }
 
-// A host function's nested call threw: carry its message on as this call's
-// exception (the engine's own has been read off by then).
+// A host function's nested call threw: throw that same exception on from
+// this call, so the page's catch gets its class and stack, not a copy.
 rethrow_(ctx: ptr) -> int {
-    return quickjs.throw_error(ctx, "Error", quickjs.last_error(ctx))
+    return quickjs.rethrow(ctx)
 }
 
 // Run the promise jobs a callback queued (its awaits, its .then()s).

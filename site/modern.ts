@@ -1,6 +1,7 @@
 "seeks outgoing-http";
 // Modern TypeScript in a page, run as written: a class with a private field,
-// optional chaining and ??, destructuring, and an async function awaiting
+// optional chaining and ??, destructuring, an Error subclass caught across
+// a container block, and an async function awaiting
 // an http request (which runs on an Aether actor; the await resumes when
 // its answer comes back on the UI thread).
 const { text, btn, set_text } = ui;
@@ -29,4 +30,16 @@ btn("Load", async () => {
   const missing = (others as any).nope?.length ?? "none";
   set_text(loaded, `loaded: n=${n} first=${first} others=${others.join("")} missing=${missing}`);
 });
+// An exception thrown in a container's block reaches the page's catch as
+// itself: its class, name and message, not a copy of its text.
+class Overdrawn extends Error {
+  constructor(by: number) { super(`overdrawn by ${by}`); this.name = "Overdrawn"; }
+}
+let caught = "nothing caught";
+try {
+  ui.vstack(() => { throw new Overdrawn(5); });
+} catch (e) {
+  caught = e instanceof Overdrawn ? `caught ${e.name}: ${e.message}` : `lost its class: ${e}`;
+}
+text(caught);
 btn("Home", () => browserContext.changePage("/"));
