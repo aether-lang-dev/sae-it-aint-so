@@ -5,10 +5,13 @@
 # aeb installed privately under target/toolchain. When ../aether is an Aether
 # dev tree (it has build/libaether.a), or SAE_AETHER_HOME names one, the
 # engine and host compile against that tree instead, for working on the
-# compiler alongside sae.
+# compiler alongside sae. SAE_AETHER_HOME=none uses the installed toolchain
+# even then (how a pin bump is checked against a release).
 set -e
 ROOT=$(cd "$(dirname "$0")" && pwd)
-if [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
+if [ "${SAE_AETHER_HOME:-}" = none ]; then
+    unset SAE_AETHER_HOME
+elif [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
     SAE_AETHER_HOME=$(cd "$ROOT/../aether" && pwd)
 fi
 if [ -n "${SAE_AETHER_HOME:-}" ]; then

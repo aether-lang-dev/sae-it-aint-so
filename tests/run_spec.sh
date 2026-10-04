@@ -21,7 +21,9 @@ SITE_PORT="${SAE_TEST_SITE_PORT:-8091}"
 DRIVER_PORT=9222
 
 # Same toolchain choice as build.sh: an Aether dev tree beside sae wins.
-if [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
+if [ "${SAE_AETHER_HOME:-}" = none ]; then
+    unset SAE_AETHER_HOME
+elif [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
     SAE_AETHER_HOME=$(cd "$ROOT/../aether" && pwd)
 fi
 if [ -n "${SAE_AETHER_HOME:-}" ]; then

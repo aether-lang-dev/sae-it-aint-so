@@ -15,8 +15,11 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 HOST="$ROOT/src/sae_host.ae"
 fails=0
 
-# Same toolchain choice as build.sh: an Aether dev tree beside sae wins.
-if [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
+# Same toolchain choice as build.sh: an Aether dev tree beside sae wins,
+# unless SAE_AETHER_HOME=none.
+if [ "${SAE_AETHER_HOME:-}" = none ]; then
+    unset SAE_AETHER_HOME
+elif [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
     SAE_AETHER_HOME=$(cd "$ROOT/../aether" && pwd)
 fi
 if [ -n "${SAE_AETHER_HOME:-}" ]; then

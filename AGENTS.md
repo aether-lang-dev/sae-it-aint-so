@@ -63,8 +63,10 @@ tests/check_page_veto.sh                     # page veto present and enforced
 tests/check_layers.sh                        # services held to their imports
 ```
 
-Toolchain: Aether main (for contrib.quickjs) as a dev tree (`$SAE_AETHER_HOME`, default
-`../aether`, built with `make compiler ae stdlib`) and aeb at `350dfc4` or
+Toolchain: Aether 0.778.0 or later (`pins`), installed, or a dev tree
+(`$SAE_AETHER_HOME`, default `../aether`, built with `make compiler ae
+stdlib`; `SAE_AETHER_HOME=none` builds against the installed one even when
+`../aether` exists), and aeb at `350dfc4` or
 later (it compiles the C contrib.quickjs ships), installed privately under `target/toolchain`:
 
 ```sh

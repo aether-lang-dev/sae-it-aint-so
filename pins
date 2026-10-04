@@ -3,12 +3,14 @@
 # that needs it (or that re-verified sae against it), as the other Aether
 # repos do with their own pins.
 
-# Aether release. The page engine is contrib.quickjs (aether#2418), merged
-# after 0.774.0 and in no release yet: until one ships it, sae builds
-# against an Aether dev tree (../aether, or SAE_AETHER_HOME), which build.sh
-# prefers. Bump this to that release when it exists. The page veto needs
-# the nested hide fix (#2381), in every release since 0.766.0.
-AE_PIN=0.766.0
+# Aether release. 0.778.0 is the first with what sae needs: the page engine,
+# contrib.quickjs (aether#2418), with its amalgamation in the release tarball
+# and in a source install (#2421), and quickjs.rethrow (#2420), which keeps
+# the class of an exception a page's container block throws. The page veto
+# needs the nested hide fix (#2381), in every release since 0.766.0.
+# Verified: every suite green on a get.sh install of 0.778.0
+# (SAE_AETHER_HOME=none ./build.sh).
+AE_PIN=0.778.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
