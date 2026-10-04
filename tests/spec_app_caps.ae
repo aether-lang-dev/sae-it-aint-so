@@ -55,6 +55,18 @@ main() {
             b.click("mkdir climb")
             spec.assert_contains(b.page_texts(), "mkdir climb: refused: fs.mkdir: outside this app's fs.write grant: ", "refused")
             spec.assert_false(fs.exists(climbed_()) == 1, "nothing made beside the app's folder")
+            // link -> outside/deep, and dangling -> outside/new.txt
+            d = os_getenv("SAE_APPDATA_DIR")
+            out = "${d}/../sae-caps-outside"
+            _m = fs.mkdir_p("${out}/deep")
+            _l1 = fs.symlink("${out}/deep", "${d}/link")
+            _l2 = fs.symlink("${out}/new.txt", "${d}/dangling")
+            b.click("symlink climb")
+            spec.assert_contains(b.page_texts(), "symlink climb: refused: fs.write_text: outside this app's fs.write grant: ", "refused")
+            spec.assert_false(fs.exists("${out}/via_link.txt") == 1, "nothing written where the link leads")
+            b.click("dangling")
+            spec.assert_contains(b.page_texts(), "dangling: refused: fs.write_text: cannot resolve", "refused")
+            spec.assert_false(fs.exists("${out}/new.txt") == 1, "its target not created")
         }
         spec.it("fs.remove within the write grant") callback {
             b.click("remove")

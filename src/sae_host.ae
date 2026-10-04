@@ -1947,10 +1947,20 @@ expand_root_(s: string) -> string {
     return s
 }
 
-// An absolute path with "." and ".." taken out lexically, so nothing that
-// follows can climb above what the path names.
-normalize_path_(p: string) -> string {
-    out = ""
+// A path made absolute (relative ones are in $APPDATA) and resolved to where
+// it leads, so a prefix check means what it says. It is walked a component
+// at a time, as the kernel walks it: "." is dropped, ".." goes to the parent
+// of what is resolved so far (which has no symlinks left in it), and a
+// symlink is followed to where it points. A component that does not exist
+// yet is kept as written, and a ".." after it removes it again. Taking ".."
+// out as text first would be wrong: with link -> /elsewhere/dir,
+// "$APPDATA/link/../x" is /elsewhere/x. A path that cannot be resolved (a
+// dangling symlink, a loop) gives "", which no grant covers. Aether's
+// std.sandbox resolves paths the same way (runtime/aether_sandbox_path.h).
+resolve_path_(raw: string) -> string {
+    p = expand_root_(raw)
+    if string.string_starts_with(p, "/") == 0 { p = "${app_data_dir_()}/${p}" }
+    res = ""
     n = string.length(p)
     i = 0
     while i <= n {
@@ -1958,47 +1968,29 @@ normalize_path_(p: string) -> string {
         while j < n && string.char_at(p, j) != 47 { j = j + 1 }
         seg = string.string_substring(p, i, j)
         if seg == ".." {
-            k = string.length(out) - 1
-            while k > 0 && string.char_at(out, k) != 47 { k = k - 1 }
+            k = string.length(res) - 1
+            while k > 0 && string.char_at(res, k) != 47 { k = k - 1 }
             if k < 0 { k = 0 }
-            out = string.string_substring(out, 0, k)
+            res = string.string_substring(res, 0, k)
         } else if seg != "" && seg != "." {
-            out = "${out}/${seg}"
+            res = "${res}/${seg}"
+            if fs.fs_is_symlink(res) == 1 {
+                rp, _k, err = fs.realpath(res)
+                if err != "" { return "" }
+                res = own_(rp)
+                if res == "/" { res = "" }
+            }
         }
         i = j + 1
     }
-    if out == "" { return "/" }
-    return out
-}
-
-// A path made absolute (relative ones are in $APPDATA) and resolved:
-// symlinks and ".." gone, so a prefix check means what it says. ".." is
-// taken out first; then the longest part that exists is resolved (its
-// symlinks followed) and the rest, which does not exist yet, appended.
-resolve_path_(raw: string) -> string {
-    p = expand_root_(raw)
-    if string.string_starts_with(p, "/") == 0 { p = "${app_data_dir_()}/${p}" }
-    cur = normalize_path_(p)
-    rest = ""
-    while cur != "/" && cur != "" {
-        rp, _k, err = fs.realpath(cur)
-        if err == "" {
-            if rest == "" { return own_(rp) }
-            if string.string_ends_with(rp, "/") == 1 { return string.concat(rp, rest) }
-            return "${rp}/${rest}"
-        }
-        par = dir_of_(cur)
-        base = string.string_substring(cur, string.length(par), string.length(cur))
-        if rest == "" { rest = base } else { rest = "${base}/${rest}" }
-        cur = string.string_substring(par, 0, string.length(par) - 1)
-        if cur == "" { cur = "/" }
-    }
-    return "/${rest}"
+    if res == "" { return "/" }
+    return res
 }
 
 // A grant root as a directory prefix ending in "/", resolved.
 grant_root_(raw: string) -> string {
     r = resolve_path_(raw)
+    if r == "" { return "" }
     if string.string_ends_with(r, "/") == 0 { r = string.concat(r, "/") }
     return r
 }
@@ -2013,6 +2005,7 @@ within_(l: ptr, p: string) -> int {
 pfs_path_(raw: string, write: int, what: string) -> (string, string) {
     if app_dir_ == "" { return "", "${what}: fs is not available to a web page" }
     p = resolve_path_(raw)
+    if p == "" { return "", "${what}: cannot resolve ${raw} (a dangling symlink, or a loop)" }
     if write == 1 {
         if within_(cap_write_, p) == 1 { return p, "" }
         return "", "${what}: outside this app's fs.write grant: ${p}"
@@ -2114,7 +2107,13 @@ grants_from_(v: ptr, key: string, into_l: ptr, roots: int) {
     while i < n {
         sv, serr = json.get_string(json.json_array_get_raw(a, i))
         if serr == "" {
-            if roots == 1 { strarr.push_copy(into_l, grant_root_(sv)) } else { strarr.push_copy(into_l, sv) }
+            if roots == 1 {
+                // A root that cannot be resolved grants nothing.
+                gr = grant_root_(sv)
+                if gr != "" { strarr.push_copy(into_l, gr) }
+            } else {
+                strarr.push_copy(into_l, sv)
+            }
         }
         i = i + 1
     }

@@ -25,6 +25,11 @@ attempt("read outside", () => fs.read_text("/etc/hosts"));
 attempt("climb out", () => fs.read_text("$APPDATA/../../../../../../../../../../../../../../../../etc/hosts"));
 // Through directories that do not exist yet: ".." must not survive to mkdir.
 attempt("mkdir climb", () => { fs.mkdir("$APPDATA/../sae-caps-climbed/x"); return "made"; });
+// A symlink in $APPDATA (made by the spec) that points out, then "..": the
+// kernel follows the link first, so this is outside, not $APPDATA/x.
+attempt("symlink climb", () => { fs.write_text("$APPDATA/link/../via_link.txt", "no"); return "written"; });
+// A dangling symlink in $APPDATA whose target is outside.
+attempt("dangling", () => { fs.write_text("$APPDATA/dangling", "no"); return "written"; });
 attempt("remove", () => { fs.remove("$APPDATA/notes/a.txt"); return `exists=${fs.exists("$APPDATA/notes/a.txt")}`; });
 attempt("open allowed", () => { shell.open("https://example.com/page"); return "opened"; });
 attempt("open other", () => { shell.open("https://evil.example.net/"); return "opened"; });
