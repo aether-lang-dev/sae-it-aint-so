@@ -1,17 +1,18 @@
 #!/bin/sh
 # Lowerer tests.
 #
-#   tests/run/*.ts  lowered, then run on mquickjs-ae's mqjs: stdout must equal
+#   tests/run/*.ts  lowered, then run on sae's engine (target/saejs, QuickJS
+#                   via contrib.quickjs): stdout must equal
 #                   the file's "// expect: " lines, and the lowered text must
 #                   have exactly as many lines as the source (line numbers in
 #                   engine errors point at what the author wrote).
 #   tests/err/*.ts  lowering must fail with the "// error: line:col: text"
 #                   the file states (text is a prefix of the message).
 #
-# Needs target/saelower (see the README) and ../mquickjs-ae built.
+# Needs target/saelower and target/saejs (see the README).
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LOWER="$ROOT/target/saelower"
-MQJS=${MQJS:-$ROOT/mqjs/target/build/bin/mqjs}
+SAEJS=${SAEJS:-$ROOT/target/saejs}
 OUT="$ROOT/target/lower-tests"
 mkdir -p "$OUT"
 pass=0
@@ -32,7 +33,7 @@ for t in "$ROOT"/lower/tests/run/*.ts; do
         continue
     fi
     sed -n 's|^// expect: ||p' "$t" > "$OUT/$name.expected"
-    "$MQJS" "$OUT/$name.js" > "$OUT/$name.actual" 2>&1
+    "$SAEJS" "$OUT/$name.js" > "$OUT/$name.actual" 2>&1
     if cmp -s "$OUT/$name.expected" "$OUT/$name.actual"; then
         pass=$((pass + 1))
     else

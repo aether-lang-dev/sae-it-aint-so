@@ -7,9 +7,12 @@ stack, as proposed in `aether-ui/docs/design/tsyne-migrated.md`.
 
 One native binary links three things:
 
-- **mquickjs-ae**: the Aether port of Fabrice Bellard and Charlie Gordon's
-  MicroQuickJS, unchanged. Each page gets its own `JSContext` in its own
-  fixed memory block.
+- **QuickJS** ([quickjs-ng](https://github.com/quickjs-ng/quickjs)), through
+  Aether's `contrib.quickjs`. Each page gets its own runtime, with a memory
+  cap (32 MB) and a time limit on every entry into its JS (5 s), so a page
+  that loops forever is stopped, not the browser. (sae began on mquickjs-ae,
+  the Aether port of MicroQuickJS, and moved for modern JavaScript and those
+  limits.)
 - **aether-ui**: the native widget toolkit (AppKit here; GTK4 and Win32 are
   the same `ui` builders).
 - **sae's host** (`src/sae_host.ae`): the browser window and the page API.
@@ -109,9 +112,11 @@ the browser, the page's own origin; in an app, the URL prefixes its
 `app.json` grants under `capabilities.http` (below).
 
 Anything else is refused: the callback gets `res.ok` false and the reason in
-`res.error`. Callbacks, not promises: mquickjs-ae has no `Promise` yet
-and a callback is what the UI thread
-hand-off needs.
+`res.error`. Callbacks: the request runs on an actor and its answer comes
+back on the UI thread, where the callback runs. (QuickJS has promises, and
+after every handler, timer and http callback sae runs the page's pending
+promise jobs, so `await` inside a page works; an awaitable `http.fetch` is
+a natural later addition.)
 
 ### App capabilities: fs, shell, and what each page may name
 
@@ -225,8 +230,10 @@ after the scene is built.
 `site/vg.ts` is the demo, and `tests/spec_nav.ae` checks its colours
 through the driver's canvas pixel route.
 
-A page reaches only what `gen/sae_spec.ae` registers: the language builtins,
-`print`/`console`, `ui`, `vg`, and `browserContext`. There is no `load()`, no file
+A page reaches only what `api_register_` (in `src/sae_host.ae`) installs in
+its runtime: the language builtins, `print`, `ui`, `vg`, `http`, `storage`
+and `browserContext`, plus `fs` and `shell` in app mode only. QuickJS's
+own `std`/`os` modules are not compiled in. There is no `load()`, no file
 system and no process access.
 
 Behind that, the host's page-facing functions are walled off from the rest
@@ -268,10 +275,8 @@ The sibling checkouts are reached through symlinks at the repo root:
 | link | points to | why |
 |---|---|---|
 | `aether-ui` | `../aether-ui` | the toolkit; its `backend/` is compiled into sae |
-| `mqjs` | `../mquickjs-ae` | the engine; `.build.ae` takes its source list from `mqjs/gen/mqjssources` |
 | `ui` | `aether-ui/ui` | so `import ui` resolves: aetherc looks up imports from the project root |
 | `vg` | `aether-ui/vg` | the same for AeVG (`import vg`, `import vg.live`) |
-| `ae` | `mqjs/ae` | the same for the engine's ~170 files, which `import ae.<module>`. Not the `ae` tool |
 
 ```sh
 ./build.sh                     # target/build/bin/sae
@@ -290,8 +295,9 @@ target/build/bin/sae http://127.0.0.1:8090/
 ```
 
 `./build.sh` uses the Aether tree at `$SAE_AETHER_HOME` (default `../aether`)
-and the aeb in `target/toolchain/bin` if present. mquickjs-ae needs Aether
-0.760+ and aeb b0cc057 or later (see its `ci-pins`).
+and the aeb in `target/toolchain/bin` if present. The engine is that tree's
+`contrib/quickjs` (merged in aether#2418, after the 0.774.0 release), whose
+QuickJS amalgamation `./build.sh` fetches into the tree if it is missing.
 
 To drive the window over HTTP with the AetherUIDriver:
 

@@ -74,7 +74,7 @@ const gh = (method: string, urlOrPath: string, cb: (res: Res) => void): void => 
 const failure = (res: Res): string =>
   res.error !== "" ? res.error : res.status === 401 ? "the token was rejected (401)" : `GitHub answered ${res.status}`;
 
-// --- small helpers mquickjs does not have: base64 (btoa) and ISO dates ---
+// --- small helpers: base64 (btoa) and ISO dates ---
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const base64 = (s: string): string => {

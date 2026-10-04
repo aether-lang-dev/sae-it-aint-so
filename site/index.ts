@@ -25,6 +25,7 @@ const links: Link[] = [
   { label: "A page outside the dialect", href: "/unsupported" },
   { label: "A page that seeks the file system", href: "/seeks_fs" },
   { label: "A page that uses what it did not seek", href: "/unsought" },
+  { label: "A page that loops forever", href: "/loop" },
 ];
 
 text("Welcome to Sae it ain't so");

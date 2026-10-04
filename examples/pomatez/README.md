@@ -35,7 +35,7 @@ tasks.
 | Pomatez feature | What sae needs first |
 |---|---|
 | Desktop notifications and sounds | A notification capability behind the page veto (macae has the macOS half); notices show in the window and on the console for now |
-| Special breaks at a time of day | `Date` objects with `getHours` (mquickjs-ae's `Date` has only `Date.now`) |
+| Special breaks at a time of day | Nothing now: QuickJS has the whole `Date`; not done yet |
 | Tray icon, always-on-top, compact mode, fullscreen breaks | Window and tray capabilities for apps |
 | Task details with Markdown, task lists, drag to reorder | Rich text and drag in the page API |
 | Themes (dark mode), languages, keyboard shortcuts | Small; not done yet |

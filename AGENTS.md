@@ -1,7 +1,7 @@
 # Notes for agents working on sae
 
 "Sae it ain't so": a fat-UI browser. Pages are small programs in a TypeScript
-dialect, fetched over HTTP, lowered to ES5 in-process, run on mquickjs-ae, and
+dialect, fetched over HTTP, lowered to ES5 in-process, run on QuickJS (Aether's contrib.quickjs), and
 rendered as native aether-ui widgets. The design is
 `../aether-ui/docs/design/tsyne-migrated.md`; the measurements that justified
 building it are `docs/spike-results.md`. Read `README.md` and
@@ -14,34 +14,40 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | Path | What |
 |---|---|
 | `src/sae_host.ae` | The browser: window and chrome, history, fetch, one `Page` (JSContext, a `ui` handle stack and a `vg` node stack) per load, and every page-API host function (`sae_ui_*`, `sae_vg_*`, `sae_bc_*`) |
-| `src/sae_rom.c` | The C that must be C: the generated ROM table, JSValue macro constants, the log sink, `main()` |
-| `gen/sae_spec.ae` | The page API's ROM entries, built on mquickjs-ae's genengine (core-only mode 2). **This list is the sandbox boundary**: a page reaches only what is registered here |
+| `src/sae_rom.c` | The C that must be C: `main()` and the stdout handle |
+| `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
+| `services/` | One module per effect a page can ask for (`files`, `shell`), each confined by its imports; `docs/architecture.md` |
+| `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`) |
 | `tools/saelower.ae` | CLI for the lowerer |
 | `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
 | `tests/lib/saedriver.ae` | The browser-test driver: Tsyne's TsyneBrowserTest verbs (navigate, back, forward, reload, current_url, assert_url, screenshot) plus page, vg and console queries, on aether-ui's uidriver |
 | `tests/run_spec.sh` | Starts the page server and sae-driver, runs a spec, stops both |
-| `aether-ui`, `mqjs`, `ui`, `vg`, `ae` | Symlinks into the sibling checkouts (`../aether-ui`, `../mquickjs-ae`); the README's "Build and run" says why each exists |
+| `aether-ui`, `ui`, `vg` | Symlinks into the sibling checkout `../aether-ui`; the README's "Build and run" says why each exists |
 
 ## Adding a page-API function
 
-1. A `@c_callback` host function in `src/sae_host.ae` with the C signature
-   `(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long`, whose first
+1. A host function in `src/sae_host.ae` with the signature
+   `(ctx: ptr, this_val: int, argv: int) -> int` (`ctx` is the page's
+   contrib.quickjs runtime, `argv` an array of the arguments), whose first
    line is the page veto (copy the `hide fs, os, client, ...` line from any
-   other one; "The page veto" in that file says why). If it needs something
-   the veto hides, add a narrow kernel helper (as `now_ns_` wraps the clock)
+   other one; "The page veto" in that file says why) and whose second is
+   `argc = quickjs.arg_count(ctx, argv)`. It returns a value handle, 0 for
+   undefined, or `sae_throw_type_error(...)`. If it needs something the
+   veto hides, add a narrow kernel helper (as `now_ns_` wraps the clock)
    rather than dropping the line.
-2. Its ROM entry in `gen/sae_spec.ae`.
-3. Its prototype in `src/sae_rom.c` (`SAE_JSFN(...)`), or the ROM table will
-   not compile.
+2. Its `reg_(...)` line in `api_register_`.
+3. If it reaches the file system or the system, it goes through a service
+   (`services/`), never `std.fs` directly.
 4. A page in `site/` and an `it` in `tests/spec_nav.ae`. If the spec needs a
    new kind of question, add a verb to `tests/lib/saedriver.ae`.
 
-JS functions a widget keeps for later are held with `hold_()` (a GC root,
-released with the page). Anything that allocates in the engine can move
-objects: read a held function from its root after allocating, not before
-(`call1_str_`).
+JS functions a widget keeps for later are held with `hold_()`/`hold_arg_()`
+(a handle of the page's runtime, released with it). Every other handle a
+host function takes it releases (`quickjs.release`). Widget callbacks go
+through `fire0_`/`fire_num_`, which report what the handler throws and then
+run the page's promise jobs.
 
 ## Build and test
 

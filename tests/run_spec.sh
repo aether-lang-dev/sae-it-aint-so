@@ -42,6 +42,9 @@ if curl -s -o /dev/null "http://127.0.0.1:$DRIVER_PORT/widgets"; then
 fi
 
 LOG="$ROOT/target/$SPEC.log"
+# A page's JS entries are stopped after 5 s in use; 1 s here keeps the
+# spec that loops forever quick.
+export SAE_PAGE_TIME_MS="${SAE_PAGE_TIME_MS:-1000}"
 # The page server runs in both modes: in app mode it is the API an app may
 # call (its /api/ routes).
 "$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &

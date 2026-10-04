@@ -24,11 +24,19 @@ for tool in ae aeb; do
         exit 1
     }
 done
-for dep in aether-ui mqjs; do
+for dep in aether-ui; do
     [ -e "$ROOT/$dep/" ] || {
         echo "build.sh: $dep/ does not resolve (a sibling checkout is missing); run ./bootstrap.sh" >&2
         exit 1
     }
 done
+# The page engine is contrib.quickjs, whose QuickJS amalgamation is fetched
+# into the Aether tree (pinned and checksummed there); a no-op once fetched.
+if [ -n "${SAE_AETHER_HOME:-}" ] && [ -f "$SAE_AETHER_HOME/scripts/fetch-quickjs-amalgamation.sh" ]; then
+    sh "$SAE_AETHER_HOME/scripts/fetch-quickjs-amalgamation.sh" >/dev/null || {
+        echo "build.sh: could not fetch the QuickJS amalgamation into $SAE_AETHER_HOME" >&2
+        exit 1
+    }
+fi
 cd "$ROOT"
 exec aeb "${1:-.build.ae}"

@@ -13,8 +13,8 @@ cannot yet, and at run time as a backstop.
 | **Kernel** | the event loop, navigation, fetching and lowering pages, app.json, the grant table, the http actors | all of sae's authority | everything it imports |
 | **Services** | one module per effect a page can ask for: `files`, `shell`, later `storage`, `net`, `ui` | one effect each, checked against the grants | only their own imports |
 | **Gate** (the page ABI) | one function per page-API call: unpack the JS arguments, check the page owns any handles, call the service, pack the result or throw the refusal | nothing | the services and engine values |
-| **Page host** | one mquickjs context per page: heap, GC roots, timers, handle ownership; the only code that enters JavaScript | nothing | the gate |
-| **Guest** | the page: TypeScript lowered to ES5, run by mquickjs-ae | what its page API objects offer | the ROM objects of its mode |
+| **Page host** | one QuickJS runtime per page (contrib.quickjs): heap cap, time limit per entry, timers, handle ownership; the only code that enters JavaScript | nothing | the gate |
+| **Guest** | the page: TypeScript lowered to ES5, run by QuickJS | what its page API objects offer | the objects `api_register_` installs for its mode |
 
 Authority flows one way: the kernel configures the services (roots, grants)
 and the guest can only ask, through the gate, for what a service will do.
@@ -59,28 +59,25 @@ that leaves `services/shell` out has no route to the opener at all.
 | Stage | | |
 |---|---|---|
 | 1 | `services/files`, `services/shell` split out of the kernel; `tests/check_layers.sh` | **done** |
-| 2 | the gate generated from one spec (`gen/sae_spec.ae` grows argument types, capability and service per call) instead of hand-written, retiring the 77 pasted `hide` lines for one compiler-checked module boundary; per-mode ROM tables, so the browser's pages have no `fs` or `shell` object at all rather than ones that refuse | next |
+| 2 | per-mode objects: **done** (a web page's runtime has no `fs` or `shell` object at all). Still to do: the gate generated from one spec (argument types, capability and service per call) instead of hand-written, retiring the 75 pasted `hide` lines for one compiler-checked module boundary | next |
 | 3 | `sandbox.enforce(page_grants)` around every entry into page code (page run, handlers, timers, http callbacks), as a runtime backstop in std | |
 | 4 | `storage`, `net`, `ui` as services; the kernel stops importing what only a service needs | |
 | later | the page host and guest in a separate process, sandboxed by the OS (Linux `spawn_sandboxed` and seccomp; macOS has no equivalent yet), so a memory-safety bug in the engine is contained too | |
 
 ### What stays C, and why
 
-`src/sae_rom.c` is about 60 lines: the ROM table (mquickjs keeps native
-functions in a static read-only table, a C initialiser that
-`gen/sae_spec.ae` generates), one-line shims for engine constants and
-calls that `mquickjs.h` defines as macros (`JS_UNDEFINED`, `JS_NewBool`,
-the variadic `JS_ThrowTypeError`), the log sink and `main`. The page-API
-functions themselves are Aether (`@c_callback`). Both C parts could go:
-mquickjs-ae exporting those constants as functions, and the ROM table
-generated as Aether if Aether can express a static array of function
-pointers.
+`src/sae_rom.c` is `main()` and the stdout handle, a dozen lines. The engine
+is Aether's `contrib.quickjs`, whose C (aether_quickjs.c over QuickJS's
+amalgamation) turns QuickJS's 16-byte `JSValue` into integer handles and
+calls every page-API function through one dispatcher, so the page API is
+all Aether, registered at run time by `api_register_`.
 
 ## Limits
 
 - The layers stop sae's own code from reaching an effect by another route;
-  they do not contain the engine. A memory-safety bug in mquickjs-ae's C
+  they do not contain the engine. A memory-safety bug in QuickJS's C
   runs in sae's process and can do anything sae can. That is what the
   separate-process stage is for.
-- A page can still spend CPU and memory without limit (an infinite loop); the
-  page heap is capped (1 MB) but time is not.
+- CPU and memory are capped per page: each entry into its JS (the page's
+  run, a handler, a timer, an http callback) is stopped after 5 s, and its
+  heap at 32 MB.

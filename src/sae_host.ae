@@ -1,5 +1,5 @@
-// sae's host: the browser window, one mquickjs context per page, and the
-// page API that context can reach (`ui` and `browserContext`).
+// sae's host: the browser window, one QuickJS runtime per page
+// (contrib.quickjs), and the page API that runtime can reach.
 //
 // The page API mirrors the Aether DSL. In Aether, `vstack(4) { ... }` makes a
 // handle, attaches it to the ambient `_ctx`, and runs the trailing block with
@@ -28,60 +28,26 @@ import std.json
 import std.actors
 import services.files
 import services.shell
+import contrib.quickjs
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
-extern sae_new_context(mem_block: ptr, mem_size: long) -> ptr
-extern sae_js_undefined() -> long
-extern sae_js_null() -> long
-extern sae_js_exception() -> long
-extern sae_js_is_exception(v: long) -> int
-extern sae_gcref_size() -> long
-extern sae_cstringbuf_size() -> long
-extern sae_throw_type_error(ctx: ptr, msg: string) -> long
 extern sae_stdout() -> ptr
-extern JS_FreeContext(ctx: ptr)
-extern JS_SetContextOpaque(ctx: ptr, opaque: ptr)
-extern JS_GetContextOpaque(ctx: ptr) -> ptr
-extern JS_Parse(ctx: ptr, input: string, input_len: long, filename: string, eval_flags: int) -> long
-extern JS_Run(ctx: ptr, val: long) -> long
-extern JS_GetException(ctx: ptr) -> long
-extern JS_PrintValueF(ctx: ptr, val: long, flags: int)
-extern JS_IsString(ctx: ptr, val: long) -> int
-extern JS_IsFunction(ctx: ptr, val: long) -> int
-extern JS_ToCStringLen(ctx: ptr, plen: ptr, val: long, buf: ptr) -> string
-extern JS_ToInt32(ctx: ptr, pres: ptr, val: long) -> int
-extern JS_NewInt32(ctx: ptr, val: int) -> long
-extern JS_NewInt64(ctx: ptr, val: long) -> long
-extern JS_NewString(ctx: ptr, buf: string) -> long
-extern JS_NewDate(ctx: ptr, epoch_ms: float) -> long
-extern JS_IsNumber(ctx: ptr, val: long) -> int
-extern JS_ToNumber(ctx: ptr, pres: ptr, val: long) -> int
-extern JS_AddGCRef(ctx: ptr, ref: ptr) -> ptr
-extern JS_DeleteGCRef(ctx: ptr, ref: ptr)
-extern JS_StackCheck(ctx: ptr, len: int) -> int
-extern JS_PushArg(ctx: ptr, val: long)
-extern JS_Call(ctx: ptr, call_flags: int) -> long
 extern putchar(c: int) -> int
 extern fputs(s: string, stream: ptr) -> int
 extern fflush(stream: ptr) -> int
 extern aether_ui_vstack_create(spacing: int) -> int
 extern aether_ui_surface_flush_deferred_impl()
-extern JS_NewFloat64(ctx: ptr, d: float) -> long
 extern aether_ui_widget_count_impl() -> int
-extern sae_js_bool(v: int) -> long
 extern aether_ui_test_server_banner_handle() -> int
 extern aether_ui_current_sheet_set_impl(sheet: ptr)
-extern JS_GetGlobalObject(ctx: ptr) -> long
-extern JS_GetPropertyStr(ctx: ptr, obj: long, name: string) -> long
-extern JS_GetPropertyUint32(ctx: ptr, obj: long, idx: int) -> long
 
-const JS_DUMP_LONG = 1
-const JS_EVAL_RETVAL = 1   // JS_Parse: the script's value is its last expression's
-const JS_EVAL_JSON = 8     // JS_Parse: parse JSON, the value is the object
-const FRAME_CF_CTOR = 65536
 const STACK_MAX = 64
-const PAGE_MEM_DEFAULT = 1048576
+// A page's runtime: its heap cap, and how long one entry into its JS (the
+// page's run, a handler, a timer, an http callback) may take before it is
+// stopped. A page that loops forever is interrupted, not the browser hung.
+const PAGE_MEM_DEFAULT = 33554432
+const PAGE_TIME_MS = 5000
 
 const NAV_NONE = 0
 const NAV_GO = 1
@@ -113,17 +79,14 @@ struct Browser {
     last_ok: int     // did the last load fetch and run cleanly
 }
 
-// One per loaded page, hung off its JSContext's opaque slot.
+// One per loaded page: its QuickJS runtime (ctx), found again from the
+// runtime by page_of_.
 struct Page {
-    ctx: ptr
+    ctx: ptr         // the page's contrib.quickjs runtime
     browser: ptr     // *Browser
     url: string
-    mem_block: ptr
     stack: ptr       // handles, STACK_MAX ints
     depth: int
-    refs: ptr        // std.list of JSGCRef*, the JS functions widgets hold
-    scratch: ptr     // 8 bytes for out-params
-    cbuf: ptr        // JSCStringBuf for JS_ToCStringLen
     ui_ns: long      // time spent inside ui builders (excludes nested page blocks)
     ui_calls: int
     // AeVG: a second stack, of vg nodes. vg.scene pushes its root, each
@@ -143,12 +106,28 @@ struct Page {
     sheet_strs: ptr  // std.list: selector and family strings the sheet borrows
     timers: ptr      // std.list: the ui.timer ids this page started (0 once cancelled)
     seq: int         // which load this is: an http reply for an older page is dropped
-    http_res: ptr    // GC ref: the page's response-object maker (http_helpers_), or null
-    http_req: ptr    // GC ref: the page's request-object maker
+    http_res: int    // the page's response-object maker (http_helpers_), or 0
+    http_req: int    // the page's request-object maker
 }
 
+// The pages whose runtimes are live (one in the browser, as a rule).
+var pages_: ptr = null
+
+// The page a runtime belongs to.
 page_of_(ctx: ptr) -> *Page {
-    return JS_GetContextOpaque(ctx) as *Page
+    n = list.size(pages_)
+    i = 0
+    while i < n {
+        pv, _ = list.get(pages_, i)
+        pp = pv as *Page
+        if pp.ctx == ctx { return pp }
+        i = i + 1
+    }
+    return null
+}
+
+sae_throw_type_error(ctx: ptr, msg: string) -> int {
+    return quickjs.throw_error(ctx, "TypeError", msg)
 }
 
 browser_of_(ctx: ptr) -> *Browser {
@@ -203,30 +182,34 @@ scaled_(real: long, which: int) -> long {
     return time_base_unix_ + (real - time_base_unix_) * time_scale_
 }
 
-arg_(argv: ptr, i: int) -> long {
-    return mem.get_long(argv, i * 8)
+// --- reading a page-API call's arguments (args is the engine's array handle) ---
+
+// Argument i as an owned string ("" past the end).
+arg_str_(ctx: ptr, argv: int, argc: int, i: int) -> string {
+    if i >= argc { return "" }
+    return quickjs.arg_string(ctx, argv, i)
 }
 
-// The argument as a C string, valid until the next arg_str_ call on this page.
-arg_str_(ctx: ptr, argv: ptr, argc: int, i: int) -> string {
-    if i >= argc { return "" }
-    p = page_of_(ctx)
-    return JS_ToCStringLen(ctx, p.scratch, arg_(argv, i), p.cbuf)
+// 1 if argument i is a function.
+is_fn_arg_(ctx: ptr, argv: int, i: int) -> int {
+    h = quickjs.arg(ctx, argv, i)
+    yes = 0
+    if quickjs.type_of(ctx, h) == "function" { yes = 1 }
+    quickjs.release(ctx, h)
+    return yes
 }
 
 // A leading number a block may stand in for: vstack(() => ...) has no
 // spacing, vstack(8, () => ...) has.
-lead_int_(ctx: ptr, argv: ptr, argc: int, i: int, dflt: int) -> int {
+lead_int_(ctx: ptr, argv: int, argc: int, i: int, dflt: int) -> int {
     if i >= argc { return dflt }
-    if JS_IsFunction(ctx, arg_(argv, i)) != 0 { return dflt }
+    if is_fn_arg_(ctx, argv, i) == 1 { return dflt }
     return arg_int_(ctx, argv, argc, i, dflt)
 }
 
-arg_int_(ctx: ptr, argv: ptr, argc: int, i: int, dflt: int) -> int {
+arg_int_(ctx: ptr, argv: int, argc: int, i: int, dflt: int) -> int {
     if i >= argc { return dflt }
-    p = page_of_(ctx)
-    if JS_ToInt32(ctx, p.scratch, arg_(argv, i)) != 0 { return dflt }
-    return mem.get_int(p.scratch, 0)
+    return quickjs.arg_int(ctx, argv, i)
 }
 
 top_(p: *Page) -> int {
@@ -244,52 +227,92 @@ pop_(p: *Page) {
     if p.depth > 0 { p.depth = p.depth - 1 }
 }
 
-// Call a JS function with no arguments. Returns the JSValue result, which is
-// the exception sentinel if the function threw.
-call0_(ctx: ptr, fnv: long) -> long {
-    if JS_StackCheck(ctx, 2) != 0 { return sae_js_exception() }
-    JS_PushArg(ctx, fnv)
-    JS_PushArg(ctx, sae_js_null())
-    return JS_Call(ctx, 0)
+// Call a held JS function with no arguments: 0, or -1 if it threw (the
+// error is in quickjs.last_error). Its promise jobs run after it.
+call0_(ctx: ptr, f: int) -> int {
+    r, err = quickjs.call(ctx, f, 0, 0)
+    if err != "" { return 0 - 1 }
+    quickjs.release(ctx, r)
+    return 0
+}
+
+// Call argument i (a function) with no arguments, as call0_.
+call_arg_(ctx: ptr, argv: int, i: int) -> int {
+    f = quickjs.arg(ctx, argv, i)
+    r = call0_(ctx, f)
+    quickjs.release(ctx, f)
+    return r
+}
+
+// Call a held function with the elements of an args array: as call0_.
+calln_(ctx: ptr, f: int, args: int) -> int {
+    r, err = quickjs.call(ctx, f, 0, args)
+    if err != "" { return 0 - 1 }
+    quickjs.release(ctx, r)
+    return 0
+}
+
+// A host function's nested call threw: carry its message on as this call's
+// exception (the engine's own has been read off by then).
+rethrow_(ctx: ptr) -> int {
+    return quickjs.throw_error(ctx, "Error", quickjs.last_error(ctx))
+}
+
+// Run the promise jobs a callback queued (its awaits, its .then()s).
+settle_(ctx: ptr) {
+    n, err = quickjs.run_jobs(ctx)
+    if n < 0 { say_("sae: uncaught exception in a promise job:\n${err}") }
+}
+
+// Run a held handler with no arguments, as a widget does when it fires:
+// report what it throws, then run the promise jobs it queued.
+fire0_(ctx: ptr, ref: int, what: string) {
+    if call0_(ctx, ref) < 0 { report_exception_(ctx, what) }
+    settle_(ctx)
 }
 
 report_exception_(ctx: ptr, where_: string) {
-    println("sae: uncaught exception in ${where_}:")
-    JS_PrintValueF(ctx, JS_GetException(ctx), JS_DUMP_LONG)
-    putchar(10)
-    fflush(sae_stdout())
+    say_("sae: uncaught exception in ${where_}:\n${quickjs.last_error(ctx)}")
 }
 
-// Keep a JS function alive (and findable after a compacting GC) for as long
-// as the page lives. Returns the JSGCRef; its first word is the value.
-hold_(ctx: ptr, fnv: long) -> ptr {
-    p = page_of_(ctx)
-    ref = malloc(sae_gcref_size())
-    slot = JS_AddGCRef(ctx, ref)
-    mem.set_long(slot, 0, fnv)
-    list.add(p.refs, ref)
-    return ref
+// A line on stdout through C stdio, flushed, as print's output is: the two
+// cannot interleave, and a spec watching the log sees it at once.
+say_(s: string) {
+    out = sae_stdout()
+    fputs(s, out)
+    putchar(10)
+    fflush(out)
+}
+
+// Keep a JS value alive for as long as the page lives: a handle of the
+// page's own, released when the page's runtime is.
+hold_(ctx: ptr, h: int) -> int {
+    return quickjs.dup(ctx, h)
+}
+
+// Hold argument i.
+hold_arg_(ctx: ptr, argv: int, i: int) -> int {
+    return quickjs.arg(ctx, argv, i)
 }
 
 // A container builder: make it under the current top, then run the page's
 // block function (its last argument) with it on top. The pop happens even if
 // the block throws, so later widgets never attach to the wrong parent.
-container_(ctx: ptr, argv: ptr, argc: int, handle: int) -> long {
+container_(ctx: ptr, argv: int, argc: int, handle: int) -> int {
     p = page_of_(ctx)
-    if argc == 1 && JS_IsFunction(ctx, arg_(argv, 0)) == 0 { return JS_NewInt32(ctx, handle) }
+    if argc == 1 && is_fn_arg_(ctx, argv, 0) == 0 { return quickjs.new_int(ctx, handle) }
     if argc >= 1 {
-        fnv = arg_(argv, argc - 1)
-        if JS_IsFunction(ctx, fnv) == 0 {
+        if is_fn_arg_(ctx, argv, argc - 1) == 0 {
             return sae_throw_type_error(ctx, "container block must be a function")
         }
         if push_(p, handle) == 0 {
             return sae_throw_type_error(ctx, "containers nested too deeply")
         }
-        r = call0_(ctx, fnv)
+        r = call_arg_(ctx, argv, argc - 1)
         pop_(p)
-        if sae_js_is_exception(r) != 0 { return r }
+        if r < 0 { return rethrow_(ctx) }
     }
-    return JS_NewInt32(ctx, handle)
+    return quickjs.new_int(ctx, handle)
 }
 
 // Is `h` a widget this page made? (See Page.first_handle.)
@@ -326,8 +349,8 @@ ui_done_(p: *Page, t: long) {
 
 // --- The page veto ---
 //
-// Every function a page can reach (everything gen/sae_spec.ae registers,
-// listed in src/sae_rom.c's SAE_JSFN prototypes) opens with the same `hide`
+// Every function a page can reach (everything api_register_ below installs
+// in a page's runtime) opens with the same `hide`
 // line. It takes the kernel out of that function's scope: the file system,
 // the environment and clocks (`os`), the network (`client`), the lowerer,
 // the page-lifecycle functions that fetch, parse and run pages, and the
@@ -346,11 +369,11 @@ ui_done_(p: *Page, t: long) {
 // tests/check_page_veto.sh fails if a page-API function lacks the line, or
 // if the compiler does not enforce it.
 
-// --- the page API: ui (named in gen/sae_spec.ae) ---
+// --- the page API: ui (installed by api_register_) ---
 
-@c_callback
-sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_vstack(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
     h = ui.vstack(mem.long_to_ptr(top_(p)), lead_int_(ctx, argv, argc, 0, SPACING))
@@ -359,9 +382,9 @@ sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return container_(ctx, argv, argc, h)
 }
 
-@c_callback
-sae_ui_hstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_hstack(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
     h = ui.hstack(mem.long_to_ptr(top_(p)), lead_int_(ctx, argv, argc, 0, SPACING))
@@ -372,9 +395,9 @@ sae_ui_hstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 // grid(cols, block) or grid(cols, spacing, block): the block's widgets fill
 // it a row at a time, cols to a row (aether-ui's grid block).
-@c_callback
-sae_ui_grid(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_grid(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     cols = lead_int_(ctx, argv, argc, 0, 1)
     if cols < 1 || cols > 64 { return sae_throw_type_error(ctx, "grid(cols, ...): cols must be 1 to 64") }
@@ -389,56 +412,53 @@ sae_ui_grid(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 // equal_cells(): in a grid's block, every column one width and every row one
 // height, children filling their cells (a keypad).
-@c_callback
-sae_ui_equal_cells(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_equal_cells(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     target = modifier_target_(ctx, "equal_cells")
     if target == 0 || in_list_(p.grids, target) == 0 {
         return sae_throw_type_error(ctx, "equal_cells() must be called inside a grid's block")
     }
     ui.equal_cells(mem.long_to_ptr(target))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_ui_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
     long t = now_ns_()
     h = ui.text(mem.long_to_ptr(top_(p)), label)
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
-@c_callback
-sae_ui_divider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_divider(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
     h = ui.divider(mem.long_to_ptr(top_(p)))
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
-@c_callback
-sae_ui_btn(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_btn(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
-    if argc < 2 || JS_IsFunction(ctx, arg_(argv, 1)) == 0 {
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 {
         return sae_throw_type_error(ctx, "btn(label, fn): fn must be a function")
     }
-    ref = hold_(ctx, arg_(argv, 1))
-    on_press = || {
-        r = call0_(ctx, mem.get_long(ref, 0))
-        if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a click handler") }
-    }
+    ref = hold_arg_(ctx, argv, 1)
+    on_press = || { fire0_(ctx, ref, "a click handler") }
     long t = now_ns_()
     h = ui.btn(mem.long_to_ptr(top_(p)), label, on_press)
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
 // A modifier (margin, bg_color, onclick) acts on the innermost container or
@@ -451,30 +471,27 @@ modifier_target_(ctx: ptr, name: string) -> int {
     return top_(p)
 }
 
-arg_num_(ctx: ptr, argv: ptr, argc: int, i: int, dflt: float) -> float {
+arg_num_(ctx: ptr, argv: int, argc: int, i: int, dflt: float) -> float {
     if i >= argc { return dflt }
-    p = page_of_(ctx)
-    if JS_ToNumber(ctx, p.scratch, arg_(argv, i)) != 0 { return dflt }
-    return mem.get_float64(p.scratch, 0)
+    return quickjs.arg_float(ctx, argv, i)
 }
 
 // Call a held JS function with one string argument.
-call1_str_(ctx: ptr, ref: ptr, s: string) -> long {
-    if JS_StackCheck(ctx, 3) != 0 { return sae_js_exception() }
-    // Allocate the string first: the GC may move the function, so read it
-    // from its root afterwards.
-    sv = JS_NewString(ctx, s)
-    JS_PushArg(ctx, sv)
-    JS_PushArg(ctx, mem.get_long(ref, 0))
-    JS_PushArg(ctx, sae_js_null())
-    return JS_Call(ctx, 1)
+call1_str_(ctx: ptr, ref: int, s: string) -> int {
+    args = quickjs.new_array(ctx)
+    v = quickjs.new_string(ctx, s)
+    _s = quickjs.set_index(ctx, args, 0, v)
+    quickjs.release(ctx, v)
+    r = calln_(ctx, ref, args)
+    quickjs.release(ctx, args)
+    return r
 }
 
 // button(label, block?): a plain button; the block (if any) runs with the
 // button on top, for onclick/bg_color/margin.
-@c_callback
-sae_ui_button(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_button(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
     long t = now_ns_()
@@ -483,68 +500,69 @@ sae_ui_button(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return container_(ctx, argv, argc, h)
 }
 
-@c_callback
-sae_ui_scroll(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_scroll(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
     sv = ui.scrollview(mem.long_to_ptr(top_(p)))
     h = ui.vstack(mem.long_to_ptr(sv), 0)
     ui_done_(p, t)
     // scroll(block): the block's widgets go in the scrolled stack
-    if argc >= 1 && JS_IsFunction(ctx, arg_(argv, 0)) != 0 {
+    if argc >= 1 && is_fn_arg_(ctx, argv, 0) != 0 {
         if push_(p, h) == 0 { return sae_throw_type_error(ctx, "containers nested too deeply") }
-        r = call0_(ctx, arg_(argv, 0))
+        r = call_arg_(ctx, argv, 0)
         pop_(p)
-        if sae_js_is_exception(r) != 0 { return r }
+        if r < 0 { return rethrow_(ctx) }
     }
-    return JS_NewInt32(ctx, sv)
+    return quickjs.new_int(ctx, sv)
 }
 
-@c_callback
-sae_ui_spacer(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_spacer(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     h = ui.spacer(mem.long_to_ptr(top_(p)))
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
 // textfield(placeholder, onChange?): onChange(text) on every edit.
-@c_callback
-sae_ui_textfield(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_textfield(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     placeholder = own_(arg_str_(ctx, argv, argc, 0))
     has_fn = 0
-    ref = null
-    if argc >= 2 && JS_IsFunction(ctx, arg_(argv, 1)) != 0 {
+    ref = 0
+    if argc >= 2 && is_fn_arg_(ctx, argv, 1) != 0 {
         has_fn = 1
-        ref = hold_(ctx, arg_(argv, 1))
+        ref = hold_arg_(ctx, argv, 1)
     }
     on_change = |s: string| {
         if has_fn == 1 {
             r = call1_str_(ctx, ref, s)
-            if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a textfield handler") }
+            if r < 0 { report_exception_(ctx, "a textfield handler") }
+            settle_(ctx)
         }
     }
     long t = now_ns_()
     h = ui.textfield(mem.long_to_ptr(top_(p)), placeholder, on_change)
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
 // get_text(handle): synchronous, in-process (Tsyne needed an await here).
-@c_callback
-sae_ui_get_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_get_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
     if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "get_text(h): h is not a widget this page made") }
-    return JS_NewString(ctx, ui.get_text(h))
+    return quickjs.new_string(ctx, ui.get_text(h))
 }
 
-@c_callback
-sae_ui_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_set_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
     if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "set_text(h, s): h is not a widget this page made") }
     t = arg_str_(ctx, argv, argc, 1)
@@ -552,27 +570,27 @@ sae_ui_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     // A button's caption too (Start / Pause): aether-ui keeps that in its own
     // setter, a no-op on anything that is not a button.
     _b = ui.set_button_label(h, t)
-    return sae_js_undefined()
+    return 0
 }
 
 // clear(h): empty a vstack or hstack the page made, so it can be built
 // again with into(). Tsyne pages could not do this (its dynamic-demo logs
 // instead of redrawing its list).
-@c_callback
-sae_ui_clear(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_clear(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     h = arg_int_(ctx, argv, argc, 0, 0)
     if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "clear(h): h is not a vstack, hstack or grid this page made") }
     ui.clear_children(h)
-    return sae_js_undefined()
+    return 0
 }
 
 // into(h, block): run block with a stack the page made as the parent, so
 // its widgets land there, the way the stack's own block did.
-@c_callback
-sae_ui_into(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_into(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     h = arg_int_(ctx, argv, argc, 0, 0)
     if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "into(h, fn): h is not a vstack, hstack or grid this page made") }
@@ -580,59 +598,56 @@ sae_ui_into(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return container_(ctx, argv, argc, h)
 }
 
-@c_callback
-sae_ui_onclick(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_onclick(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "onclick")
     if target == 0 { return sae_throw_type_error(ctx, "onclick() must be called inside a widget's block") }
-    if argc < 1 || JS_IsFunction(ctx, arg_(argv, 0)) == 0 {
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 {
         return sae_throw_type_error(ctx, "onclick(fn): fn must be a function")
     }
-    ref = hold_(ctx, arg_(argv, 0))
-    ui.onclick(mem.long_to_ptr(target), || {
-        r = call0_(ctx, mem.get_long(ref, 0))
-        if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a click handler") }
-    })
-    return sae_js_undefined()
+    ref = hold_arg_(ctx, argv, 0)
+    ui.onclick(mem.long_to_ptr(target), || { fire0_(ctx, ref, "a click handler") })
+    return 0
 }
 
-@c_callback
-sae_ui_margin(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_margin(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "margin")
     if target == 0 { return sae_throw_type_error(ctx, "margin() must be called inside a container's block") }
     top = arg_int_(ctx, argv, argc, 0, 0)
     ui.margin(mem.long_to_ptr(target), top, arg_int_(ctx, argv, argc, 1, top), arg_int_(ctx, argv, argc, 2, top), arg_int_(ctx, argv, argc, 3, top))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_ui_bg_color(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_bg_color(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "bg_color")
     if target == 0 { return sae_throw_type_error(ctx, "bg_color() must be called inside a widget's block") }
     ui.bg_color(mem.long_to_ptr(target), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 1.0))
-    return sae_js_undefined()
+    return 0
 }
 
 // Reactive state, as in the Aether DSL: ui_state(v) makes a cell, ui_set
 // writes it, and every text_bound to it updates.
-@c_callback
-sae_ui_state(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    return JS_NewInt32(ctx, ui.ui_state(arg_num_(ctx, argv, argc, 0, 0.0)))
+sae_ui_state(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return quickjs.new_int(ctx, ui.ui_state(arg_num_(ctx, argv, argc, 0, 0.0)))
 }
 
-@c_callback
-sae_ui_set(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_set(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     ui.ui_set(arg_int_(ctx, argv, argc, 0, 0), arg_num_(ctx, argv, argc, 1, 0.0))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_ui_text_bound(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_text_bound(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     st = arg_int_(ctx, argv, argc, 0, 0)
     prefix = own_(arg_str_(ctx, argv, argc, 1))
@@ -640,7 +655,7 @@ sae_ui_text_bound(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     long t = now_ns_()
     h = ui.text_bound(mem.long_to_ptr(top_(p)), st, prefix, suffix)
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
 // --- the page API: vg (AeVG vector graphics) ---
@@ -674,21 +689,20 @@ vg_node_of_(p: *Page, h: int) -> ptr {
 
 // Register a node, run the shape's block (if the page gave one at fn_at)
 // with it on top, and return its handle.
-vg_shape_done_(ctx: ptr, argv: ptr, argc: int, fn_at: int, node: ptr) -> long {
+vg_shape_done_(ctx: ptr, argv: int, argc: int, fn_at: int, node: ptr) -> int {
     p = page_of_(ctx)
     list.add(p.vg_nodes, node)
     h = list.size(p.vg_nodes)
     if argc > fn_at {
-        fnv = arg_(argv, fn_at)
-        if JS_IsFunction(ctx, fnv) == 0 {
+        if is_fn_arg_(ctx, argv, fn_at) == 0 {
             return sae_throw_type_error(ctx, "a vg shape's block must be a function")
         }
         if vg_push_(p, node) == 0 { return sae_throw_type_error(ctx, "vg shapes nested too deeply") }
-        r = call0_(ctx, fnv)
+        r = call_arg_(ctx, argv, fn_at)
         p.vg_depth = p.vg_depth - 1
-        if sae_js_is_exception(r) != 0 { return r }
+        if r < 0 { return rethrow_(ctx) }
     }
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
 // A shape needs an open scene; a modifier needs an open shape (the scene
@@ -712,45 +726,40 @@ vg_repaint_(node: ptr) {
     ui.canvas_redraw(cid)
 }
 
-// Call a held JS function with two number arguments. Each number is pushed
-// as soon as it exists, so it is rooted on the engine stack before the next
-// allocation can move anything.
-call2_num_(ctx: ptr, ref: ptr, a: float, b: float) -> long {
-    if JS_StackCheck(ctx, 4) != 0 { return sae_js_exception() }
-    JS_PushArg(ctx, JS_NewFloat64(ctx, b))
-    JS_PushArg(ctx, JS_NewFloat64(ctx, a))
-    JS_PushArg(ctx, mem.get_long(ref, 0))
-    JS_PushArg(ctx, sae_js_null())
-    return JS_Call(ctx, 2)
+// Call a held JS function with number arguments (a, and b unless nb is 1).
+call_nums_(ctx: ptr, ref: int, a: float, b: float, nb: int) -> int {
+    args = quickjs.new_array(ctx)
+    va = quickjs.new_float(ctx, a)
+    _s1 = quickjs.set_index(ctx, args, 0, va)
+    quickjs.release(ctx, va)
+    if nb == 2 {
+        vb = quickjs.new_float(ctx, b)
+        _s2 = quickjs.set_index(ctx, args, 1, vb)
+        quickjs.release(ctx, vb)
+    }
+    r = calln_(ctx, ref, args)
+    quickjs.release(ctx, args)
+    return r
 }
 
-// Call a held JS function with one number argument.
-call1_num_(ctx: ptr, ref: ptr, a: float) -> long {
-    if JS_StackCheck(ctx, 3) != 0 { return sae_js_exception() }
-    JS_PushArg(ctx, JS_NewFloat64(ctx, a))
-    JS_PushArg(ctx, mem.get_long(ref, 0))
-    JS_PushArg(ctx, sae_js_null())
-    return JS_Call(ctx, 1)
-}
-
-// Hold argument i if it is a function, for a widget's change handler;
-// null when the page passed none.
-held_fn_(ctx: ptr, argv: ptr, argc: int, i: int) -> ptr {
-    if argc <= i { return null }
-    if JS_IsFunction(ctx, arg_(argv, i)) == 0 { return null }
-    return hold_(ctx, arg_(argv, i))
+// Hold argument i if it is a function, for a widget's change handler; 0
+// when the page passed none.
+held_fn_(ctx: ptr, argv: int, argc: int, i: int) -> int {
+    if argc <= i { return 0 }
+    if is_fn_arg_(ctx, argv, i) == 0 { return 0 }
+    return hold_arg_(ctx, argv, i)
 }
 
 // Run a widget's change handler with one number.
-fire_num_(ctx: ptr, ref: ptr, v: float, what: string) {
-    if ref == null { return }
-    r = call1_num_(ctx, ref, v)
-    if sae_js_is_exception(r) != 0 { report_exception_(ctx, what) }
+fire_num_(ctx: ptr, ref: int, v: float, what: string) {
+    if ref == 0 { return }
+    if call_nums_(ctx, ref, v, 0.0, 1) < 0 { report_exception_(ctx, what) }
+    settle_(ctx)
 }
 
-// The handle argument of a get_/set_ function, or 0 (and a pending throw)
-// when it is not a widget this page made.
-own_arg_(ctx: ptr, argv: ptr, argc: int) -> int {
+// The handle argument of a get_/set_ function, or 0 when it is not a widget
+// this page made.
+own_arg_(ctx: ptr, argv: int, argc: int) -> int {
     h = arg_int_(ctx, argv, argc, 0, 0)
     if owned_(page_of_(ctx), h) == 0 { return 0 }
     return h
@@ -759,104 +768,104 @@ own_arg_(ctx: ptr, argv: ptr, argc: int) -> int {
 // --- the page API: inputs and indicators (aether-ui's names) ---
 
 // toggle(label, onChange(on)): a checkbox; on is 1 or 0.
-@c_callback
-sae_ui_toggle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_toggle(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     label = own_(arg_str_(ctx, argv, argc, 0))
     ref = held_fn_(ctx, argv, argc, 1)
     long t = now_ns_()
     h = ui.toggle(mem.long_to_ptr(top_(p)), label, |on: int| { fire_num_(ctx, ref, on, "a toggle handler") })
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
 // slider(min, max, initial, onChange(value))
-@c_callback
-sae_ui_slider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_slider(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     ref = held_fn_(ctx, argv, argc, 3)
     long t = now_ns_()
     h = ui.slider(mem.long_to_ptr(top_(p)), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 1.0),
                   arg_num_(ctx, argv, argc, 2, 0.0), |v: float| { fire_num_(ctx, ref, v, "a slider handler") })
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
 // picker(onChange(index)): a drop-down; fill it with picker_add.
-@c_callback
-sae_ui_picker(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_picker(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     ref = held_fn_(ctx, argv, argc, 0)
     long t = now_ns_()
     h = ui.picker(mem.long_to_ptr(top_(p)), |i: int| { fire_num_(ctx, ref, i, "a picker handler") })
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
-@c_callback
-sae_ui_picker_add(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_picker_add(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "picker_add(h, item): h is not a widget this page made") }
     ui.picker_add(null, h, arg_str_(ctx, argv, argc, 1))
-    return sae_js_undefined()
+    return 0
 }
 
 // progressbar(fraction): 0 to 1.
-@c_callback
-sae_ui_progressbar(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_progressbar(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
     h = ui.progressbar(mem.long_to_ptr(top_(p)), arg_num_(ctx, argv, argc, 0, 0.0))
     ui_done_(p, t)
-    return JS_NewInt32(ctx, h)
+    return quickjs.new_int(ctx, h)
 }
 
-@c_callback
-sae_ui_set_progress(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_set_progress(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "set_progress(h, f): h is not a widget this page made") }
     ui.set_progress(h, arg_num_(ctx, argv, argc, 1, 0.0))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_ui_set_toggle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_set_toggle(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "set_toggle(h, on): h is not a widget this page made") }
     ui.set_toggle(h, arg_int_(ctx, argv, argc, 1, 0))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_ui_get_toggle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_get_toggle(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "get_toggle(h): h is not a widget this page made") }
-    return JS_NewInt32(ctx, ui.get_toggle(h))
+    return quickjs.new_int(ctx, ui.get_toggle(h))
 }
 
-@c_callback
-sae_ui_set_slider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_set_slider(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "set_slider(h, v): h is not a widget this page made") }
     ui.set_slider(h, arg_num_(ctx, argv, argc, 1, 0.0))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_ui_get_slider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_get_slider(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "get_slider(h): h is not a widget this page made") }
-    return JS_NewFloat64(ctx, ui.get_slider(h))
+    return quickjs.new_float(ctx, ui.get_slider(h))
 }
 
 // --- the page API: styles (a CSS-alike, after Swiby and Tsyne) ---
@@ -875,61 +884,39 @@ sae_ui_get_slider(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // page's widgets, those already built and those built later, never the
 // browser's chrome; it is dropped when the page is left.
 
-// A temporary GC root for a value held across allocations.
-tmp_ref_(ctx: ptr, v: long) -> ptr {
-    ref = malloc(sae_gcref_size())
-    slot = JS_AddGCRef(ctx, ref)
-    mem.set_long(slot, 0, v)
-    return ref
-}
-
-tmp_unref_(ctx: ptr, ref: ptr) {
-    JS_DeleteGCRef(ctx, ref)
-    free(ref)
-}
-
 // An owned copy of a JS value as a string.
-js_str_(ctx: ptr, v: long) -> string {
-    p = page_of_(ctx)
-    return own_(JS_ToCStringLen(ctx, p.scratch, v, p.cbuf))
+js_str_(ctx: ptr, v: int) -> string { return quickjs.to_string(ctx, v) }
+
+js_num_(ctx: ptr, v: int) -> float { return quickjs.to_float(ctx, v) }
+
+// 1 if v is undefined or null.
+js_nothing_(ctx: ptr, v: int) -> int {
+    t = quickjs.type_of(ctx, v)
+    if t == "undefined" || t == "null" { return 1 }
+    return 0
 }
 
-js_num_(ctx: ptr, v: long) -> float {
-    p = page_of_(ctx)
-    if JS_ToNumber(ctx, p.scratch, v) != 0 { return 0.0 }
-    return mem.get_float64(p.scratch, 0)
+// A string property of obj, or dflt when it is missing.
+js_prop_str_(ctx: ptr, obj: int, name: string, dflt: string) -> string {
+    v, err = quickjs.get(ctx, obj, name)
+    if err != "" { return dflt }
+    out = dflt
+    if js_nothing_(ctx, v) == 0 { out = quickjs.to_string(ctx, v) }
+    quickjs.release(ctx, v)
+    return out
 }
 
-// A string property of the object held in obj_r, or dflt when it is missing.
-js_prop_str_(ctx: ptr, obj_r: ptr, name: string, dflt: string) -> string {
-    v = JS_GetPropertyStr(ctx, mem.get_long(obj_r, 0), name)
-    if v == sae_js_undefined() || v == sae_js_null() { return dflt }
-    return js_str_(ctx, v)
-}
-
-// Object.keys(obj), the object held in `obj_r`. The keys function is fetched
-// after the stack check and pushed straight away, so nothing allocates
-// between reading it and the engine rooting it.
-object_keys_(ctx: ptr, obj_r: ptr) -> long {
-    if JS_StackCheck(ctx, 3) != 0 { return sae_js_exception() }
-    objc = JS_GetPropertyStr(ctx, JS_GetGlobalObject(ctx), "Object")
-    kf = JS_GetPropertyStr(ctx, objc, "keys")
-    JS_PushArg(ctx, mem.get_long(obj_r, 0))
-    JS_PushArg(ctx, kf)
-    JS_PushArg(ctx, sae_js_null())
-    return JS_Call(ctx, 1)
-}
-
-js_length_(ctx: ptr, arr: long) -> int {
-    p = page_of_(ctx)
-    lv = JS_GetPropertyStr(ctx, arr, "length")
-    if JS_ToInt32(ctx, p.scratch, lv) != 0 { return 0 }
-    return mem.get_int(p.scratch, 0)
+// Key i of a keys array, as a string.
+js_key_(ctx: ptr, keys: int, i: int) -> string {
+    k, _e = quickjs.get_index(ctx, keys, i)
+    s = quickjs.to_string(ctx, k)
+    quickjs.release(ctx, k)
+    return s
 }
 
 // A colour: 0xRRGGBB, or "#rrggbb" / "#rgb". -1 when it is neither.
-js_colour_(ctx: ptr, v: long) -> int {
-    if JS_IsString(ctx, v) == 0 { return js_num_(ctx, v) as int }
+js_colour_(ctx: ptr, v: int) -> int {
+    if quickjs.type_of(ctx, v) != "string" { return js_num_(ctx, v) as int }
     s = js_str_(ctx, v)
     n = string.length(s)
     if n < 1 || string.char_at(s, 0) != 35 { return 0 - 1 }
@@ -975,20 +962,19 @@ selector_(sel: string) -> string {
     return "${prefix}${k}"
 }
 
-// One rule: each property of the object in rule_r, by name. Returns "" or
-// a message naming the first property it could not use.
-style_rule_(ctx: ptr, p: *Page, sel: string, rule_r: ptr) -> string {
-    keys = object_keys_(ctx, rule_r)
-    if sae_js_is_exception(keys) != 0 { return "a rule must be an object" }
-    keys_r = tmp_ref_(ctx, keys)
-    n = js_length_(ctx, mem.get_long(keys_r, 0))
+// One rule: each property of the object `rule`, by name. Returns "" or a
+// message naming the first property it could not use.
+style_rule_(ctx: ptr, p: *Page, sel: string, rule: int) -> string {
+    if quickjs.type_of(ctx, rule) != "object" { return "a rule must be an object" }
+    keys = quickjs.keys(ctx, rule)
+    n = quickjs.length(ctx, keys)
     bw = 0.0 - 1.0
     bc = 0 - 1
     bad = ""
     i = 0
     while i < n {
-        name = js_str_(ctx, JS_GetPropertyUint32(ctx, mem.get_long(keys_r, 0), i))
-        v = JS_GetPropertyStr(ctx, mem.get_long(rule_r, 0), name)
+        name = js_key_(ctx, keys, i)
+        v, _e = quickjs.get(ctx, rule, name)
         if string.equals(name, "color") == 1 {
             c = js_colour_(ctx, v)
             if c < 0 { bad = "${sel} { color }: not 0xRRGGBB or \"#rrggbb\"" } else { ui.st_color(p.sheet, sel, c) }
@@ -1019,111 +1005,107 @@ style_rule_(ctx: ptr, p: *Page, sel: string, rule_r: ptr) -> string {
         } else if bad == "" {
             bad = "${sel} { ${name} }: not a style property sae knows"
         }
+        quickjs.release(ctx, v)
         i = i + 1
     }
+    quickjs.release(ctx, keys)
     if bw >= 0.0 || bc >= 0 {
         if bw < 0.0 { bw = 1.0 }
         if bc < 0 { bc = 0 }
         ui.st_border(p.sheet, sel, bw, bc)
     }
-    tmp_unref_(ctx, keys_r)
     return bad
 }
 
-@c_callback
-sae_ui_styles(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_styles(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     if argc < 1 { return sae_throw_type_error(ctx, "styles(sheet): sheet is missing") }
-    obj_r = tmp_ref_(ctx, arg_(argv, 0))
-    keys = object_keys_(ctx, obj_r)
-    if sae_js_is_exception(keys) != 0 {
-        tmp_unref_(ctx, obj_r)
+    obj = quickjs.arg(ctx, argv, 0)
+    if quickjs.type_of(ctx, obj) != "object" {
+        quickjs.release(ctx, obj)
         return sae_throw_type_error(ctx, "styles(sheet): sheet must be an object")
     }
-    keys_r = tmp_ref_(ctx, keys)
-    rule_r = tmp_ref_(ctx, sae_js_undefined())
+    keys = quickjs.keys(ctx, obj)
     if p.sheet == null { p.sheet = ui.create_styles() }
-    n = js_length_(ctx, mem.get_long(keys_r, 0))
+    n = quickjs.length(ctx, keys)
     bad = ""
     i = 0
     while i < n {
-        sel = selector_(js_str_(ctx, JS_GetPropertyUint32(ctx, mem.get_long(keys_r, 0), i)))
+        raw = js_key_(ctx, keys, i)
+        sel = selector_(raw)
         list.add(p.sheet_strs, sel)
-        raw = js_str_(ctx, JS_GetPropertyUint32(ctx, mem.get_long(keys_r, 0), i))
-        mem.set_long(rule_r, 0, JS_GetPropertyStr(ctx, mem.get_long(obj_r, 0), raw))
-        e = style_rule_(ctx, p, sel, rule_r)
+        rule, _e = quickjs.get(ctx, obj, raw)
+        e = style_rule_(ctx, p, sel, rule)
+        quickjs.release(ctx, rule)
         if bad == "" { bad = e }
         i = i + 1
     }
-    tmp_unref_(ctx, rule_r)
-    tmp_unref_(ctx, keys_r)
-    tmp_unref_(ctx, obj_r)
+    quickjs.release(ctx, keys)
+    quickjs.release(ctx, obj)
     // The page's widgets only: what it built so far, and (as the current
     // sheet) what it builds next.
     aether_ui_current_sheet_set_impl(p.sheet)
     ui.apply_styles(p.root, p.sheet)
     if bad != "" { return sae_throw_type_error(ctx, "styles: ${bad}") }
-    return sae_js_undefined()
+    return 0
 }
 
 // add_class(h, "header"): opt a widget into "header" and "header.kind" rules.
-@c_callback
-sae_ui_add_class(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_add_class(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "add_class(h, name): h is not a widget this page made") }
     ui.add_css_class(h, own_(arg_str_(ctx, argv, argc, 1)))
-    return sae_js_undefined()
+    return 0
 }
 
 // style_id(h, "status"): name a widget for "#status" rules.
-@c_callback
-sae_ui_style_id(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_style_id(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "style_id(h, name): h is not a widget this page made") }
     ui.style_id(h, own_(arg_str_(ctx, argv, argc, 1)))
-    return sae_js_undefined()
+    return 0
 }
 
 // set_visible(h, on): show or hide a widget the page made, keeping it (and
 // anything drawing into it) alive. For views a page switches between.
-@c_callback
-sae_ui_set_visible(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_set_visible(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "set_visible(h, on): h is not a widget this page made") }
     hidden = 1
     if arg_int_(ctx, argv, argc, 1, 0) != 0 { hidden = 0 }
     _r = ui.set_hidden(h, hidden)
-    return sae_js_undefined()
+    return 0
 }
 
 // --- the page API: timers ---
 
 // timer(ms, fn): call fn every ms milliseconds (at least 10) until
 // timer_cancel(id) or the page goes. Returns the timer's id.
-@c_callback
-sae_ui_timer(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_timer(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     ms = arg_int_(ctx, argv, argc, 0, 1000)
     if ms < 10 { ms = 10 }
     ref = held_fn_(ctx, argv, argc, 1)
-    if ref == null { return sae_throw_type_error(ctx, "timer(ms, fn): fn must be a function") }
-    id = ui.timer(ms, || {
-        r = call0_(ctx, mem.get_long(ref, 0))
-        if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a timer") }
-    })
+    if ref == 0 { return sae_throw_type_error(ctx, "timer(ms, fn): fn must be a function") }
+    id = ui.timer(ms, || { fire0_(ctx, ref, "a timer") })
     list.add(p.timers, mem.long_to_ptr(id))
-    return JS_NewInt32(ctx, id)
+    return quickjs.new_int(ctx, id)
 }
 
 // timer_cancel(id): stop one of this page's timers. Another id is ignored.
-@c_callback
-sae_ui_timer_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_ui_timer_cancel(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     id = arg_int_(ctx, argv, argc, 0, 0)
     n = list.size(p.timers)
@@ -1133,11 +1115,11 @@ sae_ui_timer_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
         if mem.ptr_to_long(v) == id && id != 0 {
             ui.timer_cancel(id)
             list.set(p.timers, i, mem.long_to_ptr(0))
-            return sae_js_undefined()
+            return 0
         }
         i = i + 1
     }
-    return sae_js_undefined()
+    return 0
 }
 
 // --- the page API: http, on Aether's actor core ---
@@ -1164,24 +1146,24 @@ sae_ui_timer_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // origins app.json lists under "http" (Tauri's allowlist). The rest is
 // refused: res.ok false, res.error saying why, delivered the same way.
 
-@c_callback
-sae_http_get(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_http_get(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     return http_start_(ctx, "GET", own_(arg_str_(ctx, argv, argc, 0)), "", "", null, held_fn_(ctx, argv, argc, 1))
 }
 
 // http.cancel(id): what req.cancel() calls. The request may still run to
 // completion on its actor; its callback will not.
-@c_callback
-sae_http_cancel(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_http_cancel(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     http_cancel_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_http_post(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_http_post(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     return http_start_(ctx, "POST", own_(arg_str_(ctx, argv, argc, 0)),
                        own_(arg_str_(ctx, argv, argc, 1)), own_(arg_str_(ctx, argv, argc, 2)),
                        null, held_fn_(ctx, argv, argc, 3))
@@ -1189,36 +1171,32 @@ sae_http_post(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 
 // http.request({ method, url, headers, body, contentType }, (res) => ...):
 // any method, request headers; res.headers holds the response's, lowercased.
-@c_callback
-sae_http_request(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_http_request(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if argc < 2 { return sae_throw_type_error(ctx, "http.request(options, fn)") }
-    opt_r = tmp_ref_(ctx, arg_(argv, 0))
-    method = js_prop_str_(ctx, opt_r, "method", "GET")
-    url = js_prop_str_(ctx, opt_r, "url", "")
-    body = js_prop_str_(ctx, opt_r, "body", "")
-    ctype = js_prop_str_(ctx, opt_r, "contentType", "")
+    opt = quickjs.arg(ctx, argv, 0)
+    method = js_prop_str_(ctx, opt, "method", "GET")
+    url = js_prop_str_(ctx, opt, "url", "")
+    body = js_prop_str_(ctx, opt, "body", "")
+    ctype = js_prop_str_(ctx, opt, "contentType", "")
     hdrs = null
-    hv = JS_GetPropertyStr(ctx, mem.get_long(opt_r, 0), "headers")
-    if hv != sae_js_undefined() && hv != sae_js_null() {
-        h_r = tmp_ref_(ctx, hv)
-        keys = object_keys_(ctx, h_r)
-        if sae_js_is_exception(keys) == 0 {
-            k_r = tmp_ref_(ctx, keys)
-            hdrs = strarr.new()
-            n = js_length_(ctx, mem.get_long(k_r, 0))
-            i = 0
-            while i < n {
-                name = js_str_(ctx, JS_GetPropertyUint32(ctx, mem.get_long(k_r, 0), i))
-                val = js_str_(ctx, JS_GetPropertyStr(ctx, mem.get_long(h_r, 0), name))
-                strarr.push_copy(hdrs, "${name}: ${val}")
-                i = i + 1
-            }
-            tmp_unref_(ctx, k_r)
+    hv, _e = quickjs.get(ctx, opt, "headers")
+    if quickjs.type_of(ctx, hv) == "object" {
+        keys = quickjs.keys(ctx, hv)
+        hdrs = strarr.new()
+        n = quickjs.length(ctx, keys)
+        i = 0
+        while i < n {
+            name = js_key_(ctx, keys, i)
+            val = js_prop_str_(ctx, hv, name, "")
+            strarr.push_copy(hdrs, "${name}: ${val}")
+            i = i + 1
         }
-        tmp_unref_(ctx, h_r)
+        quickjs.release(ctx, keys)
     }
-    tmp_unref_(ctx, opt_r)
+    quickjs.release(ctx, hv)
+    quickjs.release(ctx, opt)
     if url == "" { return sae_throw_type_error(ctx, "http.request: options.url is missing") }
     return http_start_(ctx, string.to_upper(method), url, body, ctype, hdrs, held_fn_(ctx, argv, argc, 1))
 }
@@ -1231,64 +1209,64 @@ sae_http_request(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // capabilities in app.json; a page in the browser gets a refusal from both.
 // See docs/app-capabilities.md.
 
-@c_callback
-sae_fs_read_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     text, err = files.read_text(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
-    return JS_NewString(ctx, text)
+    return quickjs.new_string(ctx, text)
 }
 
-@c_callback
-sae_fs_write_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_fs_write_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = own_(arg_str_(ctx, argv, argc, 0))
     err = files.write_text(p, own_(arg_str_(ctx, argv, argc, 1)))
     if err != "" { return sae_throw_type_error(ctx, err) }
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_fs_exists(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_fs_exists(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     yes, why = files.exists(own_(arg_str_(ctx, argv, argc, 0)))
     if why != "" { return sae_throw_type_error(ctx, why) }
-    return sae_js_bool(yes)
+    return quickjs.new_bool(ctx, yes)
 }
 
-@c_callback
-sae_fs_list(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_fs_list(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     names, err = files.list_json(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
     // A JSON array, parsed back on the JS side: the names are strings only.
     return json_value_(ctx, names)
 }
 
-@c_callback
-sae_fs_mkdir(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_fs_mkdir(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     err = files.mkdir(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_fs_remove(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_fs_remove(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     err = files.remove(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
-    return sae_js_undefined()
+    return 0
 }
 
 // shell.open(url): hand a URL to the system (the default browser for https:),
 // if capabilities.shell.open lists a prefix of it. App mode only.
-@c_callback
-sae_shell_open(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_shell_open(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     why = shell.open(own_(arg_str_(ctx, argv, argc, 0)))
     if why != "" { return sae_throw_type_error(ctx, why) }
-    return sae_js_undefined()
+    return 0
 }
 
 // --- the page API: storage ---
@@ -1299,41 +1277,41 @@ sae_shell_open(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 // another's. Keys are letters, digits, '.', '_' and '-'. The file system is
 // the kernel's (storage_file_ below); a page reaches only these three calls.
 
-@c_callback
-sae_storage_get(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_storage_get(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.get(key): key must be letters, digits, '.', '_' or '-'") }
     v, found = storage_read_(page_of_(ctx).url, key)
-    if found == 0 { return sae_js_null() }
-    return JS_NewString(ctx, v)
+    if found == 0 { return quickjs.new_null(ctx) }
+    return quickjs.new_string(ctx, v)
 }
 
-@c_callback
-sae_storage_set(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_storage_set(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.set(key, value): key must be letters, digits, '.', '_' or '-'") }
     val = own_(arg_str_(ctx, argv, argc, 1))
     if string.length(val) > STORAGE_MAX { return sae_throw_type_error(ctx, "storage.set: value over 1 MB") }
     if storage_write_(page_of_(ctx).url, key, val) == 0 { return sae_throw_type_error(ctx, "storage.set: could not save") }
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_storage_remove(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_storage_remove(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.remove(key): key must be letters, digits, '.', '_' or '-'") }
     storage_remove_(page_of_(ctx).url, key)
-    return sae_js_undefined()
+    return 0
 }
 
 // vg.scene(viewBox, w, h, block): a vector-graphics canvas w x h px under
 // the current ui container, drawing the viewBox.
-@c_callback
-sae_vg_scene(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_scene(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     vb = own_(arg_str_(ctx, argv, argc, 0))
     long t = now_ns_()
@@ -1342,45 +1320,45 @@ sae_vg_scene(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return vg_shape_done_(ctx, argv, argc, 3, root)
 }
 
-@c_callback
-sae_vg_circle(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_circle(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.circle() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.circle(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0))
     return vg_shape_done_(ctx, argv, argc, 3, n)
 }
 
-@c_callback
-sae_vg_rect(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_rect(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rect() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.rect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
     return vg_shape_done_(ctx, argv, argc, 4, n)
 }
 
-@c_callback
-sae_vg_rrect(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_rrect(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rrect() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.rrect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0), arg_num_(ctx, argv, argc, 4, 0.0))
     return vg_shape_done_(ctx, argv, argc, 5, n)
 }
 
-@c_callback
-sae_vg_line(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_line(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.line() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.line(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
     return vg_shape_done_(ctx, argv, argc, 4, n)
 }
 
-@c_callback
-sae_vg_path(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_path(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.path() must be called inside vg.scene()") }
     p = page_of_(ctx)
     d = own_(arg_str_(ctx, argv, argc, 0))
@@ -1388,9 +1366,9 @@ sae_vg_path(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     return vg_shape_done_(ctx, argv, argc, 1, n)
 }
 
-@c_callback
-sae_vg_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text() must be called inside vg.scene()") }
     p = page_of_(ctx)
     s = own_(arg_str_(ctx, argv, argc, 2))
@@ -1399,205 +1377,186 @@ sae_vg_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
 }
 
 // vg.g(block): a group; its block's shapes nest under it.
-@c_callback
-sae_vg_g(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_g(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.g() must be called inside vg.scene()") }
     p = page_of_(ctx)
     n = vg.g(vg_top_(p))
     return vg_shape_done_(ctx, argv, argc, 0, n)
 }
 
-@c_callback
-sae_vg_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_fill(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.fill() must be called inside a shape's block") }
     vg.fill(vg_top_(page_of_(ctx)), arg_str_(ctx, argv, argc, 0))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_vg_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_stroke(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.stroke() must be called inside a shape's block") }
     c = own_(arg_str_(ctx, argv, argc, 0))
     vg.stroke(vg_top_(page_of_(ctx)), c, arg_num_(ctx, argv, argc, 1, 1.0))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_vg_opacity(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_opacity(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.opacity() must be called inside a shape's block") }
     vg.opacity(vg_top_(page_of_(ctx)), arg_num_(ctx, argv, argc, 0, 1.0))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_vg_transform(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_transform(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.transform() must be called inside a shape's block") }
     t = own_(arg_str_(ctx, argv, argc, 0))
     vg.transform(vg_top_(page_of_(ctx)), t)
-    return sae_js_undefined()
+    return 0
 }
 
 // vg.on_click(fn(x, y)): x and y are where the click landed, in the scene's
 // viewBox coordinates.
-@c_callback
-sae_vg_on_click(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_on_click(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.on_click() must be called inside a shape's block") }
-    if argc < 1 || JS_IsFunction(ctx, arg_(argv, 0)) == 0 {
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 {
         return sae_throw_type_error(ctx, "vg.on_click(fn): fn must be a function")
     }
-    ref = hold_(ctx, arg_(argv, 0))
+    ref = hold_arg_(ctx, argv, 0)
     node = vg_top_(page_of_(ctx))
     scene = vg.node_scene(node)
     // AeVG hands the handler canvas pixels; a page thinks in its viewBox.
     // The mapping is read at click time, since a resize replaces it.
     vg.on_click(node, |x: float, y: float| {
-        r = call2_num_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y))
-        if sae_js_is_exception(r) != 0 { report_exception_(ctx, "a vg click handler") }
+        r = call_nums_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 2)
+        if r < 0 { report_exception_(ctx, "a vg click handler") }
+        settle_(ctx)
     })
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_vg_set_fill(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_set_fill(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_fill(h, color): h is not a vg shape") }
     vg.element_set_fill(vg.node_element(n), arg_str_(ctx, argv, argc, 1))
     vg_repaint_(n)
-    return sae_js_undefined()
+    return 0
 }
 
 // vg.set_text(h, s): change a vg.text shape's text (a clock, a counter).
-@c_callback
-sae_vg_set_text(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_set_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_text(h, s): h is not a vg shape") }
     vg.element_set_text(vg.node_element(n), arg_str_(ctx, argv, argc, 1))
     vg_repaint_(n)
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_vg_set_stroke(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_set_stroke(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_stroke(h, color, width): h is not a vg shape") }
     c = own_(arg_str_(ctx, argv, argc, 1))
     vg.element_set_stroke(vg.node_element(n), c, arg_num_(ctx, argv, argc, 2, 1.0))
     vg_repaint_(n)
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_vg_set_opacity(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_vg_set_opacity(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_opacity(h, value): h is not a vg shape") }
     vg.element_set_opacity(vg.node_element(n), arg_num_(ctx, argv, argc, 1, 1.0))
     vg_repaint_(n)
-    return sae_js_undefined()
+    return 0
 }
 
 // --- the page API: browserContext ---
 
-@c_callback
-sae_bc_change_page(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_bc_change_page(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     b = browser_of_(ctx)
     href = arg_str_(ctx, argv, argc, 0)
     request_nav_(b, NAV_GO, resolve_(page_of_(ctx).url, href))
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_bc_back(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_bc_back(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(ctx), NAV_BACK, "")
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_bc_forward(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_bc_forward(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(ctx), NAV_FORWARD, "")
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_bc_reload(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+sae_bc_reload(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(ctx), NAV_RELOAD, "")
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-sae_bc_current_url(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    return JS_NewString(ctx, page_of_(ctx).url)
+sae_bc_current_url(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return quickjs.new_string(ctx, page_of_(ctx).url)
 }
 
-// --- the core library's host functions (mode 2 of genengine) ---
+// --- the page's globals beyond the page API: print, and the clocks ---
 
-// All of print's output goes through C stdio (the engine's log sink for
-// non-strings is fwrite to stdout too), then is flushed, so it cannot
-// interleave with the host's own println output.
-@c_callback
-js_print(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+// All of print's output goes through C stdio, then is flushed, so it cannot
+// interleave with the host's own println output. Objects print as JSON.
+js_print(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
     out = sae_stdout()
     i = 0
     while i < argc {
         if i != 0 { putchar(32) }
-        v = arg_(argv, i)
-        if JS_IsString(ctx, v) != 0 {
-            fputs(arg_str_(ctx, argv, argc, i), out)
+        v = quickjs.arg(ctx, argv, i)
+        t = quickjs.type_of(ctx, v)
+        if t == "object" || t == "array" {
+            fputs(quickjs.to_json(ctx, v), out)
         } else {
-            JS_PrintValueF(ctx, v, JS_DUMP_LONG)
+            fputs(quickjs.to_string(ctx, v), out)
         }
+        quickjs.release(ctx, v)
         i = i + 1
     }
     putchar(10)
     fflush(out)
-    return sae_js_undefined()
+    return 0
 }
 
-@c_callback
-js_date_now(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    return JS_NewInt64(ctx, now_unix_ms_())
+// Date.now() and performance.now(), on sae's clocks (SAE_TIME_SCALE).
+js_date_now(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_float(ctx, now_unix_ms_() as float)
 }
 
-@c_callback
-js_performance_now(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    return JS_NewInt64(ctx, now_ms_())
-}
-
-@c_callback
-js_date_constructor(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
-    ac = argc & (0 - 1 - FRAME_CF_CTOR)
-    float val = 0.0
-    if ac == 0 {
-        long ms = now_unix_ms_()
-        val = ms
-    } else {
-        if ac == 1 && JS_IsNumber(ctx, arg_(argv, 0)) != 0 {
-            p = page_of_(ctx)
-            if JS_ToNumber(ctx, p.scratch, arg_(argv, 0)) != 0 { return sae_js_exception() }
-            val = mem.get_float64(p.scratch, 0)
-        } else {
-            return sae_throw_type_error(ctx, "unsupported Date() parameter")
-        }
-    }
-    return JS_NewDate(ctx, val)
+js_performance_now(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_float(ctx, now_ms_() as float)
 }
 
 // --- URLs and fetching ---
@@ -1622,7 +1581,7 @@ struct HttpWait {
     id: int
     page: ptr
     seq: int
-    ref: ptr
+    ref: int         // the page's callback (a handle of its runtime)
 }
 
 message HttpRun { job: ptr }
@@ -1727,9 +1686,9 @@ http_refusal_(page_url: string, url: string) -> string {
     return "a page may reach only its own origin: ${url}"
 }
 
-http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: string, headers: ptr, ref: ptr) -> long {
+http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: string, headers: ptr, ref: int) -> int {
     p = page_of_(ctx)
-    if ref == null { return sae_throw_type_error(ctx, "http: the last argument must be a function") }
+    if ref == 0 { return sae_throw_type_error(ctx, "http: the last argument must be a function") }
     url = resolve_(p.url, url_arg)
     if http_waits_ == null { http_waits_ = list.new() }
     http_ids_ = http_ids_ + 1
@@ -1760,12 +1719,15 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     }
     if http_timer_ == 0 { http_timer_ = ui.timer(20, || { http_poll_() }) }
     // The request object: { id, cancel() }.
-    if http_helpers_(ctx, p) == 0 { return sae_js_exception() }
-    if JS_StackCheck(ctx, 3) != 0 { return sae_js_exception() }
-    JS_PushArg(ctx, JS_NewInt32(ctx, j.id))
-    JS_PushArg(ctx, mem.get_long(p.http_req, 0))
-    JS_PushArg(ctx, sae_js_null())
-    return JS_Call(ctx, 1)
+    if http_helpers_(ctx, p) == 0 { return rethrow_(ctx) }
+    args = quickjs.new_array(ctx)
+    idh = quickjs.new_int(ctx, j.id)
+    _s = quickjs.set_index(ctx, args, 0, idh)
+    quickjs.release(ctx, idh)
+    r, err = quickjs.call(ctx, p.http_req, 0, args)
+    quickjs.release(ctx, args)
+    if err != "" { return rethrow_(ctx) }
+    return r
 }
 
 // The two small JS functions the http API hands pages, compiled once per page
@@ -1773,15 +1735,15 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
 // method), one the request object (so req.cancel() is). 1 when they are
 // ready.
 http_helpers_(ctx: ptr, p: *Page) -> int {
-    if p.http_res != null { return 1 }
+    if p.http_res != 0 { return 1 }
     rs = "(function (ok, status, text, error, raw) { var h = {}; var ls = raw.split(/\\r?\\n/); for (var i = 1; i < ls.length; i++) { var c = ls[i].indexOf(':'); if (c > 0) h[ls[i].slice(0, c).trim().toLowerCase()] = ls[i].slice(c + 1).trim(); } return { ok: ok, status: status, text: text, error: error, headers: h, json: function () { return JSON.parse(this.text); } }; })"
     qs = "(function (id) { return { id: id, cancel: function () { http.cancel(id); } }; })"
-    rf = JS_Run(ctx, JS_Parse(ctx, rs, string.length(rs), "sae:http", JS_EVAL_RETVAL))
-    if sae_js_is_exception(rf) != 0 { return 0 }
-    p.http_res = hold_(ctx, rf)
-    qf = JS_Run(ctx, JS_Parse(ctx, qs, string.length(qs), "sae:http", JS_EVAL_RETVAL))
-    if sae_js_is_exception(qf) != 0 { return 0 }
-    p.http_req = hold_(ctx, qf)
+    rf, e1 = quickjs.eval(ctx, rs, "sae:http")
+    if e1 != "" { return 0 }
+    p.http_res = rf
+    qf, e2 = quickjs.eval(ctx, qs, "sae:http")
+    if e2 != "" { return 0 }
+    p.http_req = qf
     return 1
 }
 
@@ -1853,7 +1815,8 @@ http_deliver_(j: *HttpJob) {
                 if cur != null && cur == w.page && (cur as *Page).seq == w.seq {
                     p = cur as *Page
                     r = call_http_(p, w.ref, j.status, j.resp, j.err, j.resp_headers)
-                    if sae_js_is_exception(r) != 0 { report_exception_(p.ctx, "an http callback") }
+                    if r < 0 { report_exception_(p.ctx, "an http callback") }
+                    settle_(p.ctx)
                 }
             }
             heap.free(w)
@@ -1865,29 +1828,37 @@ http_deliver_(j: *HttpJob) {
     heap.free(j)
 }
 
-// fn(res): res is made by the page's response maker, then handed straight
-// to fn. Each value is pushed as soon as it exists, so it is rooted on the
-// engine stack before the next allocation can move anything; the functions
-// are read from their roots last.
-call_http_(p: *Page, ref: ptr, status: int, text: string, err: string, raw_headers: string) -> long {
+// fn(res): res is made by the page's response maker, then handed to fn.
+call_http_(p: *Page, ref: int, status: int, text: string, err: string, raw_headers: string) -> int {
     ctx = p.ctx
-    if http_helpers_(ctx, p) == 0 { return sae_js_exception() }
-    if JS_StackCheck(ctx, 10) != 0 { return sae_js_exception() }
+    if http_helpers_(ctx, p) == 0 { return 0 - 1 }
     ok = 0
     if err == "" && status >= 200 && status < 300 { ok = 1 }
-    JS_PushArg(ctx, JS_NewString(ctx, raw_headers))
-    JS_PushArg(ctx, JS_NewString(ctx, err))
-    JS_PushArg(ctx, JS_NewString(ctx, text))
-    JS_PushArg(ctx, JS_NewInt32(ctx, status))
-    JS_PushArg(ctx, sae_js_bool(ok))
-    JS_PushArg(ctx, mem.get_long(p.http_res, 0))
-    JS_PushArg(ctx, sae_js_null())
-    res = JS_Call(ctx, 5)
-    if sae_js_is_exception(res) != 0 { return res }
-    JS_PushArg(ctx, res)
-    JS_PushArg(ctx, mem.get_long(ref, 0))
-    JS_PushArg(ctx, sae_js_null())
-    return JS_Call(ctx, 1)
+    args = quickjs.new_array(ctx)
+    a0 = quickjs.new_bool(ctx, ok)
+    a1 = quickjs.new_int(ctx, status)
+    a2 = quickjs.new_string(ctx, text)
+    a3 = quickjs.new_string(ctx, err)
+    a4 = quickjs.new_string(ctx, raw_headers)
+    _s0 = quickjs.set_index(ctx, args, 0, a0)
+    _s1 = quickjs.set_index(ctx, args, 1, a1)
+    _s2 = quickjs.set_index(ctx, args, 2, a2)
+    _s3 = quickjs.set_index(ctx, args, 3, a3)
+    _s4 = quickjs.set_index(ctx, args, 4, a4)
+    quickjs.release(ctx, a0)
+    quickjs.release(ctx, a1)
+    quickjs.release(ctx, a2)
+    quickjs.release(ctx, a3)
+    quickjs.release(ctx, a4)
+    res, e1 = quickjs.call(ctx, p.http_res, 0, args)
+    quickjs.release(ctx, args)
+    if e1 != "" { return 0 - 1 }
+    args2 = quickjs.new_array(ctx)
+    _s5 = quickjs.set_index(ctx, args2, 0, res)
+    quickjs.release(ctx, res)
+    r = calln_(ctx, ref, args2)
+    quickjs.release(ctx, args2)
+    return r
 }
 
 // --- capabilities (the kernel side; docs/app-capabilities.md) ---
@@ -1915,10 +1886,12 @@ app_data_dir_() -> string {
     return "${env_("HOME")}/.local/share/${app_name_}"
 }
 
-// A JSON text made into a JS value (JSON.parse, from the host). With
-// JS_EVAL_JSON, JS_Parse returns the value itself; there is nothing to run.
-json_value_(ctx: ptr, text: string) -> long {
-    return JS_Parse(ctx, text, string.length(text), "sae:json", JS_EVAL_JSON)
+// A JSON text made into a JS value (JSON.parse, from the host), for a
+// page-API call to return.
+json_value_(ctx: ptr, text: string) -> int {
+    h, err = quickjs.parse_json(ctx, text)
+    if err != "" { return sae_throw_type_error(ctx, "bad JSON from the host: ${err}") }
+    return h
 }
 
 // 1 if this context can give a page the privilege `nm`. A web page in the
@@ -2162,16 +2135,170 @@ fetch_(url: string) -> (int, string, string, string) {
 
 // --- pages ---
 
+// --- the page's engine: the only code that makes, runs and frees one ---
+
+engine_new_(mem_bytes: long) -> ptr {
+    kb = (mem_bytes / 1024) as int
+    q = quickjs.runtime(kb, 0)
+    if q != null {
+        // SAE_PAGE_TIME_MS overrides the limit (specs use a short one).
+        ms = PAGE_TIME_MS
+        tv = env_("SAE_PAGE_TIME_MS")
+        if tv != "" {
+            n, nerr = string.to_int(tv)
+            if nerr == "" && n > 0 { ms = n }
+        }
+        quickjs.set_time_limit(q, ms)
+    }
+    return q
+}
+
+engine_eval_(q: ptr, src: string, url: string) -> (int, string) {
+    return quickjs.eval(q, src, url)
+}
+
+engine_dispose_(q: ptr) { quickjs.dispose(q) }
+
+// One page-API function: obj[name] calls the Aether function f.
+reg_(q: ptr, obj: int, name: string, arity: int, f: fn) {
+    h = quickjs.function(q, name, arity, f)
+    _e = quickjs.set(q, obj, name, h)
+    quickjs.release(q, h)
+}
+
+// Install the page API in a page's runtime: everything a page can reach is
+// registered here, so this function is the sandbox boundary. fs and shell
+// exist only in app mode: a
+// web page has no such objects at all.
+api_register_(p: *Page) {
+    q = p.ctx
+    u = quickjs.new_object(q)
+    reg_(q, u, "vstack", 2, sae_ui_vstack)
+    reg_(q, u, "hstack", 2, sae_ui_hstack)
+    reg_(q, u, "grid", 3, sae_ui_grid)
+    reg_(q, u, "equal_cells", 0, sae_ui_equal_cells)
+    reg_(q, u, "text", 1, sae_ui_text)
+    reg_(q, u, "btn", 2, sae_ui_btn)
+    reg_(q, u, "divider", 0, sae_ui_divider)
+    reg_(q, u, "button", 2, sae_ui_button)
+    reg_(q, u, "scroll", 1, sae_ui_scroll)
+    reg_(q, u, "spacer", 0, sae_ui_spacer)
+    reg_(q, u, "textfield", 2, sae_ui_textfield)
+    reg_(q, u, "get_text", 1, sae_ui_get_text)
+    reg_(q, u, "set_text", 2, sae_ui_set_text)
+    reg_(q, u, "clear", 1, sae_ui_clear)
+    reg_(q, u, "into", 2, sae_ui_into)
+    reg_(q, u, "toggle", 2, sae_ui_toggle)
+    reg_(q, u, "slider", 4, sae_ui_slider)
+    reg_(q, u, "picker", 1, sae_ui_picker)
+    reg_(q, u, "picker_add", 2, sae_ui_picker_add)
+    reg_(q, u, "progressbar", 1, sae_ui_progressbar)
+    reg_(q, u, "set_progress", 2, sae_ui_set_progress)
+    reg_(q, u, "set_toggle", 2, sae_ui_set_toggle)
+    reg_(q, u, "get_toggle", 1, sae_ui_get_toggle)
+    reg_(q, u, "set_slider", 2, sae_ui_set_slider)
+    reg_(q, u, "get_slider", 1, sae_ui_get_slider)
+    reg_(q, u, "styles", 1, sae_ui_styles)
+    reg_(q, u, "add_class", 2, sae_ui_add_class)
+    reg_(q, u, "style_id", 2, sae_ui_style_id)
+    reg_(q, u, "timer", 2, sae_ui_timer)
+    reg_(q, u, "set_visible", 2, sae_ui_set_visible)
+    reg_(q, u, "timer_cancel", 1, sae_ui_timer_cancel)
+    reg_(q, u, "onclick", 1, sae_ui_onclick)
+    reg_(q, u, "margin", 4, sae_ui_margin)
+    reg_(q, u, "bg_color", 4, sae_ui_bg_color)
+    reg_(q, u, "ui_state", 1, sae_ui_state)
+    reg_(q, u, "ui_set", 2, sae_ui_set)
+    reg_(q, u, "text_bound", 3, sae_ui_text_bound)
+    quickjs.set_global(q, "ui", u)
+    quickjs.release(q, u)
+
+    v = quickjs.new_object(q)
+    reg_(q, v, "scene", 4, sae_vg_scene)
+    reg_(q, v, "circle", 4, sae_vg_circle)
+    reg_(q, v, "rect", 5, sae_vg_rect)
+    reg_(q, v, "rrect", 6, sae_vg_rrect)
+    reg_(q, v, "line", 5, sae_vg_line)
+    reg_(q, v, "path", 2, sae_vg_path)
+    reg_(q, v, "text", 4, sae_vg_text)
+    reg_(q, v, "g", 1, sae_vg_g)
+    reg_(q, v, "fill", 1, sae_vg_fill)
+    reg_(q, v, "stroke", 2, sae_vg_stroke)
+    reg_(q, v, "opacity", 1, sae_vg_opacity)
+    reg_(q, v, "transform", 1, sae_vg_transform)
+    reg_(q, v, "on_click", 1, sae_vg_on_click)
+    reg_(q, v, "set_fill", 2, sae_vg_set_fill)
+    reg_(q, v, "set_text", 2, sae_vg_set_text)
+    reg_(q, v, "set_stroke", 3, sae_vg_set_stroke)
+    reg_(q, v, "set_opacity", 2, sae_vg_set_opacity)
+    quickjs.set_global(q, "vg", v)
+    quickjs.release(q, v)
+
+    ht = quickjs.new_object(q)
+    reg_(q, ht, "get", 2, sae_http_get)
+    reg_(q, ht, "post", 4, sae_http_post)
+    reg_(q, ht, "cancel", 1, sae_http_cancel)
+    reg_(q, ht, "request", 2, sae_http_request)
+    quickjs.set_global(q, "http", ht)
+    quickjs.release(q, ht)
+
+    if app_dir_ != "" {
+        fo = quickjs.new_object(q)
+        reg_(q, fo, "read_text", 1, sae_fs_read_text)
+        reg_(q, fo, "readFileSync", 2, sae_fs_read_text)
+        reg_(q, fo, "write_text", 2, sae_fs_write_text)
+        reg_(q, fo, "writeFileSync", 2, sae_fs_write_text)
+        reg_(q, fo, "exists", 1, sae_fs_exists)
+        reg_(q, fo, "existsSync", 1, sae_fs_exists)
+        reg_(q, fo, "list", 1, sae_fs_list)
+        reg_(q, fo, "readdirSync", 1, sae_fs_list)
+        reg_(q, fo, "mkdir", 1, sae_fs_mkdir)
+        reg_(q, fo, "remove", 1, sae_fs_remove)
+        quickjs.set_global(q, "fs", fo)
+        quickjs.release(q, fo)
+
+        sho = quickjs.new_object(q)
+        reg_(q, sho, "open", 1, sae_shell_open)
+        quickjs.set_global(q, "shell", sho)
+        quickjs.release(q, sho)
+    }
+
+    st = quickjs.new_object(q)
+    reg_(q, st, "get", 1, sae_storage_get)
+    reg_(q, st, "set", 2, sae_storage_set)
+    reg_(q, st, "remove", 1, sae_storage_remove)
+    quickjs.set_global(q, "storage", st)
+    quickjs.release(q, st)
+
+    bc = quickjs.new_object(q)
+    reg_(q, bc, "changePage", 1, sae_bc_change_page)
+    reg_(q, bc, "back", 0, sae_bc_back)
+    reg_(q, bc, "forward", 0, sae_bc_forward)
+    reg_(q, bc, "reload", 0, sae_bc_reload)
+    cu = quickjs.new_string(q, p.url)
+    _c = quickjs.set(q, bc, "currentUrl", cu)
+    quickjs.release(q, cu)
+    quickjs.set_global(q, "browserContext", bc)
+    quickjs.release(q, bc)
+
+    pr = quickjs.function(q, "print", 1, js_print)
+    quickjs.set_global(q, "print", pr)
+    quickjs.release(q, pr)
+    d, _e1 = quickjs.get_global(q, "Date")
+    reg_(q, d, "now", 0, js_date_now)
+    quickjs.release(q, d)
+    perf = quickjs.new_object(q)
+    reg_(q, perf, "now", 0, js_performance_now)
+    quickjs.set_global(q, "performance", perf)
+    quickjs.release(q, perf)
+}
+
 page_new_(b: *Browser, url: string) -> *Page {
     p = heap.new(Page)
     p.browser = b
     p.url = own_(url)
-    p.mem_block = malloc(b.page_mem)
     p.stack = malloc(STACK_MAX * 4)
     p.depth = 0
-    p.refs = list.new()
-    p.scratch = malloc(8)
-    p.cbuf = malloc(sae_cstringbuf_size())
     p.ui_ns = 0
     p.ui_calls = 0
     p.vg_stack = malloc(STACK_MAX * 8)
@@ -2184,10 +2311,12 @@ page_new_(b: *Browser, url: string) -> *Page {
     p.timers = list.new()
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
-    p.http_res = null
-    p.http_req = null
-    p.ctx = sae_new_context(p.mem_block, b.page_mem)
-    JS_SetContextOpaque(p.ctx, p)
+    p.http_res = 0
+    p.http_req = 0
+    p.ctx = engine_new_(b.page_mem)
+    if pages_ == null { pages_ = list.new() }
+    list.add(pages_, p as ptr)
+    api_register_(p)
     p.root = ui.vstack(mem.long_to_ptr(b.content), 4)
     // After the root: it is the browser's, like the content area it sits in.
     p.first_handle = aether_ui_widget_count_impl() + 1
@@ -2197,7 +2326,7 @@ page_new_(b: *Browser, url: string) -> *Page {
 
 page_free_(p: *Page) {
     // A page's timers stop with it: a tick after this would call into a
-    // freed JS context.
+    // freed runtime.
     nt = list.size(p.timers)
     ti = 0
     while ti < nt {
@@ -2207,15 +2336,6 @@ page_free_(p: *Page) {
         ti = ti + 1
     }
     list.free(p.timers)
-    n = list.size(p.refs)
-    i = 0
-    while i < n {
-        ref, _ = list.get(p.refs, i)
-        JS_DeleteGCRef(p.ctx, ref)
-        free(ref)
-        i = i + 1
-    }
-    list.free(p.refs)
     list.free(p.vg_nodes)
     list.free(p.stacks)
     list.free(p.grids)
@@ -2227,32 +2347,37 @@ page_free_(p: *Page) {
     }
     list.free(p.sheet_strs)
     free(p.vg_stack)
-    JS_FreeContext(p.ctx)
-    free(p.mem_block)
+    // The runtime goes with everything it held: the page's handlers, its
+    // http helpers, its pending promises.
+    n = list.size(pages_)
+    i = 0
+    while i < n {
+        pv, _ = list.get(pages_, i)
+        if pv == p as ptr {
+            list.list_remove(pages_, i)
+            break
+        }
+        i = i + 1
+    }
+    engine_dispose_(p.ctx)
     free(p.stack)
-    free(p.scratch)
-    free(p.cbuf)
     heap.free(p)
 }
 
-// Run page source into the page's content area: parse to bytecode, then run.
-// Returns 1 on success. Fills times_ns[0..1] with the parse and run times.
+// Run page source into the page's content area, then the promise jobs it
+// queued. Returns 1 on success. Fills times_ns[0..1]: QuickJS compiles and
+// runs in one call, so the run time holds both and the parse time is 0.
 page_run_(p: *Page, src: string, times_ns: ptr) -> int {
     long t0 = os.now_monotonic_ns()
-    fnv = JS_Parse(p.ctx, src, string.length(src), p.url, 0)
-    long t1 = os.now_monotonic_ns()
-    mem.set_long(times_ns, 0, t1 - t0)
-    mem.set_long(times_ns, 8, 0)
-    if sae_js_is_exception(fnv) != 0 {
-        report_exception_(p.ctx, p.url)
+    mem.set_long(times_ns, 0, 0)
+    v, err = engine_eval_(p.ctx, src, p.url)
+    mem.set_long(times_ns, 8, os.now_monotonic_ns() - t0)
+    if err != "" {
+        say_("sae: uncaught exception in ${p.url}:\n${err}")
         return 0
     }
-    r = JS_Run(p.ctx, fnv)
-    mem.set_long(times_ns, 8, os.now_monotonic_ns() - t1)
-    if sae_js_is_exception(r) != 0 {
-        report_exception_(p.ctx, p.url)
-        return 0
-    }
+    quickjs.release(p.ctx, v)
+    settle_(p.ctx)
     return 1
 }
 

@@ -1,4 +1,4 @@
-// lower: the sae page dialect to the ES5 subset mquickjs runs.
+// lower: the sae page dialect to ES5, which QuickJS (sae's engine) runs.
 //
 // The dialect is TypeScript restricted to `--erasableSyntaxOnly`, over ES5
 // plus a written list of ES2015 forms. Lowering never re-prints the program.
@@ -2647,7 +2647,7 @@ lx_free_(x: *Lx) {
 }
 
 // What `...v` spreads: a string's characters, an array, or any array-like
-// (mquickjs's Array.prototype.slice takes only real arrays). Strings split
+// (an engine's Array.prototype.slice may take only real arrays). Strings split
 // into UTF-16 units, not code points.
 const SPREAD_FN = "function $sae_spread(v) { if (typeof v === \"string\") return v.split(\"\"); if (Array.isArray(v)) return v; var r = []; for (var i = 0; i < v.length; i++) r.push(v[i]); return r; }"
 

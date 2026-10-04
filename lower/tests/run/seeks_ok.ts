@@ -1,7 +1,7 @@
 "seeks local-filesystem";
 "seeks outgoing-http";
 // One privilege per line; the page may then name fs and http. ui, vg,
-// storage and browserContext need no seeking. (No page API on mqjs.)
+// storage and browserContext need no seeking. (No page API in saejs.)
 const where = (): string => typeof fs + " " + typeof http + " " + typeof ui;
 print(where());
 const show = (shell: string): void => print(`a parameter named shell: ${shell}`);

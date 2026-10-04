@@ -6,7 +6,7 @@ Aether's `contrib` modules, and 3D scenes through ae3d.
 
 ## The constraint that shapes everything
 
-A page is untrusted code from a URL, running on mquickjs-ae: an ES5-subset
+A page is untrusted code from a URL, running on QuickJS (contrib.quickjs): a
 engine, about 2x slower than C. Two things follow.
 
 1. **The page describes; native code does the work.** This is already how
@@ -97,7 +97,7 @@ the page can handle. It waits on the shader question above.
 - **The page veto** (`src/sae_host.ae`) extends to every `gfx` host
   function. ae3d's file loaders, the agent channel and the engine's window
   are on the hide list from the start, and `tests/check_page_veto.sh` covers
-  the new functions without change, since it reads them from the ROM table.
+  the new functions without change, since they are registered at run time.
 - **Budgets per page**: objects, triangles, texture bytes, lights, and
   `on_update` time per frame. Over budget is a thrown error, like calling a
   shape outside `vg.scene`. The numbers are policy, set by the browser.

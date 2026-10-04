@@ -1,0 +1,54 @@
+// saejs — run a JavaScript file on the engine sae runs pages on
+// (contrib.quickjs), with only `print`: what the lowerer tests run their
+// output with.
+//
+//   target/saejs file.js
+import contrib.quickjs
+import std.fs
+import std.os
+
+extern exit(code: int)
+extern putchar(c: int) -> int
+
+print_(q: ptr, this_h: int, args: int) -> int {
+    n = quickjs.arg_count(q, args)
+    i = 0
+    while i < n {
+        if i > 0 { putchar(32) }
+        print(quickjs.arg_string(q, args, i))
+        i = i + 1
+    }
+    println("")
+    return 0
+}
+
+main() {
+    if os.aether_args_count() < 2 {
+        println("usage: saejs file.js")
+        exit(2)
+    }
+    path = os.aether_args_get(1)
+    src, err = fs.read(path)
+    if err != "" {
+        println("saejs: cannot read ${path}: ${err}")
+        exit(2)
+    }
+    q = quickjs.runtime(65536, 0)
+    quickjs.set_time_limit(q, 10000)
+    pf = quickjs.function(q, "print", 1, print_)
+    quickjs.set_global(q, "print", pf)
+    quickjs.release(q, pf)
+    v, e = quickjs.eval(q, src, path)
+    if e != "" {
+        println(e)
+        quickjs.dispose(q)
+        exit(1)
+    }
+    quickjs.release(q, v)
+    _n, je = quickjs.run_jobs(q)
+    quickjs.dispose(q)
+    if je != "" {
+        println(je)
+        exit(1)
+    }
+}

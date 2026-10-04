@@ -1,7 +1,7 @@
 # lower: the page dialect
 
 `lower` turns a page written in sae's dialect into the ES5 subset that
-mquickjs-ae runs unchanged. The browser runs it in-process on every page
+QuickJS (sae's engine) runs unchanged. The browser runs it in-process on every page
 (`src/sae_host.ae`); `target/saelower` runs it from the command line, so a
 server can lower pages ahead of time.
 
@@ -46,14 +46,14 @@ does not check them.
 | `0b` / `0o` literals, numeric separators | decimal |
 | trailing commas in parameter and argument lists | removed |
 
-`for...of` is passed through: mquickjs runs it natively.
+`for...of` is passed through: the engine runs it natively.
 
 Spread in arrays and calls is lowered to `concat` and `apply`:
 `[a, ...b]` becomes `[].concat([a], $sae_spread(b))` and `o.m(...b)`
 becomes `o.m.apply(o, [].concat($sae_spread(b)))`, the receiver named by
 repeating the path. `$sae_spread` (appended to the page's last line when a
 spread is used) takes a string's characters, an array as it is, or any
-array-like (`arguments`); mquickjs's `slice` takes only real arrays.
+array-like (`arguments`).
 Strings spread into UTF-16 units, not code points as ES2015's do.
 
 **Refused**, each with a `line:col` error: `class`, `async`/`await`,
@@ -74,7 +74,8 @@ Four uses are refused because lowering would change what they mean:
 
 ## Tests
 
-`lower/tests/run/*.ts` are lowered and run on mquickjs-ae's `mqjs`. Each must
+`lower/tests/run/*.ts` are lowered and run on sae's engine (`target/saejs`, from
+`tools/saejs.ae`). Each must
 print exactly its `// expect:` lines and keep its line count.
 `lower/tests/err/*.ts` must fail with the `// error: line:col: message` they
 state. Without the per-iteration wraps, `letloop.ts` prints `for 3` three

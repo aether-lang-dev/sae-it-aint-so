@@ -1,9 +1,10 @@
 #!/bin/sh
 # tests/check_page_veto.sh — the page veto is in place and enforced.
 #
-# 1. Every function a page can reach (each SAE_JSFN in src/sae_rom.c) opens
-#    with the page veto: one `hide` line, the same in all of them (see "The
-#    page veto" in src/sae_host.ae).
+# 1. Every function a page can reach (each one api_register_ in
+#    src/sae_host.ae installs with reg_ or quickjs.function) opens with the
+#    page veto: one `hide` line, the same in all of them (see "The page
+#    veto" in src/sae_host.ae).
 # 2. The compiler in use enforces that line where it matters: a hidden
 #    module named inside an `if` body, a nested block or a closure fails to
 #    compile. Aether before the fix for nested qualified names let all three
@@ -35,16 +36,18 @@ if [ -z "$veto" ]; then
     exit 1
 fi
 n=0
-for fn in $(grep -o 'SAE_JSFN([a-z_0-9]*' "$ROOT/src/sae_rom.c" | sed 's/SAE_JSFN(//' | grep -vx name); do
+# The functions api_register_ hands the engine: the last argument of each
+# reg_(...) and quickjs.function(...) call inside it.
+fns=$(awk '/^api_register_\(/ { on = 1; next } on && /^}/ { exit }
+           on && /(reg_|quickjs\.function)\(/ { line = $0; sub(/\)[[:space:]]*$/, "", line); n = split(line, a, ","); f = a[n]; gsub(/[[:space:]]/, "", f); print f }' "$HOST" | sort -u)
+for fn in $fns; do
     n=$((n + 1))
-    first=$(awk -v fn="$fn" '
-        prev == "@c_callback" && index($0, fn "(ctx: ptr") == 1 { getline; print; exit }
-        { prev = $0 }' "$HOST")
+    first=$(awk -v fn="$fn" 'index($0, fn "(ctx: ptr") == 1 { getline; print; exit }' "$HOST")
     if [ "$first" != "$veto" ]; then
         bad "$fn: does not open with the page veto (has: ${first:-nothing})"
     fi
 done
-[ "$n" -gt 0 ] || bad "no SAE_JSFN prototypes found in src/sae_rom.c"
+[ "$n" -gt 0 ] || bad "no page-API functions found in api_register_"
 [ "$fails" -eq 0 ] && ok "all $n page-API functions open with the page veto"
 
 # --- 2. the compiler enforces it, at depth ---
@@ -59,7 +62,7 @@ import std.os
 import std.http.client
 EOF
 for f in env_ fetch_ load_ go_ run_nav_ page_new_ page_free_ page_run_ browser_new_ \
-         build_chrome_ set_status_ sae_main sae_new_context JS_Parse JS_Run JS_FreeContext; do
+         build_chrome_ set_status_ sae_main engine_new_ engine_eval_ engine_dispose_; do
     echo "$f() -> int { return 0 }" >> "$work/head.ae"
 done
 lower_stub='lower() -> int { return 0 }'

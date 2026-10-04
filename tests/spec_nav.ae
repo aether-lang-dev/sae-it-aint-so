@@ -99,6 +99,14 @@ main() {
             b.back()
             b.assert_page(HOME, "200 ", "Back from the unreadable page")
         }
+        spec.it("a page that loops forever is stopped; the browser carries on") callback {
+            b.click("A page that loops forever")
+            b.assert_text("Before the loop", "what it built first stays")
+            spec.assert_true(b.wait_for_console("InternalError: interrupted"), "stopped by the time limit")
+            b.assert_no_text("Never reached", "after")
+            b.back()
+            b.assert_page(HOME, "200 ", "and the browser still navigates")
+        }
         spec.it("a modifier outside a container throws; earlier widgets stay") callback {
             b.click("Modifier misuse")
             b.assert_text("This page failed: see the console.", "failure notice")

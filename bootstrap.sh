@@ -3,8 +3,8 @@
 #
 #   1. `ae` and `aeb`, pinned, through aeb's get.sh (binary-first, into
 #      $PREFIX, default ~/.local). The same one-liner selaenium documents.
-#   2. The sibling checkouts sae's symlinks point at: ../aether-ui and
-#      ../mquickjs-ae, cloned at their pinned commits. A sibling that already
+#   2. The sibling checkout sae's symlinks point at, ../aether-ui, cloned
+#      at its pinned commit. A sibling that already
 #      exists is left as it is (it may be your working copy).
 #
 # Versions come from ./pins. Then: ./build.sh
@@ -43,6 +43,5 @@ clone() {
 }
 command -v git >/dev/null 2>&1 || { say "git is required"; exit 1; }
 clone aether-ui "$AETHER_UI_URL" "$AETHER_UI_REF"
-clone mquickjs-ae "$MQUICKJS_AE_URL" "$MQUICKJS_AE_REF"
 
 say "done; now ./build.sh"

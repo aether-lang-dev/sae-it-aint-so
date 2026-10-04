@@ -1,12 +1,11 @@
-// sae, the browser. One native binary: the mquickjs engine (mquickjs-ae,
-// via the mqjs symlink), the aether-ui toolkit (via the aether-ui and ui
-// symlinks) and sae's own host. The ROM table comes from gen/.
+// sae, the browser. One native binary: the QuickJS engine (Aether's
+// contrib.quickjs, compiled from the Aether tree sae builds against), the
+// aether-ui toolkit (via the aether-ui and ui symlinks) and sae's own host.
 
 import bldr
 import bldr (dep)
 import c
 import c (sources, aether_source, cflag, link_flag, output_file, aether_home, aether_caps, include)
-import mqjs.gen.mqjssources
 import std.os
 import std.string
 
@@ -35,7 +34,7 @@ output_name_() -> string {
 // alongside sae; ./build.sh sets it when ../aether is one. Unset, the
 // installed toolchain on PATH is used (what ./bootstrap.sh installs). Not
 // AETHER_HOME, which names the toolchain aeb itself runs on (the same split
-// as mquickjs-ae's MQJS_AETHER_HOME).
+// as a dev tree's own build uses).
 aether_root_() -> string {
     root = os.getenv("SAE_AETHER_HOME")
     if string.length(root) > 0 { return root }
@@ -49,23 +48,33 @@ ae_bin_() -> string {
     return "ae"
 }
 
+// contrib.quickjs's C, from the Aether tree sae builds against: the dev tree
+// (SAE_AETHER_HOME), else the installed toolchain's share/aether.
+quickjs_c_() -> string {
+    root = aether_root_()
+    if string.length(root) > 0 { return "${root}/contrib/quickjs/aether_quickjs.c" }
+    home = os.getenv("AETHER_HOME")
+    return "${home}/share/aether/contrib/quickjs/aether_quickjs.c"
+}
+
 aeb(cap) {
     bldr.build() {
-        dep("gen/.build.ae")
         c.program() {
             cflag("-Os")
             cflag("-D_GNU_SOURCE")
             cflag("-fno-math-errno")
             cflag("-fno-trapping-math")
-            cflag("-Imqjs")
             if string.length(aether_root_()) > 0 { aether_home(aether_root_()) }
             // ui reads theme files (std.fs) and the environment (std.os);
             // the host reads and fetches pages (std.fs, std.http). Pages
             // themselves get none of these.
             aether_caps("fs,os,net")
 
-            mqjssources.register_engine_c_sources("mqjs")
-            mqjssources.register_engine_sources("ae")
+            // The engine: contrib.quickjs's C (QuickJS's amalgamation, which
+            // scripts/fetch-quickjs-amalgamation.sh fetches into that tree).
+            // aeb's c.program does not yet follow a module's @source, so it
+            // is named here.
+            sources(quickjs_c_())
 
             aether_source("src/sae_host.ae")
             sources("src/sae_rom.c")

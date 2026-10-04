@@ -3,8 +3,11 @@
 # that needs it (or that re-verified sae against it), as the other Aether
 # repos do with their own pins.
 
-# Aether release. Floor 0.766.0: mquickjs-ae's VM uses its _unchecked mem
-# accessors (#2382), and the page veto needs its nested hide fix (#2381).
+# Aether release. The page engine is contrib.quickjs (aether#2418), merged
+# after 0.774.0 and in no release yet: until one ships it, sae builds
+# against an Aether dev tree (../aether, or SAE_AETHER_HOME), which build.sh
+# prefers. Bump this to that release when it exists. The page veto needs
+# the nested hide fix (#2381), in every release since 0.766.0.
 AE_PIN=0.766.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
@@ -13,8 +16,6 @@ AE_PIN=0.766.0
 # changed imported module did not relink).
 AEB_REF=v0.325
 
-# Sibling checkouts, reached through the aether-ui and mqjs symlinks.
+# Sibling checkouts, reached through the aether-ui symlink.
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 AETHER_UI_REF=e8482736ace7803804b0a4fd773e8c106123e37e
-MQUICKJS_AE_URL=https://github.com/aether-lang-dev/mquickjs-ae.git
-MQUICKJS_AE_REF=a6f5fb5c6f56bd96f6df4b7a44a93b39d3d615da
