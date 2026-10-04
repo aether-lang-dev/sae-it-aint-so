@@ -40,17 +40,25 @@ Plain ES5 is valid dialect too, and passes through unchanged.
 Container builders take their block as the last argument, the way Aether's
 trailing block works: `ui.vstack(4, fn)` makes the stack under the current
 parent, runs `fn` with the stack as the parent, and pops it again even if
-`fn` throws.
+`fn` throws. A stack's or grid's spacing may be left out (`vstack(fn)`,
+4 points).
+
+```ts
+grid(4, () => {                       // four to a row, filled a row at a time
+  equal_cells();                      // every key one size: a keypad
+  [..."789+456-123*0C=/"].forEach(key);
+});
+```
 
 The `ui` object (each builder returns its widget handle):
 
 | | |
 |---|---|
-| containers | `vstack(spacing, fn)`, `hstack(spacing, fn)`, `scroll(fn)`, `button(label, fn)` (the block styles the button) |
+| containers | `vstack([spacing,] fn)`, `hstack([spacing,] fn)`, `grid(cols, [spacing,] fn)` (the block's widgets fill it row by row), `scroll(fn)`, `button(label, fn)` (the block styles the button) |
 | widgets | `text(s)`, `btn(label, onPress)`, `divider()`, `spacer()`, `textfield(placeholder, onChange(text))` |
-| modifiers (inside a block) | `margin(t, r, b, l)`, `bg_color(r, g, b, a)`, `onclick(fn)` |
+| modifiers (inside a block) | `margin(t, r, b, l)`, `bg_color(r, g, b, a)`, `onclick(fn)`, `equal_cells()` (in a grid: one width per column, one height per row, for all) |
 | reading and writing | `get_text(h)`, `set_text(h, s)`: synchronous, no `await` |
-| rebuilding | `clear(h)` empties a `vstack`/`hstack` the page made; `into(h, fn)` builds into it again |
+| rebuilding | `clear(h)` empties a `vstack`/`hstack`/`grid` the page made; `into(h, fn)` builds into it again |
 | inputs and indicators | `toggle(label, onChange(on))`, `slider(min, max, initial, onChange(v))`, `picker(onChange(i))` + `picker_add(h, item)`, `progressbar(f)` + `set_progress(h, f)`; `get_`/`set_toggle`, `get_`/`set_slider` |
 | styles | `styles(sheet)`, `add_class(h, name)`, `style_id(h, name)`: see below |
 | timers | `timer(ms, fn)` returns an id, `timer_cancel(id)`; a page's timers stop when it goes |

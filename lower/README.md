@@ -48,8 +48,17 @@ does not check them.
 
 `for...of` is passed through: mquickjs runs it natively.
 
+Spread in arrays and calls is lowered to `concat` and `apply`:
+`[a, ...b]` becomes `[].concat([a], $sae_spread(b))` and `o.m(...b)`
+becomes `o.m.apply(o, [].concat($sae_spread(b)))`, the receiver named by
+repeating the path. `$sae_spread` (appended to the page's last line when a
+spread is used) takes a string's characters, an array as it is, or any
+array-like (`arguments`); mquickjs's `slice` takes only real arrays.
+Strings spread into UTF-16 units, not code points as ES2015's do.
+
 **Refused**, each with a `line:col` error: `class`, `async`/`await`,
-generators, spread (`...` in calls, arrays and objects), optional chaining
+generators, object spread (`{...o}`), spread in a call to anything but a
+name or a dotted path (`f(1)(...a)`, `new F(...a)`), optional chaining
 (`?.`), `??`, `**`, `&&=`/`||=`/`??=`, computed keys, tagged templates,
 destructuring assignment and parameters, nested patterns, BigInt, `import`
 and `export` (a page is a script).

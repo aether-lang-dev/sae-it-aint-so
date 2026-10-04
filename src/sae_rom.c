@@ -21,6 +21,8 @@ SAE_JSFN(js_performance_now);
 
 SAE_JSFN(sae_ui_vstack);
 SAE_JSFN(sae_ui_hstack);
+SAE_JSFN(sae_ui_grid);
+SAE_JSFN(sae_ui_equal_cells);
 SAE_JSFN(sae_ui_text);
 SAE_JSFN(sae_ui_btn);
 SAE_JSFN(sae_ui_divider);

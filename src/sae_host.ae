@@ -134,7 +134,8 @@ struct Page {
     // handle at least first_handle. A page may name only those: not the
     // address bar, the status line, the driver's banner or a past page's.
     first_handle: int
-    stacks: ptr      // std.list: the vstack/hstack handles this page made
+    stacks: ptr      // std.list: the vstack/hstack/grid handles this page made
+    grids: ptr       // std.list: the grid handles this page made
     root: int        // the page's own stack in the content area: its widgets
                      //   go in it, its styles stop at it, it goes with the page
     sheet: ptr       // the page's AeCS sheet (ui.styles), or null
@@ -177,6 +178,9 @@ now_unix_ms_() -> long { return scaled_(os.now_unix_ms(), 1) }
 // performance.now) n times fast, from the moment each is first read, so a
 // spec can watch a minute-long timer finish in seconds. Off (1x) unless set.
 var time_scale_ = 0
+// The gap between a stack's or grid's children when the page gives none.
+const SPACING = 4
+
 var time_base_mono_: long = 0
 var time_base_unix_: long = 0
 
@@ -207,6 +211,14 @@ arg_str_(ctx: ptr, argv: ptr, argc: int, i: int) -> string {
     if i >= argc { return "" }
     p = page_of_(ctx)
     return JS_ToCStringLen(ctx, p.scratch, arg_(argv, i), p.cbuf)
+}
+
+// A leading number a block may stand in for: vstack(() => ...) has no
+// spacing, vstack(8, () => ...) has.
+lead_int_(ctx: ptr, argv: ptr, argc: int, i: int, dflt: int) -> int {
+    if i >= argc { return dflt }
+    if JS_IsFunction(ctx, arg_(argv, i)) != 0 { return dflt }
+    return arg_int_(ctx, argv, argc, i, dflt)
 }
 
 arg_int_(ctx: ptr, argv: ptr, argc: int, i: int, dflt: int) -> int {
@@ -259,12 +271,13 @@ hold_(ctx: ptr, fnv: long) -> ptr {
 }
 
 // A container builder: make it under the current top, then run the page's
-// block function with it on top. The pop happens even if the block throws,
-// so later widgets never attach to the wrong parent.
+// block function (its last argument) with it on top. The pop happens even if
+// the block throws, so later widgets never attach to the wrong parent.
 container_(ctx: ptr, argv: ptr, argc: int, handle: int) -> long {
     p = page_of_(ctx)
-    if argc >= 2 {
-        fnv = arg_(argv, 1)
+    if argc == 1 && JS_IsFunction(ctx, arg_(argv, 0)) == 0 { return JS_NewInt32(ctx, handle) }
+    if argc >= 1 {
+        fnv = arg_(argv, argc - 1)
         if JS_IsFunction(ctx, fnv) == 0 {
             return sae_throw_type_error(ctx, "container block must be a function")
         }
@@ -287,12 +300,16 @@ owned_(p: *Page, h: int) -> int {
     return 1
 }
 
-// Is `h` a vstack or hstack this page made?
+// Is `h` a vstack, hstack or grid this page made?
 own_stack_(p: *Page, h: int) -> int {
-    n = list.size(p.stacks)
+    return in_list_(p.stacks, h)
+}
+
+in_list_(l: ptr, h: int) -> int {
+    n = list.size(l)
     i = 0
     while i < n {
-        v, _ = list.get(p.stacks, i)
+        v, _ = list.get(l, i)
         if mem.ptr_to_long(v) == h { return 1 }
         i = i + 1
     }
@@ -335,7 +352,7 @@ sae_ui_vstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     long t = now_ns_()
-    h = ui.vstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
+    h = ui.vstack(mem.long_to_ptr(top_(p)), lead_int_(ctx, argv, argc, 0, SPACING))
     ui_done_(p, t)
     list.add(p.stacks, mem.long_to_ptr(h))
     return container_(ctx, argv, argc, h)
@@ -346,10 +363,41 @@ sae_ui_hstack(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     long t = now_ns_()
-    h = ui.hstack(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0))
+    h = ui.hstack(mem.long_to_ptr(top_(p)), lead_int_(ctx, argv, argc, 0, SPACING))
     ui_done_(p, t)
     list.add(p.stacks, mem.long_to_ptr(h))
     return container_(ctx, argv, argc, h)
+}
+
+// grid(cols, block) or grid(cols, spacing, block): the block's widgets fill
+// it a row at a time, cols to a row (aether-ui's grid block).
+@c_callback
+sae_ui_grid(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    cols = lead_int_(ctx, argv, argc, 0, 1)
+    if cols < 1 || cols > 64 { return sae_throw_type_error(ctx, "grid(cols, ...): cols must be 1 to 64") }
+    sp = lead_int_(ctx, argv, argc, 1, SPACING)
+    long t = now_ns_()
+    h = ui.grid(mem.long_to_ptr(top_(p)), cols, sp, sp)
+    ui_done_(p, t)
+    list.add(p.stacks, mem.long_to_ptr(h))
+    list.add(p.grids, mem.long_to_ptr(h))
+    return container_(ctx, argv, argc, h)
+}
+
+// equal_cells(): in a grid's block, every column one width and every row one
+// height, children filling their cells (a keypad).
+@c_callback
+sae_ui_equal_cells(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
+    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
+    p = page_of_(ctx)
+    target = modifier_target_(ctx, "equal_cells")
+    if target == 0 || in_list_(p.grids, target) == 0 {
+        return sae_throw_type_error(ctx, "equal_cells() must be called inside a grid's block")
+    }
+    ui.equal_cells(mem.long_to_ptr(target))
+    return sae_js_undefined()
 }
 
 @c_callback
@@ -514,7 +562,7 @@ sae_ui_clear(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     h = arg_int_(ctx, argv, argc, 0, 0)
-    if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "clear(h): h is not a vstack or hstack this page made") }
+    if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "clear(h): h is not a vstack, hstack or grid this page made") }
     ui.clear_children(h)
     return sae_js_undefined()
 }
@@ -526,7 +574,7 @@ sae_ui_into(ctx: ptr, this_val: ptr, argc: int, argv: ptr) -> long {
     hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, sae_new_context, JS_Parse, JS_Run, JS_FreeContext
     p = page_of_(ctx)
     h = arg_int_(ctx, argv, argc, 0, 0)
-    if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "into(h, fn): h is not a vstack or hstack this page made") }
+    if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "into(h, fn): h is not a vstack, hstack or grid this page made") }
     if argc < 2 { return sae_throw_type_error(ctx, "into(h, fn): fn is missing") }
     return container_(ctx, argv, argc, h)
 }
@@ -2274,6 +2322,7 @@ page_new_(b: *Browser, url: string) -> *Page {
     p.vg_depth = 0
     p.vg_nodes = list.new()
     p.stacks = list.new()
+    p.grids = list.new()
     p.sheet = null
     p.sheet_strs = list.new()
     p.timers = list.new()
@@ -2313,6 +2362,7 @@ page_free_(p: *Page) {
     list.free(p.refs)
     list.free(p.vg_nodes)
     list.free(p.stacks)
+    list.free(p.grids)
     // The page's sheet styles only its own widgets: un-set it before the
     // next page builds, then free it (free_styles refuses the current one).
     if p.sheet != null {

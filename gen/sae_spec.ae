@@ -21,6 +21,8 @@ sae_stdlib_main(argc: int, argv: ptr) -> int {
     u = statics_of(object(g, "ui"))
     cfunc(u, "vstack", 2, "sae_ui_vstack")
     cfunc(u, "hstack", 2, "sae_ui_hstack")
+    cfunc(u, "grid", 3, "sae_ui_grid")
+    cfunc(u, "equal_cells", 0, "sae_ui_equal_cells")
     cfunc(u, "text", 1, "sae_ui_text")
     cfunc(u, "btn", 2, "sae_ui_btn")
     cfunc(u, "divider", 0, "sae_ui_divider")

@@ -14,6 +14,10 @@ go_home(msg: string) {
     b.assert_page(HOME, "200 ", msg)
 }
 
+key_at_(label: string, f: string) -> int {
+    return uidriver.widget_int_field_by_id(uidriver.widget_id_of("button", label), f)
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -113,7 +117,14 @@ main() {
             b.assert_text(" 10", "7 + 3 = 10")
             b.click("C")
             b.click("6"); b.click("*"); b.click("7"); b.click("=")
-            b.assert_text(" 42", "6 * 7 = 42 (the row's op, captured per iteration)")
+            b.assert_text(" 42", "6 * 7 = 42")
+            // grid(4, () => { equal_cells(); [..."789+456-123*0C=/"].forEach(key) })
+            spec.assert_eq(key_at_("8", "y"), key_at_("7", "y"), "8 beside 7")
+            spec.assert_eq(key_at_("+", "y"), key_at_("7", "y"), "+ ends the first row")
+            spec.assert_eq(key_at_("4", "x"), key_at_("7", "x"), "4 under 7")
+            spec.assert_eq(key_at_("/", "x"), key_at_("+", "x"), "/ under +")
+            spec.assert_gt(key_at_("0", "y"), key_at_("1", "y"), "0 on the last row")
+            spec.assert_eq(key_at_("C", "w"), key_at_("7", "w"), "equal cells")
             go_home("home from calculator")
         }
         spec.it("a text field's handler, get_text, and a scroll block") callback {

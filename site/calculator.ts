@@ -1,48 +1,45 @@
-// The calculator from aether-ui's examples/calculator, as a page: the same
-// shape as the Aether DSL, with trailing blocks as last arguments.
-const { vstack, hstack, btn, button, bg_color, onclick, divider,
+// The calculator, in Tsyne's shape on aether-ui's grid: sixteen keys spelled
+// out in one string and spread into a 4-column grid, filled a row at a time
+// (aether-ui's examples/calculator is the same grid, in Aether).
+const { vstack, grid, equal_cells, btn, button, bg_color, onclick, divider,
         text_bound, ui_state, ui_set, margin } = ui;
 
 type Op = (a: number, b: number) => number;
+const OPS: { [k: string]: Op } = {
+  "+": (a, b) => a + b,
+  "-": (a, b) => a - b,
+  "*": (a, b) => a * b,
+  "/": (a, b) => (b === 0 ? a : a / b),
+};
 
 let num = 0, prev = 0;
 let op: Op = (a, b) => a;
 const display = ui_state(0);
 
-const digit = (d: number) => { num = num * 10 + d; ui_set(display, num); };
-const apply_op = (f: Op) => { prev = num; num = 0; op = f; ui_set(display, 0); };
+const digit = (d: string) => { num = num * 10 + +d; ui_set(display, num); };
+const operator = (k: string) => { prev = num; num = 0; op = OPS[k]; ui_set(display, 0); };
 const equals = () => { num = op(prev, num); prev = 0; ui_set(display, num); };
 const clear = () => { num = 0; prev = 0; ui_set(display, 0); };
 
-const key_op = (label: string, f: Op) => {
-  button(label, () => {
-    bg_color(0.95, 0.85, 0.5, 1.0);
-    onclick(() => apply_op(f));
-  });
+const key = (k: string) => {
+  if (k in OPS) {
+    button(k, () => { bg_color(0.95, 0.85, 0.5, 1.0); onclick(() => operator(k)); });
+  } else if (k === "C") {
+    button(k, () => { bg_color(0.9, 0.6, 0.6, 1.0); onclick(clear); });
+  } else if (k === "=") {
+    btn(k, equals);
+  } else {
+    btn(k, () => digit(k));
+  }
 };
 
-vstack(4, () => {
+vstack(() => {
   margin(12, 12, 12, 12);
   text_bound(display, " ", "");
   divider();
-  const rows: Array<[number, number, number, string, Op]> = [
-    [7, 8, 9, "+", (a, b) => a + b],
-    [4, 5, 6, "-", (a, b) => a - b],
-    [1, 2, 3, "*", (a, b) => a * b],
-  ];
-  for (const [d1, d2, d3, label, f] of rows) {
-    hstack(4, () => {
-      btn(`${d1}`, () => digit(d1));
-      btn(`${d2}`, () => digit(d2));
-      btn(`${d3}`, () => digit(d3));
-      key_op(label, f);
-    });
-  }
-  hstack(4, () => {
-    btn("C", clear);
-    btn("0", () => digit(0));
-    btn("=", equals);
-    key_op("/", (a, b) => b === 0 ? 0 : a / b);
+  grid(4, () => {
+    equal_cells();
+    [..."789+456-123*0C=/"].forEach(key);
   });
 });
 btn("Home", () => browserContext.changePage("/"));

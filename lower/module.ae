@@ -14,10 +14,11 @@
 // `this`), let/const (to var, with each loop iteration wrapped in a function
 // when a closure in the body could see a per-iteration binding), template
 // literals, shorthand properties and methods, destructuring declarations,
-// default and rest parameters, 0b/0o literals and numeric separators.
+// default and rest parameters, 0b/0o literals and numeric separators,
+// spread in arrays and in calls to a name or dotted path.
 //
 // Anything else outside ES5 is an error naming line and column: classes,
-// async/await, generators, spread, optional chaining, `??`, `**`, computed
+// async/await, generators, object spread, optional chaining, `??`, `**`, computed
 // keys, enum, namespace, parameter properties, import/export.
 
 import std.string
@@ -142,6 +143,7 @@ struct Lx {
     sealed: string   // "seal except" names of the page, as ",a,b,", or "" (none)
     hides: ptr       // std.strarr: "hide" names in force, stacked by function
     hide_base: ptr   // per function: hides length at its start
+    spread: int      // 1 once a spread was lowered: append $sae_spread
 }
 
 ch_(x: *Lx, i: int) -> int {
@@ -2076,7 +2078,7 @@ parse_postfix_(x: *Lx) {
             // TS non-null assertion
             blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
             advance_(x)
-            parse_call_member_tail_(x)
+            parse_call_member_tail_(x, 0 - 1)
         } else {
             return
         }
@@ -2108,14 +2110,17 @@ parse_call_member_(x: *Lx) {
             j = skip_type_args_(x, x.pos)
             if j > 0 && tk_is_(x, j, "(") == 1 { erase_tokens_(x, x.pos, j) }
         }
-        if at_(x, "(") == 1 { parse_args_(x) }
-    } else {
-        parse_primary_(x)
+        if at_(x, "(") == 1 { parse_args_(x, 0 - 1) }
+        parse_call_member_tail_(x, 0 - 1)
+        return
     }
-    parse_call_member_tail_(x)
+    start = x.pos
+    parse_primary_(x)
+    parse_call_member_tail_(x, start)
 }
 
-parse_call_member_tail_(x: *Lx) {
+// callee: the token the member chain starts at, or -1 if unknown.
+parse_call_member_tail_(x: *Lx, callee: int) {
     while x.err == "" {
         if at_(x, ".") == 1 {
             advance_(x)
@@ -2132,7 +2137,7 @@ parse_call_member_tail_(x: *Lx) {
             parse_expr_(x)
             expect_(x, "]")
         } else if at_(x, "(") == 1 {
-            parse_args_(x)
+            parse_args_(x, callee)
         } else if at_(x, "<") == 1 && tk_nlb_(x, x.pos) == 0 {
             // f<T>(...): type arguments, if what follows is a call
             j = skip_type_args_(x, x.pos)
@@ -2150,13 +2155,47 @@ parse_call_member_tail_(x: *Lx) {
     }
 }
 
-parse_args_(x: *Lx) {
-    expect_(x, "(")
-    while at_(x, ")") == 0 && x.err == "" {
-        if at_(x, "...") == 1 {
-            unsupported_(x, x.pos, "spread arguments (...)")
+// The callee of a call with spread, tokens [s, e): a name or a dotted path
+// of names (f, o.m, a.b.m), so `this` can be named by repeating the path.
+// Returns the receiver's text ("void 0" for a plain name), or "" if the
+// callee is anything else.
+spread_receiver_(x: *Lx, s: int, e: int) -> string {
+    if s >= e { return "" }
+    i = s
+    while i < e {
+        if (i - s) % 2 == 0 {
+            if tk_kind_(x, i) != T_IDENT { return "" }
+        } else if tk_is_(x, i, ".") == 0 {
+            return ""
+        }
+        i = i + 1
+    }
+    if (e - s) % 2 == 0 { return "" }
+    if e - s == 1 { return "void 0" }
+    return string.string_substring(x.src, tk_start_(x, s), tk_end_(x, e - 3))
+}
+
+// Arguments of a call whose callee is tokens [callee, x.pos); callee < 0
+// for `new F(...)`, which cannot spread.
+parse_args_(x: *Lx, callee: int) {
+    if has_spread_(x, x.pos) == 1 {
+        recv = ""
+        if callee >= 0 { recv = spread_receiver_(x, callee, x.pos) }
+        if recv == "" {
+            unsupported_(x, x.pos, "spread arguments (...) except to a name or a.b.name")
             return
         }
+        // f(a, ...b) -> f.apply(void 0, [].concat([a], $sae_spread(b)))
+        o = x.pos
+        edit_(x, tk_start_(x, o), tk_end_(x, o), ".apply(${recv}, [].concat(")
+        advance_(x)
+        parse_spread_list_(x, ")")
+        if at_(x, ")") == 1 { edit_(x, tk_start_(x, x.pos), tk_end_(x, x.pos), "))") }
+        expect_(x, ")")
+        return
+    }
+    expect_(x, "(")
+    while at_(x, ")") == 0 && x.err == "" {
         parse_assign_(x)
         if at_(x, ",") == 1 {
             c = x.pos
@@ -2232,7 +2271,60 @@ parse_primary_(x: *Lx) {
     fail_at_(x, tk_start_(x, i), "unexpected '${tk_text_(x, i)}'")
 }
 
+// Does the bracketed list opening at token `open` have a top-level `...`?
+has_spread_(x: *Lx, open: int) -> int {
+    close = tk_mate_(x, open)
+    i = open + 1
+    while i < close {
+        if tk_is_(x, i, "...") == 1 { return 1 }
+        m = tk_mate_(x, i)
+        if m > i { i = m + 1 } else { i = i + 1 }
+    }
+    return 0
+}
+
+// The elements of a list with spread, from just after its opening bracket
+// to its closing one, as concat's arguments: `a` becomes `[a]` and `...b`
+// becomes `$sae_spread(b)`. The caller rewrites the brackets.
+parse_spread_list_(x: *Lx, close: string) {
+    x.spread = 1
+    while at_(x, close) == 0 && x.err == "" {
+        if at_(x, ",") == 1 {
+            unsupported_(x, x.pos, "a hole in a list with spread")
+            return
+        }
+        if at_(x, "...") == 1 {
+            d = x.pos
+            edit_(x, tk_start_(x, d), tk_end_(x, d), "$sae_spread(")
+            advance_(x)
+            parse_assign_(x)
+            insert_(x, x.last_end, ")")
+        } else {
+            insert_(x, tk_start_(x, x.pos), "[")
+            parse_assign_(x)
+            insert_(x, x.last_end, "]")
+        }
+        if at_(x, ",") == 1 {
+            c = x.pos
+            advance_(x)
+            if at_(x, close) == 1 { blank_(x, tk_start_(x, c), tk_end_(x, c)) }
+        } else {
+            break
+        }
+    }
+}
+
 parse_array_(x: *Lx) {
+    if has_spread_(x, x.pos) == 1 {
+        // [a, ...b, c] -> [].concat([a], $sae_spread(b), [c])
+        o = x.pos
+        edit_(x, tk_start_(x, o), tk_end_(x, o), "[].concat(")
+        advance_(x)
+        parse_spread_list_(x, "]")
+        if at_(x, "]") == 1 { edit_(x, tk_start_(x, x.pos), tk_end_(x, x.pos), ")") }
+        expect_(x, "]")
+        return
+    }
     expect_(x, "[")
     while at_(x, "]") == 0 && x.err == "" {
         if at_(x, ",") == 1 {
@@ -2454,6 +2546,7 @@ lx_new_(src: string) -> *Lx {
     x.sealed = ""
     x.hides = strarr.new()
     x.hide_base = iv_new_()
+    x.spread = 0
     return x
 }
 
@@ -2490,6 +2583,11 @@ lx_free_(x: *Lx) {
     heap.free(x)
 }
 
+// What `...v` spreads: a string's characters, an array, or any array-like
+// (mquickjs's Array.prototype.slice takes only real arrays). Strings split
+// into UTF-16 units, not code points.
+const SPREAD_FN = "function $sae_spread(v) { if (typeof v === \"string\") return v.split(\"\"); if (Array.isArray(v)) return v; var r = []; for (var i = 0; i < v.length; i++) r.push(v[i]); return r; }"
+
 // Lower one page. Returns (es5_source, error): error is "" on success, or
 // "name:line:col: message".
 lower_source(src: string, name: string) -> (string, string) {
@@ -2499,6 +2597,11 @@ lower_source(src: string, name: string) -> (string, string) {
     if x.err == "" { parse_program_(x) }
     out = ""
     if x.err == "" { out = apply_edits_(x) }
+    // Spread's runtime half, hoisted, on the last line so no line moves.
+    if x.err == "" && x.spread == 1 {
+        if string.string_ends_with(out, "\n") == 0 { out = string.concat(out, "\n") }
+        out = string.concat(out, SPREAD_FN)
+    }
     err = ""
     if x.err != "" { err = "${name}:${x.err_line}:${x.err_col}: ${x.err}" }
     lx_free_(x)
