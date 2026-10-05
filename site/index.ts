@@ -26,6 +26,9 @@ const links: Link[] = [
   { label: "A page outside the dialect", href: "/unsupported" },
   { label: "A page that seeks the file system", href: "/seeks_fs" },
   { label: "A page that uses what it did not seek", href: "/unsought" },
+  { label: "Scoped requests", href: "/scoped" },
+  { label: "A page that seeks another origin", href: "/scoped_far" },
+  { label: "A page that can do without", href: "/optional" },
   { label: "A page that loops forever", href: "/loop" },
 ];
 

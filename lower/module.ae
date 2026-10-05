@@ -21,14 +21,14 @@ import std.strbuilder
 import std.strarr
 import std.mem
 
-exports (lower_source, page_seeks, LOWER_VERSION)
+exports (lower_source, page_seeks, page_optional, page_scopes, LOWER_VERSION)
 
 extern malloc(n: long) -> ptr
 extern realloc(p: ptr, n: long) -> ptr
 extern free(p: ptr)
 
 // Part of sae's bytecode cache key: bump it whenever output changes.
-const LOWER_VERSION = "lower-2"
+const LOWER_VERSION = "lower-3"
 
 // ---------------------------------------------------------------------------
 // A growable int vector.
@@ -121,7 +121,9 @@ struct Lx {
     fn_vars: ptr     // std.strarr: var/function/parameter names, stacked
     fn_varbase: ptr  // per function: fn_vars length at its start
         sealed: string   // objects the page's "seeks" lines unlock, as ",fs,http,"
-    sought: string   // the privileges it seeks, as ",local-filesystem,outgoing-http,"
+    sought: string   // the privileges it requires, as ",local-filesystem,outgoing-http,"
+    optional: string // the privileges it uses if granted (", reduced functionality without")
+    scopes: string   // scoped seeks, one per line: "privilege\tVERBS\tpattern\n"
     hides: ptr       // std.strarr: "hide" names in force, stacked by function
     hide_base: ptr   // per function: hides length at its start
 }
@@ -907,35 +909,125 @@ privilege_of_(obj: string) -> string {
 }
 
 // The "seeks" lines at the top of a page: string statements, one after
-// another, each naming one privilege or several separated by commas:
+// another, one privilege each, optionally narrowed to a scope and optionally
+// marked as something the page can do without:
 //
-//     "seeks local-filesystem";
 //     "seeks outgoing-http";
+//     "seeks outgoing-http GET,PATCH https://api.github.com/notifications/*";
+//     "seeks outgoing-http GET /api/*, reduced functionality without";
 //
-// The page may then name the objects those unlock, and the kernel checks
-// them against what the context grants before the page runs.
+// The page may then name the objects those unlock. The kernel checks each
+// against what the context grants before the page runs, and checks every
+// request against the page's scopes. docs/app-capabilities.md.
+const OPTIONAL_SUFFIX = ", reduced functionality without"
+const HTTP_VERBS = ",GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS,"
+
+// The words of s, split on spaces, empty ones dropped, as a strarr.
+words_of_(s: string) -> ptr {
+    out = strarr.new()
+    parts = string.split(s, " ")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        w = string.trim(string.string_array_get(parts, i))
+        if w != "" { _p = strarr.push_copy(out, w) }
+        i = i + 1
+    }
+    return out
+}
+
+// Why an outgoing-http scope ("GET,POST" and a URL pattern) is malformed, or "".
+http_scope_error_(verbs: string, pattern: string) -> string {
+    vs = string.split(verbs, ",")
+    nv = string.string_array_size(vs)
+    i = 0
+    while i < nv {
+        v = string.string_array_get(vs, i)
+        if v == "" || string.contains(HTTP_VERBS, ",${v},") == 0 {
+            return "\"${v}\" is not an HTTP method (GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS)"
+        }
+        i = i + 1
+    }
+    if string.starts_with(pattern, "/") == 1 { return "" }
+    rest = ""
+    if string.starts_with(pattern, "https://") == 1 { rest = string.substring(pattern, 8, string.length(pattern)) }
+    if string.starts_with(pattern, "http://") == 1 { rest = string.substring(pattern, 7, string.length(pattern)) }
+    if rest == "" {
+        return "\"${pattern}\" is not a URL pattern: it starts with https://, http:// or / (this page's own origin)"
+    }
+    slash = string.index_of(rest, "/")
+    host = rest
+    if slash >= 0 { host = string.substring(rest, 0, slash) }
+    if host == "" { return "\"${pattern}\" names no host" }
+    if string.contains(host, "*") == 1 {
+        return "\"${pattern}\": the scheme, host and port are matched exactly; only the path may use *"
+    }
+    return ""
+}
+
 page_seeks_(x: *Lx) {
     j = x.pos
     while tk_kind_(x, j) == T_STR && x.err == "" {
         d = str_inner_(x, j)
         if string.starts_with(d, "seeks ") == 0 { return }
-        names = names_of_(string.substring(d, 6, string.length(d)))
-        parts = string.split(names, ",")
-        n = string.string_array_size(parts)
-        k = 0
-        while k < n {
-            nm = string.string_array_get(parts, k)
-            if nm != "" {
-                obj = object_of_(nm)
-                if obj == "" {
-                    fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls)")
-                    return
-                }
-                if string.contains(x.sought, ",${nm},") == 0 { x.sought = string.concat(x.sought, "${nm},") }
-                if string.contains(x.sealed, ",${obj},") == 0 { x.sealed = string.concat(x.sealed, "${obj},") }
-            }
-            k = k + 1
+        rest = string.trim(string.substring(d, 6, string.length(d)))
+        optional = 0
+        if string.ends_with(rest, OPTIONAL_SUFFIX) == 1 {
+            optional = 1
+            rest = string.trim(string.substring(rest, 0, string.length(rest) - string.length(OPTIONAL_SUFFIX)))
         }
+        ws = words_of_(rest)
+        nw = strarr.size(ws)
+        nm = ""
+        if nw > 0 { nm = strarr.get(ws, 0) }
+        if string.ends_with(nm, ",") == 1 || (nw > 1 && string.starts_with(strarr.get(ws, 1), ",") == 1) {
+            fail_at_(x, tk_start_(x, j), "\"seeks\" takes one privilege per line; give each its own")
+            return
+        }
+        obj = object_of_(nm)
+        if obj == "" {
+            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls)")
+            return
+        }
+        scoped = 0
+        if nw > 1 {
+            if nm != "outgoing-http" {
+                fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\" cannot take a scope yet; seek it without one (only outgoing-http can be scoped so far)")
+                return
+            }
+            if nw != 3 {
+                fail_at_(x, tk_start_(x, j), "a scoped seek is a method list and a URL pattern: \"seeks outgoing-http GET https://example.com/api/*\"")
+                return
+            }
+            why = http_scope_error_(strarr.get(ws, 1), strarr.get(ws, 2))
+            if why != "" {
+                fail_at_(x, tk_start_(x, j), why)
+                return
+            }
+            scoped = 1
+        }
+        // One privilege is required or optional, scoped or not: never both.
+        was_req = string.contains(x.sought, ",${nm},")
+        was_opt = string.contains(x.optional, ",${nm},")
+        if (optional == 1 && was_req == 1) || (optional == 0 && was_opt == 1) {
+            fail_at_(x, tk_start_(x, j), "${nm} is sought both as required and as \"reduced functionality without\"")
+            return
+        }
+        was_scoped = string.contains(x.scopes, "${nm}\t")
+        if (was_req == 1 || was_opt == 1) && was_scoped != scoped {
+            fail_at_(x, tk_start_(x, j), "${nm} is sought both with and without a scope; scope every line or none")
+            return
+        }
+        if optional == 1 {
+            if was_opt == 0 { x.optional = string.concat(x.optional, "${nm},") }
+        } else {
+            if was_req == 0 { x.sought = string.concat(x.sought, "${nm},") }
+        }
+        if scoped == 1 {
+            x.scopes = string.concat(x.scopes, "${nm}\t${strarr.get(ws, 1)}\t${strarr.get(ws, 2)}\n")
+        }
+        strarr.free(ws)
+        if string.contains(x.sealed, ",${obj},") == 0 { x.sealed = string.concat(x.sealed, "${obj},") }
         j = j + 1
         if tk_is_(x, j, ";") == 1 { j = j + 1 }
     }
@@ -2130,6 +2222,8 @@ lx_new_(src: string) -> *Lx {
     x.fn_varbase = iv_new_()
         x.sealed = ","
     x.sought = ","
+    x.optional = ","
+    x.scopes = ""
     x.hides = strarr.new()
     x.hide_base = iv_new_()
     return x
@@ -2155,11 +2249,16 @@ lx_free_(x: *Lx) {
     heap.free(x)
 }
 
-// The privileges the last page lowered seeks, as ",local-filesystem,", or
-// "," if none.
+// What the last page lowered seeks: the privileges it requires, as
+// ",local-filesystem,"; those it can do without; and its scoped seeks, one
+// per line as "privilege\tVERBS\tpattern".
 var last_seeks_: string = ""
+var last_optional_: string = ""
+var last_scopes_: string = ""
 
 page_seeks() -> string { return last_seeks_ }
+page_optional() -> string { return last_optional_ }
+page_scopes() -> string { return last_scopes_ }
 
 // Lower one page. Returns (es5_source, error): error is "" on success, or
 // "name:line:col: message".
@@ -2170,9 +2269,13 @@ lower_source(src: string, name: string) -> (string, string) {
     if x.err == "" { parse_program_(x) }
     out = ""
     last_seeks_ = ""
+    last_optional_ = ""
+    last_scopes_ = ""
     if x.err == "" {
         out = apply_edits_(x)
         last_seeks_ = string.copy(x.sought)
+        last_optional_ = string.copy(x.optional)
+        last_scopes_ = string.copy(x.scopes)
     }
     err = ""
     if x.err != "" { err = "${name}:${x.err_line}:${x.err_col}: ${x.err}" }

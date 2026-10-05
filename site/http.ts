@@ -29,6 +29,12 @@ btn("Fetch POST", async () => {
   const other = await http.fetch("http://example.com/");
   set_text(fetched, `fetch: ${res.status} ${res.text} | other origin ok=${other.ok}`);
 });
+// Redirects are followed by sae, each hop checked as the first URL was: a
+// same-origin URL that redirects elsewhere is refused, not followed.
+const away = text("away: (none)");
+btn("Redirect away", () =>
+  http.get("/api/redirect?to=http://example.com/", (res: Res) =>
+    set_text(away, res.ok ? `away: followed to ${res.status}` : `away: ${res.error}`)));
 btn("GET json", () =>
   http.get("/api/json", (res: Res) => {
     const data = res.json();

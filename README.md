@@ -163,9 +163,16 @@ names `fs`, `http` or `shell` without seeking it is refused when it is read
 (`page:4:1: fs needs "seeks local-filesystem" at the top of the page`), and
 one that seeks what its context does not grant is refused before any of it
 runs, saying what is missing (`seeks local-filesystem, which a web page in
-the browser cannot have`). A function that starts `"hide fs";` (with every
-function inside it) may not name `fs`. `docs/app-capabilities.md` has the
-whole design.
+the browser cannot have`). A seek can be narrowed to what the page will
+actually do, and sae holds every request to it, redirects included:
+
+```ts
+"seeks outgoing-http GET,POST /api/*";            // these methods, this path, its own origin
+"seeks local-filesystem, reduced functionality without";   // loads without it; fs is then absent
+```
+
+A function that starts `"hide fs";` (with every function inside it) may
+not name `fs`. `docs/app-capabilities.md` has the whole design.
 
 ### Storage
 

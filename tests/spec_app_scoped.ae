@@ -1,0 +1,36 @@
+// spec_app_scoped.ae — scoped seeks in an app: a scope must lie inside
+// app.json's grant, and a page may make only the requests its scopes name.
+// An app has no browser chrome to go back with, so the refusal comes last.
+//   SAE_TEST_APP=tests/apps/scoped tests/run_spec.sh spec_app_scoped
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "scoped seeks, in an app") {
+        spec.it("a scope inside the grant loads; its request is made, others refused") callback {
+            b.assert_text("Scoped app", "loaded")
+            b.click("Sought")
+            b.assert_text("sought: ok 200", "the sought request")
+            b.click("Granted but unsought")
+            b.assert_text("unsought: refused (this page's seeks do not cover GET http://127.0.0.1:8091/api/echo?msg=x)",
+                "app.json would allow it; the page's own seek does not")
+        }
+        spec.it("an optional privilege app.json does not grant leaves its object absent") callback {
+            b.click("Can do without")
+            b.assert_text("files: not available, working without", "fs absent")
+            b.click("Back")
+            b.assert_text("Scoped app", "back")
+        }
+        spec.it("a scope beyond app.json's grant is refused at load") callback {
+            b.click("Beyond the grant")
+            b.assert_text("This page cannot run here:", "notice")
+            spec.assert_contains(b.page_texts(), "seeks outgoing-http GET http://127.0.0.1:8091/old-home, beyond what this app's app.json grants", "why")
+            b.assert_no_text("You should not see this", "none of it ran")
+        }
+    }
+    return spec.run_summary(fw)
+}

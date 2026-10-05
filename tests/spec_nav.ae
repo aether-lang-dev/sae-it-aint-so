@@ -99,6 +99,39 @@ main() {
             b.back()
             b.assert_page(HOME, "200 ", "Back from the unreadable page")
         }
+        spec.it("a page with scoped seeks makes the requests it names and no others") callback {
+            b.click("Scoped requests")
+            b.click("Sought GET")
+            b.assert_text("sought GET: ok 200", "a sought method and path")
+            b.click("Sought POST")
+            b.assert_text("sought POST: ok 200", "the second method on the same path")
+            b.click("Unsought path")
+            b.assert_text("unsought path: refused (this page's seeks do not cover GET ${b.test_url("/api/headers")})", "a path it did not seek")
+            b.click("Unsought method")
+            b.assert_text("unsought method: refused (this page's seeks do not cover PUT ${b.test_url("/api/echo")})", "a method it did not seek")
+            b.click("Redirect within")
+            b.assert_text("redirect within: ok 200", "a redirect to a sought URL is followed")
+            b.click("Redirect beyond")
+            b.assert_text("redirect beyond: refused (redirected to ${b.test_url("/api/headers")}: this page's seeks do not cover GET ${b.test_url("/api/headers")})",
+                "a redirect is held to the scopes too")
+            b.click("Home")
+            b.assert_page(HOME, "200 ", "home")
+        }
+        spec.it("a web page that seeks another origin is refused before it runs") callback {
+            b.click("A page that seeks another origin")
+            b.assert_text("This page cannot run here:", "notice")
+            spec.assert_contains(b.page_texts(), "seeks outgoing-http GET https://example.com/*, which is not its own origin", "why")
+            b.assert_no_text("You should not see this", "none of it ran")
+            b.back()
+            b.assert_page(HOME, "200 ", "Back from the refused page")
+        }
+        spec.it("a page that can do without what it seeks loads, and finds it absent") callback {
+            b.click("A page that can do without")
+            b.assert_text("files: not available, working without", "fs is absent, not refused")
+            b.assert_text("network: not available, working without", "an optional scope beyond the grant leaves http absent")
+            b.back()
+            b.assert_page(HOME, "200 ", "Back from the page that did without")
+        }
         spec.it("modern TypeScript runs as written: a class, an Error subclass, and an await on http") callback {
             b.click("Modern TypeScript")
             b.assert_text("clicks: 0", "a class with a private field")
@@ -160,7 +193,11 @@ main() {
             spec.assert_eq(key_at_("4", "x"), key_at_("7", "x"), "4 under 7")
             spec.assert_eq(key_at_("/", "x"), key_at_("+", "x"), "/ under +")
             spec.assert_gt(key_at_("0", "y"), key_at_("1", "y"), "0 on the last row")
-            spec.assert_eq(key_at_("C", "w"), key_at_("7", "w"), "equal cells")
+            // Equal by constraint; frames are then snapped to whole pixels, so
+            // a grid whose width does not divide by 4 has one cell a pixel
+            // wider (which width that is moves with the window's content).
+            wd = key_at_("C", "w") - key_at_("7", "w")
+            spec.assert_true(wd >= -1 && wd <= 1, "equal cells, to the pixel (C ${key_at_("C", "w")}, 7 ${key_at_("7", "w")})")
             go_home("home from calculator")
         }
         spec.it("a text field's handler, get_text, and a scroll block") callback {
@@ -305,6 +342,11 @@ main() {
         spec.it("http.fetch: the same requests, awaited, refused the same way") callback {
             b.click("Fetch POST")
             b.assert_text("fetch: 200 posted: awaited body | other origin ok=false", "awaited POST, then a refusal as res.ok false")
+        }
+        spec.it("a redirect to another origin is refused, not followed") callback {
+            b.click("Redirect away")
+            b.assert_text("away: redirected to http://example.com/: a page may reach only its own origin: http://example.com/",
+                "each hop checked as the first URL was")
         }
         spec.it("res.json() parses the body") callback {
             b.click("GET json")

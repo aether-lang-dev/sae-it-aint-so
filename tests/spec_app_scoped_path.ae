@@ -1,0 +1,20 @@
+// spec_app_scoped_path.ae — an app's page has no web origin, so a path-only
+// outgoing-http pattern ("/api/*") is refused at load, saying to name the URL.
+//   SAE_TEST_APP=tests/apps/scoped_path tests/run_spec.sh spec_app_scoped_path
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "a path-only scope, in an app") {
+        spec.it("is refused at load") callback {
+            b.assert_text("This page cannot run here:", "notice")
+            spec.assert_contains(b.page_texts(), "seeks outgoing-http GET /api/json: a path-only pattern means the page's own origin, and this page has none; name the full URL", "why")
+            b.assert_no_text("You should not see this", "none of it ran")
+        }
+    }
+    return spec.run_summary(fw)
+}

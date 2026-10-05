@@ -108,6 +108,10 @@ struct Page {
     seq: int         // which load this is: an http reply for an older page is dropped
     http_res: int    // the page's response-object maker (http_helpers_), or 0
     http_req: int    // the page's request-object maker
+    http_scopes: string // its outgoing-http scopes, "VERBS\tabsolute-pattern\n"
+                     //   per line, or "" when it seeks outgoing-http unscoped
+    absent: string   // privileges it can do without and was not granted, as
+                     //   ",local-filesystem,": their objects are not installed
 }
 
 // The pages whose runtimes are live (one in the browser, as a rule).
@@ -1570,6 +1574,8 @@ struct HttpJob {
     body: string
     ctype: string
     headers: ptr     // strarr of "Name: value", or null
+    page_url: string // the page that asked, and its scopes: every redirect
+    scopes: string   //   hop is checked against them as the first URL was
     status: int
     resp: string
     resp_headers: string
@@ -1632,58 +1638,184 @@ var http_waits_: ptr = null     // std.list of *HttpWait
 var http_ids_ = 0
 var http_timer_ = 0
 
-http_do_(jp: ptr) {
-    j = jp as *HttpJob
-    req = client.request(j.method, j.url)
-    if req == null {
-        j.err = "not a valid URL"
-        return
-    }
-    client.set_timeout(req, 15s)
-    client.set_follow_redirects(req, 5)
-    if j.headers != null {
-        nh = strarr.size(j.headers)
-        hi = 0
-        while hi < nh {
-            line = strarr.get(j.headers, hi)
-            c = string.index_of(line, ": ")
-            if c > 0 {
-                _sh = client.set_header(req, string.string_substring(line, 0, c),
-                                        string.string_substring(line, c + 2, string.length(line)))
-            }
-            hi = hi + 1
-        }
-    }
-    if j.body != "" || j.method == "POST" || j.method == "PUT" || j.method == "PATCH" {
-        ct = j.ctype
-        if ct == "" { ct = "text/plain" }
-        _sb = client.set_body(req, string.bytes(j.body), ct)
-    }
-    resp, err = client.send_request(req)
-    client.request_free(req)
-    if err != "" {
-        j.err = own_(err)
-        return
-    }
-    j.status = client.response_status(resp)
-    j.resp = own_(client.response_body(resp))
-    j.resp_headers = own_(client.response_headers(resp))
-    client.response_free(resp)
+// A redirect status: the response names where to go next.
+is_redirect_(status: int) -> int {
+    if status == 301 || status == 302 || status == 303 || status == 307 || status == 308 { return 1 }
+    return 0
 }
 
-// "" if a page at page_url may reach url, else why not.
-http_refusal_(page_url: string, url: string) -> string {
-    if is_http_(url) == 0 { return "http.get/post takes an http(s) URL: ${url}" }
-    if app_dir_ != "" {
-        if prefix_in_(cap_http_, url) == 1 { return "" }
-        return "this app may not reach ${url} (app.json capabilities.http lists what it may)"
+const REDIRECT_HOPS = 5
+
+// Run one request on a fetcher actor. Redirects are followed here, not by
+// the client, so every hop is checked against the page's grant and scopes
+// exactly as the first URL was: an allowed URL cannot redirect a page to
+// one it may not reach.
+http_do_(jp: ptr) {
+    j = jp as *HttpJob
+    url = j.url
+    method = j.method
+    body = j.body
+    host0 = string.string_substring(url, 0, origin_end_(url))
+    cross = 0        // a hop left the first origin: credentials stay behind
+    hops = 0
+    while 1 == 1 {
+        req = client.request(method, url)
+        if req == null {
+            j.err = "not a valid URL: ${url}"
+            return
+        }
+        client.set_timeout(req, 15s)
+        if j.headers != null {
+            nh = strarr.size(j.headers)
+            hi = 0
+            while hi < nh {
+                line = strarr.get(j.headers, hi)
+                c = string.index_of(line, ": ")
+                if c > 0 {
+                    hname = string.string_substring(line, 0, c)
+                    lname = string.to_lower(hname)
+                    if cross == 0 || (lname != "authorization" && lname != "cookie" && lname != "proxy-authorization") {
+                        _sh = client.set_header(req, hname, string.string_substring(line, c + 2, string.length(line)))
+                    }
+                }
+                hi = hi + 1
+            }
+        }
+        if body != "" || method == "POST" || method == "PUT" || method == "PATCH" {
+            ct = j.ctype
+            if ct == "" { ct = "text/plain" }
+            _sb = client.set_body(req, string.bytes(body), ct)
+        }
+        resp, err = client.send_request(req)
+        client.request_free(req)
+        if err != "" {
+            j.err = own_(err)
+            return
+        }
+        status = client.response_status(resp)
+        loc = ""
+        if is_redirect_(status) == 1 { loc = client.response_header(resp, "Location") }
+        if loc == "" {
+            j.status = status
+            j.resp = own_(client.response_body(resp))
+            j.resp_headers = own_(client.response_headers(resp))
+            client.response_free(resp)
+            return
+        }
+        client.response_free(resp)
+        hops = hops + 1
+        if hops > REDIRECT_HOPS {
+            j.err = "too many redirects (more than ${REDIRECT_HOPS}) from ${j.url}"
+            return
+        }
+        next = resolve_(url, loc)
+        if string.string_starts_with(url, "https://") == 1 && string.string_starts_with(next, "http://") == 1 {
+            j.err = "refused a redirect from https to http: ${next}"
+            return
+        }
+        // 303, and 301/302 after a POST, continue as a GET without a body.
+        if status == 303 || ((status == 301 || status == 302) && method == "POST") {
+            method = "GET"
+            body = ""
+        }
+        why = http_refusal_(j.page_url, j.scopes, method, next)
+        if why != "" {
+            j.err = "redirected to ${next}: ${why}"
+            return
+        }
+        if string.string_substring(next, 0, origin_end_(next)) != host0 { cross = 1 }
+        url = next
     }
-    if is_http_(page_url) == 1 {
+}
+
+// 1 if s[i..] matches the glob g[k..]: "*" is any run of characters but
+// "/", "**" any run at all, everything else itself.
+glob_at_(g: string, k: int, s: string, i: int) -> int {
+    gn = string.length(g)
+    sn = string.length(s)
+    while k < gn {
+        c = string.string_char_at(g, k)
+        if c == 42 {
+            deep = 0
+            if k + 1 < gn && string.string_char_at(g, k + 1) == 42 { deep = 1 }
+            nk = k + 1 + deep
+            jj = i
+            while jj <= sn {
+                if glob_at_(g, nk, s, jj) == 1 { return 1 }
+                if jj < sn && deep == 0 && string.string_char_at(s, jj) == 47 { return 0 }
+                jj = jj + 1
+            }
+            return 0
+        }
+        if i >= sn { return 0 }
+        if string.string_char_at(s, i) != c { return 0 }
+        i = i + 1
+        k = k + 1
+    }
+    if i == sn { return 1 }
+    return 0
+}
+
+// The path of an http(s) URL, without its query or fragment ("/" if none).
+url_path_(u: string) -> string {
+    path = string.string_substring(u, origin_end_(u), string.length(u))
+    q = string.index_of(path, "?")
+    if q >= 0 { path = string.string_substring(path, 0, q) }
+    h = string.index_of(path, "#")
+    if h >= 0 { path = string.string_substring(path, 0, h) }
+    if path == "" { path = "/" }
+    return path
+}
+
+// 1 if one of a page's scopes ("VERBS\tpattern" lines, patterns absolute)
+// covers `method` on `url`: the method is listed, the origin is the
+// pattern's exactly, and the path matches its glob. The query is not part
+// of the match.
+scope_covers_(scopes: string, method: string, url: string) -> int {
+    origin = string.string_substring(url, 0, origin_end_(url))
+    path = url_path_(url)
+    lines = string.split(scopes, "\n")
+    n = string.string_array_size(lines)
+    i = 0
+    while i < n {
+        line = string.string_array_get(lines, i)
+        i = i + 1
+        tab = string.index_of(line, "\t")
+        if tab > 0 {
+            verbs = string.string_substring(line, 0, tab)
+            pat = string.string_substring(line, tab + 1, string.length(line))
+            if string.contains(",${verbs},", ",${method},") == 1 {
+                if string.string_substring(pat, 0, origin_end_(pat)) == origin {
+                    if glob_at_(url_path_(pat), 0, path, 0) == 1 { return 1 }
+                }
+            }
+        }
+    }
+    return 0
+}
+
+// "" if a page at page_url, with these scopes ("" when it seeks
+// outgoing-http unscoped), may make this request, else why not. The grant
+// (app.json, or a web page's own origin) is checked first, then the scopes.
+http_refusal_(page_url: string, scopes: string, method: string, url: string) -> string {
+    if is_http_(url) == 0 { return "http.get/post takes an http(s) URL: ${url}" }
+    granted = 0
+    if app_dir_ != "" {
+        if prefix_in_(cap_http_, url) == 0 {
+            return "this app may not reach ${url} (app.json capabilities.http lists what it may)"
+        }
+        granted = 1
+    }
+    if granted == 0 {
+        if is_http_(page_url) == 0 { return "a page may reach only its own origin: ${url}" }
         po = string.string_substring(page_url, 0, origin_end_(page_url))
         uo = string.string_substring(url, 0, origin_end_(url))
-        if po == uo { return "" }
+        if po != uo { return "a page may reach only its own origin: ${url}" }
     }
-    return "a page may reach only its own origin: ${url}"
+    if scopes != "" && scope_covers_(scopes, method, url) == 0 {
+        return "this page's seeks do not cover ${method} ${url}"
+    }
+    return ""
 }
 
 http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: string, headers: ptr, ref: int) -> int {
@@ -1702,7 +1834,9 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     j.status = 0
     j.resp = ""
     j.resp_headers = ""
-    j.err = http_refusal_(p.url, url)
+    j.page_url = p.url
+    j.scopes = p.http_scopes
+    j.err = http_refusal_(p.url, p.http_scopes, method, url)
     w = heap.new(HttpWait)
     w.id = j.id
     w.page = p as ptr
@@ -1929,6 +2063,66 @@ seek_refusal_(url: string, seeks: string) -> string {
     if missing == "" { return "" }
     if app_dir_ == "" { return "${url} seeks ${missing}, which a web page in the browser cannot have" }
     return "${url} seeks ${missing}, which this app's app.json does not grant"
+}
+
+// A page's outgoing-http scopes (lowerer lines "outgoing-http\tVERBS\tpattern")
+// checked against what this context grants, with path-only patterns ("/api/*")
+// made absolute against the page's own origin. Returns the scopes as the
+// page keeps them ("VERBS\tpattern" lines) and "", or "" and why the page
+// cannot run. A scope must lie inside the grant: within app.json's http
+// prefixes in an app, on the page's own origin in the browser.
+http_scopes_for_(page_url: string, scopes: string) -> (string, string) {
+    out = ""
+    lines = string.split(scopes, "\n")
+    n = string.string_array_size(lines)
+    i = 0
+    while i < n {
+        line = string.string_array_get(lines, i)
+        i = i + 1
+        if string.string_starts_with(line, "outgoing-http\t") == 1 {
+            rest = string.string_substring(line, 14, string.length(line))
+            tab = string.index_of(rest, "\t")
+            verbs = string.string_substring(rest, 0, tab)
+            pat = string.string_substring(rest, tab + 1, string.length(rest))
+            shown = "seeks outgoing-http ${verbs} ${pat}"
+            if string.string_starts_with(pat, "/") == 1 {
+                if is_http_(page_url) == 0 {
+                    return "", "${page_url} ${shown}: a path-only pattern means the page's own origin, and this page has none; name the full URL"
+                }
+                pat = string.concat(string.string_substring(page_url, 0, origin_end_(page_url)), pat)
+            }
+            if app_dir_ != "" {
+                lit = pat
+                star = string.index_of(pat, "*")
+                if star >= 0 { lit = string.string_substring(pat, 0, star) }
+                if prefix_in_(cap_http_, lit) == 0 {
+                    return "", "${page_url} ${shown}, beyond what this app's app.json grants (capabilities.http)"
+                }
+            } else {
+                if is_http_(page_url) == 0 || string.string_substring(pat, 0, origin_end_(pat)) != string.string_substring(page_url, 0, origin_end_(page_url)) {
+                    return "", "${page_url} ${shown}, which is not its own origin; a web page may reach only that"
+                }
+            }
+            out = string.concat(out, "${verbs}\t${pat}\n")
+        }
+    }
+    return out, ""
+}
+
+// The privileges a page can do without (",outgoing-http,") that this context
+// cannot give it, as ",local-filesystem,": their objects are left out, so the
+// page sees `typeof fs === "undefined"` and falls back.
+absent_of_(optional: string) -> string {
+    out = ","
+    parts = string.split(optional, ",")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        nm = string.string_array_get(parts, i)
+        if nm != "" && available_(nm) == 0 { out = string.concat(out, "${nm},") }
+        i = i + 1
+    }
+    return out
 }
 
 // The strings of a JSON array `key` in object `v` (none if absent), each
@@ -2234,6 +2428,9 @@ api_register_(p: *Page) {
     quickjs.set_global(q, "vg", v)
     quickjs.release(q, v)
 
+    // A privilege the page can do without and was not granted has no
+    // object at all, so `typeof http === "undefined"` tells the page.
+    if string.contains(p.absent, ",outgoing-http,") == 0 {
     ht = quickjs.new_object(q)
     reg_(q, ht, "get", 2, sae_http_get)
     reg_(q, ht, "post", 4, sae_http_post)
@@ -2246,8 +2443,9 @@ api_register_(p: *Page) {
     // resolves where a callback would have run.
     hf, _hfe = quickjs.eval(q, "http.fetch = function (o) { return new Promise(function (resolve) { if (typeof o === 'string') http.get(o, resolve); else http.request(o, resolve); }); };", "sae:http")
     quickjs.release(q, hf)
+    }
 
-    if app_dir_ != "" {
+    if app_dir_ != "" && string.contains(p.absent, ",local-filesystem,") == 0 {
         fo = quickjs.new_object(q)
         reg_(q, fo, "read_text", 1, sae_fs_read_text)
         reg_(q, fo, "readFileSync", 2, sae_fs_read_text)
@@ -2261,7 +2459,8 @@ api_register_(p: *Page) {
         reg_(q, fo, "remove", 1, sae_fs_remove)
         quickjs.set_global(q, "fs", fo)
         quickjs.release(q, fo)
-
+    }
+    if app_dir_ != "" && string.contains(p.absent, ",open-urls,") == 0 {
         sho = quickjs.new_object(q)
         reg_(q, sho, "open", 1, sae_shell_open)
         quickjs.set_global(q, "shell", sho)
@@ -2298,10 +2497,12 @@ api_register_(p: *Page) {
     quickjs.release(q, perf)
 }
 
-page_new_(b: *Browser, url: string) -> *Page {
+page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Page {
     p = heap.new(Page)
     p.browser = b
     p.url = own_(url)
+    p.absent = own_(absent)
+    p.http_scopes = own_(http_scopes)
     p.stack = malloc(STACK_MAX * 4)
     p.depth = 0
     p.ui_ns = 0
@@ -2439,7 +2640,29 @@ load_(b: *Browser, url: string) {
         return
     }
 
-    p = page_new_(b, final_url)
+    // Optional privileges this context cannot give are left out; scopes are
+    // checked against the grant here too, before any of the page runs. An
+    // optional outgoing-http whose scope reaches past the grant goes the
+    // same way as one not granted at all: the page does without.
+    absent = absent_of_(lower.page_optional())
+    scopes, swhy = http_scopes_for_(final_url, lower.page_scopes())
+    if swhy != "" {
+        if string.contains(lower.page_optional(), ",outgoing-http,") == 1 {
+            absent = string.concat(absent, "outgoing-http,")
+            swhy = ""
+            scopes = ""
+        }
+    }
+    if swhy != "" {
+        ui.text(mem.long_to_ptr(b.content), "This page cannot run here:")
+        ui.text(mem.long_to_ptr(b.content), swhy)
+        set_status_(b, "${status} ${final_url}")
+        println("sae: ${swhy}")
+        b.last_ok = 0
+        return
+    }
+
+    p = page_new_(b, final_url, absent, scopes)
     b.page = p
     times = malloc(16)
     ok = page_run_(p, es5, times)

@@ -53,14 +53,18 @@ including on a promise an http callback resolves.
 
 ## Directives: seeks and hide
 
-A page's first statements may be `"seeks <privilege>";` lines
-(`local-filesystem`, `outgoing-http`, `open-urls`, one per line or several
-separated by commas). They unlock `fs`, `http` and `shell`, which a page may
-not name otherwise: `page.ts:3:1: fs needs "seeks local-filesystem" at the
-top of the page`. `lower_source` keeps the list for the host
-(`page_seeks()`), which checks it against the page's grants before running
-it. A function's first statement may be `"hide fs, http";`: those names are
-refused in that function and every function inside it. A name the code
+A page's first statements may be `"seeks ..."` lines, one privilege each
+(`local-filesystem`, `outgoing-http`, `open-urls`), optionally scoped
+(`"seeks outgoing-http GET,POST /api/*"`) and optionally marked
+`, reduced functionality without`. They unlock `fs`, `http` and `shell`,
+which a page may not name otherwise: `page.ts:3:1: fs needs "seeks
+local-filesystem" at the top of the page`. The lowerer checks the grammar
+(methods, patterns, one privilege per line, required or optional but not
+both) and keeps what it found for the host: `page_seeks()` (required
+privileges), `page_optional()` and `page_scopes()`. The host checks them
+against the page's grants before running it, and every request against the
+scopes. A function's first statement may be `"hide fs, http";`: those names
+are refused in that function and every function inside it. A name the code
 binds itself (a parameter, variable, class or catch binding called `fs`) is
 its own, not the capability. See `../docs/app-capabilities.md`.
 
