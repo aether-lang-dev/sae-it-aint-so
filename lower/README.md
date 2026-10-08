@@ -11,18 +11,19 @@ target/saelower page.ts > page.js
 lower/run-tests.sh
 ```
 
-It erases TypeScript and does nothing else. It tokenizes, parses the grammar
-enough to know what each token is, and overwrites the TypeScript with spaces
-(the ts-blank-space approach), so every line and column stays where the
-author wrote it: a position in an engine error is a position in the `.ts`.
-The JavaScript is passed through untouched. `lower/run-tests.sh` checks the
-line count for every test page.
+It erases TypeScript and does one more thing (Modules, below). It
+tokenizes, parses the grammar enough to know what each token is, and
+overwrites the TypeScript with spaces (the ts-blank-space approach), so
+every line and column stays where the author wrote it: a position in an
+engine error is a position in the `.ts`. The JavaScript is passed through
+untouched. `lower/run-tests.sh` checks the line count for every test page.
 
 ## The dialect
 
 Modern TypeScript, as `tsc --erasableSyntaxOnly` (TS 5.8) accepts it, over
-modern JavaScript (ES2023), with two exceptions: a page is a script, so no
-`import`/`export`; and no decorators (QuickJS does not run them yet).
+modern JavaScript (ES2023), with one exception: no decorators (QuickJS does
+not run them yet). Static `import`/`export` are the dialect's (Modules,
+below); `import()` and `import.meta` are not.
 Check pages with `tsc --noEmit --erasableSyntaxOnly`; the lowerer erases
 types, it does not check them.
 
@@ -46,10 +47,73 @@ including on a promise an http callback resolves.
 | `interface`, `type` aliases, `declare ...` (statements and class members) | `namespace` / `module` |
 | `as T`, `as const`, `satisfies T`, `<T>expr` | parameter properties (`constructor(private x)`) |
 | non-null `x!`, definite `let x!: T` and `field!: T`, optional `p?` and `field?` | decorators |
-| type parameters and type arguments (`f<T>()`, `new Map<K, V>()`, `class C<T>`) | `import` / `export` (except `import type` / `export type`, erased) |
+| type parameters and type arguments (`f<T>()`, `new Map<K, V>()`, `class C<T>`) | `import.meta`; `export` in a page; top-level `await` in a module |
+| `import type`, `export type`, `type` specifiers in an import or export list | string names in an import list (`import { "a-b" as ab }`) |
 | `public`, `private`, `protected`, `readonly`, `override`, `abstract` | |
 | `implements I, J`; `abstract` classes and members; index signatures | |
 | `this:` parameters, overload signatures (functions and methods) | |
+
+## Modules: the one non-erasure
+
+A static `import` or `export` statement is rewritten, in place, into a
+call on `$sae`, the loader object sae's host hands each unit (README,
+"Modules"): the host resolves, fetches and runs a page's imports before
+the page, so the page itself still runs synchronously. The rewrite stays on
+the statement's own lines (a multi-line statement collapses onto its first
+line, the rest left blank), so the line count holds; columns after the
+statement on that line move. Everything else is erased as before.
+
+| Written | Lowered |
+|---|---|
+| `import { a, b as c } from "./m.ts"` | `const { a, b: c } = $sae.m("./m.ts")` |
+| `import * as ns from "./m.ts"` | `const ns = $sae.m("./m.ts")` |
+| `import d from "./m.ts"` | `const d = $sae.m("./m.ts").default` |
+| `import "./m.ts"` | `$sae.m("./m.ts")` |
+| `export const a = 1, b = 2` | `const a = 1, b = 2;$sae.x($exports, "a", () => a, "b", () => b)` |
+| `export function f() {}` (and `class`, `let`, `var`) | `function f() {};$sae.x($exports, "f", () => f)` |
+| `export { a, b as c }` | `$sae.x($exports, "a", () => a, "c", () => b)` |
+| `export { a as b } from "./m.ts"` | `$sae.x($exports, "b", () => $sae.m("./m.ts").a)` |
+| `export * from "./m.ts"` | `$sae.all($exports, $sae.m("./m.ts"))` |
+| `export * as ns from "./m.ts"` | `$sae.x($exports, "ns", () => $sae.m("./m.ts"))` |
+| `export default expr` | `$exports.default = expr` |
+
+`$sae.m(spec)` returns the namespace object of a module the host already
+ran, resolved against the unit's own URL; `$sae.x` defines each export as
+a getter on the namespace (so `ns.count` reads a `let` as it is now, and a
+module's exports are its whole top-level scope's values, not copies);
+`$sae.all` copies another namespace's names (not `default`). An imported
+binding is a `const`, a copy taken when the import runs. `import type`,
+`export type`, `export interface`, `export declare` and `type` specifiers
+in a list are erased as before.
+
+**The wrapper.** A unit that imports, exports or awaits at its top level is
+wrapped in one function expression: the prefix `(function ($sae) {` (a
+page), `(async function ($sae) {` (a page with a top-level `await`) or
+`(function ($sae, $exports) {` (a module) goes before the first character,
+so line 1's columns move by its length, and the suffix `})` goes after the
+last character, after the final newline if there is one; a file without a
+final newline gets one first, the one case that adds a line. The host
+evaluates the text to that function and calls it with the loader object
+(and, for a module, its namespace); `page_wrapped()` tells it to. A page
+with neither import nor top-level `await` is the erased script it always
+was. Inside the wrapper, a page's top-level declarations are not globals.
+
+**Top-level `await`.** An `await` (or `for await`) outside every function
+makes the page's wrapper `async`, nothing else changes; the page runs on
+when its promise settles, and the host reports a rejection as an uncaught
+exception. In a module it is refused: a module's exports are ready when the
+page runs.
+
+**Positioned errors.** `import`/`export` anywhere but the top level, `export`
+in a page, `"seeks"` in a module, `import.meta`, a `\` in a module name,
+string names in a list, and top-level `await` in a module are each refused
+with the line and column (`lower/tests/err`).
+
+`lower_module(src, name, seeks)` lowers a module (`seeks` is the importing
+page's, as `",outgoing-http,"`: the module may name what the page sought);
+`page_imports()` lists what the last unit imports (`spec\tline\tcol` per
+line) and `page_wrapped()` whether its output is a function to call.
+`saelower --module`, `--imports` and `--module-imports` expose them.
 
 ## Directives: seeks and hide
 
@@ -80,7 +144,15 @@ its own, not the capability. See `../docs/app-capabilities.md`.
 from `tools/saejs.ae`): each must print exactly its `// expect:` lines and
 keep its line count. `modern.ts` covers the JavaScript above and
 `ts_classes.ts` the TypeScript erased inside classes. `lower/tests/err/*.ts`
-must fail with the `// error: line:col: message` they state.
+must fail with the `// error: line:col: message` they state
+(`err/module_*.ts` are lowered as modules). `lower/tests/mod/*.ts` are
+pages with imports: each is lowered, its import closure (`./lib/*.ts`
+beside it, `sae:*` from `lib/sae`) lowered as modules, and all of it run
+behind `tests/mod/harness.js`, a JavaScript stand-in for the host's loader
+object, against `// expect:` lines (`imports.ts` is every import and export
+form, `tla*.ts` top-level await, `sae_*.ts` the library modules).
+`lower/tests/mod/golden/*.ts` are compared with their `.js`: the exact
+rewrite.
 
 ## History
 

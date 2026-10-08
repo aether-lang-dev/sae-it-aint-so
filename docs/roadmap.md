@@ -52,7 +52,7 @@ they *cannot* be reintroduced as the browser grows.
 | **Resource caps per page.** 5 s per entry into JS, 32 MB heap. | done, and: 8 http in flight, 256 timers and frames, 4 MB storage per origin (`cap_*` in the corpus) | a per-origin memory budget |
 | **Coarse clocks in browser mode.** `performance.now()` and frame timestamps rounded (100 µs), as browsers did after Spectre; app mode keeps full resolution. | implemented behind one switch (`SAE_COARSE_CLOCKS`, on in the browser, off in an app; `spec_webrules` in both modes) | decision 1: confirm the default, then drop the switch or keep it |
 | **No fingerprinting surface.** No `navigator`, no device details; `browserContext` exposes the URL and navigation only. | done (`spec_globals` pins the surface) | keep |
-| **No code from anywhere else.** No module loader, no `data:`/`http:` imports. | done; in the corpus (`import_url`) | section 3 adds same-origin `import`, hashed; nothing else |
+| **No code from anywhere else.** No module loader, no `data:`/`http:` imports. | done; same-origin and `sae:` static `import`, hashed (3.1), **built** | keep as a red-team case (`tests/spec_imports.ae`, `tests/check_module_rules.sh`: cross-origin, `data:`, cycle, hash, climb-out, `import()` refused) |
 
 ### 1.2 The one cross-origin case: a CORS-alike
 
@@ -181,13 +181,13 @@ The lowerer's principle holds: it erases TypeScript and passes JavaScript
 through, so every line stays where the author wrote it. Growth must be
 either erasable or one small, documented desugar. In order of leverage:
 
-1. **Modules within an app or origin.** `import { chart } from "./chart.ts"`
-   is refused today. Allow it for the page's own origin (browser) or bundle
-   (app), through sae's loader: fetched like a page, lowered, hashed (an
-   SRI-alike: an `import` may name the hash it expects), never cross-origin,
-   never `data:`. This is the one non-erasure the lowerer takes on: `import`
-   and `export` become a sae-provided loader call. Shared components are the
-   single biggest ergonomic gap now.
+1. **Modules within an app or origin.** **Built** (README "Modules",
+   `lower/README.md` "Modules"): `import { chart } from "./chart.ts"` for
+   the page's own origin (browser) or bundle (app), through sae's loader:
+   fetched like a page, lowered, hashed (an SRI-alike: an `import` may name
+   the hash it expects), never cross-origin, never `data:`. The one
+   non-erasure the lowerer takes on: `import` and `export` become a
+   sae-provided loader call (`$sae`), resolved before the page runs.
 2. **`sae.d.ts`, generated from the gate spec** (section 1.3 item 2). Authors
    get autocompletion and `tsc --noEmit --erasableSyntaxOnly` catches wrong
    calls before a page is served. No grammar change at all; it is the gate's
@@ -203,9 +203,9 @@ either erasable or one small, documented desugar. In order of leverage:
    `each(list, key, render)` and `batch(fn)`. This is the Vue-alike half of
    "SVG + Vue": declare once, never call `set_text` again.
 5. **Async-first services.** `sqlite`, the files powerbox and `http.fetch`
-   are promises; `await` works in handlers already. Add top-level `await`:
-   the lowerer wraps a page in an async function when it sees one (a
-   one-line desugar, documented).
+   are promises; `await` works in handlers already. Top-level `await` is
+   **built**: the lowerer wraps a page in an async function when it sees
+   one (`lower/README.md` "The wrapper").
 6. **Keyboard and pointer in pages**: `on_key`, `on_drag`, `on_scroll`,
    `on_hover` exist in aether-ui and are needed by half the demos below.
 7. **Non-goals, deliberately.** No JSX: it is a real transform, and the
@@ -314,15 +314,15 @@ Each wave is what a few agent-days can finish and verify on every lane
    LD_PRELOAD and Capsicum lanes running the corpus.
 3. The gate generated from one spec, with `seal except`, and `sae.d.ts` out
    of the same spec (1.3 item 2, 3.2).
-4. Same-origin and in-bundle `import` (3.1).
+4. Same-origin and in-bundle `import` (3.1). **Done.**
 5. The reactive surface for pages (3.4) and the AeVG surface (4): the full
    grammar in TS guise, components, bindings, data joins, tweens, events, and
    the transpiler's TypeScript output.
 6. SQLite v1 (`page-services.md` section 6), which is independent and can
    run alongside.
 7. Pixels from a page (8.2) and the first `sae:` library modules (8.1):
-   `noise`, `scales`, `easing`, through the loader of 3.1. Demos 13 and 15
-   follow directly.
+   `noise`, `scales`, `easing`, through the loader of 3.1 (**the modules
+   are done**; pixels are not). Demos 13 and 15 follow directly.
 
 **Wave 2, trust and files (section 2):**
 
@@ -361,12 +361,14 @@ the system; all of it is what a page author reaches for first. sae's answer
 is a **page standard library** at a reserved origin: `import { perlin } from
 "sae:noise"`, resolved by the loader of section 3.1 from modules bundled
 with sae and hashed, never from the network, usable in browser and app mode
-with no capability. First modules: `sae:noise`, `sae:scales`, `sae:easing`,
+with no capability. First modules: `sae:noise`, `sae:scales`, `sae:easing`
+(**built**: `lib/sae/`, hashed into `lib/sae/MANIFEST` at build time,
+served by `services/stdlib`; README "Modules" has their API), then
 `sae:projections`, `sae:zoom-pan`, `sae:particles`, and `sae:charts`
 (axes, line and bar charts as AeVG components). Written fresh, in the
-dialect, so they are also the dialect's own test corpus. Where speed matters
-(`perf-gap.md`), a module can be backed by an Aether verb later without the
-page noticing.
+dialect, so they are also the dialect's own test corpus
+(`lower/tests/mod/sae_*.ts`). Where speed matters (`perf-gap.md`), a module
+can be backed by an Aether verb later without the page noticing.
 
 ### 8.2 The missing capability: pixels from a page
 
@@ -495,11 +497,14 @@ gRPC bridge: sae is in-process. The three.js-over-fake-WebGL route:
 3. **The CORS-alike header name** (`Sae-Allow-Origin`), and `*` allowed?
 4. **`import` syntax**: plain ES `import` with same-origin and hash rules, or
    a sae-specific form? (Plain ES, I think: tsc and editors understand it.)
+   **Built as plain ES.**
 5. **Signing**: ed25519 with a `.well-known` domain proof, as above?
 6. **JSX stays out**, the trailing-block form stays the house style?
 7. **The gate spec's format** (one table in a `.md` the generator reads, or a
    small `.ae` DSL)?
 8. **The `sae:` library origin**: that name, and the first modules (8.1)?
+   **Built as `sae:`** with `noise`, `scales`, `easing`; the name is one
+   constant to change.
 9. **Raster budgets** (8.2): 32 MB of pixels per page, and a dimension cap?
 10. **Which demo first.** My pick: 4 (the shop) and 1b (the camera), because
    together they exercise every security rule and the whole AeVG surface

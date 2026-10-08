@@ -121,8 +121,14 @@ and in an app `fs` and `shell`.
 - No `fetch`, `XMLHttpRequest`, `WebSocket`, `require`, `std`, `os` or
   `scriptArgs` (the timer names are sae's own, above, not quickjs-libc's).
 - `import()` of any specifier, whether a path, a `data:` URL or `http:`,
-  rejects: no module loader is installed. Static `import` is a syntax error,
-  because pages run as scripts.
+  rejects: no module loader is installed for it, still. **Static `import`**
+  is how a page gets code (README "Modules"): the lowerer rewrites it into
+  a call on `$sae`, a loader object handed to the page's wrapper function
+  (not a global: the global surface above is unchanged), and the host
+  resolves and runs the import closure before the page, from the page's own
+  origin (browser), its bundle (app) or its folder (a file), or `sae:`, the
+  library sae carries, hashed; `$sae.m` returns only what was imported
+  statically, so a page cannot reach code it did not name at the top.
 - `Atomics.wait` throws ("cannot block in this thread").
 - `eval` and `Function` stay in the page's own realm.
 - A host function's `.constructor` is just `Function`, it has no

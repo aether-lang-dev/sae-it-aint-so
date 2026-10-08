@@ -15,10 +15,11 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 |---|---|
 | `src/sae_host.ae` | The browser: window and chrome, history, fetch, one `Page` (JSContext, a `ui` handle stack and a `vg` node stack) per load, and every page-API host function (`sae_ui_*`, `sae_vg_*`, `sae_bc_*`) |
 | `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
-| `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs`, `shell` and `sqlite` only in app mode) |
-| `services/` | One module per effect a page can ask for (`files`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `sqlite`: the app's databases, the one place the engine is named), each confined by its imports; `docs/architecture.md` |
+| `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
+| `services/` | One module per effect a page can ask for (`files`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `stdlib`: the `sae:` library and import hashes), each confined by its imports; `docs/architecture.md` |
+| `lib/sae/` | The `sae:` page standard library (`noise`, `scales`, `easing`), written in the dialect; `MANIFEST` holds their build-time hashes (`tools/hash-lib.sh`) |
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
-| `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference |
+| `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae` |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`) |
 | `tools/saelower.ae` | CLI for the lowerer |
 | `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
@@ -59,7 +60,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 (cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 ../aether/build/ae build tools/saejs.ae -o target/saejs
-lower/run-tests.sh                           # 43 lowerer tests
+lower/run-tests.sh                           # 59 lowerer tests (run, err, mod, golden)
 tests/run_spec.sh                            # spec_nav: 45 specs
 tests/check_page_veto.sh                     # page veto present and enforced
 tests/check_layers.sh                        # services held to their imports
@@ -77,6 +78,9 @@ tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 17 attempt
 ../aether/build/ae run tests/spec_sqlite_service.ae   # services/sqlite: parameters, rows, migrations, escape routes, no window
 SAE_TEST_APP=tests/apps/sqlite_demo tests/run_spec.sh spec_app_sqlite   # sqlite.<name> through pages (resets its own rows)
 tests/check_sqlite_relaunch.sh                 # migrations once across a relaunch; a failing migration refuses the app
+tests/run_spec.sh spec_imports                 # static import/export, sae:, top-level await, refusals: 11
+SAE_TEST_APP=tests/apps/imports tests/run_spec.sh spec_app_imports   # an app importing from its bundle
+tests/check_module_rules.sh                    # the loader's rules, headless (file pages, an app's refusals, the library manifest)
 ```
 
 Toolchain: Aether 0.791.0 or later (`pins`), installed, or a dev tree

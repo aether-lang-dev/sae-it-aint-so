@@ -25,8 +25,9 @@ in-process call into aether-ui's `ui/module.ae` builders.
 Pages are written in modern TypeScript: what `tsc --erasableSyntaxOnly`
 accepts, over ES2023 (classes, async/await, destructuring, `?.`, `??`, ...).
 The browser erases the types in-process, keeping every line and column, and
-QuickJS runs the rest as written. A page is a script (no `import`/`export`),
-and decorators are not supported yet; see `lower/README.md` for the dialect.
+QuickJS runs the rest as written. A page may `import` from its own origin
+and from the `sae:` library (Modules, below); decorators are not supported
+yet; see `lower/README.md` for the dialect.
 
 ```ts
 interface Link { label: string; href: string }
@@ -333,6 +334,77 @@ stays the kernel's: a page reaches only these three calls.
 `SAE_TIME_SCALE=<n>` runs the clocks pages see (`Date.now`, `new Date()`,
 `performance.now`) n times fast, for specs that wait on timers.
 
+### Modules: `import`, `export` and the `sae:` library
+
+A page may import, with plain ES syntax (so `tsc` and editors understand
+it), from two places and nowhere else:
+
+```ts
+import { card, type Card } from "./lib/card.ts";     // its own origin (or bundle)
+import * as cards from "/lib/card.ts";              // the same, origin-relative
+import { noise, fbm2 } from "sae:noise";            // the page standard library
+import { linear } from "sae:scales#sha256-...";     // optional: the bytes it expects
+```
+
+- **Where from.** In the browser, a relative or absolute path on the page's
+  own origin (an absolute `http(s):` URL only if it is on that origin); in
+  an app, a path inside the bundle (`./lib/x.ts`, `/lib/x.ts` or
+  `app:/lib/x.ts`); for a page loaded from a file, a file in the page's own
+  folder; and `sae:<name>` anywhere. Everything else is refused before any
+  of the page runs, with the reason on the page and the console: another
+  origin, `data:`, any other scheme, a bare name (there is no npm here), a
+  path that climbs out (`..` above the bundle or folder), a module the
+  server does not have (anything but a 200), an import cycle (named), and
+  a `#sha256-<hex>` that does not match the fetched bytes. Dynamic
+  `import()` stays refused: no loader is installed for it.
+- **Before the page.** Imports are static and run first: sae fetches the
+  page's whole import closure on the same path and rules as pages, lowers
+  each module, runs them in dependency order into a per-page registry
+  (freed with the page), then runs the page. A module runs once per page
+  load, however many pages import it; its `export`s are getters on a
+  namespace object, so `ns.count` reads the module's `let` as it is now,
+  while `import { count }` is a copy taken when the import runs. Modules
+  are `export const/let/var/function/class`, `export { a as b }`, `export
+  default`, and the re-exports `export { a } from`, `export * from`,
+  `export * as ns from`. A module cannot `"seeks"`; it may name what the
+  page importing it sought. A page cannot `export` (nothing imports a
+  page). `lower/README.md` has the rewrite, the one non-erasure the
+  lowerer makes.
+- **The `sae:` library** (`lib/sae/`): modules sae carries, loadable in
+  the browser and in apps with no capability, each hashed at build time
+  into `lib/sae/MANIFEST` (`tools/hash-lib.sh`, run by `./build.sh`) and
+  refused if its bytes differ. The first three, written in the dialect:
+  - `sae:noise`: `value1/value2` (0..1), `perlin1/perlin2` (-1..1),
+    `fbm1/fbm2(x, y, { octaves, persistence, lacunarity })`, `hash1/hash2`,
+    `random(seed)` (a stream) and `noise(seed)` (all of them fixed to one
+    seed); every value is a pure function of its inputs and the seed, the
+    same on every machine.
+  - `sae:scales` (d3-alike): `linear()`, `log()`, `band()`, `ordinal()`
+    with chained `.domain()`/`.range()`, `.invert()`, `.clamp()`,
+    `.ticks(n)`, `.nice()`, `.bandwidth()`/`.step()`/`.padding()`, plus
+    `ticks(start, stop, count)` and `tickStep`.
+  - `sae:easing`: `linear`, `easeIn/Out/InOut` × `Quad Cubic Quart Quint
+    Sine Expo Circ Back Elastic Bounce`, `lerp`, `clamp01`, `tween(from,
+    to, t, curve)`, `ease(name)` (by name, `"outCubic"` or
+    `"easeOutCubic"`) and `names`.
+
+  `SAE_LIB_DIR` names another library directory; otherwise sae looks
+  beside its binary (`lib/sae` next to `bin/`, a `.app`'s
+  `Resources/lib/sae`, or this repository's `lib/sae` above
+  `target/build/bin/`). Credit: Cosyne's library tier (Tsyne) for the idea
+  of a page-side library; the modules are sae's own.
+- **Top-level `await`.** A page may `await` at its top level; it runs on
+  from where its promise settles (its widgets built in order, handlers
+  live meanwhile), and a throw after the first `await` is reported like
+  any uncaught exception. A module may not (its exports are ready when the
+  page runs).
+
+A page with an import or a top-level `await` runs inside a function (the
+lowerer's wrapper), so its top-level declarations are not globals; a page
+with neither is the script it always was. `site/imports.ts` and
+`site/import_noise.ts` are the demos, `tests/spec_imports.ae`,
+`tests/spec_app_imports.ae` and `tests/check_module_rules.sh` the specs.
+
 ### Styles: a CSS-alike
 
 After Swiby's stylesheets (its banking demo's themes) and Tsyne's
@@ -396,9 +468,11 @@ through the driver's canvas pixel route.
 
 A page reaches only what `api_register_` (in `src/sae_host.ae`) installs in
 its runtime: the language builtins, `print`, `ui`, `vg`, `http`, `storage`
-and `browserContext`, plus `fs` and `shell` in app mode only. QuickJS's
-own `std`/`os` modules are not compiled in. There is no `load()`, no file
-system and no process access.
+and `browserContext`, plus `fs` and `shell` in app mode only, and the
+`$sae` loader object its wrapper takes when it imports (whose `m` returns
+only modules the page imported statically). QuickJS's own `std`/`os`
+modules are not compiled in. There is no `load()`, no file system and no
+process access.
 
 Behind that, the host's page-facing functions are walled off from the rest
 of the browser (the "kernel": fetching, the file system, the environment,
@@ -414,8 +488,9 @@ list starts with the file system and its neighbours and grows from there;
 the end state is `seal except`, an explicit whitelist per function.
 
 The effects a page can ask for live in their own modules,
-`services/files` and `services/shell`, each able to reach only its imports:
-only `services/shell` can name the system URL opener.
+`services/files`, `services/shell`, `services/net` and `services/stdlib`
+(the `sae:` library and the import hashes), each able to reach only its
+imports: only `services/shell` can name the system URL opener.
 `tests/check_layers.sh` holds each service to its import list.
 [docs/architecture.md](docs/architecture.md) has the layers (kernel,
 services, gate, page host, guest), how each line is held, and what comes

@@ -11,7 +11,7 @@ cannot yet, and at run time as a backstop.
 | Layer | What it is | Holds | Can reach |
 |---|---|---|---|
 | **Kernel** | the event loop, navigation, fetching and lowering pages, app.json, the grant table, the http actors | all of sae's authority | everything it imports |
-| **Services** | one module per effect a page can ask for: `files`, `shell`, `net` (the allowlist and opening a request), later `storage`, `ui` | one effect each, checked against the grants | only their own imports |
+| **Services** | one module per effect a page can ask for: `files`, `shell`, `net` (the allowlist and opening a request), `stdlib` (the `sae:` library's files and the import hashes), later `storage`, `ui` | one effect each, checked against the grants | only their own imports |
 | **Gate** (the page ABI) | one function per page-API call: unpack the JS arguments, check the page owns any handles, call the service, pack the result or throw the refusal | nothing | the services and engine values |
 | **Page host** | one QuickJS runtime per page (contrib.quickjs): heap cap, time limit per entry, timers (the page's timer queue and animation-frame list, which go with it; page-scoped, so no grant), handle ownership; the only code that enters JavaScript | nothing | the gate |
 | **Guest** | the page: modern TypeScript, its types erased, run by QuickJS | what its page API objects offer | the objects `api_register_` installs for its mode |
