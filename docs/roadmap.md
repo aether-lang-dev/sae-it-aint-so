@@ -1,4 +1,4 @@
-# sae, the next stretch: a browser that cannot be escaped, apps that earn trust, a terser dialect, and SVG that is alive
+# sae, the next stretch: a browser that cannot be escaped, apps that earn trust, a terser dialect, and AeVG alive
 
 A design note for Paul and Nic, written 2026-10-08, after the day's work
 landed (`docs/page-services.md` has the IoC model and the agreed files and
@@ -188,11 +188,9 @@ either erasable or one small, documented desugar. In order of leverage:
    get autocompletion and `tsc --noEmit --erasableSyntaxOnly` catches wrong
    calls before a page is served. No grammar change at all; it is the gate's
    second output.
-3. **Two tagged templates, no syntax change:**
-   - ``svg`<svg …>` `` loads an SVG into the current scene (the loader
-     exists in `vg/svg`); `${state}` holes become live bindings. Paste an
-     Inkscape export, wire it in TypeScript. Section 4 has the details.
-   - ``bind`Count: ${n} of ${total}` `` is a multi-state `text_bound`.
+3. **One tagged template, no syntax change:** ``bind`Count: ${n} of
+   ${total}` `` is a multi-state `text_bound`. (Not an ``svg`…` `` loader:
+   section 4 says why a scene is source, not a string.)
 4. **Reactive sugar that already exists one layer down.** aether-ui has
    `computed`, `bind_text`, `bind_value` (two-way), `bind_enabled`,
    `bind_hidden`, `each` with keyed reconciliation and `ui_batch`. Pages see
@@ -211,33 +209,55 @@ either erasable or one small, documented desugar. In order of leverage:
    declarative"). No `enum` or decorators: `tsc --erasableSyntaxOnly` refuses
    them too, and the dialect stays "what tsc erases".
 
-## 4. AeVG, alive: SVG + Vue in one language
+## 4. AeVG, alive: the SVG model as TypeScript
 
-What exists in aether-ui's `vg` and sae does not yet expose: the SVG loader
-(gradients, filters, clip paths, `<use>`, `<style>`), the transpiler (SVG to
-editable scene source), per-element bindings (`bind_fill`, `bind_stroke`,
-`bind_opacity`, `bind_text`, `bind_pos`, `visible_when`), data joins
-(`bind_items` with `trackby`, `render` and `update`: a d3-alike enter/update
-pattern), tweens (`animate`, `tween_fill`, `tween_opacity`), events (hover,
-double and right click, drag, scroll), tooltips, cursors, and text set in
-real fonts. Trajan's Column (500 paths, 40 gradients, click-to-explore) runs
-on it today, in Aether.
+AeVG is not an SVG loader. It is the SVG model (shapes, paths, groups,
+transforms, gradients, filters, clip paths, text, CSS) as a language:
+trailing-block Aether in aether-ui, and the same verbs in TypeScript on a sae
+page (`vg.rect(…)`, `vg.g(() => …)`). That aether-ui renders the 208-file
+W3C/CVG corpus against librsvg pixel for pixel (`vg/test/svg-compare-aevg.py`:
+0.0 mean error on `atom`, 1.1 on `USStates`, 1.9 on Trajan's Column) is the
+proof that the model is faithful; it is a qualification of correctness, not
+the feature. The transpiler turns a drawing into that source *once* (Trajan's
+Column is 500 paths of it, with the interaction woven in by hand); from then
+on the scene is code: diffable, parameterised, bound to state. That is the
+"SVG + Vue in one language" claim: the picture and its behaviour are one
+TypeScript file, and nothing is parsed at run time.
+
+What exists one layer down and pages do not yet see: per-element bindings
+(`bind_fill`, `bind_stroke`, `bind_opacity`, `bind_text`, `bind_pos`,
+`visible_when`), data joins (`bind_items` with `trackby`, `render` and
+`update`: a d3-alike enter/update pattern), tweens (`animate`, `tween_fill`,
+`tween_opacity`), events (hover, double and right click, drag, scroll),
+tooltips, cursors, text in real fonts and CSS rules.
 
 The page-side plan:
 
-- **`svg` tagged template and `vg.id(name)`**: load an SVG; elements with
-  `id` become handles. Then `bind`, `animate`, `on_click` and the rest apply
-  to a hand drawn in Inkscape as easily as to a `circle()` the page drew.
-- **Bindings to page state**, so a scene re-renders itself when state
-  changes: `vg.bind_pos(hand, angle)`; `vg.visible_when(wire, selected)`.
-- **Data joins**: `vg.items(list, key, render, update)`, the d3-alike
-  pattern that makes charts and maps a few lines.
-- **Tweens and the frame clock**: `vg.animate(h, { to, ms, easing })` on top
-  of the display-synced `frame()` that landed today.
-- **Zoom and pan** as a viewBox binding (Cosyne's zoom-pan demo is the
-  model): pinch, wheel and drag drive a state; the scene follows.
-- **Export**: a scene back to SVG, or to PNG, through the files powerbox in
-  app mode. The round trip SVG in, edit, SVG out is demo 9.
+- **The whole grammar in TypeScript guise.** Pages have `circle`, `rect`,
+  `rrect`, `line`, `path`, `text`, `g` and four modifiers. Add what a corpus
+  file's transpiled source needs: `polygon`, `polyline`, `ellipse`,
+  transforms on groups, named gradients and clip paths, text anchoring,
+  stroke caps and joins, CSS classes. The test: any corpus file, transpiled
+  to AeVG-TS, runs as a page and renders as the parity harness says it
+  should.
+- **Components as functions.** A clock face is
+  `const face = (cx, cy, r) => vg.g(() => { … })`, placed four times by
+  transforms (Cosyne's `svg-clock` / `svg-big-ben` composition idea). A
+  `<use>` is a function call.
+- **Bindings to page state**, so a scene re-renders itself: `vg.bind_pos(hand,
+  angle)`, `vg.visible_when(wire, selected)`, `vg.bind_text(lcd, label)`.
+- **Data joins**: `vg.items(list, key, render, update)`, which makes a chart
+  or a map a few lines.
+- **Tweens on the frame clock** that landed today: `vg.animate(h, { to, ms,
+  easing })`.
+- **Events** for pages: hover, drag, double and right click, scroll,
+  tooltips, cursors.
+- **Zoom and pan** as a viewBox state (Cosyne's zoom-pan demo is the model).
+- **The transpiler as a dev tool**: `saelower --from-svg drawing.svg` emits
+  AeVG-TS (the Aether transpiler already emits DSL source; a TypeScript
+  emitter is a second output of the same walk). Run once, then edit.
+- **Export** of a scene to SVG or PNG through the files powerbox in app
+  mode: AeVG-TS in, SVG out, so a sae page can author for the web too.
 
 ## 5. Demo apps, chosen to pull the platform forward
 
@@ -247,18 +267,25 @@ installable packages that exercise the trust strategy.
 
 | # | Demo | Shows | Needs | Ancestor |
 |---|---|---|---|---|
-| 1 | **Big Ben, live.** The Elizabeth Tower drawn once, hands bound to the clock, click a tower to fly the viewBox to it, hover for the history of each part. | `svg` template, `bind_pos`, tweens, zoom-pan, tooltips | 4 | Cosyne `svg-clock` / `svg-big-ben` (idea: compose one clock component by transforms) |
+| 1 | **Big Ben, live.** The Elizabeth Tower as AeVG-TS: one clock-face component placed by transforms, hands bound to the clock, click a tower to fly the viewBox to it, hover for the history of each part. | components, `bind_pos`, tweens, zoom-pan, tooltips | 4 | Cosyne `svg-clock` / `svg-big-ben` (idea: compose one clock component by transforms) |
+| 1b | **The camera you can operate.** `AJ_Digital_Camera` from the corpus (public domain; parity "good"), transpiled once to AeVG-TS, then made real: turn the mode dial (a group rotation bound to state), press the shutter (a tween and an LCD flash), zoom the lens, the LCD text bound to state. The "take one of those and make it interactive" demo. | the full grammar in TS guise, the transpiler's TS output, bindings, tweens | 4 | the W3C/CVG corpus |
 | 2 | **Paris, hour by hour.** A server in any language computes crowd density per hex per hour; the page fetches its own origin's JSON and renders a hex heatmap with data joins; a slider scrubs the week, play runs on the frame clock. | same-origin `http`, `items`, colour scales, `bind`, `frame` | 3.4, 4 | Tsyne `larger-apps/realtime-paris-density-simulation` (idea: H3 hexes, temporal profiles) |
 | 3 | **Live dashboard.** Line and bar charts updating in place from a streaming response; `batch` coalesces a burst into one repaint. | `http.stream` (new), `items`, `batch` | 3.4, 4, streaming | Cosyne `line-chart`, Tsyne `STREAMING_CONTENT` |
 | 4 | **The fat-web shop.** Catalogue pages, a cart in per-origin storage, checkout by POST-redirect-GET, login by a page-held token (no cookies), and a reviews service on a second origin reached through the CORS-alike. Every rule in 1.1 is exercised by a shop that works. | 1.1, 1.2, modules | 1, 3.1 | Tsyne `BROWSER_MODE` sample server (idea: pages from any backend) |
 | 5 | **Devtools overlay.** The browser's own inspector: widget tree, storage, timers, frame clock, and the `std.audit` refusal log, as a chrome overlay built with aether-ui, read from the same driver surface the specs use. | 1.3 item 3, aether-ui overlays | 1.3 | aether-ui `apps/inspector` (same idea, in-chrome) |
 | 6 | **Sae Notes.** Notes in `sqlite.notes` with full-text search, attachments through the files powerbox, a signed package with purpose strings, the Privacy screen, and grants the user can switch off while the app keeps working. The reference app for section 2. | SQLite v1, files, signing, audit, optional seeks | 2, `page-services.md` 5 and 6 | — |
 | 7 | **Gitify, grown up.** Signed, optional `shell.open` (read-only without it), background refresh, notifications. The smallest complete trust story. | 2, notifications | 2 | `examples/gitify` |
-| 8 | **SVG Tetris as a page.** The 2004 public-domain SVG game as a sae page: keys, ghost piece, next-piece panel, 60 fps on the frame clock. The engine stays pure TypeScript. | `on_key`, `svg` template, `frame` | 3.6, 4 | aether-ui `apps/svg_tetris` (alex fritze's CC0 original) |
-| 9 | **Sketch.** Draw and drag shapes, snap, group; load an SVG, edit it, save it back through the powerbox. The SVG round trip. | drag events, `svg` in and out, files | 3.6, 4, files | aether-ui `apps/sketchpad`, Tsyne `designer` (idea: WYSIWYG that writes source) |
+| 8 | **SVG Tetris as a page.** The 2004 public-domain SVG game as a sae page: the engine pure TypeScript, the board AeVG-TS, keys, ghost piece, next-piece panel, 60 fps on the frame clock. | `on_key`, AeVG-TS, `frame` | 3.6, 4 | aether-ui `apps/svg_tetris` (alex fritze's CC0 original) |
+| 9 | **Sketch.** Draw and drag shapes, snap, group; the scene is AeVG-TS the page holds; save it as SVG through the powerbox, so a sae page authors for the web. | drag events, scene export, files | 3.6, 4, files | aether-ui `apps/sketchpad`, Tsyne `designer` (idea: WYSIWYG that writes source) |
 | 10 | **Playground.** Left pane: the page's source in an editor. Right pane: the page running inside a *sub-page*, its own runtime and grants, messages only across the boundary. The iframe done right, and the way a third-party component (a map, a payment widget, an ad) would ever be embedded. | sub-page embedding (new), modules | 3.1, new | Tsyne `larger-apps/literate-programming` (idea: prose and running code side by side) |
 | 11 | **Remote table.** A chess or Go board whose opponent is a server in any language; state changes stream in, rendering stays local. Shows sae as a smart display: a 50-byte "move" where a framebuffer would send pixels. | streaming, `svg`, `items` | 3 | Tsyne `REMOTE_GAMES_ETC` (idea: semantic network transparency) |
 | 12 | **Particles, kaleidoscope, terrain.** The Cosyne GPU demos. Need the `gfx` scene API of `docs/gpu-pages.md`: a page describes, native code draws, shaders are validated. Last, because a page that writes shaders is a page that can hang a GPU. | `gfx` | gpu-pages | Cosyne `particles`, `kaleidoscope-shader`, `procedural-terrain-gpu` |
+
+Corpus files carry their own licences: `AJ_Digital_Camera` says public
+domain; `USStates` (a map worth a data-join demo) is GFDL and GPL from
+Wikimedia; the small W3C test shapes state none. Check before a demo is built
+on one; aether-ui's rule for Trajan's Column and Tetris was a provenance
+block at the top of the file.
 
 The demos ship as a gallery: `site/` grows an index page that launches each
 (Cosyne's demo launcher is the model), and the app demos are packages the
@@ -279,8 +306,9 @@ Each wave is what a few agent-days can finish and verify on every lane
 3. The gate generated from one spec, with `seal except`, and `sae.d.ts` out
    of the same spec (1.3 item 2, 3.2).
 4. Same-origin and in-bundle `import` (3.1).
-5. The reactive surface for pages (3.4) and the live AeVG surface (4),
-   including the `svg` template and `vg.id`.
+5. The reactive surface for pages (3.4) and the AeVG surface (4): the full
+   grammar in TS guise, components, bindings, data joins, tweens, events, and
+   the transpiler's TypeScript output.
 6. SQLite v1 (`page-services.md` section 6), which is independent and can
    run alongside.
 
@@ -311,6 +339,7 @@ Each wave is what a few agent-days can finish and verify on every lane
 6. **JSX stays out**, the trailing-block form stays the house style?
 7. **The gate spec's format** (one table in a `.md` the generator reads, or a
    small `.ae` DSL)?
-8. **Which demo first.** My pick: 4 (the shop) and 1 (Big Ben), because
-   together they exercise every security rule and the whole AeVG surface,
-   and both are browser pages that need no packaging work.
+8. **Which demo first.** My pick: 4 (the shop) and 1b (the camera), because
+   together they exercise every security rule and the whole AeVG surface
+   from a corpus file through to bindings, and both are browser pages that
+   need no packaging work.
