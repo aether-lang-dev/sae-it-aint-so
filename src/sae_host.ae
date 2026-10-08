@@ -35,6 +35,14 @@ import services.net
 import services.sqlite
 import services.stdlib
 import contrib.quickjs
+// wave1/aevg: the scene record and the grammar modules its surface reaches.
+import aevg
+import aevg (AeModel, AeScene, AeRec, K_SCENE, K_GROUP, K_SHAPE, K_TEXT)
+import vg.grammar.events
+import vg.grammar.element
+import vg.grammar.element (SHAPE_CIRCLE, SHAPE_RECT, SHAPE_LINE)
+import vg.grammar.utils
+import std.strbuilder
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -3229,6 +3237,1433 @@ sae_ui_image(ctx: ptr, this_val: int, argv: int) -> int {
     return container_(ctx, argv, argc, h)
 }
 
+// ===== wave1/aevg: the reactive surface and the AeVG surface for pages =====
+//
+// docs/roadmap.md sections 3.4 and 4. Two halves:
+//
+// 1. Reactive primitives for the page's `state`/`computed`/`bind`/`each`/
+//    `batch` (the JS surface itself is src/sae_prelude.js, evaluated into
+//    every page's runtime by api_register_): typed aether-ui cells
+//    (ui_state/ui_state_s/_b/_i), computed_s observers, ui_batch, and the
+//    property bindings bind_text/bind_value/bind_enabled/bind_hidden.
+// 2. The AeVG grammar in TypeScript guise: every shape and modifier goes
+//    through aevg/module.ae's record of the scene (groups whose transform,
+//    opacity, fill and stroke cascade; defs; a rebuildable viewBox), plus
+//    bindings evaluated by vg.refresh(), events beyond click (hover, drag,
+//    scroll, double click), tooltips, and defs (gradients, clip paths).
+//
+// The vg shape verbs and the fill/stroke/opacity/transform/on_click
+// modifiers below are registered AFTER the earlier ones of the same name in
+// api_register_, so a page gets these: the same arguments and results, plus
+// the group cascade and the records that bindings and set_transform need.
+// The earlier functions stay as they were (unreferenced from a page, still
+// page-veto'd for tests/check_page_veto.sh).
+//
+// Per-page state lives in a side table keyed by the runtime (ae_page_), not
+// in Page: four agents share that struct, and a dead entry (a page that has
+// gone) is pruned on the next lookup, so nothing here outlives its page.
+
+extern aether_ui_widget_kind_impl(handle: int) -> string
+extern sae_prelude() -> string
+
+struct AePage {
+    ctx: ptr
+    seq: int
+    model: ptr       // *AeModel
+    binds: ptr       // std.list of *AeBind
+    defs_sb: ptr     // strbuilder while a vg.defs() block runs, else null
+    defs_scene: ptr  // the *AeScene the defs go to
+}
+
+// A binding the page made with vg.bind_*/visible_when/view_box: evaluated
+// by vg.refresh() (which the prelude calls after a state changes).
+struct AeBind {
+    rec: ptr         // *AeRec (null for a view_box binding: see scene)
+    scene: ptr       // *AeScene
+    kind: int        // AB_*
+    fn_h: int        // the held JS function
+}
+
+const AB_FILL = 1
+const AB_STROKE = 2
+const AB_OPACITY = 3
+const AB_TEXT = 4
+const AB_POS = 5
+const AB_TRANSFORM = 6
+const AB_WHEN = 7
+const AB_VIEWBOX = 8
+
+var ae_pages_: ptr = null
+
+// The page's wave1/aevg record, made on first use, dropped when its page is
+// gone (the runtime pointer may be reused by a later page; the sequence
+// number tells them apart).
+ae_page_(ctx: ptr) -> *AePage {
+    if ae_pages_ == null { ae_pages_ = list.new() }
+    p = page_of_(ctx)
+    // Prune the dead: entries whose page is no longer live.
+    i = 0
+    while i < list.size(ae_pages_) {
+        v, _ = list.get(ae_pages_, i)
+        ap = v as *AePage
+        lp = page_of_(ap.ctx)
+        if lp == null || lp.seq != ap.seq {
+            ae_page_free_(ap)
+            list.list_remove(ae_pages_, i)
+        } else {
+            i = i + 1
+        }
+    }
+    if p == null { return null }
+    n = list.size(ae_pages_)
+    i = 0
+    while i < n {
+        v2, _2 = list.get(ae_pages_, i)
+        ap2 = v2 as *AePage
+        if ap2.ctx == ctx && ap2.seq == p.seq { return ap2 }
+        i = i + 1
+    }
+    ap3 = heap.new(AePage)
+    ap3.ctx = ctx
+    ap3.seq = p.seq
+    ap3.model = aevg.model_new() as ptr
+    ap3.binds = list.new()
+    ap3.defs_sb = null
+    ap3.defs_scene = null
+    list.add(ae_pages_, ap3 as ptr)
+    return ap3
+}
+
+ae_page_free_(ap: *AePage) {
+    // The runtime that held the bound functions is gone with the page, so
+    // the handles need no release.
+    n = list.size(ap.binds)
+    i = 0
+    while i < n {
+        v, _ = list.get(ap.binds, i)
+        heap.free(v as *AeBind)
+        i = i + 1
+    }
+    list.free(ap.binds)
+    aevg.model_free(ap.model as *AeModel)
+    heap.free(ap)
+}
+
+ae_model_(ctx: ptr) -> *AeModel {
+    return ae_page_(ctx).model as *AeModel
+}
+
+// The record of the node on top of the vg stack (the open shape, group or
+// scene root), or null.
+ae_top_rec_(ctx: ptr) -> *AeRec {
+    p = page_of_(ctx)
+    if p.vg_depth < 1 { return null }
+    return aevg.rec_of(ae_model_(ctx), vg_top_(p))
+}
+
+// The record of a handle a page holds, or null.
+ae_rec_of_handle_(ctx: ptr, h: int) -> *AeRec {
+    n = vg_node_of_(page_of_(ctx), h)
+    if n == null { return null }
+    return aevg.rec_of(ae_model_(ctx), n)
+}
+
+// Repaint whatever the call changed.
+ae_repaint_(ctx: ptr) {
+    aevg.repaint_dirty(ae_model_(ctx))
+}
+
+// --- JS value helpers (reading a page's objects) ---
+
+// obj[name] as a string, "" when absent.
+ae_prop_str_(ctx: ptr, obj: int, name: string) -> string {
+    h, err = quickjs.get(ctx, obj, name)
+    if err != "" { return "" }
+    t = quickjs.type_of(ctx, h)
+    if t == "undefined" || t == "null" {
+        quickjs.release(ctx, h)
+        return ""
+    }
+    s = own_(quickjs.to_string(ctx, h))
+    quickjs.release(ctx, h)
+    return s
+}
+
+// 1 if obj has a non-undefined property `name`.
+ae_has_prop_(ctx: ptr, obj: int, name: string) -> int {
+    h, err = quickjs.get(ctx, obj, name)
+    if err != "" { return 0 }
+    t = quickjs.type_of(ctx, h)
+    quickjs.release(ctx, h)
+    if t == "undefined" { return 0 }
+    return 1
+}
+
+ae_prop_num_(ctx: ptr, obj: int, name: string, dflt: float) -> float {
+    h, err = quickjs.get(ctx, obj, name)
+    if err != "" { return dflt }
+    t = quickjs.type_of(ctx, h)
+    if t == "undefined" || t == "null" {
+        quickjs.release(ctx, h)
+        return dflt
+    }
+    v = quickjs.to_float(ctx, h)
+    quickjs.release(ctx, h)
+    return v
+}
+
+// arr[i] as a string ("" past the end).
+ae_index_str_(ctx: ptr, arr: int, i: int) -> string {
+    h, err = quickjs.get_index(ctx, arr, i)
+    if err != "" { return "" }
+    t = quickjs.type_of(ctx, h)
+    if t == "undefined" {
+        quickjs.release(ctx, h)
+        return ""
+    }
+    s = own_(quickjs.to_string(ctx, h))
+    quickjs.release(ctx, h)
+    return s
+}
+
+ae_index_num_(ctx: ptr, arr: int, i: int) -> float {
+    h, err = quickjs.get_index(ctx, arr, i)
+    if err != "" { return 0.0 }
+    v = quickjs.to_float(ctx, h)
+    quickjs.release(ctx, h)
+    return v
+}
+
+// Call a held JS function with up to four numbers.
+ae_call_nums4_(ctx: ptr, ref: int, a: float, b: float, c: float, d: float, n: int) -> int {
+    args = quickjs.new_array(ctx)
+    i = 0
+    while i < n {
+        v = a
+        if i == 1 { v = b }
+        if i == 2 { v = c }
+        if i == 3 { v = d }
+        vh = quickjs.new_float(ctx, v)
+        _s = quickjs.set_index(ctx, args, i, vh)
+        quickjs.release(ctx, vh)
+        i = i + 1
+    }
+    r = calln_(ctx, ref, args)
+    quickjs.release(ctx, args)
+    return r
+}
+
+ae_call_bool_(ctx: ptr, ref: int, b: int) -> int {
+    args = quickjs.new_array(ctx)
+    vh = quickjs.new_bool(ctx, b)
+    _s = quickjs.set_index(ctx, args, 0, vh)
+    quickjs.release(ctx, vh)
+    r = calln_(ctx, ref, args)
+    quickjs.release(ctx, args)
+    return r
+}
+
+// Call a held JS function with no arguments and return its value's handle
+// (0 if it threw; the error is reported).
+ae_call_value_(ctx: ptr, ref: int, what: string) -> int {
+    r, err = quickjs.call(ctx, ref, 0, 0)
+    if err != "" {
+        report_exception_(ctx, what)
+        return 0
+    }
+    return r
+}
+
+// --- the page API: reactive primitives (the prelude's state/computed/bind) ---
+
+// ui._cell(kind, init): a typed aether-ui cell. kind "f" (number), "s"
+// (string), "b" (boolean), "i" (a version counter the prelude bumps for a
+// JS value it keeps itself). Returns the cell handle, which is also what
+// ui_set/text_bound accept, so the two surfaces interoperate.
+sae_ae_cell(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    kind = arg_str_(ctx, argv, argc, 0)
+    if kind == "s" { return quickjs.new_int(ctx, ui.ui_state_s(own_(arg_str_(ctx, argv, argc, 1)))) }
+    if kind == "b" { return quickjs.new_int(ctx, ui.ui_state_b(quickjs.arg_bool(ctx, argv, 1))) }
+    if kind == "i" { return quickjs.new_int(ctx, ui.ui_state_i(arg_int_(ctx, argv, argc, 1, 0))) }
+    return quickjs.new_int(ctx, ui.ui_state(arg_num_(ctx, argv, argc, 1, 0.0)))
+}
+
+sae_ae_cell_get(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    kind = arg_str_(ctx, argv, argc, 0)
+    h = arg_int_(ctx, argv, argc, 1, 0)
+    if kind == "s" { return quickjs.new_string(ctx, ui.ui_get_s(h)) }
+    if kind == "b" { return quickjs.new_bool(ctx, ui.ui_get_b(h)) }
+    if kind == "i" { return quickjs.new_int(ctx, ui.ui_get_i(h)) }
+    return quickjs.new_float(ctx, ui.ui_get(h))
+}
+
+sae_ae_cell_set(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    kind = arg_str_(ctx, argv, argc, 0)
+    h = arg_int_(ctx, argv, argc, 1, 0)
+    if kind == "s" { _a = ui.ui_set_s(h, own_(arg_str_(ctx, argv, argc, 2))) }
+    else if kind == "b" { _b = ui.ui_set_b(h, quickjs.arg_bool(ctx, argv, 2)) }
+    else if kind == "i" { _c = ui.ui_set_i(h, arg_int_(ctx, argv, argc, 2, 0)) }
+    else { _d = ui.ui_set(h, arg_num_(ctx, argv, argc, 2, 0.0)) }
+    return 0
+}
+
+// ui._computed(fn, a, b): run fn now, and again whenever cell a or b
+// changes (once per batch). aether-ui's computed_s, whose observer watches
+// two cells; the prelude registers one per pair for more inputs.
+sae_ae_computed(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    ref = held_fn_(ctx, argv, argc, 0)
+    if ref == 0 { return sae_throw_type_error(ctx, "computed(fn, ...states): fn must be a function") }
+    a = arg_int_(ctx, argv, argc, 1, 0)
+    b = arg_int_(ctx, argv, argc, 2, 0)
+    seq = page_of_(ctx).seq
+    ui.computed_s(|| {
+        // The cell outlives the page; a later page must not be called into.
+        lp = page_of_(ctx)
+        if lp == null { return }
+        if lp.seq != seq { return }
+        fire0_(ctx, ref, "a computed")
+    }, a, b)
+    return 0
+}
+
+// ui._batch(fn): aether-ui's ui_batch: observers run once at the end.
+sae_ae_batch(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "batch(fn): fn must be a function") }
+    threw = 0
+    ui.ui_batch(|| {
+        if call_arg_(ctx, argv, 0) < 0 { threw = 1 }
+    })
+    if threw == 1 { return rethrow_(ctx) }
+    return 0
+}
+
+// ui._bind(what, widget, cell, invert): a property binding on a widget the
+// page made. what: "text", "value" (two-way, a text field and a string
+// cell), "enabled", "hidden".
+sae_ae_bind(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    what = arg_str_(ctx, argv, argc, 0)
+    w = arg_int_(ctx, argv, argc, 1, 0)
+    if owned_(page_of_(ctx), w) == 0 { return sae_throw_type_error(ctx, "bind(widget, state): widget is not one this page made") }
+    cell = arg_int_(ctx, argv, argc, 2, 0)
+    inv = arg_int_(ctx, argv, argc, 3, 0)
+    if what == "value" { ui.bind_value(w, cell) }
+    else if what == "enabled" { ui.bind_enabled(w, cell, inv) }
+    else if what == "hidden" { ui.bind_hidden(w, cell, inv) }
+    else { ui.bind_text(w, cell) }
+    return 0
+}
+
+// ui._widget_kind(h): the backend's kind name ("textfield", "label", ...),
+// so the prelude's bind() can pick two-way for a field.
+sae_ae_widget_kind(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return quickjs.new_string(ctx, "") }
+    return quickjs.new_string(ctx, own_(aether_ui_widget_kind_impl(h)))
+}
+
+// ui._remove_child(parent, child): for each()'s keyed reconciliation: a row
+// whose key has gone leaves its container; both must be the page's own.
+sae_ae_remove_child(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    parent = arg_int_(ctx, argv, argc, 0, 0)
+    child = arg_int_(ctx, argv, argc, 1, 0)
+    if own_stack_(p, parent) == 0 || owned_(p, child) == 0 {
+        return sae_throw_type_error(ctx, "remove_child(parent, child): not widgets this page made")
+    }
+    ui.remove_child(parent, child)
+    return 0
+}
+
+// ui.set_enabled(h, on): grey a widget out, or back.
+sae_ae_set_enabled(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "set_enabled(h, on): h is not a widget this page made") }
+    _r = ui.style_enabled(h, quickjs.arg_bool(ctx, argv, 1))
+    return 0
+}
+
+// --- the page API: vg, with the scene record (aevg/module.ae) ---
+
+// vg.scene(viewBox, w, h, fn): as before, plus the record and the canvas
+// events beyond click: hover (and the tooltip), drag, scroll, resize.
+sae_ae_scene(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    vb = own_(arg_str_(ctx, argv, argc, 0))
+    w = arg_int_(ctx, argv, argc, 1, 100)
+    h = arg_int_(ctx, argv, argc, 2, 100)
+    long t = now_ns_()
+    root = live.vg(mem.long_to_ptr(top_(p)), vb, w, h)
+    ui_done_(p, t)
+    scene = vg.node_scene(root)
+    m = ae_model_(ctx)
+    sc = aevg.scene_add(m, scene, root, vg.scene_canvas(scene), vb, w, h)
+    ae_wire_canvas_(ctx, sc)
+    return vg_shape_done_(ctx, argv, argc, 3, root)
+}
+
+// The canvas hooks for a scene. Click replaces live.vg's own hook (one per
+// canvas) and keeps its work: dispatch, then a full repaint. A second click
+// within 400 ms and 6 px is also a double click.
+ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
+    scene = sc.scene
+    cid = sc.cid
+    es = vg.scene_event_state(scene)
+    seq = page_of_(ctx).seq
+    ui.canvas_on_click(cid, |x: float, y: float| {
+        if ae_live_(ctx, seq) == 0 { return }
+        long now = now_ms_()
+        dbl = 0
+        if sc.last_click_ms != 0 && now - sc.last_click_ms < 400 {
+            dx = x - sc.last_cx
+            dy = y - sc.last_cy
+            if dx < 6.0 && dx > 0.0 - 6.0 && dy < 6.0 && dy > 0.0 - 6.0 { dbl = 1 }
+        }
+        sc.last_click_ms = now
+        sc.last_cx = x
+        sc.last_cy = y
+        sc.pressed = 1
+        events.dispatch_click(es, vg.scene_ctx(scene), x, y)
+        if dbl == 1 {
+            sc.last_click_ms = 0
+            events.dispatch_double_click(es, vg.scene_ctx(scene), x, y)
+        }
+        aevg.repaint_scene(sc)
+    })
+    ui.canvas_on_move(cid, |x: float, y: float| {
+        if ae_live_(ctx, seq) == 0 { return }
+        c = vg.scene_ctx(scene)
+        events.dispatch_hover(es, c, x, y)
+        if sc.pressed == 1 {
+            events.dispatch_drag(es, c, x, y, x - sc.last_cx, y - sc.last_cy)
+            sc.last_cx = x
+            sc.last_cy = y
+        }
+        tip = events.tooltip_at(c, x, y)
+        if ui.vg_tooltip_drawn() == 1 {
+            if string.length(tip) > 0 { _t = ui.vg_tooltip_show(cid, tip, x, y) } else { ui.vg_tooltip_hide() }
+        } else if tip != sc.tooltip {
+            sc.tooltip = own_(tip)
+            _tt = ui.style_tooltip(ui.canvas_widget(cid), tip)
+        }
+        if sc.dirty == 1 { aevg.repaint_scene(sc) }
+    })
+    ui.canvas_on_release(cid, |x: float, y: float| {
+        if ae_live_(ctx, seq) == 0 { return }
+        if sc.pressed == 1 {
+            sc.pressed = 0
+            events.dispatch_drag_end(es, vg.scene_ctx(scene))
+            if sc.dirty == 1 { aevg.repaint_scene(sc) }
+        }
+    })
+    ui.canvas_on_scroll(cid, |dx: float, dy: float| {
+        if ae_live_(ctx, seq) == 0 { return }
+        events.dispatch_scroll(es, vg.scene_ctx(scene), dx, dy, sc.last_cx, sc.last_cy)
+        if sc.dirty == 1 { aevg.repaint_scene(sc) }
+    })
+    ui.canvas_on_resize(cid, |rw: float, rh: float| {
+        if ae_live_(ctx, seq) == 0 { return }
+        aevg.scene_resize(ae_model_(ctx), sc, rw as int, rh as int)
+        ui.canvas_clear(cid)
+        live.vg_flush_live(scene, cid, 0.0)
+        sc.dirty = 0
+    })
+}
+
+// 1 while the page that made a scene is still the page the runtime pointer
+// belongs to (a canvas hook outliving its page must do nothing).
+ae_live_(ctx: ptr, seq: int) -> int {
+    lp = page_of_(ctx)
+    if lp == null { return 0 }
+    if lp.seq != seq { return 0 }
+    return 1
+}
+
+// A shape under the open node: record it (inheriting the group's transform,
+// opacity and paint), then run its block as vg_shape_done_ does.
+ae_shape_done_(ctx: ptr, argv: int, argc: int, fn_at: int, node: ptr, kind: int) -> int {
+    m = ae_model_(ctx)
+    parent = ae_top_rec_(ctx)
+    sc = null
+    if parent != null { sc = parent.scene }
+    _r = aevg.rec_add(m, node, vg.node_element(node), kind, parent, sc as *AeScene)
+    return vg_shape_done_(ctx, argv, argc, fn_at, node)
+}
+
+sae_ae_circle(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.circle() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.circle(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0))
+    return ae_shape_done_(ctx, argv, argc, 3, n, K_SHAPE)
+}
+
+sae_ae_rect(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rect() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.rect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
+    return ae_shape_done_(ctx, argv, argc, 4, n, K_SHAPE)
+}
+
+sae_ae_rrect(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rrect() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.rrect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0), arg_num_(ctx, argv, argc, 4, 0.0))
+    return ae_shape_done_(ctx, argv, argc, 5, n, K_SHAPE)
+}
+
+sae_ae_line(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.line() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.line(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
+    return ae_shape_done_(ctx, argv, argc, 4, n, K_SHAPE)
+}
+
+sae_ae_path(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.path() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    d = own_(arg_str_(ctx, argv, argc, 0))
+    n = vg.path(vg_top_(p), d)
+    return ae_shape_done_(ctx, argv, argc, 1, n, K_SHAPE)
+}
+
+// polygon(points, fn?) and polyline(points, fn?): points as SVG writes them
+// ("x,y x,y ...") or as a flat array of numbers; a path underneath, as
+// aether-ui's transpiler and loader draw them.
+ae_points_arg_(ctx: ptr, argv: int, argc: int) -> string {
+    if argc < 1 { return "" }
+    h = quickjs.arg(ctx, argv, 0)
+    t = quickjs.type_of(ctx, h)
+    if t == "string" {
+        quickjs.release(ctx, h)
+        return own_(arg_str_(ctx, argv, argc, 0))
+    }
+    n = quickjs.length(ctx, h)
+    sb = strbuilder.new(64)
+    i = 0
+    while i < n {
+        if i > 0 {
+            if i % 2 == 1 { _c = strbuilder.append(sb, ",") } else { _s = strbuilder.append(sb, " ") }
+        }
+        _v = strbuilder.append(sb, ae_index_str_(ctx, h, i))
+        i = i + 1
+    }
+    quickjs.release(ctx, h)
+    return strbuilder.finish(sb)
+}
+
+sae_ae_polygon(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.polygon() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.path(vg_top_(p), utils.points_to_path(ae_points_arg_(ctx, argv, argc), 1))
+    return ae_shape_done_(ctx, argv, argc, 1, n, K_SHAPE)
+}
+
+sae_ae_polyline(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.polyline() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.path(vg_top_(p), utils.points_to_path(ae_points_arg_(ctx, argv, argc), 0))
+    return ae_shape_done_(ctx, argv, argc, 1, n, K_SHAPE)
+}
+
+// ellipse(cx, cy, rx, ry, fn?): two arcs, as the transpiler emits it.
+sae_ae_ellipse(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.ellipse() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    d = utils.ellipse_to_path(arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
+    n = vg.path(vg_top_(p), d)
+    return ae_shape_done_(ctx, argv, argc, 4, n, K_SHAPE)
+}
+
+// text(x, y, s, fn?), text_sized(x, y, size, s, fn?) and
+// text_anchored(x, y, size, anchor, s, fn?): size in viewBox units (0 for
+// the engine's default), anchor "start", "middle" or "end". The size and
+// anchor are part of the text's record, so they are arguments, not block
+// modifiers.
+sae_ae_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    s = own_(arg_str_(ctx, argv, argc, 2))
+    n = vg.text(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), s)
+    return ae_shape_done_(ctx, argv, argc, 3, n, K_TEXT)
+}
+
+sae_ae_text_sized(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text_sized() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    s = own_(arg_str_(ctx, argv, argc, 3))
+    n = vg.text_sized(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), s)
+    return ae_shape_done_(ctx, argv, argc, 4, n, K_TEXT)
+}
+
+sae_ae_text_anchored(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text_anchored() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    anchor = own_(arg_str_(ctx, argv, argc, 3))
+    s = own_(arg_str_(ctx, argv, argc, 4))
+    n = vg.text_anchored(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), anchor, s)
+    return ae_shape_done_(ctx, argv, argc, 5, n, K_TEXT)
+}
+
+// vg.g(fn): a group. Its block's fill, stroke, opacity and transform reach
+// the shapes made inside it (and set_transform(g, t) turns them all later).
+sae_ae_g(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.g() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    n = vg.g(vg_top_(p))
+    return ae_shape_done_(ctx, argv, argc, 0, n, K_GROUP)
+}
+
+// vg.into(h, fn): run fn with a group (or the scene root) the page made on
+// top, so its shapes land there: components rendered again, data joins.
+sae_ae_into(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null || r.el != null { return sae_throw_type_error(ctx, "vg.into(h, fn): h is not a group or scene this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "vg.into(h, fn): fn must be a function") }
+    p = page_of_(ctx)
+    if vg_push_(p, r.node) == 0 { return sae_throw_type_error(ctx, "vg shapes nested too deeply") }
+    c = call_arg_(ctx, argv, 1)
+    p.vg_depth = p.vg_depth - 1
+    if c < 0 { return rethrow_(ctx) }
+    ae_repaint_(ctx)
+    return 0
+}
+
+// The modifiers: fill, stroke, opacity and transform on the open node, with
+// the group cascade.
+ae_modifier_rec_(ctx: ptr, name: string) -> *AeRec {
+    if vg_shape_open_(ctx) == 0 { return null }
+    return ae_top_rec_(ctx)
+}
+
+sae_ae_fill(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "fill")
+    if r == null { return sae_throw_type_error(ctx, "vg.fill() must be called inside a shape's block") }
+    aevg.rec_set_fill(r, own_(arg_str_(ctx, argv, argc, 0)))
+    return 0
+}
+
+sae_ae_stroke(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "stroke")
+    if r == null { return sae_throw_type_error(ctx, "vg.stroke() must be called inside a shape's block") }
+    aevg.rec_set_stroke(r, own_(arg_str_(ctx, argv, argc, 0)), arg_num_(ctx, argv, argc, 1, 1.0))
+    return 0
+}
+
+sae_ae_opacity(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "opacity")
+    if r == null { return sae_throw_type_error(ctx, "vg.opacity() must be called inside a shape's block") }
+    aevg.rec_set_opacity(r, arg_num_(ctx, argv, argc, 0, 1.0))
+    return 0
+}
+
+sae_ae_transform(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "transform")
+    if r == null { return sae_throw_type_error(ctx, "vg.transform() must be called inside a shape's block") }
+    aevg.rec_set_transform(r, own_(arg_str_(ctx, argv, argc, 0)))
+    return 0
+}
+
+// linecap("round"|"square"|"butt"), linejoin("round"|"bevel"|"miter"): on
+// the open shape, or on a group for the shapes made inside it afterwards.
+sae_ae_linecap(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "linecap")
+    if r == null { return sae_throw_type_error(ctx, "vg.linecap() must be called inside a shape's block") }
+    if r.el != null { vg.linecap(r.node, own_(arg_str_(ctx, argv, argc, 0))) }
+    return 0
+}
+
+sae_ae_linejoin(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "linejoin")
+    if r == null { return sae_throw_type_error(ctx, "vg.linejoin() must be called inside a shape's block") }
+    if r.el != null { vg.linejoin(r.node, own_(arg_str_(ctx, argv, argc, 0))) }
+    return 0
+}
+
+// tooltip(s) and cursor(s) on the open shape. The tooltip shows on hover
+// (natively on the canvas, or drawn where aether-ui draws them); the cursor
+// is kept on the element for aether-ui to apply when its canvases can.
+sae_ae_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "tooltip")
+    if r == null || r.el == null { return sae_throw_type_error(ctx, "vg.tooltip() must be called inside a shape's block") }
+    vg.tooltip(r.node, own_(arg_str_(ctx, argv, argc, 0)))
+    r.interactive = 1
+    return 0
+}
+
+sae_ae_cursor(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "cursor")
+    if r == null || r.el == null { return sae_throw_type_error(ctx, "vg.cursor() must be called inside a shape's block") }
+    vg.cursor(r.node, own_(arg_str_(ctx, argv, argc, 0)))
+    r.interactive = 1
+    return 0
+}
+
+// --- vg events: click (as before), hover, double and right click, drag, scroll ---
+
+// The handler's shape and its scene, for a modifier that takes fn.
+ae_event_rec_(ctx: ptr, argv: int, argc: int, name: string) -> *AeRec {
+    r = ae_modifier_rec_(ctx, name)
+    if r == null || r.el == null { return null }
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return null }
+    r.interactive = 1
+    return r
+}
+
+sae_ae_on_click(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_event_rec_(ctx, argv, argc, "on_click")
+    if r == null { return sae_throw_type_error(ctx, "vg.on_click(fn) must be called inside a shape's block, with a function") }
+    ref = hold_arg_(ctx, argv, 0)
+    scene = vg.node_scene(r.node)
+    vg.on_click(r.node, |x: float, y: float| {
+        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg click handler") }
+        settle_(ctx)
+    })
+    return 0
+}
+
+sae_ae_on_double_click(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_event_rec_(ctx, argv, argc, "on_double_click")
+    if r == null { return sae_throw_type_error(ctx, "vg.on_double_click(fn) must be called inside a shape's block, with a function") }
+    ref = hold_arg_(ctx, argv, 0)
+    scene = vg.node_scene(r.node)
+    vg.on_double_click(r.node, |x: float, y: float| {
+        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg double-click handler") }
+        settle_(ctx)
+    })
+    return 0
+}
+
+// on_right_click(fn): kept on the element; no aether-ui canvas reports a
+// right click yet, so it waits for that hook.
+sae_ae_on_right_click(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_event_rec_(ctx, argv, argc, "on_right_click")
+    if r == null { return sae_throw_type_error(ctx, "vg.on_right_click(fn) must be called inside a shape's block, with a function") }
+    ref = hold_arg_(ctx, argv, 0)
+    scene = vg.node_scene(r.node)
+    vg.on_right_click(r.node, |x: float, y: float| {
+        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg right-click handler") }
+        settle_(ctx)
+    })
+    return 0
+}
+
+// on_hover(fn(inside)): inside is true as the pointer enters, false as it
+// leaves.
+sae_ae_on_hover(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_event_rec_(ctx, argv, argc, "on_hover")
+    if r == null { return sae_throw_type_error(ctx, "vg.on_hover(fn) must be called inside a shape's block, with a function") }
+    ref = hold_arg_(ctx, argv, 0)
+    vg.on_hover(r.node, |inside: int| {
+        if ae_call_bool_(ctx, ref, inside) < 0 { report_exception_(ctx, "a vg hover handler") }
+        settle_(ctx)
+    })
+    return 0
+}
+
+// on_drag(fn(x, y, dx, dy)): the pointer moving with the button down over
+// this shape, in viewBox units; on_drag_end(fn(x, y)) when it is released.
+sae_ae_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_event_rec_(ctx, argv, argc, "on_drag")
+    if r == null { return sae_throw_type_error(ctx, "vg.on_drag(fn) must be called inside a shape's block, with a function") }
+    ref = hold_arg_(ctx, argv, 0)
+    scene = vg.node_scene(r.node)
+    el = r.el
+    element.element_on_drag(el, |x: float, y: float, dx: float, dy: float| {
+        // Deltas scale as positions do; the origin cancels out.
+        sx = vg.scene_px_to_vb_x(scene, dx) - vg.scene_px_to_vb_x(scene, 0.0)
+        sy = vg.scene_px_to_vb_y(scene, dy) - vg.scene_px_to_vb_y(scene, 0.0)
+        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), sx, sy, 4) < 0 { report_exception_(ctx, "a vg drag handler") }
+        settle_(ctx)
+    })
+    return 0
+}
+
+sae_ae_on_drag_end(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_event_rec_(ctx, argv, argc, "on_drag_end")
+    if r == null { return sae_throw_type_error(ctx, "vg.on_drag_end(fn) must be called inside a shape's block, with a function") }
+    ref = hold_arg_(ctx, argv, 0)
+    scene = vg.node_scene(r.node)
+    element.element_on_drag_end(r.el, |x: float, y: float| {
+        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg drag-end handler") }
+        settle_(ctx)
+    })
+    return 0
+}
+
+// on_scroll(fn(dx, dy)): the wheel over this shape; dy < 0 is away from
+// the user (zoom in, by convention), in canvas pixels.
+sae_ae_on_scroll(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_event_rec_(ctx, argv, argc, "on_scroll")
+    if r == null { return sae_throw_type_error(ctx, "vg.on_scroll(fn) must be called inside a shape's block, with a function") }
+    ref = hold_arg_(ctx, argv, 0)
+    element.element_on_scroll(r.el, |dx: float, dy: float, x: float, y: float| {
+        if ae_call_nums4_(ctx, ref, dx, dy, 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg scroll handler") }
+        settle_(ctx)
+    })
+    return 0
+}
+
+// --- vg setters: a shape or group changed from anywhere ---
+
+// vg.set_transform(h, t): a shape's or group's own transform; a group's
+// children follow (the mode dial turns as one).
+sae_ae_set_transform(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null { return sae_throw_type_error(ctx, "vg.set_transform(h, t): h is not a vg node") }
+    aevg.rec_set_transform(r, own_(arg_str_(ctx, argv, argc, 1)))
+    ae_repaint_(ctx)
+    return 0
+}
+
+sae_ae_set_visible(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null { return sae_throw_type_error(ctx, "vg.set_visible(h, on): h is not a vg node") }
+    aevg.rec_set_visible(r, quickjs.arg_bool(ctx, argv, 1))
+    ae_repaint_(ctx)
+    return 0
+}
+
+// vg.remove(h): the node is hidden and done with (a data join's exit).
+sae_ae_remove(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null { return sae_throw_type_error(ctx, "vg.remove(h): h is not a vg node") }
+    aevg.rec_set_visible(r, 0)
+    r.interactive = 0
+    ae_repaint_(ctx)
+    return 0
+}
+
+// Apply one property of a vg.set() object (or a bind_pos result) to a node.
+// Geometry keys write the element's shape geometry, which the next flush
+// draws from (circle: cx, cy, r; rect: x, y, w|width, h|height; line: x1,
+// y1, x2, y2), once the shape has been drawn once.
+ae_apply_prop_(ctx: ptr, r: *AeRec, key: string, obj: int) -> int {
+    if key == "fill" { aevg.rec_set_fill(r, ae_prop_str_(ctx, obj, key)); return 1 }
+    if key == "opacity" { aevg.rec_set_opacity(r, ae_prop_num_(ctx, obj, key, 1.0)); return 1 }
+    if key == "transform" { aevg.rec_set_transform(r, ae_prop_str_(ctx, obj, key)); return 1 }
+    if key == "visible" {
+        h, _e = quickjs.get(ctx, obj, key)
+        aevg.rec_set_visible(r, quickjs.to_bool(ctx, h))
+        quickjs.release(ctx, h)
+        return 1
+    }
+    if key == "stroke" {
+        h2, _e2 = quickjs.get(ctx, obj, key)
+        if quickjs.type_of(ctx, h2) == "string" {
+            aevg.rec_set_stroke(r, own_(quickjs.to_string(ctx, h2)), 1.0)
+        } else {
+            aevg.rec_set_stroke(r, ae_index_str_(ctx, h2, 0), ae_index_num_(ctx, h2, 1))
+        }
+        quickjs.release(ctx, h2)
+        return 1
+    }
+    if key == "stroke_width" {
+        if r.el != null && element.element_has_stroke(r.el) == 1 {
+            aevg.rec_set_stroke(r, own_(element.element_last_stroke_color(r.el)), ae_prop_num_(ctx, obj, key, 1.0))
+        }
+        return 1
+    }
+    if key == "text" {
+        if r.el != null { vg.element_set_text(r.el, ae_prop_str_(ctx, obj, key)) }
+        aevg.scene_mark_dirty(r.scene as *AeScene)
+        return 1
+    }
+    if r.el == null { return 0 }
+    slot = 0 - 1
+    st = element.element_shape_type(r.el)
+    if st == SHAPE_CIRCLE {
+        if key == "cx" { slot = 0 }
+        if key == "cy" { slot = 1 }
+        if key == "r" { slot = 2 }
+    }
+    if st == SHAPE_RECT {
+        if key == "x" { slot = 0 }
+        if key == "y" { slot = 1 }
+        if key == "w" || key == "width" { slot = 2 }
+        if key == "h" || key == "height" { slot = 3 }
+    }
+    if st == SHAPE_LINE {
+        if key == "x1" { slot = 0 }
+        if key == "y1" { slot = 1 }
+        if key == "x2" { slot = 2 }
+        if key == "y2" { slot = 3 }
+    }
+    if slot < 0 { return 0 }
+    element.element_set_geo(r.el, slot, ae_prop_num_(ctx, obj, key, 0.0))
+    // The flush syncs the draw attrs from the geometry only for a shape with
+    // a position binding; give it one (never evaluated by sae).
+    if element.element_pos_binding(r.el) == null {
+        element.element_bind_pos(r.el, ae_no_pos_)
+    }
+    aevg.scene_mark_dirty(r.scene as *AeScene)
+    return 1
+}
+
+// The position binding sae gives a moved shape: never evaluated by sae.
+ae_no_pos_() -> ptr { return null }
+
+// Apply every property of a JS object.
+ae_apply_obj_(ctx: ptr, r: *AeRec, obj: int) {
+    ks = quickjs.keys(ctx, obj)
+    n = quickjs.length(ctx, ks)
+    i = 0
+    while i < n {
+        k = ae_index_str_(ctx, ks, i)
+        _a = ae_apply_prop_(ctx, r, k, obj)
+        i = i + 1
+    }
+    quickjs.release(ctx, ks)
+}
+
+// vg.set(h, { fill, stroke: [c, w], opacity, transform, text, visible, cx,
+// cy, r, x, y, w, h, x1, y1, x2, y2 }): several changes, one repaint.
+sae_ae_set(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null { return sae_throw_type_error(ctx, "vg.set(h, props): h is not a vg node") }
+    if argc < 2 { return 0 }
+    obj = quickjs.arg(ctx, argv, 1)
+    if quickjs.type_of(ctx, obj) == "object" { ae_apply_obj_(ctx, r, obj) }
+    quickjs.release(ctx, obj)
+    ae_repaint_(ctx)
+    return 0
+}
+
+// vg.get(h): what the node currently has: fill, opacity, transform (its
+// own), visible, text, and its geometry once drawn.
+sae_ae_get(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null { return sae_throw_type_error(ctx, "vg.get(h): h is not a vg node") }
+    o = quickjs.new_object(ctx)
+    ae_put_str_(ctx, o, "transform", r.tf)
+    ae_put_num_(ctx, o, "opacity", r.op)
+    vb = quickjs.new_bool(ctx, r.visible)
+    _v = quickjs.set(ctx, o, "visible", vb)
+    quickjs.release(ctx, vb)
+    if r.el != null {
+        ae_put_str_(ctx, o, "fill", element.element_last_fill(r.el))
+        if element.element_has_stroke(r.el) == 1 {
+            ae_put_str_(ctx, o, "stroke", element.element_last_stroke_color(r.el))
+            ae_put_num_(ctx, o, "stroke_width", element.element_last_stroke_width(r.el))
+        }
+        lt = element.element_last_text(r.el)
+        if lt != null { ae_put_str_(ctx, o, "text", lt) }
+        st = element.element_shape_type(r.el)
+        if st == SHAPE_CIRCLE {
+            ae_put_num_(ctx, o, "cx", element.element_geo0(r.el))
+            ae_put_num_(ctx, o, "cy", element.element_geo1(r.el))
+            ae_put_num_(ctx, o, "r", element.element_geo2(r.el))
+        }
+        if st == SHAPE_RECT {
+            ae_put_num_(ctx, o, "x", element.element_geo0(r.el))
+            ae_put_num_(ctx, o, "y", element.element_geo1(r.el))
+            ae_put_num_(ctx, o, "w", element.element_geo2(r.el))
+            ae_put_num_(ctx, o, "h", element.element_geo3(r.el))
+        }
+        if st == SHAPE_LINE {
+            ae_put_num_(ctx, o, "x1", element.element_geo0(r.el))
+            ae_put_num_(ctx, o, "y1", element.element_geo1(r.el))
+            ae_put_num_(ctx, o, "x2", element.element_geo2(r.el))
+            ae_put_num_(ctx, o, "y2", element.element_geo3(r.el))
+        }
+    }
+    return o
+}
+
+ae_put_str_(ctx: ptr, o: int, k: string, v: string) {
+    h = quickjs.new_string(ctx, v)
+    _s = quickjs.set(ctx, o, k, h)
+    quickjs.release(ctx, h)
+}
+
+ae_put_num_(ctx: ptr, o: int, k: string, v: float) {
+    h = quickjs.new_float(ctx, v)
+    _s = quickjs.set(ctx, o, k, h)
+    quickjs.release(ctx, h)
+}
+
+// --- vg bindings: evaluated by vg.refresh() ---
+
+// A binding modifier: bind_fill(fn) inside a shape's block, or
+// bind_fill(h, fn) from anywhere. Returns the record and holds fn.
+ae_bind_args_(ctx: ptr, argv: int, argc: int, name: string) -> (ptr, int) {
+    if argc >= 2 && is_fn_arg_(ctx, argv, 1) == 1 {
+        r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+        if r == null { return null, 0 }
+        return r as ptr, hold_arg_(ctx, argv, 1)
+    }
+    if argc >= 1 && is_fn_arg_(ctx, argv, 0) == 1 {
+        r2 = ae_modifier_rec_(ctx, name)
+        if r2 == null { return null, 0 }
+        return r2 as ptr, hold_arg_(ctx, argv, 0)
+    }
+    return null, 0
+}
+
+ae_bind_add_(ctx: ptr, r: *AeRec, kind: int, fn_h: int) {
+    b = heap.new(AeBind)
+    b.rec = r as ptr
+    b.scene = r.scene
+    b.kind = kind
+    b.fn_h = fn_h
+    list.add(ae_page_(ctx).binds, b as ptr)
+}
+
+ae_bind_(ctx: ptr, argv: int, kind: int, name: string) -> int {
+    argc = quickjs.arg_count(ctx, argv)
+    rp, fn_h = ae_bind_args_(ctx, argv, argc, name)
+    r = rp as *AeRec
+    if rp == null { return sae_throw_type_error(ctx, "vg.${name}(fn) must be called inside a shape's block (or as vg.${name}(h, fn)), with a function") }
+    ae_bind_add_(ctx, r, kind, fn_h)
+    ae_eval_bind_(ctx, r, kind, fn_h)
+    ae_repaint_(ctx)
+    return 0
+}
+
+sae_ae_bind_fill(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return ae_bind_(ctx, argv, AB_FILL, "bind_fill")
+}
+
+sae_ae_bind_stroke(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return ae_bind_(ctx, argv, AB_STROKE, "bind_stroke")
+}
+
+sae_ae_bind_opacity(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return ae_bind_(ctx, argv, AB_OPACITY, "bind_opacity")
+}
+
+sae_ae_bind_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return ae_bind_(ctx, argv, AB_TEXT, "bind_text")
+}
+
+sae_ae_bind_pos(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return ae_bind_(ctx, argv, AB_POS, "bind_pos")
+}
+
+sae_ae_bind_transform(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return ae_bind_(ctx, argv, AB_TRANSFORM, "bind_transform")
+}
+
+sae_ae_visible_when(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return ae_bind_(ctx, argv, AB_WHEN, "visible_when")
+}
+
+// vg.view_box(fn): inside a scene's block: the viewBox follows fn's string
+// (zoom and pan as state; the prelude accepts a state too).
+sae_ae_view_box(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.view_box(fn) must be called inside vg.scene()") }
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "vg.view_box(fn): fn must be a function") }
+    r = ae_top_rec_(ctx)
+    if r == null { return 0 }
+    ae_bind_add_(ctx, r, AB_VIEWBOX, hold_arg_(ctx, argv, 0))
+    return 0
+}
+
+// vg.set_view_box(scene, "x y w h"): the scene handle is what vg.scene()
+// returned.
+sae_ae_set_view_box(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null || r.kind != K_SCENE { return sae_throw_type_error(ctx, "vg.set_view_box(scene, vb): scene is not one this page made") }
+    aevg.scene_set_view_box(ae_model_(ctx), r.scene as *AeScene, own_(arg_str_(ctx, argv, argc, 1)))
+    ae_repaint_(ctx)
+    return 0
+}
+
+// Evaluate one binding: call its function, apply the value.
+ae_eval_bind_(ctx: ptr, r: *AeRec, kind: int, fn_h: int) {
+    v = ae_call_value_(ctx, fn_h, "a vg binding")
+    if v == 0 { return }
+    t = quickjs.type_of(ctx, v)
+    if kind == AB_FILL {
+        if t != "undefined" { aevg.rec_set_fill(r, own_(quickjs.to_string(ctx, v))) }
+    } else if kind == AB_STROKE {
+        if t == "string" { aevg.rec_set_stroke(r, own_(quickjs.to_string(ctx, v)), 1.0) }
+        else if t == "object" { aevg.rec_set_stroke(r, ae_index_str_(ctx, v, 0), ae_index_num_(ctx, v, 1)) }
+    } else if kind == AB_OPACITY {
+        aevg.rec_set_opacity(r, quickjs.to_float(ctx, v))
+    } else if kind == AB_TEXT {
+        if r.el != null {
+            vg.element_set_text(r.el, own_(quickjs.to_string(ctx, v)))
+            aevg.scene_mark_dirty(r.scene as *AeScene)
+        }
+    } else if kind == AB_POS {
+        if t == "object" { ae_apply_obj_(ctx, r, v) }
+    } else if kind == AB_TRANSFORM {
+        aevg.rec_set_transform(r, own_(quickjs.to_string(ctx, v)))
+    } else if kind == AB_WHEN {
+        aevg.rec_set_visible(r, quickjs.to_bool(ctx, v))
+    } else if kind == AB_VIEWBOX {
+        sc = r.scene as *AeScene
+        nv = own_(quickjs.to_string(ctx, v))
+        if nv != sc.vb { aevg.scene_set_view_box(ae_model_(ctx), sc, nv) }
+    }
+    quickjs.release(ctx, v)
+    settle_(ctx)
+}
+
+// vg.refresh(): re-evaluate every binding and repaint what changed. The
+// prelude calls it after a state is set (once per batch).
+sae_ae_refresh(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    ap = ae_page_(ctx)
+    n = list.size(ap.binds)
+    i = 0
+    while i < n {
+        v, _ = list.get(ap.binds, i)
+        b = v as *AeBind
+        ae_eval_bind_(ctx, b.rec as *AeRec, b.kind, b.fn_h)
+        i = i + 1
+    }
+    ae_repaint_(ctx)
+    return 0
+}
+
+// --- vg defs: gradients and clip paths, named and registered on the scene ---
+
+// vg.defs(fn): inside a scene's block; the gradients and clip paths declared
+// in fn are registered together (a gradient may href one declared before it).
+sae_ae_defs(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.defs(fn) must be called inside vg.scene()") }
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "vg.defs(fn): fn must be a function") }
+    ap = ae_page_(ctx)
+    if ap.defs_sb != null { return sae_throw_type_error(ctx, "vg.defs() cannot nest") }
+    r = ae_top_rec_(ctx)
+    ap.defs_sb = strbuilder.new(256)
+    ap.defs_scene = r.scene
+    c = call_arg_(ctx, argv, 0)
+    svg = strbuilder.finish(ap.defs_sb)
+    ap.defs_sb = null
+    if c < 0 { return rethrow_(ctx) }
+    aevg.defs_register(r.scene as *AeScene, svg)
+    return 0
+}
+
+// The open defs block's builder, or null (with the error thrown).
+ae_defs_sb_(ctx: ptr, name: string) -> ptr {
+    ap = ae_page_(ctx)
+    return ap.defs_sb
+}
+
+// stops: [[offset, color], [offset, color, opacity], ...] as <stop>s.
+ae_stops_(ctx: ptr, sb: ptr, stops: int) {
+    n = quickjs.length(ctx, stops)
+    i = 0
+    while i < n {
+        st, _e = quickjs.get_index(ctx, stops, i)
+        _a = strbuilder.append(sb, "<stop")
+        _b = strbuilder.append(sb, aevg.attr_str("offset", ae_index_str_(ctx, st, 0)))
+        _c = strbuilder.append(sb, aevg.attr_str("stop-color", ae_index_str_(ctx, st, 1)))
+        _d = strbuilder.append(sb, aevg.attr_str("stop-opacity", ae_index_str_(ctx, st, 2)))
+        _f = strbuilder.append(sb, "/>")
+        quickjs.release(ctx, st)
+        i = i + 1
+    }
+}
+
+// The options a gradient may carry: { units, transform, href, spread }.
+ae_gradient_opts_(ctx: ptr, sb: ptr, argv: int, argc: int, at: int) {
+    if argc <= at { return }
+    o = quickjs.arg(ctx, argv, at)
+    if quickjs.type_of(ctx, o) == "object" {
+        _a = strbuilder.append(sb, aevg.attr_str("gradientUnits", ae_prop_str_(ctx, o, "units")))
+        _b = strbuilder.append(sb, aevg.attr_str("gradientTransform", ae_prop_str_(ctx, o, "transform")))
+        href = ae_prop_str_(ctx, o, "href")
+        if string.length(href) > 0 { _c = strbuilder.append(sb, aevg.attr_str("xlink:href", "#${href}")) }
+        _d = strbuilder.append(sb, aevg.attr_str("spreadMethod", ae_prop_str_(ctx, o, "spread")))
+    }
+    quickjs.release(ctx, o)
+}
+
+// vg.linear_gradient(id, x1, y1, x2, y2, stops, opts?): coordinates as
+// fractions of the shape's box, or in viewBox units with
+// { units: "userSpaceOnUse" }. A shape uses it with fill("url(#id)").
+sae_ae_linear_gradient(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    sb = ae_defs_sb_(ctx, "linear_gradient")
+    if sb == null { return sae_throw_type_error(ctx, "vg.linear_gradient() must be called inside vg.defs()") }
+    _a = strbuilder.append(sb, "<linearGradient")
+    _b = strbuilder.append(sb, aevg.attr_str("id", arg_str_(ctx, argv, argc, 0)))
+    _c = strbuilder.append(sb, aevg.attr_str("x1", arg_str_(ctx, argv, argc, 1)))
+    _d = strbuilder.append(sb, aevg.attr_str("y1", arg_str_(ctx, argv, argc, 2)))
+    _e = strbuilder.append(sb, aevg.attr_str("x2", arg_str_(ctx, argv, argc, 3)))
+    _f = strbuilder.append(sb, aevg.attr_str("y2", arg_str_(ctx, argv, argc, 4)))
+    ae_gradient_opts_(ctx, sb, argv, argc, 6)
+    _g = strbuilder.append(sb, ">")
+    if argc > 5 {
+        stops = quickjs.arg(ctx, argv, 5)
+        if quickjs.type_of(ctx, stops) == "object" { ae_stops_(ctx, sb, stops) }
+        quickjs.release(ctx, stops)
+    }
+    _h = strbuilder.append(sb, "</linearGradient>")
+    return 0
+}
+
+// vg.radial_gradient(id, cx, cy, r, stops, opts?): opts may add fx and fy.
+sae_ae_radial_gradient(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    sb = ae_defs_sb_(ctx, "radial_gradient")
+    if sb == null { return sae_throw_type_error(ctx, "vg.radial_gradient() must be called inside vg.defs()") }
+    _a = strbuilder.append(sb, "<radialGradient")
+    _b = strbuilder.append(sb, aevg.attr_str("id", arg_str_(ctx, argv, argc, 0)))
+    _c = strbuilder.append(sb, aevg.attr_str("cx", arg_str_(ctx, argv, argc, 1)))
+    _d = strbuilder.append(sb, aevg.attr_str("cy", arg_str_(ctx, argv, argc, 2)))
+    _e = strbuilder.append(sb, aevg.attr_str("r", arg_str_(ctx, argv, argc, 3)))
+    if argc > 5 {
+        o = quickjs.arg(ctx, argv, 5)
+        if quickjs.type_of(ctx, o) == "object" {
+            _fx = strbuilder.append(sb, aevg.attr_str("fx", ae_prop_str_(ctx, o, "fx")))
+            _fy = strbuilder.append(sb, aevg.attr_str("fy", ae_prop_str_(ctx, o, "fy")))
+        }
+        quickjs.release(ctx, o)
+    }
+    ae_gradient_opts_(ctx, sb, argv, argc, 5)
+    _g = strbuilder.append(sb, ">")
+    if argc > 4 {
+        stops = quickjs.arg(ctx, argv, 4)
+        if quickjs.type_of(ctx, stops) == "object" { ae_stops_(ctx, sb, stops) }
+        quickjs.release(ctx, stops)
+    }
+    _h = strbuilder.append(sb, "</radialGradient>")
+    return 0
+}
+
+// vg.clip_path(id, shapes, opts?): shapes as [["rect", x, y, w, h],
+// ["circle", cx, cy, r], ["ellipse", cx, cy, rx, ry], ["path", d],
+// ["polygon", points]]; a shape is clipped with { clip: id } ... which the
+// deferred shape verbs cannot carry yet (see the report), so a clip path
+// today is registered and waits for that attribute.
+sae_ae_clip_path(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    sb = ae_defs_sb_(ctx, "clip_path")
+    if sb == null { return sae_throw_type_error(ctx, "vg.clip_path() must be called inside vg.defs()") }
+    _a = strbuilder.append(sb, "<clipPath")
+    _b = strbuilder.append(sb, aevg.attr_str("id", arg_str_(ctx, argv, argc, 0)))
+    if argc > 2 {
+        o = quickjs.arg(ctx, argv, 2)
+        if quickjs.type_of(ctx, o) == "object" {
+            _t = strbuilder.append(sb, aevg.attr_str("transform", ae_prop_str_(ctx, o, "transform")))
+            _u = strbuilder.append(sb, aevg.attr_str("clipPathUnits", ae_prop_str_(ctx, o, "units")))
+        }
+        quickjs.release(ctx, o)
+    }
+    _c = strbuilder.append(sb, ">")
+    if argc > 1 {
+        shapes = quickjs.arg(ctx, argv, 1)
+        n = quickjs.length(ctx, shapes)
+        i = 0
+        while i < n {
+            s, _e = quickjs.get_index(ctx, shapes, i)
+            kind = ae_index_str_(ctx, s, 0)
+            if kind == "rect" {
+                _r = strbuilder.append(sb, "<rect${aevg.attr_str("x", ae_index_str_(ctx, s, 1))}${aevg.attr_str("y", ae_index_str_(ctx, s, 2))}${aevg.attr_str("width", ae_index_str_(ctx, s, 3))}${aevg.attr_str("height", ae_index_str_(ctx, s, 4))}/>")
+            } else if kind == "circle" {
+                _ci = strbuilder.append(sb, "<circle${aevg.attr_str("cx", ae_index_str_(ctx, s, 1))}${aevg.attr_str("cy", ae_index_str_(ctx, s, 2))}${aevg.attr_str("r", ae_index_str_(ctx, s, 3))}/>")
+            } else if kind == "ellipse" {
+                _el = strbuilder.append(sb, "<ellipse${aevg.attr_str("cx", ae_index_str_(ctx, s, 1))}${aevg.attr_str("cy", ae_index_str_(ctx, s, 2))}${aevg.attr_str("rx", ae_index_str_(ctx, s, 3))}${aevg.attr_str("ry", ae_index_str_(ctx, s, 4))}/>")
+            } else if kind == "path" {
+                _pa = strbuilder.append(sb, "<path${aevg.attr_str("d", ae_index_str_(ctx, s, 1))}/>")
+            } else if kind == "polygon" {
+                _po = strbuilder.append(sb, "<polygon${aevg.attr_str("points", ae_index_str_(ctx, s, 1))}/>")
+            }
+            quickjs.release(ctx, s)
+            i = i + 1
+        }
+        quickjs.release(ctx, shapes)
+    }
+    _d = strbuilder.append(sb, "</clipPath>")
+    return 0
+}
+
+// vg.css(text): CSS rules for the open scene (kind selectors such as
+// `path { stroke: #000 }`; class selectors wait for a class attribute on
+// shapes, as clip paths do).
+sae_ae_css(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.css(text) must be called inside vg.scene()") }
+    r = ae_top_rec_(ctx)
+    if r == null { return 0 }
+    aevg.css_register(r.scene as *AeScene, own_(arg_str_(ctx, argv, argc, 0)))
+    return 0
+}
+
+// The registrations, in one block for api_register_ (called from there).
+ae_register_(p: *Page) {
+    q = p.ctx
+    u, _ue = quickjs.get_global(q, "ui")
+    reg_(q, u, "_cell", 2, sae_ae_cell)
+    reg_(q, u, "_cell_get", 2, sae_ae_cell_get)
+    reg_(q, u, "_cell_set", 3, sae_ae_cell_set)
+    reg_(q, u, "_computed", 3, sae_ae_computed)
+    reg_(q, u, "_batch", 1, sae_ae_batch)
+    reg_(q, u, "_bind", 4, sae_ae_bind)
+    reg_(q, u, "_widget_kind", 1, sae_ae_widget_kind)
+    reg_(q, u, "_remove_child", 2, sae_ae_remove_child)
+    reg_(q, u, "set_enabled", 2, sae_ae_set_enabled)
+    quickjs.release(q, u)
+    v, _ve = quickjs.get_global(q, "vg")
+    // These supersede the earlier registrations of the same names (see the
+    // banner above): the page sees the versions with the scene record.
+    reg_(q, v, "scene", 4, sae_ae_scene)
+    reg_(q, v, "circle", 4, sae_ae_circle)
+    reg_(q, v, "rect", 5, sae_ae_rect)
+    reg_(q, v, "rrect", 6, sae_ae_rrect)
+    reg_(q, v, "line", 5, sae_ae_line)
+    reg_(q, v, "path", 2, sae_ae_path)
+    reg_(q, v, "text", 4, sae_ae_text)
+    reg_(q, v, "g", 1, sae_ae_g)
+    reg_(q, v, "fill", 1, sae_ae_fill)
+    reg_(q, v, "stroke", 2, sae_ae_stroke)
+    reg_(q, v, "opacity", 1, sae_ae_opacity)
+    reg_(q, v, "transform", 1, sae_ae_transform)
+    reg_(q, v, "on_click", 1, sae_ae_on_click)
+    // New.
+    reg_(q, v, "polygon", 2, sae_ae_polygon)
+    reg_(q, v, "polyline", 2, sae_ae_polyline)
+    reg_(q, v, "ellipse", 5, sae_ae_ellipse)
+    reg_(q, v, "text_sized", 5, sae_ae_text_sized)
+    reg_(q, v, "text_anchored", 6, sae_ae_text_anchored)
+    reg_(q, v, "into", 2, sae_ae_into)
+    reg_(q, v, "linecap", 1, sae_ae_linecap)
+    reg_(q, v, "linejoin", 1, sae_ae_linejoin)
+    reg_(q, v, "tooltip", 1, sae_ae_tooltip)
+    reg_(q, v, "cursor", 1, sae_ae_cursor)
+    reg_(q, v, "on_hover", 1, sae_ae_on_hover)
+    reg_(q, v, "on_double_click", 1, sae_ae_on_double_click)
+    reg_(q, v, "on_right_click", 1, sae_ae_on_right_click)
+    reg_(q, v, "on_drag", 1, sae_ae_on_drag)
+    reg_(q, v, "on_drag_end", 1, sae_ae_on_drag_end)
+    reg_(q, v, "on_scroll", 1, sae_ae_on_scroll)
+    reg_(q, v, "set_transform", 2, sae_ae_set_transform)
+    reg_(q, v, "set_visible", 2, sae_ae_set_visible)
+    reg_(q, v, "remove", 1, sae_ae_remove)
+    reg_(q, v, "set", 2, sae_ae_set)
+    reg_(q, v, "get", 1, sae_ae_get)
+    reg_(q, v, "bind_fill", 2, sae_ae_bind_fill)
+    reg_(q, v, "bind_stroke", 2, sae_ae_bind_stroke)
+    reg_(q, v, "bind_opacity", 2, sae_ae_bind_opacity)
+    reg_(q, v, "bind_text", 2, sae_ae_bind_text)
+    reg_(q, v, "bind_pos", 2, sae_ae_bind_pos)
+    reg_(q, v, "bind_transform", 2, sae_ae_bind_transform)
+    reg_(q, v, "visible_when", 2, sae_ae_visible_when)
+    reg_(q, v, "view_box", 1, sae_ae_view_box)
+    reg_(q, v, "set_view_box", 2, sae_ae_set_view_box)
+    reg_(q, v, "refresh", 0, sae_ae_refresh)
+    reg_(q, v, "defs", 1, sae_ae_defs)
+    reg_(q, v, "linear_gradient", 7, sae_ae_linear_gradient)
+    reg_(q, v, "radial_gradient", 6, sae_ae_radial_gradient)
+    reg_(q, v, "clip_path", 3, sae_ae_clip_path)
+    reg_(q, v, "css", 1, sae_ae_css)
+    quickjs.release(q, v)
+    // The JS surface over these: state, computed, bind, each, batch, the
+    // bind tagged template, vg.animate, vg.items (src/sae_prelude.js).
+    pre, perr = quickjs.eval(q, sae_prelude(), "sae:prelude")
+    if perr != "" { say_("sae: the prelude failed:\n${perr}") }
+    quickjs.release(q, pre)
+}
+
+// ===== end wave1/aevg =====
+
 // --- URLs and fetching ---
 
 // --- http (the kernel side of the http page API) ---
@@ -4341,6 +5776,9 @@ api_register_(p: *Page) {
     // unit meets them on the $sae object its wrapper takes (modules_prepare_).
     p.mod_get = quickjs.function(q, "m", 1, sae_mod_get)
     p.mod_fail = quickjs.function(q, "fail", 1, sae_mod_fail)
+    // ===== wave1/aevg: the reactive and AeVG surfaces (their reg_ lines are
+    // in ae_register_, one block, above) =====
+    ae_register_(p)
 }
 
 page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Page {

@@ -78,6 +78,7 @@ aeb(cap) {
             // wave1/raster: a page's Uint8Array bytes (see the file's header).
             sources("src/sae_raster.c")
             include(quickjs_include_())
+            sources("src/sae_prelude.c")
 
             // aether-ui's macOS backend (the darwin arm of aether-ui's
             // build_support/aetherui ui_backend, which targets the aether
