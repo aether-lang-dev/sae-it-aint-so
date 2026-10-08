@@ -41,6 +41,15 @@ aether_root_() -> string {
     return ""
 }
 
+// wave1/raster: where contrib.quickjs's QuickJS header is, for
+// src/sae_raster.c (the typed-array bytes workaround): the dev tree's
+// contrib/, or the installed toolchain's share/aether/contrib/.
+quickjs_include_() -> string {
+    root = aether_root_()
+    if string.length(root) > 0 { return "${root}/contrib/quickjs/amalgamation" }
+    return "${os.getenv("AETHER_HOME")}/current/share/aether/contrib/quickjs/amalgamation"
+}
+
 // The `ae` that reports libaether's own link dependencies.
 ae_bin_() -> string {
     root = aether_root_()
@@ -66,6 +75,9 @@ aeb(cap) {
             // that C includes (fetched into the Aether tree by build.sh).
             aether_source("src/sae_host.ae")
             sources("src/sae_rom.c")
+            // wave1/raster: a page's Uint8Array bytes (see the file's header).
+            sources("src/sae_raster.c")
+            include(quickjs_include_())
 
             // aether-ui's macOS backend (the darwin arm of aether-ui's
             // build_support/aetherui ui_backend, which targets the aether

@@ -2935,6 +2935,270 @@ sae_sqlite_end(ctx: ptr, this_val: int, argv: int) -> int {
     return sqlite_submit_(ctx, sqlite.KIND_EXEC, SQLITE_OP_END, sql, "", name, id)
 }
 // ===== end wave1/sqlite =====
+// ===== wave1/raster: the page API: rasters (vg.raster, vg.image, ui.image) =====
+//
+// Pixels from a page (docs/roadmap.md 8.2). A raster is an AeVG image element
+// (aether-ui's vg.image) whose pixels the page gives as a Uint8Array of
+// straight RGBA8, w*h*4 bytes, copied into a buffer the host owns and updates
+// in place on vg.raster_update. vg.image decodes PNG/JPEG/GIF/BMP bytes
+// through the toolkit into an element that owns its pixels; ui.image makes
+// the same picture a widget. Page-scoped, no capability: a page's rasters
+// are freed with the page (raster_page_free_, called from page_free_).
+//
+// Budgets (roadmap decision 9, provisional): RASTER_MAX_DIM on either
+// dimension and RASTER_BUDGET bytes of pixels per page in total, decoded
+// images included, refused with a TypeError that says which.
+//
+// The bytes come out of the engine through src/sae_raster.c, a labelled
+// workaround for contrib.quickjs having no typed-array access
+// (asks/quickjs-typed-array-bytes.md); its layout mirror is self-checked once
+// per process before any page's bytes are read through it.
+
+const RASTER_BUDGET = 33554432
+const RASTER_MAX_DIM = 4096
+
+extern sae_qjs_u8_bytes(q: ptr, h: int, out_len: ptr) -> ptr
+extern sae_qjs_u8_self_check(q: ptr) -> int
+extern aether_ui_image_decode_rgba_impl(data: ptr, length: int, out_w: ptr, out_h: ptr) -> ptr
+
+// One raster a page made: its vg node (handle = its index in p.vg_nodes),
+// the buffer (ours for vg.raster, the element's for vg.image: pix null) and
+// its size against the page's budget.
+struct PageRaster {
+    ctx: ptr
+    handle: int
+    node: ptr
+    pix: ptr
+    bytes: int
+    pw: int
+    ph: int
+}
+
+var rasters_: ptr = null     // std.list of *PageRaster, every page's
+var raster_checked_ = 0      // 0 not yet, 1 the bytes path works, -1 it does not
+
+raster_list_() -> ptr {
+    if rasters_ == null { rasters_ = list.new() }
+    return rasters_
+}
+
+// The page's rasters' bytes so far.
+raster_used_(ctx: ptr) -> int {
+    l = raster_list_()
+    n = list.size(l)
+    used = 0
+    i = 0
+    while i < n {
+        rv, _ = list.get(l, i)
+        r = rv as *PageRaster
+        if r.ctx == ctx { used = used + r.bytes }
+        i = i + 1
+    }
+    return used
+}
+
+raster_of_(ctx: ptr, h: int) -> *PageRaster {
+    l = raster_list_()
+    n = list.size(l)
+    i = 0
+    while i < n {
+        rv, _ = list.get(l, i)
+        r = rv as *PageRaster
+        if r.ctx == ctx && r.handle == h { return r }
+        i = i + 1
+    }
+    return null
+}
+
+raster_add_(ctx: ptr, h: int, node: ptr, pix: ptr, bytes: int, pw: int, ph: int) {
+    r = heap.new(PageRaster)
+    r.ctx = ctx
+    r.handle = h
+    r.node = node
+    r.pix = pix
+    r.bytes = bytes
+    r.pw = pw
+    r.ph = ph
+    list.add(raster_list_(), r as ptr)
+}
+
+// Free a page's rasters with it (from page_free_): the buffers vg.raster
+// copied into; vg.image's belong to their elements.
+raster_page_free_(p: *Page) {
+    if rasters_ == null { return }
+    i = list.size(rasters_) - 1
+    while i >= 0 {
+        rv, _ = list.get(rasters_, i)
+        r = rv as *PageRaster
+        if r.ctx == p.ctx {
+            if r.pix != null { free(r.pix) }
+            list.list_remove(rasters_, i)
+            heap.free(r)
+        }
+        i = i - 1
+    }
+}
+
+// "" when a w x h raster of `bytes` more fits the page, else the refusal.
+raster_refusal_(ctx: ptr, what: string, w: int, h: int, bytes: int) -> string {
+    if w < 1 || h < 1 { return "${what}: ${w}x${h} is not a size" }
+    if w > RASTER_MAX_DIM || h > RASTER_MAX_DIM {
+        return "${what}: ${w}x${h} is over the ${RASTER_MAX_DIM} limit on either dimension"
+    }
+    if raster_used_(ctx) + bytes > RASTER_BUDGET {
+        return "${what}: this page's rasters would exceed 32 MB of pixels"
+    }
+    return ""
+}
+
+// The bytes of argument i, a Uint8Array (or Uint8ClampedArray): a pointer
+// into the engine's buffer, valid until JS runs, and their count; null and
+// -1 when it is not one. The first call proves the engine mirror.
+arg_bytes_(ctx: ptr, argv: int, argc: int, i: int) -> (ptr, int) {
+    if i >= argc { return null, -1 }
+    if raster_checked_ == 0 {
+        if sae_qjs_u8_self_check(ctx) == 1 { raster_checked_ = 1 } else { raster_checked_ = -1 }
+    }
+    if raster_checked_ != 1 { return null, -2 }
+    hv = quickjs.arg(ctx, argv, i)
+    lenp = malloc(4)
+    mem.set_int(lenp, 0, 0)
+    b = sae_qjs_u8_bytes(ctx, hv, lenp)
+    n = mem.get_int(lenp, 0)
+    free(lenp)
+    quickjs.release(ctx, hv)
+    if b == null { return null, -1 }
+    return b, n
+}
+
+// The refusal for a bytes argument that is not one, by what arg_bytes_ said.
+bytes_refusal_(what: string, n: int) -> string {
+    if n == -2 { return "${what}: this build cannot read a page's bytes (the engine's typed-array layout did not check out)" }
+    return "${what}: expected a Uint8Array"
+}
+
+// vg.raster(w, h, rgba, block?): a w x h image element at viewBox (0, 0),
+// one unit a pixel, drawing a copy of rgba (w*h*4 bytes). Returns its
+// handle; the block's vg.box / vg.fit / vg.on_click / vg.transform / ...
+// apply to it.
+sae_vg_raster(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.raster() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    w = arg_int_(ctx, argv, argc, 0, 0)
+    h = arg_int_(ctx, argv, argc, 1, 0)
+    why = raster_refusal_(ctx, "vg.raster", w, h, w * h * 4)
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    b, n = arg_bytes_(ctx, argv, argc, 2)
+    if b == null { return sae_throw_type_error(ctx, bytes_refusal_("vg.raster(w, h, rgba)", n)) }
+    if n != w * h * 4 { return sae_throw_type_error(ctx, "vg.raster(w, h, rgba): rgba has ${n} bytes, not w*h*4 = ${w * h * 4}") }
+    pix = malloc(n as long)
+    _c = mem.copy(pix, b, n as long)
+    node = vg.image(vg_top_(p), 0.0, 0.0, w as float, h as float)
+    vg.image_pixels(node, pix, w, h)
+    raster_add_(ctx, list.size(p.vg_nodes) + 1, node, pix, n, w, h)
+    return vg_shape_done_(ctx, argv, argc, 3, node)
+}
+
+// vg.raster_update(h, rgba): new pixels for a raster, the same size, in
+// place; the scene repaints.
+sae_vg_raster_update(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = raster_of_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null { return sae_throw_type_error(ctx, "vg.raster_update(h, rgba): h is not a vg.raster of this page") }
+    if r.pix == null { return sae_throw_type_error(ctx, "vg.raster_update(h, rgba): h is a vg.image; its pixels are the picture's") }
+    b, n = arg_bytes_(ctx, argv, argc, 1)
+    if b == null { return sae_throw_type_error(ctx, bytes_refusal_("vg.raster_update(h, rgba)", n)) }
+    if n != r.bytes { return sae_throw_type_error(ctx, "vg.raster_update(h, rgba): rgba has ${n} bytes, not the raster's ${r.bytes}") }
+    _c = mem.copy(r.pix, b, n as long)
+    vg_repaint_(r.node)
+    return 0
+}
+
+// vg.image(bytes, block?): an encoded image (PNG, JPEG, GIF, BMP) decoded
+// by the toolkit into an element at viewBox (0, 0), one unit a pixel,
+// sized as the picture is. Returns its handle.
+sae_vg_image(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.image() must be called inside vg.scene()") }
+    p = page_of_(ctx)
+    b, n = arg_bytes_(ctx, argv, argc, 0)
+    if b == null { return sae_throw_type_error(ctx, bytes_refusal_("vg.image(bytes)", n)) }
+    node = vg.image(vg_top_(p), 0.0, 0.0, 0.0, 0.0)
+    if vg.image_bytes(node, b, n) == 0 {
+        return sae_throw_type_error(ctx, "vg.image(bytes): not an image this platform decodes (PNG, JPEG, GIF, BMP)")
+    }
+    pw = vg.image_pixel_w(node)
+    ph = vg.image_pixel_h(node)
+    why = raster_refusal_(ctx, "vg.image", pw, ph, pw * ph * 4)
+    if why != "" {
+        vg.image_pixels(node, null, 0, 0)    // drops the decoded pixels
+        return sae_throw_type_error(ctx, why)
+    }
+    vg.image_box(node, 0.0, 0.0, pw as float, ph as float)
+    raster_add_(ctx, list.size(p.vg_nodes) + 1, node, null, pw * ph * 4, pw, ph)
+    return vg_shape_done_(ctx, argv, argc, 1, node)
+}
+
+// vg.box(x, y, w, h): inside a raster's or image's block, the viewBox box
+// it draws into (the default is (0, 0) and its own size).
+sae_vg_box(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.box() must be called inside a raster's or image's block") }
+    vg.image_box(vg_top_(page_of_(ctx)), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
+    return 0
+}
+
+// vg.fit(mode): inside a raster's or image's block, how its pixels fill
+// the box: "stretch" (the default), "contain", "cover" or "original".
+sae_vg_fit(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.fit() must be called inside a raster's or image's block") }
+    vg.image_fit(vg_top_(page_of_(ctx)), arg_str_(ctx, argv, argc, 0))
+    return 0
+}
+
+// vg.raster_size(h): [w, h] of a raster or image, in pixels.
+sae_vg_raster_size(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = raster_of_(ctx, arg_int_(ctx, argv, argc, 0, 0))
+    if r == null { return sae_throw_type_error(ctx, "vg.raster_size(h): h is not a raster or image of this page") }
+    return json_value_(ctx, "[${r.pw}, ${r.ph}]")
+}
+
+// ui.image(bytes, block?): an encoded image as a widget under the current
+// container, at its own size. The picture is decoded once more to count
+// its pixels against the page's budget (the widget keeps its own copy).
+sae_ui_image(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    b, n = arg_bytes_(ctx, argv, argc, 0)
+    if b == null { return sae_throw_type_error(ctx, bytes_refusal_("ui.image(bytes)", n)) }
+    wh = malloc(8)
+    mem.set_int(wh, 0, 0)
+    mem.set_int(wh, 4, 0)
+    pix = aether_ui_image_decode_rgba_impl(b, n, wh, mem.long_to_ptr(mem.ptr_to_long(wh) + 4))
+    pw = mem.get_int(wh, 0)
+    ph = mem.get_int(wh, 4)
+    free(wh)
+    if pix == null { return sae_throw_type_error(ctx, "ui.image(bytes): not an image this platform decodes (PNG, JPEG, GIF, BMP)") }
+    free(pix)
+    why = raster_refusal_(ctx, "ui.image", pw, ph, pw * ph * 4)
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    long t = now_ns_()
+    h = ui.image_from_bytes_ptr(mem.long_to_ptr(top_(p)), b, n)
+    ui.image_size(h, pw, ph)
+    ui_done_(p, t)
+    raster_add_(ctx, 0 - h, null, null, pw * ph * 4, pw, ph)
+    return container_(ctx, argv, argc, h)
+}
 
 // --- URLs and fetching ---
 
@@ -3925,6 +4189,17 @@ api_register_(p: *Page) {
     reg_(q, v, "set_text", 2, sae_vg_set_text)
     reg_(q, v, "set_stroke", 3, sae_vg_set_stroke)
     reg_(q, v, "set_opacity", 2, sae_vg_set_opacity)
+    // ===== wave1/raster: pixels from a page =====
+    reg_(q, v, "raster", 4, sae_vg_raster)
+    reg_(q, v, "raster_update", 2, sae_vg_raster_update)
+    reg_(q, v, "raster_size", 1, sae_vg_raster_size)
+    reg_(q, v, "image", 2, sae_vg_image)
+    reg_(q, v, "box", 4, sae_vg_box)
+    reg_(q, v, "fit", 1, sae_vg_fit)
+    uimg, _ue = quickjs.get_global(q, "ui")
+    reg_(q, uimg, "image", 2, sae_ui_image)
+    quickjs.release(q, uimg)
+    // ===== end wave1/raster =====
     quickjs.set_global(q, "vg", v)
     quickjs.release(q, v)
 
@@ -4088,6 +4363,7 @@ page_free_(p: *Page) {
     // would call into a freed runtime.
     timers_free_(p)
     modules_free_(p)   // wave1/imports: its module registry
+    raster_page_free_(p)   // wave1/raster: its rasters' buffers
     list.free(p.vg_nodes)
     list.free(p.stacks)
     list.free(p.grids)

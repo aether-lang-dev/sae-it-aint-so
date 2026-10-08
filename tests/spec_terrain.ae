@@ -1,0 +1,70 @@
+// spec_terrain.ae — demo 13: sliders drive a noise heightmap into a raster.
+// The page prints a checksum of its pixels after every render, so a slider
+// that changes the picture changes the checksum; the colour bands are read
+// from the canvas. The page is site/terrain.ts.
+//
+//   tests/run_spec.sh spec_terrain
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// Some pixel of the 128x128 viewBox is within tol of rgb: sample a grid.
+has_colour(rgb: int, tol: int) -> int {
+    y = 4.0
+    while y < 128.0 {
+        x = 4.0
+        while x < 128.0 {
+            if b.vg_pixel_near(b.vg_px_x(x, 128.0, 128.0), b.vg_px_y(y, 128.0, 128.0), rgb, tol) == 1 { return 1 }
+            x = x + 8.0
+        }
+        y = y + 8.0
+    }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "terrain (demo 13)") {
+        spec.it("renders a heightmap with water, land and the high bands") callback {
+            b.navigate(b.test_url("/terrain"))
+            b.assert_page("Terrain: value noise, coloured by height", "200 ", "terrain page")
+            spec.assert_true(b.wait_for_console("terrain: seed 1 scale 24 octaves 4 water 40 checksum"), "the first render")
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(4.0, 128.0, 128.0), b.vg_px_y(4.0, 128.0, 128.0), 0x000000) == 0, "something is drawn")
+            spec.assert_true(has_colour(0x3c78d2, 20) == 1 || has_colour(0x1840a0, 20) == 1, "water somewhere")
+            spec.assert_true(has_colour(0x3c963c, 20) == 1 || has_colour(0x1e6428, 20) == 1, "grass or forest somewhere")
+        }
+        spec.it("the water slider at 100 floods everything; at 0 there is no water") callback {
+            b.slide_nth(2, 100)
+            spec.assert_true(b.wait_for_console("water 100 checksum"), "re-rendered")
+            sleep(100)
+            spec.assert_true(has_colour(0x3c963c, 20) == 0, "no grass under water")
+            spec.assert_true(has_colour(0x3c78d2, 20) == 1 || has_colour(0x1840a0, 20) == 1, "water everywhere")
+            b.slide_nth(2, 0)
+            spec.assert_true(b.wait_for_console("water 0 checksum"), "re-rendered again")
+            sleep(100)
+            spec.assert_true(has_colour(0x3c78d2, 20) == 0, "no water left")
+            spec.assert_true(has_colour(0xf0f0f5, 12) == 1, "snow on the peaks")
+        }
+        spec.it("scale and octaves change the picture: the checksum moves") callback {
+            b.slide_nth(0, 8)
+            spec.assert_true(b.wait_for_console("scale 8 octaves 4 water 0"), "scale applied")
+            b.slide_nth(1, 1)
+            spec.assert_true(b.wait_for_console("scale 8 octaves 1 water 0"), "octaves applied")
+            spec.assert_true(b.console_count("checksum") >= 5, "five renders so far")
+        }
+        spec.it("a new seed changes the pixels") callback {
+            before = b.vg_pixel(b.vg_px_x(64.0, 128.0, 128.0), b.vg_px_y(64.0, 128.0, 128.0))
+            b.click("New seed")
+            spec.assert_true(b.wait_for_console("terrain: seed 20 "), "seed rolled")
+            // Not every pixel changes with the seed, but the checksum does.
+            l1 = b.console_count("seed 1 scale 8 octaves 1 water 0 checksum")
+            spec.assert_eq(l1, 1, "the previous render was logged once")
+            spec.assert_true(b.console_count("checksum") >= 6, "and a new one followed")
+            _ = before
+        }
+    }
+    return spec.run_summary(fw)
+}

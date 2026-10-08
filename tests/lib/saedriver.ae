@@ -36,6 +36,7 @@ exports(
     wait_for_url, wait_for_page, wait_for_text, wait_for_text_gone, wait_for_widget_count,
     assert_url, assert_page, assert_text, assert_no_text,
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
+    console_count, wait_for_console_n,
     screenshot, console_contains, wait_for_console, url_encode
 )
 
@@ -533,6 +534,28 @@ wait_for_console(text: string) -> int {
     i = 0
     while i < TRIES {
         if console_contains(text) == 1 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+// How many times sae-driver has printed `text` so far.
+console_count(text: string) -> int {
+    p = os_getenv("SAE_TEST_LOG")
+    if p == null { return 0 }
+    body, err = fs.read(p)
+    if string.length(err) > 0 { return 0 }
+    return uidriver.count_occurrences(body, text)
+}
+
+// 1 once `text` has been printed at least n times: for a line a page
+// prints again on a second visit, where wait_for_console would be
+// satisfied by the first.
+wait_for_console_n(text: string, n: int) -> int {
+    i = 0
+    while i < TRIES {
+        if console_count(text) >= n { return 1 }
         sleep(POLL_MS)
         i = i + 1
     }

@@ -1,0 +1,70 @@
+// spec_raster.ae — pixels from a page: vg.raster draws the page's bytes,
+// raster_update changes them in place, vg.image and ui.image decode a PNG,
+// and the budgets refuse what they say. The page is site/raster.ts.
+//
+//   tests/run_spec.sh spec_raster
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "pixels from a page") {
+        spec.it("vg.raster draws a 2x2 buffer over its box, one colour a quadrant") callback {
+            b.navigate(b.test_url("/raster"))
+            b.assert_page("Rasters", "200 ", "raster page")
+            // The raster's box is (0,0)-(50,50) of a 100x100 viewBox.
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(12.5, 100.0, 100.0), b.vg_px_y(12.5, 100.0, 100.0), 0xff0000), "top-left red")
+            spec.assert_true(b.vg_pixel_near(b.vg_px_x(37.5, 100.0, 100.0), b.vg_px_y(12.5, 100.0, 100.0), 0x00ff00, 24) == 1, "top-right green")
+            spec.assert_true(b.vg_pixel_near(b.vg_px_x(12.5, 100.0, 100.0), b.vg_px_y(37.5, 100.0, 100.0), 0x0000ff, 24) == 1, "bottom-left blue")
+            spec.assert_true(b.vg_pixel_near(b.vg_px_x(37.5, 100.0, 100.0), b.vg_px_y(37.5, 100.0, 100.0), 0xffffff, 24) == 1, "bottom-right white")
+        }
+        spec.it("vg.image decodes a PNG into the scene, fit to its box") callback {
+            spec.assert_true(b.wait_for_console("image decoded as 2x2"), "raster_size reports the decoded size")
+            // Box (50,50)-(100,100), a square picture in a square box: the quadrants again.
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(62.5, 100.0, 100.0), b.vg_px_y(62.5, 100.0, 100.0), 0xff0000), "decoded red")
+            spec.assert_true(b.vg_pixel_near(b.vg_px_x(87.5, 100.0, 100.0), b.vg_px_y(87.5, 100.0, 100.0), 0xffffff, 24) == 1, "decoded white")
+        }
+        spec.it("ui.image is a widget of the picture's size") callback {
+            id = uidriver.widget_id_last_of("image", "")
+            spec.assert_gt(id, 0, "an image widget")
+            spec.assert_eq(uidriver.widget_int_field_by_id(id, "w"), 2, "2 px wide")
+        }
+        spec.it("clicking the raster runs its handler in viewBox coordinates, and raster_update repaints") callback {
+            x = b.vg_px_x(12.5, 100.0, 100.0)
+            y = b.vg_px_y(12.5, 100.0, 100.0)
+            b.vg_click(x, y)
+            spec.assert_true(b.wait_for_console("raster clicked at 12,12"), "the handler saw viewBox coordinates")
+            spec.assert_true(b.wait_for_vg_pixel(x, y, 0xffff00), "yellow after the update")
+            b.click("Update")
+            spec.assert_true(b.wait_for_console("raster updated to black"), "updated from a ui button")
+            spec.assert_true(b.wait_for_vg_pixel(x, y, 0x000000), "black now")
+        }
+        spec.it("the budgets refuse, with messages, and the page lives on") callback {
+            b.click("Refusals")
+            spec.assert_true(b.wait_for_console("too wide: vg.raster: 4097x1 is over the 4096 limit on either dimension"), "dimension cap")
+            spec.assert_true(b.wait_for_console("short buffer: vg.raster(w, h, rgba): rgba has 15 bytes, not w*h*4 = 16"), "length check")
+            spec.assert_true(b.wait_for_console("not bytes: vg.raster(w, h, rgba): expected a Uint8Array"), "type check")
+            spec.assert_true(b.wait_for_console("not an image: vg.image(bytes): not an image this platform decodes"), "decode failure")
+            spec.assert_true(b.wait_for_console("update wrong size: vg.raster_update(h, rgba): rgba has 8 bytes, not the raster's 16"), "update length")
+            spec.assert_true(b.wait_for_console("update a stranger: vg.raster_update(h, rgba): h is not a vg.raster of this page"), "a handle that is not ours")
+            spec.assert_true(b.wait_for_console("big 2: accepted"), "three 8 MB rasters fit")
+            spec.assert_true(b.wait_for_console("big 3: vg.raster: this page's rasters would exceed 32 MB of pixels"), "the fourth is over the 32 MB budget")
+            spec.assert_true(b.wait_for_console("outside a scene: vg.raster() must be called inside vg.scene()"), "needs a scene")
+            spec.assert_true(b.wait_for_console("ui.image not an image: ui.image(bytes): not an image this platform decodes"), "ui.image decode failure")
+            b.assert_text("Rasters", "the page is still here")
+        }
+        spec.it("leaving the page frees its rasters: a fresh page starts from zero") callback {
+            b.click("Home")
+            spec.assert_true(b.wait_for_text("Welcome to Sae it ain't so"), "home")
+            b.click("Rasters (pixels from a page)")
+            b.assert_page("Rasters", "200 ", "raster page again")
+            b.click("Refusals")
+            spec.assert_true(b.wait_for_console_n("big 2: accepted", 2), "the budget was the page's, not the process's")
+        }
+    }
+    return spec.run_summary(fw)
+}
