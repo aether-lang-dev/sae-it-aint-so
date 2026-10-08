@@ -1,0 +1,94 @@
+// spec_globals.ae — the whole global surface a page sees, against an
+// explicit list: sae is an IoC container, and a page may reach only what
+// api_register_ hands it. A global that appears (a quickjs-ng bump, a new
+// page-API object) fails this spec until it is added here on purpose.
+//
+//   tests/run_spec.sh spec_globals                                (browser)
+//   SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$PWD/target/globals-appdata \
+//     tests/run_spec.sh spec_globals                              (app)
+//
+// The pages are site/globals.ts (seeks nothing) and site/globals_seeks.ts
+// (seeks all three privileges, optionally); tests/apps/globals links both
+// and grants all three.
+import std.spec
+import std.string
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+// The language: quickjs-ng's intrinsics, as contrib.quickjs builds them (no
+// quickjs-libc: no std, os, scriptArgs, setTimeout or module loader).
+const LANGUAGE = "Object Function Error EvalError RangeError ReferenceError SyntaxError TypeError URIError InternalError AggregateError SuppressedError Iterator Array parseInt parseFloat isNaN isFinite queueMicrotask decodeURI decodeURIComponent encodeURI encodeURIComponent escape unescape Infinity NaN undefined eval Number Boolean String Math Reflect Symbol DisposableStack globalThis BigInt Date RegExp JSON Proxy Map Set WeakMap WeakSet ArrayBuffer SharedArrayBuffer Uint8ClampedArray Int8Array Uint8Array Int16Array Uint16Array Int32Array Uint32Array BigInt64Array BigUint64Array Float16Array Float32Array Float64Array DataView Atomics Promise AsyncDisposableStack WeakRef FinalizationRegistry DOMException btoa atob Symbol(Symbol.toStringTag)"
+
+// What api_register_ gives every page, in either mode. The six timer names
+// are sae's (the same page-scoped queue as ui.timer, so no grant), not
+// quickjs-libc's: added on purpose with them (docs/page-services.md, 4).
+const SAE_EVERY_PAGE = "performance ui vg storage browserContext print setTimeout setInterval clearTimeout clearInterval requestAnimationFrame cancelAnimationFrame"
+
+// Object.prototype, the one prototype above globalThis.
+const OBJECT_PROTO = "toString toLocaleString valueOf hasOwnProperty isPrototypeOf propertyIsEnumerable __proto__ __defineGetter__ __defineSetter__ __lookupGetter__ __lookupSetter__ constructor"
+
+// The line of the page's texts that starts with `prefix`, without it.
+line_of(prefix: string) -> string {
+    lines = string.split(b.page_texts(), "\n")
+    n = string.string_array_size(lines)
+    i = 0
+    while i < n {
+        l = string.string_array_get(lines, i)
+        if string.starts_with(l, prefix) == 1 { return string.substring(l, string.length(prefix), string.length(l)) }
+        i = i + 1
+    }
+    return "(no line ${prefix})"
+}
+
+// The words of `a` not in `b`, space-separated ("" if none).
+missing_from(a: string, b: string) -> string {
+    out = ""
+    ws = string.split(a, " ")
+    n = string.string_array_size(ws)
+    i = 0
+    while i < n {
+        w = string.string_array_get(ws, i)
+        if w != "" && string.contains(" ${b} ", " ${w} ") == 0 { out = string.concat(out, " ${w}") }
+        i = i + 1
+    }
+    return out
+}
+
+// The surface `actual` is exactly `expected`, as sets of names.
+assert_surface(actual: string, expected: string, what: string) {
+    spec.assert_str_eq(missing_from(actual, expected), "", "${what}: globals not on the list (add them here on purpose)")
+    spec.assert_str_eq(missing_from(expected, actual), "", "${what}: globals on the list that are gone")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    app = os_getenv("SAE_TEST_APP")
+    in_app = 0
+    if app != null { in_app = 1 }
+    mode = "browser"
+    if in_app == 1 { mode = "app" }
+    spec.describe(fw, "the global surface (${mode})") {
+        spec.it("a page that seeks nothing sees the language and sae's every-page objects, nothing else") callback {
+            if in_app == 0 { b.navigate(b.test_url("/globals")) }
+            spec.assert_true(b.wait_for_text("levels: 2"), "globalThis, then Object.prototype")
+            assert_surface(line_of("G0: "), "${LANGUAGE} ${SAE_EVERY_PAGE}", "globalThis")
+            assert_surface(line_of("G1: "), OBJECT_PROTO, "Object.prototype")
+        }
+        spec.it("unsought privileges are absent, not only unnamed") callback {
+            b.assert_text("computed: undefined undefined undefined", "globalThis[\"ht\" + \"tp\"], fs, shell")
+        }
+        spec.it("there is no module loader: import() rejects") callback {
+            spec.assert_true(b.wait_for_text("import: rejected ReferenceError"), "nothing loaded")
+        }
+        spec.it("a page that seeks all three gets each only where its context grants it") callback {
+            b.click("Seeking page")
+            spec.assert_true(b.wait_for_text("seeking levels: 2"), "loaded")
+            granted = "http"
+            if in_app == 1 { granted = "http fs shell" }
+            assert_surface(line_of("S0: "), "${LANGUAGE} ${SAE_EVERY_PAGE} ${granted}", "globalThis")
+        }
+    }
+    return spec.run_summary(fw)
+}

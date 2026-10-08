@@ -6,7 +6,8 @@
 # it does not import ui, services/shell cannot read a page's files because
 # it imports only two fs calls. This script holds each service to its import
 # list, so widening one is a reviewed change to this file, and checks that
-# ui.open_url (the system URL opener) is named nowhere but services/shell.
+# ui.open_url (the system URL opener) is named nowhere but services/shell,
+# and client.request (an outgoing request) nowhere but services/net.
 # The kernel imports all of ui to build the browser, and Aether can hide a
 # namespace but not one member of it (asks/aether-hide-one-member.md), so
 # that rule is a grep until it can be a `hide`.
@@ -33,6 +34,8 @@ expect_imports services/files/module.ae \
     "import std.fs|import std.dir|import std.string|import std.strarr"
 expect_imports services/shell/module.ae \
     "import ui (open_url)|import std.fs (read, write_atomic)|import std.string|import std.strarr"
+expect_imports services/net/module.ae \
+    "import std.http.client (request)|import std.string|import std.strarr"
 
 # ui.open_url, or a bare open_url from a selective import, only in services/shell.
 hits=$(grep -rnE '(^|[^_a-zA-Z0-9])open_url[[:space:]]*\(|import ui \([^)]*open_url' \
@@ -44,6 +47,21 @@ if [ -n "$hits" ]; then
     fail=1
 else
     echo "ok   open_url is named only in services/shell"
+fi
+
+# client.request (building an outgoing request), or a bare request() from a
+# selective import, only in services/net: every request sae makes is opened
+# there, after app.json capabilities.http is checked. The kernel still sends, reads and
+# frees requests (send_request, response_*, request_free), which need one.
+hits=$(grep -rnE 'client\.request[[:space:]]*\(|import std\.http\.client \([^)]*request[,)]' \
+        --include='*.ae' src services lower tools gen 2>/dev/null \
+      | grep -v '^services/net/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+if [ -n "$hits" ]; then
+    echo "FAIL client.request named outside services/net:"
+    echo "$hits" | sed 's/^/       /'
+    fail=1
+else
+    echo "ok   client.request is named only in services/net"
 fi
 
 # The kernel does not list directories; services/files does, for pages.

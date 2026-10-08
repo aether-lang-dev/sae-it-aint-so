@@ -1,0 +1,84 @@
+// spec_timers.ae — a page's timers: ui.after, ui.sleep, ui.frame, and the
+// web names (setTimeout, setInterval, clearTimeout, clearInterval,
+// requestAnimationFrame, cancelAnimationFrame). The pages are site/timers.ts
+// and site/timers_away.ts.
+//
+//   tests/run_spec.sh spec_timers
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a page's timers") {
+        spec.it("the timers page loads") callback {
+            b.navigate(b.test_url("/timers"))
+            spec.assert_true(b.wait_for_text("cancelled: 0"), "loaded")
+        }
+        spec.it("a one-shot fires exactly once") callback {
+            spec.assert_true(b.wait_for_text("once: 1"), "fired")
+            sleep(300)
+            b.assert_text("once: 1", "and only once")
+        }
+        spec.it("a one-shot that throws fires exactly once, and its error is reported") callback {
+            spec.assert_true(b.wait_for_text("throws: 1"), "fired")
+            sleep(300)
+            b.assert_text("throws: 1", "the throw did not make it fire again")
+            spec.assert_true(b.console_contains("boom from a one-shot") == 1, "the error reached the console")
+        }
+        spec.it("a one-shot slower than its own delay fires exactly once") callback {
+            spec.assert_true(b.wait_for_text("slow: 1"), "fired")
+            sleep(300)
+            b.assert_text("slow: 1", "no second tick got in while it ran")
+        }
+        spec.it("a timer cancelled before its time never fires, whichever cancel is used") callback {
+            sleep(200)
+            b.assert_text("cancelled: 0", "none of the four ran")
+        }
+        spec.it("timers run in order of due time, then of being set") callback {
+            spec.assert_true(b.wait_for_text("order: cabd"), "c (0 ms), a and b (15 ms, in order), d (40 ms)")
+        }
+        spec.it("ui.sleep resolves in order of its delay, and await waits for it") callback {
+            spec.assert_true(b.wait_for_text("sleep: 0,20,60,waited"), "resolved 0, 20, 60, then a 50 ms await")
+        }
+        spec.it("setTimeout passes its extra arguments") callback {
+            spec.assert_true(b.wait_for_text("args: x 2 true"), "fn(\"x\", 2, true)")
+        }
+        spec.it("setInterval repeats until clearInterval") callback {
+            spec.assert_true(b.wait_for_text("interval: 3"), "three ticks")
+            sleep(200)
+            b.assert_text("interval: 3", "and none after clearInterval")
+        }
+        spec.it("requestAnimationFrame fires again when re-requested, with an increasing timestamp") callback {
+            spec.assert_true(b.wait_for_text("raf: 10 increasing near-now fractional"),
+                "ten frames, timestamps increasing, on performance.now()'s clock, sub-millisecond")
+        }
+        spec.it("cancelAnimationFrame stops a callback, before its frame or within it") callback {
+            sleep(200)
+            b.assert_text("raf-cancelled: 0", "neither cancelled callback ran")
+        }
+        spec.it("ui.frame is requestAnimationFrame, with a number timestamp") callback {
+            spec.assert_true(b.wait_for_text("ui.frame: number"), "ran")
+        }
+        spec.it("nothing fires after the page has gone") callback {
+            b.click("Leave timers")
+            spec.assert_true(b.wait_for_text("away: armed"), "the timers_away page armed every kind")
+            b.click("Leave")
+            spec.assert_true(b.wait_for_text("Pages are small programs, rendered as native widgets."), "left for /about")
+            sleep(700)   // past every armed delay (400 ms) and many intervals and frames
+            spec.assert_true(b.console_contains("ran after the page went") == 0, "no timer, sleep or frame ran")
+            // The page's frame subscription went with it: aether-ui's frame
+            // clock has nobody left and delivers nothing more.
+            spec.assert_eq(uidriver.frame_clock_subscribers(), 0, "no frame subscription outlives the page")
+            spec.assert_eq(uidriver.frame_clock_running(), 0, "and no frame clock runs for it")
+            f1 = uidriver.frame_clock_frames()
+            sleep(300)
+            spec.assert_eq(uidriver.frame_clock_frames(), f1, "the frame clock stopped")
+            b.assert_text("Pages are small programs, rendered as native widgets.", "the browser is still alive and on /about")
+        }
+    }
+    return spec.run_summary(fw)
+}

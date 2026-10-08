@@ -11,9 +11,9 @@ cannot yet, and at run time as a backstop.
 | Layer | What it is | Holds | Can reach |
 |---|---|---|---|
 | **Kernel** | the event loop, navigation, fetching and lowering pages, app.json, the grant table, the http actors | all of sae's authority | everything it imports |
-| **Services** | one module per effect a page can ask for: `files`, `shell`, later `storage`, `net`, `ui` | one effect each, checked against the grants | only their own imports |
+| **Services** | one module per effect a page can ask for: `files`, `shell`, `net` (the allowlist and opening a request), later `storage`, `ui` | one effect each, checked against the grants | only their own imports |
 | **Gate** (the page ABI) | one function per page-API call: unpack the JS arguments, check the page owns any handles, call the service, pack the result or throw the refusal | nothing | the services and engine values |
-| **Page host** | one QuickJS runtime per page (contrib.quickjs): heap cap, time limit per entry, timers, handle ownership; the only code that enters JavaScript | nothing | the gate |
+| **Page host** | one QuickJS runtime per page (contrib.quickjs): heap cap, time limit per entry, timers (the page's timer queue and animation-frame list, which go with it; page-scoped, so no grant), handle ownership; the only code that enters JavaScript | nothing | the gate |
 | **Guest** | the page: modern TypeScript, its types erased, run by QuickJS | what its page API objects offer | the objects `api_register_` installs for its mode |
 
 Authority flows one way: the kernel configures the services (roots, grants)
@@ -25,7 +25,9 @@ and the guest can only ask, through the gate, for what a service will do.
    it imports. `services/files` imports `std.fs`, `std.dir`, `std.string`
    and `std.strarr`, so it cannot open a URL, read the environment or reach
    the network. `services/shell` imports exactly `ui (open_url)` and
-   `std.fs (read, write_atomic)` (the spec log).
+   `std.fs (read, write_atomic)` (the spec log). `services/net` imports one
+   client call, `std.http.client (request)`: it builds requests; it cannot
+   send them or reach anything else.
 2. **The page veto, checked by the compiler.** Every gate function opens
    with a `hide` line naming the kernel (fs, os, the network client, the
    lowerer, page lifecycle, the engine's parse/run), so a gate cannot name
@@ -33,7 +35,7 @@ and the guest can only ask, through the gate, for what a service will do.
 3. **Layer rules, checked by a script.** `tests/check_layers.sh` holds each
    service to its exact import list (widening one is a reviewed change to
    that script) and fails if `open_url` is named anywhere but
-   `services/shell`. The kernel imports all of `ui` to build the browser,
+   `services/shell`, or `client.request` anywhere but `services/net`. The kernel imports all of `ui` to build the browser,
    and Aether can hide a namespace but not one of its members
    (`asks/aether-hide-one-member.md`); when it can, the rule becomes a
    `hide ui.open_url` the compiler checks.
@@ -54,6 +56,19 @@ it; it is held by the layers instead. Only `services/shell` can name it
 `app.json` grants, and a web page in the browser gets a refusal. A build
 that leaves `services/shell` out has no route to the opener at all.
 
+### services/net: the app's network allowlist
+
+Every outgoing request sae makes (a page's http call, each redirect hop
+sae follows, a page fetched in the browser) is built by
+`net.open_request`, which first checks the URL against the app's
+`capabilities.http` prefixes (app.json; none means no network), the
+server before the path. Nothing else may build one
+(rule 3), and a gate cannot name `net` or `client` (rule 2), so the check
+is one function on the only route to a socket. In the browser the list is
+off and a page's own-origin rule, in the kernel, applies as before. The
+kernel still sends the request on its http actors; moving that into the
+service too is stage 4.
+
 ## Where sae is now
 
 | Stage | | |
@@ -61,12 +76,14 @@ that leaves `services/shell` out has no route to the opener at all.
 | 1 | `services/files`, `services/shell` split out of the kernel; `tests/check_layers.sh` | **done** |
 | 2 | per-mode objects: **done** (a web page's runtime has no `fs` or `shell` object at all). Still to do: the gate generated from one spec (argument types, capability and service per call) instead of hand-written, retiring the 75 pasted `hide` lines for one compiler-checked module boundary | next |
 | 3 | `sandbox.enforce(page_grants)` around every entry into page code (page run, handlers, timers, http callbacks), as a runtime backstop in std | |
-| 4 | `storage`, `net`, `ui` as services; the kernel stops importing what only a service needs | |
+| 4 | `storage`, `ui` as services, and `net` sending as well as opening requests; the kernel stops importing what only a service needs | `net` started |
 | later | the page host and guest in a separate process, sandboxed by the OS (Linux `spawn_sandboxed` and seccomp; macOS has no equivalent yet), so a memory-safety bug in the engine is contained too | |
 
 ### What stays C, and why
 
-`src/sae_rom.c` is `main()` and the stdout handle, a dozen lines. The engine
+`src/sae_rom.c` is the stdout handle, one function; `main()` is Aether's
+(`src/sae_host.ae`), so a library build of sae (Android's) has the same
+entry as the desktop binary. The engine
 is Aether's `contrib.quickjs`, whose C (aether_quickjs.c over QuickJS's
 amalgamation) turns QuickJS's 16-byte `JSValue` into integer handles and
 calls every page-API function through one dispatcher, so the page API is
@@ -79,5 +96,5 @@ all Aether, registered at run time by `api_register_`.
   runs in sae's process and can do anything sae can. That is what the
   separate-process stage is for.
 - CPU and memory are capped per page: each entry into its JS (the page's
-  run, a handler, a timer, an http callback) is stopped after 5 s, and its
-  heap at 32 MB.
+  run, a handler, a timer, an animation frame, an http callback) is stopped
+  after 5 s, and its heap at 32 MB.

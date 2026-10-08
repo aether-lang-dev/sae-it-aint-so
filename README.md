@@ -67,7 +67,7 @@ The `ui` object (each builder returns its widget handle):
 | rebuilding | `clear(h)` empties a `vstack`/`hstack`/`grid` the page made; `into(h, fn)` builds into it again |
 | inputs and indicators | `toggle(label, onChange(on))`, `slider(min, max, initial, onChange(v))`, `picker(onChange(i))` + `picker_add(h, item)`, `progressbar(f)` + `set_progress(h, f)`; `get_`/`set_toggle`, `get_`/`set_slider` |
 | styles | `styles(sheet)`, `add_class(h, name)`, `style_id(h, name)`: see below |
-| timers | `timer(ms, fn)` returns an id, `timer_cancel(id)`; a page's timers stop when it goes |
+| timers | `timer(ms, fn)` repeats, `after(ms, fn)` runs once, both return an id for `timer_cancel(id)`; `sleep(ms)` is a promise; `frame(fn)` runs `fn(timestamp)` on the next display frame, `frame_cancel(id)`; see Timers below |
 | showing | `set_visible(h, on)`: hide a view and keep it (and its timers, vg scenes) alive |
 | reactive state | `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` |
 
@@ -81,6 +81,45 @@ A modifier at a page's top level has nothing to modify (the top of the stack
 is the browser's own content area), so it throws, where Aether would refuse
 to compile it. `site/calculator.ts` is the design doc's calculator example.
 Pages are not given `window()`: the browser owns the window.
+
+### Timers and animation frames
+
+```ts
+ui.after(500, () => hint.hide());           // once; ui.timer(ms, fn) repeats
+await ui.sleep(200);                         // a promise
+const id = setTimeout((a, b) => go(a, b), 100, "x", 2);
+clearTimeout(id);
+const tick = (ts: number) => { draw(ts); requestAnimationFrame(tick); };
+requestAnimationFrame(tick);                 // or ui.frame(tick)
+```
+
+Every page also has the web's names as globals: `setTimeout`,
+`setInterval`, `clearTimeout`, `clearInterval`, `requestAnimationFrame` and
+`cancelAnimationFrame`. They are sae's, not quickjs-libc's, and they are
+**page-scoped services**: one queue per page, holding only that page's
+timers, cancelled with the page, so they need no capability grant and are
+in every page, browser or app. All the ids are the page's own and shared
+(`clearTimeout` cancels a `setInterval`, `timer_cancel` a `setTimeout`).
+
+- A one-shot (`after`, `setTimeout`, `sleep`) runs exactly once, even if its
+  callback is slower than its delay or throws: it leaves the queue before its
+  callback runs.
+- Timers run in order of due time, then of being set; each callback is
+  followed by the page's promise jobs. HTML's clamping: a negative, `NaN` or
+  overflowing delay is 0, and from a timer nested more than five deep (or an
+  interval past its fifth run) at least 4 ms. `ui.timer` keeps its 10 ms floor.
+- `setTimeout(fn, ms, ...args)` and `setInterval` pass the extra arguments;
+  a string handler is a `TypeError` (sae does not `eval` it).
+- `requestAnimationFrame` (`ui.frame`) runs `fn` once, on the next display
+  frame from aether-ui's frame clock (`ui.on_frame`: GTK4's frame clock,
+  CADisplayLink, Choreographer, DwmFlush on Windows). Every callback in one
+  frame gets the same timestamp, in fractional milliseconds on
+  `performance.now()`'s clock; one that requests again runs in the next frame.
+  The page holds a frame subscription only while callbacks wait.
+- When the page goes, nothing more of its runs: its timers, intervals and
+  frames are cancelled, and a pending `ui.sleep` promise never settles; it
+  goes with the page's runtime.
+- `SAE_TIME_SCALE` speeds up the clocks a page reads, not its timers.
 
 ### HTTP, on Aether's actor core
 
@@ -112,7 +151,8 @@ with lowercased names.
 
 Where a page may reach is the kernel's decision, behind the page veto: in
 the browser, the page's own origin; in an app, the URL prefixes its
-`app.json` grants under `capabilities.http` (below).
+`app.json` grants under `capabilities.http` (below, and App mode for the
+matching rules), and nothing at all without them.
 
 Anything else is refused: the callback gets `res.ok` false and the reason in
 `res.error`. The request runs on an actor and its answer comes back on the
@@ -125,8 +165,9 @@ const res = await http.fetch({ method: "POST", url: "/api/notes", body: json });
 if (res.ok) render(res.json());
 ```
 
-After every handler, timer and http callback sae runs the page's pending
-promise jobs, so an `await` carries on as soon as its answer is delivered.
+After every handler, timer, animation frame and http callback sae runs the
+page's pending promise jobs, so an `await` carries on as soon as its answer
+is delivered.
 
 ### App capabilities: fs, shell, and what each page may name
 
@@ -158,7 +199,10 @@ A page says at its top which privileges it seeks, one per line:
 "seeks open-urls";          // unlocks shell.open
 ```
 
-`ui`, `vg`, `storage` and `browserContext` every page has. A page that
+`ui`, `vg`, `storage`, `browserContext` and the timer globals (`setTimeout`
+and friends, page-scoped, so never sought) every page has; an object it
+does not seek it does not have, by any route (`tests/spec_globals.ae` holds
+the whole global surface to a list, in both modes). A page that
 names `fs`, `http` or `shell` without seeking it is refused when it is read
 (`page:4:1: fs needs "seeks local-filesystem" at the top of the page`), and
 one that seeks what its context does not grant is refused before any of it
@@ -178,8 +222,27 @@ not name `fs`. `docs/app-capabilities.md` has the whole design.
 
 `storage.get(key)` (a string, or `null`), `storage.set(key, value)` and
 `storage.remove(key)`: values that outlive the page and the process, like
-`localStorage`. Each app (in app mode) or origin (in the browser) has its
-own, under `~/.sae/storage` (`$SAE_STORAGE_DIR` overrides it). Keys are
+`localStorage`, under `~/.sae/storage` (`$SAE_STORAGE_DIR` overrides it;
+`.sae/storage` in the working directory where there is no `$HOME`, as in an
+APK). Each has its own:
+
+- an **app**, by what identifies the installed app, never its display name
+  (two apps may share one): a packaged `.app`'s bundle identifier
+  (`app-id-<bundle id>`; give `tools/saepack.sh` a distinct one for each
+  app), otherwise its folder, canonical and hashed
+  (`app-<folder>-<hash>`: `sae --app <dir>`, and an APK, whose pages live
+  in the package's own files folder);
+- an **origin** in the browser;
+- a **folder**, for pages loaded from files (`file-<folder>-<hash>`): the
+  file system's nearest thing to a site, so pages that link to one another
+  in a folder share storage and pages elsewhere do not. Per file would
+  split a folder of pages that work together; one scope for every file, as
+  before, let any local page read another's.
+
+Storage kept by sae before this was keyed by an app's name (`app-<name>`)
+or shared by all file pages (`file`). It is not moved: two apps with one
+name shared that folder, so there is no telling whose it was. To keep an
+app's data, move its old folder's files into the new one by hand. Keys are
 letters, digits, `.`, `_` and `-`; a value is at most 1 MB. The file system
 stays the kernel's: a page reaches only these three calls.
 
@@ -335,10 +398,39 @@ bundled with it. `sae --app <dir>` opens `<dir>` as an app: no address bar,
 no Back/Forward/Reload, the window titled and sized from `<dir>/app.json`:
 
 ```json
-{ "name": "Sae Tasks", "start": "/", "width": 480, "height": 420 }
+{ "name": "Sae Tasks", "start": "/", "width": 480, "height": 420,
+  "capabilities": { "http": ["https://api.example.com/repos/", "https://*.example.com/"] } }
 ```
 
-(all optional). Pages are `app:` URLs, mapped like the dev page server maps
+(all optional). `name` titles the window, `start` is the first page (an
+app's own: `app:/`-relative), `width` and `height` size the window, and
+`capabilities` grants what the app may do beyond its pages (below).
+`capabilities.http` is the app's whole network, a list of URL prefixes
+after Tauri's HTTP-plugin scopes:
+
+- **Absent or empty, no network at all** (deny by default): `http` is not
+  available to its pages, and a page that requires it is refused at load.
+- A URL is allowed if a prefix covers it: first its server, then its path.
+  Scheme, host and port must match exactly, a default port being the same
+  as writing it (`https://h/` is `https://h:443/`; `http://localhost:8091/`
+  is not `http://127.0.0.1:8091/`), compared parsed, not as text, so
+  `https://h.com` does not cover `https://h.com.evil.test/`. Then the path
+  (and query) must start with the prefix's path as written; a path with a
+  `.` or `..` segment is refused. `https://*.example.com/` covers any one
+  leftmost label (`api.example.com`, not `example.com` or
+  `a.b.example.com`); the rest must have two labels, or be `localhost`. An
+  entry sae does not understand allows nothing, and is reported at start.
+- It is checked in `services/net`, the one place sae opens a request,
+  before any name is looked up or socket opened, and again on every
+  redirect hop (sae follows redirects itself). A refusal is `res.ok` false
+  with `this app may not reach <url> (app.json capabilities.http lists
+  what it may)` in `res.error` (`redirected to <url>: ...` for a hop), and
+  is logged once on the console.
+- `app:/` pages are not network: they load and navigate whatever the list
+  says, and an app loads no page from anywhere else (`start` included).
+- Browser mode has no list: a web page reaches its own origin, as before.
+
+Pages are `app:` URLs, mapped like the dev page server maps
 a site: `app:/about` is `<dir>/about.ts` (or `.js`), `app:/` the index, a
 missing page the app's own `404.ts` if it has one. `browserContext` works as
 in the browser, and an app navigates only among its own pages: anything else
@@ -356,6 +448,18 @@ apps are ported: `examples/pomatez`, a Pomodoro timer from Electron/Tauri
 (7.7 MB), which talks to the GitHub API over sae's actor-backed http and is
 specced against a mock GitHub Enterprise API in the page server. Each has a
 README saying what is ported and what is not yet.
+
+`tools/saepack-android.sh <dir>` packages the same folder as an Android APK
+(into `target/apps/`), through aether-ui's `tools/android-apk.sh`: sae built
+as the library Android's activity loads, its Aether `main()` the entry as on
+the desktop, and the pages packed as assets that the backend copies out to an
+`app/` folder in the directory it runs the app in, where a sae started with no
+arguments looks for them. `AETHER_UI_WITH_DRIVER=1` links the AetherUIDriver.
+An app without `capabilities.http` gets an APK without the INTERNET permission
+(`ANDROID_NO_INTERNET=1` to android-apk.sh), except with the driver, which is
+a socket server and needs it.
+Pages load from the bundle; an `https:` fetch from a page needs a TLS-capable
+cross build (aether-crossbuild's sysroot), which the APK does not have yet.
 
 ### Testing pages: saedriver
 

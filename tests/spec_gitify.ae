@@ -8,16 +8,32 @@
 import std.spec
 import std.string
 import std.fs
+import std.dir
 import std.os (os_getenv)
 import saedriver as b
 import uidriver
 
 const HOST = "http://127.0.0.1:8091"
 
+// The app's storage folder: app-gitify-<hash> (keyed by the app's
+// folder, tests/apps/gitify, not its name).
+app_store(d: string) -> string {
+    l, err = dir.list(d)
+    if err != "" { return "${d}/(none)" }
+    n = dir.list_count(l)
+    i = 0
+    while i < n {
+        nm = dir.list_get(l, i)
+        if string.starts_with(nm, "app-gitify-") == 1 { return "${d}/${nm}" }
+        i = i + 1
+    }
+    return "${d}/(none)"
+}
+
 stored(key: string) -> string {
     d = os_getenv("SAE_STORAGE_DIR")
     if d == null { return "" }
-    body, err = fs.read("${d}/app-Gitify/${key}")
+    body, err = fs.read("${app_store(d)}/${key}")
     if string.length(err) > 0 { return "" }
     return body
 }

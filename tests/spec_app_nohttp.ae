@@ -1,0 +1,36 @@
+// spec_app_nohttp.ae — an app whose app.json has no capabilities.http has
+// no network at all (deny by default), while its own app:/ pages load and
+// navigate.
+//   SAE_TEST_APP=tests/apps/nohttp tests/run_spec.sh spec_app_nohttp
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "app mode: no capabilities.http") {
+        spec.it("the start page loads, without http") callback {
+            b.assert_text("No http app: http is undefined", "http is absent")
+        }
+        spec.it("its own pages navigate") callback {
+            b.click("Next page")
+            b.assert_text("Second page", "navigated")
+            b.click("Back")
+            b.assert_text("No http app: http is undefined", "and back")
+        }
+        spec.it("leaving for a URL is refused, and the page stays") callback {
+            b.click("Leave")
+            spec.assert_true(b.wait_for_console("refused http://127.0.0.1:8091/"), "refused")
+            b.assert_text("No http app: http is undefined", "still here")
+        }
+        spec.it("a page that needs the network is refused at load") callback {
+            b.click("Needs network")
+            b.assert_text("This page cannot run here:", "notice")
+            spec.assert_contains(b.page_texts(), "seeks outgoing-http, which this app's app.json does not grant", "why")
+            b.assert_no_text("You should not see this", "none of it ran")
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -31,7 +31,11 @@ Aether's `hide` (`aether/docs/hide-and-seal.md`):
 - **Default deny.** An app with no `"capabilities"` gets what a browser page
   gets, minus the origin its pages came from: `ui`, `vg`, `storage`,
   `browserContext`, timers. Nothing in the file system, no network, no shell.
-- **`http`**: URL prefixes. A request to anything else is refused, the
+- **`http`**: URL prefixes, the app's whole network: the server each
+  names (scheme, host and port exactly; `*.` for one leftmost label), then
+  its path (README, App mode, has the matching rules). Held in
+  `services/net`, where every request sae makes is opened, before any
+  socket and on every redirect hop. A request to anything else is refused, the
   refusal delivered as `res.ok === false` with the reason in `res.error`.
 - **`shell.open`**: URL prefixes the app may hand to the system (the default
   browser for `https:`, Mail for `mailto:`).
@@ -120,7 +124,9 @@ page's own origin; an app's pages have none, so they name the full URL.
 
 ### Checked three times
 
-- **Naming needs seeking.** A page that names `fs`, `http` or `shell`
+- **Naming needs seeking.** A page that does not seek a privilege has no
+  object for it at all (`globalThis["ht" + "tp"]` is undefined too), and
+  one that names `fs`, `http` or `shell`
   without a line that unlocks it is refused when it is read, at the line:
   `page.ts:12:5: fs needs "seeks local-filesystem" at the top of the page`.
   A misspelt privilege, a method that is not one, a malformed pattern or

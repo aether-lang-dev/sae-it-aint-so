@@ -1,0 +1,6 @@
+{
+  "name": "Http list test",
+  "capabilities": {
+    "http": ["http://127.0.0.1:8091/api/", "http://*.localhost:8091/api/", "http://localhost"]
+  }
+}

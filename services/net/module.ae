@@ -1,0 +1,259 @@
+// services/net — an app's network allowlist (app.json capabilities.http),
+// and the one place sae opens an outgoing request. See docs/architecture.md
+// and docs/app-capabilities.md.
+//
+// Every request sae makes, for a page's http call (each redirect hop
+// included) or to fetch a page, is created here, by open_request, which
+// checks the URL against the allowlist before the client is even given it:
+// no socket is opened, no name is looked up, for a URL the app does not
+// list. tests/check_layers.sh fails if any other module in sae names
+// client.request, so there is no route around the check.
+//
+// What it can reach is its imports: one client call (request: building a
+// request, not sending it), and std.string and std.strarr for the list.
+//
+// The list is URL prefixes, each a server (its origin) and a path:
+//
+//   "https://api.github.com/"          that server, any path
+//   "https://api.github.com/repos/"    that server, paths under /repos/
+//   "http://127.0.0.1:8000/api/"       an explicit port
+//   "https://*.example.com/"           any one leftmost label: a.example.com,
+//                                      not example.com, not a.b.example.com
+//
+// A URL is allowed if one entry covers it: first its origin (scheme, host
+// and port exactly, a default port the same as writing it, the host's case
+// ignored), then its path (and query) starting with the entry's path, as
+// written. The origin is compared parsed, not as text, so "https://h.com"
+// does not cover "https://h.com.evil.test/", and a path with a "." or ".."
+// segment is refused rather than matched (a server may resolve it out of the
+// prefix), however it is spelt: %2e for a dot, %2f or %5c or "\\" for the
+// slash around it, encoded once or more. Other escapes are left alone, so an
+// encoded slash inside a segment ("group%2Fproject", as GitLab's API takes
+// it) still works; the prefix itself is matched against the path as written.
+//
+// In the browser (enabled 0) nothing is checked: a web page's reach is its
+// own origin, held by the kernel. In an app (enabled 1) an absent or empty
+// list means no network at all.
+
+import std.http.client (request)
+import std.string
+import std.strarr
+
+exports (configure, allow, granted, refusal, open_request, origin_of)
+
+var enabled_: int = 0     // 0 in the browser: no allowlist applies
+var entries_: ptr = null  // strarr: "scheme://host:port\tpath", host maybe "*.rest"
+
+// Set up for an app (enabled 1) or a web page (0). An app starts with
+// nothing allowed.
+configure(enabled: int) {
+    enabled_ = enabled
+    entries_ = strarr.new()
+}
+
+// Add one prefix of app.json capabilities.http. "" if it was added, else
+// why not (the caller reports it; an entry that is not understood allows
+// nothing).
+allow(entry: string) -> string {
+    if entries_ == null { return "net: not configured" }
+    e = entry
+    sep = string.index_of(e, "://")
+    path = ""
+    if sep > 0 {
+        slash = string.index_of(string.string_substring(e, sep + 3, string.length(e)), "/")
+        if slash >= 0 {
+            path = string.string_substring(e, sep + 3 + slash, string.length(e))
+            e = string.string_substring(e, 0, sep + 3 + slash)
+        }
+    }
+    wild = 0
+    if sep > 0 && string.string_starts_with(string.string_substring(e, sep + 3, string.length(e)), "*.") == 1 {
+        // The one wildcard: a whole leftmost label. The rest must be a host
+        // of at least two labels, so "*.com" is not one; "*.localhost" (a
+        // name that never leaves the machine, RFC 6761) is the exception.
+        e = string.concat(string.string_substring(e, 0, sep + 3), string.string_substring(e, sep + 5, string.length(e)))
+        wild = 1
+    }
+    scheme, host, port, err = origin_of(e)
+    if err == "" && wild == 1 && string.contains(host, ".") == 0 && host != "localhost" {
+        err = "a wildcard needs at least two labels after it (or localhost)"
+    }
+    if err == "" && string.contains(path, "*") == 1 { err = "no wildcard in the path" }
+    if err != "" { return "app.json capabilities.http: ignoring \"${entry}\": ${err}; an entry is a URL prefix, scheme://host[:port]/path, the host maybe *.host" }
+    if wild == 1 { host = string.concat("*.", host) }
+    strarr.push_copy(entries_, "${scheme}://${host}:${port}\t${path}")
+    return ""
+}
+
+// 1 if the app may reach anything at all.
+granted() -> int {
+    if enabled_ == 0 || entries_ == null { return 0 }
+    if strarr.size(entries_) > 0 { return 1 }
+    return 0
+}
+
+// The origin of an http(s) URL as (scheme, host, port, ""), the host
+// lowercased and the port filled in, or ("", "", 0, why) for anything that
+// is not one. Strict on purpose: the authority (up to the first "/", which
+// is where the client ends it too) may hold only a DNS name or IPv4 address
+// and a port, so the host checked here is the host the client connects to;
+// "user@host", "%" escapes, "?" or "#" before the path, and IPv6 literals
+// (which the client does not parse) are refused rather than guessed at.
+origin_of(url: string) -> (string, string, int, string) {
+    scheme = ""
+    start = 0
+    if string.string_starts_with(url, "http://") == 1 {
+        scheme = "http"
+        start = 7
+    }
+    if string.string_starts_with(url, "https://") == 1 {
+        scheme = "https"
+        start = 8
+    }
+    if scheme == "" { return "", "", 0, "not an http(s) URL" }
+    rest = string.string_substring(url, start, string.length(url))
+    slash = string.index_of(rest, "/")
+    auth = rest
+    if slash >= 0 { auth = string.string_substring(rest, 0, slash) }
+    auth = string.to_lower(auth)
+    host = auth
+    port = 80
+    if scheme == "https" { port = 443 }
+    colon = string.index_of(auth, ":")
+    if colon >= 0 {
+        host = string.string_substring(auth, 0, colon)
+        ps = string.string_substring(auth, colon + 1, string.length(auth))
+        if ps == "" || string.length(ps) > 5 || digits_(ps) == 0 { return "", "", 0, "a port must be digits" }
+        pn, perr = string.to_int(ps)
+        if perr != "" || pn < 1 || pn > 65535 { return "", "", 0, "a port must be 1 to 65535" }
+        port = pn
+    }
+    if host_ok_(host) == 0 { return "", "", 0, "not a host name sae can check: \"${host}\"" }
+    return scheme, host, port, ""
+}
+
+// 1 if every character of s is a digit.
+digits_(s: string) -> int {
+    n = string.length(s)
+    i = 0
+    while i < n {
+        c = string.string_char_at(s, i)
+        if c < 48 || c > 57 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// 1 if h is a lowercase DNS name or IPv4 address: letters, digits, "-" and
+// ".", not empty, no empty label.
+host_ok_(h: string) -> int {
+    n = string.length(h)
+    if n == 0 || n > 253 { return 0 }
+    if string.string_starts_with(h, ".") == 1 || string.string_ends_with(h, ".") == 1 { return 0 }
+    if string.contains(h, "..") == 1 { return 0 }
+    i = 0
+    while i < n {
+        c = string.string_char_at(h, i)
+        ok = 0
+        if c >= 97 && c <= 122 { ok = 1 }
+        if c >= 48 && c <= 57 { ok = 1 }
+        if c == 45 || c == 46 { ok = 1 }
+        if ok == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// 1 if the entry "scheme://host:port" (host maybe "*.rest") covers this
+// origin.
+covers_(entry: string, scheme: string, host: string, port: int) -> int {
+    sep = string.index_of(entry, "://")
+    if string.string_substring(entry, 0, sep) != scheme { return 0 }
+    hp = string.string_substring(entry, sep + 3, string.length(entry))
+    c = string.index_of(hp, ":")
+    if string.string_substring(hp, c + 1, string.length(hp)) != "${port}" { return 0 }
+    eh = string.string_substring(hp, 0, c)
+    if eh == host { return 1 }
+    if string.string_starts_with(eh, "*.") == 1 {
+        suffix = string.string_substring(eh, 1, string.length(eh))
+        if string.string_ends_with(host, suffix) == 1 {
+            label = string.string_substring(host, 0, string.length(host) - string.length(suffix))
+            if label != "" && string.contains(label, ".") == 0 { return 1 }
+        }
+    }
+    return 0
+}
+
+// A path with every spelling of ".", "/" and "\\" a server might decode made
+// plain: %2e, %2f and %5c in either case, %25 (so a twice-encoded "%252e"
+// is seen too, up to four times over), and "\\" read as "/". Only these
+// forms: the check is for dot segments, and decoding everything would only
+// add ways to disagree with the server about what else a path means.
+dots_plain_(path: string) -> string {
+    p = path
+    k = 0
+    while k < 4 {
+        prev = p
+        p = string.string_replace_all(p, "%25", "%")
+        p = string.string_replace_all(p, "%2e", ".")
+        p = string.string_replace_all(p, "%2E", ".")
+        p = string.string_replace_all(p, "%2f", "/")
+        p = string.string_replace_all(p, "%2F", "/")
+        p = string.string_replace_all(p, "%5c", "/")
+        p = string.string_replace_all(p, "%5C", "/")
+        p = string.string_replace_all(p, "\\", "/")
+        if p == prev { k = 4 }
+        k = k + 1
+    }
+    return p
+}
+
+// 1 if a URL path (with its query) has a "." or ".." segment, however it is
+// spelt (dots_plain_).
+dot_segment_(path: string) -> int {
+    q = string.index_of(path, "?")
+    p = path
+    if q >= 0 { p = string.string_substring(path, 0, q) }
+    p = dots_plain_(p)
+    if string.contains(p, "/../") == 1 || string.contains(p, "/./") == 1 { return 1 }
+    if string.string_ends_with(p, "/..") == 1 || string.string_ends_with(p, "/.") == 1 { return 1 }
+    return 0
+}
+
+// Why this app may not open a connection for `url`, or "". The server is
+// checked first, then the path; either way the refusal is the same, naming
+// capabilities.http. Always "" in the browser.
+refusal(url: string) -> string {
+    if enabled_ == 0 { return "" }
+    why = "this app may not reach ${url} (app.json capabilities.http lists what it may)"
+    scheme, host, port, err = origin_of(url)
+    if err != "" || entries_ == null { return why }
+    sep = string.index_of(url, "://")
+    rest = string.string_substring(url, sep + 3, string.length(url))
+    slash = string.index_of(rest, "/")
+    path = "/"
+    if slash >= 0 { path = string.string_substring(rest, slash, string.length(rest)) }
+    if dot_segment_(path) == 1 { return why }
+    n = strarr.size(entries_)
+    i = 0
+    while i < n {
+        ent = strarr.get(entries_, i)
+        tab = string.index_of(ent, "\t")
+        if covers_(string.string_substring(ent, 0, tab), scheme, host, port) == 1 {
+            if string.string_starts_with(path, string.string_substring(ent, tab + 1, string.length(ent))) == 1 { return "" }
+        }
+        i = i + 1
+    }
+    return why
+}
+
+// A client request for `method` on `url`, if the allowlist lets it be made:
+// (request, "") or (null, why not). Built, not sent; the caller sets it up,
+// sends and frees it.
+open_request(method: string, url: string) -> (ptr, string) {
+    why = refusal(url)
+    if why != "" { return null, why }
+    req = request(method, url)
+    if req == null { return null, "not a valid URL: ${url}" }
+    return req, ""
+}

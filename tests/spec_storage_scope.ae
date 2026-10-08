@@ -1,0 +1,64 @@
+// spec_storage_scope.ae — storage is scoped to the installed app, not its
+// display name, and to a file page's directory. tests/check_storage_scope.sh
+// runs it in its phases against one SAE_STORAGE_DIR:
+//   app_a     tests/apps/samename_a: nothing stored yet; claim "a"
+//   app_b     tests/apps/samename_b, the same app.json name: sees nothing
+//   app_a2    tests/apps/samename_a reopened: still sees "a"
+//   files     the browser, file: pages in two directories
+import std.spec
+import std.string
+import std.os (os_getenv)
+import std.fs
+import saedriver as b
+import uidriver
+
+phase() -> string {
+    v = os_getenv("SAE_SCOPE_PHASE")
+    if v == null { return "" }
+    return v
+}
+
+page(rel: string) -> string {
+    d, _k, _e = fs.realpath("storage_pages")
+    return "${d}/${rel}"
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    ph = phase()
+    spec.describe(fw, "storage scope: ${ph}") {
+        if ph == "app_a" {
+            spec.it("a fresh app sees nothing, and keeps what it stores") callback {
+                b.assert_text("who: (none)", "fresh")
+                b.click("Claim")
+                b.assert_text("claimed a", "stored")
+            }
+        }
+        if ph == "app_b" {
+            spec.it("another app with the same app.json name does not see it") callback {
+                b.assert_text("who: (none)", "its own storage")
+                b.click("Claim")
+                b.assert_text("claimed b", "stored")
+            }
+        }
+        if ph == "app_a2" {
+            spec.it("the first app, reopened, still has its own") callback {
+                b.assert_text("who: a", "kept, and not b's")
+            }
+        }
+        if ph == "files" {
+            spec.it("file: pages share storage within a directory, not across directories") callback {
+                b.assert_text("one sees: (none)", "fresh: the browser starts on one/store.ts")
+                b.click("Claim")
+                b.assert_text("claimed one", "stored")
+                b.navigate(page("two/store.ts"))
+                b.assert_text("two sees: (none)", "another directory sees nothing")
+                b.click("Claim")
+                b.navigate(page("one/sibling.ts"))
+                b.assert_text("sibling sees: one", "the same directory shares")
+            }
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -21,6 +21,9 @@ import std.list
 import std.strarr
 import std.string
 import std.http.client
+// HTTPS in a build without OpenSSL (every cross-build, including Android):
+// std.http.client uses the pure-Aether TLS 1.3 client when it is linked.
+import std.cryptography.tls13_client
 import lower
 import vg
 import vg.live
@@ -28,6 +31,7 @@ import std.json
 import std.actors
 import services.files
 import services.shell
+import services.net
 import contrib.quickjs
 
 extern malloc(n: long) -> ptr
@@ -104,7 +108,17 @@ struct Page {
                      //   go in it, its styles stop at it, it goes with the page
     sheet: ptr       // the page's AeCS sheet (ui.styles), or null
     sheet_strs: ptr  // std.list: selector and family strings the sheet borrows
-    timers: ptr      // std.list: the ui.timer ids this page started (0 once cancelled)
+    timers: ptr      // std.list of *PageTimer: the page's timer queue ("the page API: timers")
+    timer_ids: int   // the last timer id handed out
+    timer_seq: int   // queue order
+    timer_nesting: int // the running timer callback's nesting level, 0 outside one
+    timers_running: int // 1 while a wake runs the queue
+    wake: int        // the aether-ui one-shot armed for the earliest timer, or 0
+    wake_due: long   // the due time it is armed for
+    rafs: ptr        // std.list of *PageRaf: the next frame's callbacks
+    raf_batch: ptr   // the frame's callbacks while they run, else null
+    raf_ids: int     // the last animation-frame id handed out
+    frame_sub: int   // the aether-ui on_frame subscription while rafs wait, or 0
     seq: int         // which load this is: an http reply for an older page is dropped
     http_res: int    // the page's response-object maker (http_helpers_), or 0
     http_req: int    // the page's request-object maker
@@ -356,7 +370,8 @@ ui_done_(p: *Page, t: long) {
 // Every function a page can reach (everything api_register_ below installs
 // in a page's runtime) opens with the same `hide`
 // line. It takes the kernel out of that function's scope: the file system,
-// the environment and clocks (`os`), the network (`client`), the lowerer,
+// the environment and clocks (`os`), the network (`client`, and `net`,
+// services/net, the one place a request is opened), the lowerer,
 // the page-lifecycle functions that fetch, parse and run pages, and the
 // engine's raw parse/run/context calls. Naming any of them in a page-API
 // function, at any depth (an `if` body, a nested block, a closure), is a
@@ -376,7 +391,7 @@ ui_done_(p: *Page, t: long) {
 // --- the page API: ui (installed by api_register_) ---
 
 sae_ui_vstack(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
@@ -387,7 +402,7 @@ sae_ui_vstack(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_hstack(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
@@ -400,7 +415,7 @@ sae_ui_hstack(ctx: ptr, this_val: int, argv: int) -> int {
 // grid(cols, block) or grid(cols, spacing, block): the block's widgets fill
 // it a row at a time, cols to a row (aether-ui's grid block).
 sae_ui_grid(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     cols = lead_int_(ctx, argv, argc, 0, 1)
@@ -417,7 +432,7 @@ sae_ui_grid(ctx: ptr, this_val: int, argv: int) -> int {
 // equal_cells(): in a grid's block, every column one width and every row one
 // height, children filling their cells (a keypad).
 sae_ui_equal_cells(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     target = modifier_target_(ctx, "equal_cells")
@@ -429,7 +444,7 @@ sae_ui_equal_cells(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_text(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
@@ -440,7 +455,7 @@ sae_ui_text(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_divider(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
@@ -450,7 +465,7 @@ sae_ui_divider(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_btn(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
@@ -494,7 +509,7 @@ call1_str_(ctx: ptr, ref: int, s: string) -> int {
 // button(label, block?): a plain button; the block (if any) runs with the
 // button on top, for onclick/bg_color/margin.
 sae_ui_button(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     label = arg_str_(ctx, argv, argc, 0)
@@ -505,7 +520,7 @@ sae_ui_button(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_scroll(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
@@ -523,7 +538,7 @@ sae_ui_scroll(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_spacer(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     h = ui.spacer(mem.long_to_ptr(top_(p)))
@@ -532,7 +547,7 @@ sae_ui_spacer(ctx: ptr, this_val: int, argv: int) -> int {
 
 // textfield(placeholder, onChange?): onChange(text) on every edit.
 sae_ui_textfield(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     placeholder = own_(arg_str_(ctx, argv, argc, 0))
@@ -557,7 +572,7 @@ sae_ui_textfield(ctx: ptr, this_val: int, argv: int) -> int {
 
 // get_text(handle): synchronous, in-process (Tsyne needed an await here).
 sae_ui_get_text(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
     if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "get_text(h): h is not a widget this page made") }
@@ -565,7 +580,7 @@ sae_ui_get_text(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_set_text(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
     if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "set_text(h, s): h is not a widget this page made") }
@@ -581,7 +596,7 @@ sae_ui_set_text(ctx: ptr, this_val: int, argv: int) -> int {
 // again with into(). Tsyne pages could not do this (its dynamic-demo logs
 // instead of redrawing its list).
 sae_ui_clear(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     h = arg_int_(ctx, argv, argc, 0, 0)
@@ -593,7 +608,7 @@ sae_ui_clear(ctx: ptr, this_val: int, argv: int) -> int {
 // into(h, block): run block with a stack the page made as the parent, so
 // its widgets land there, the way the stack's own block did.
 sae_ui_into(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     h = arg_int_(ctx, argv, argc, 0, 0)
@@ -603,7 +618,7 @@ sae_ui_into(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_onclick(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "onclick")
     if target == 0 { return sae_throw_type_error(ctx, "onclick() must be called inside a widget's block") }
@@ -616,7 +631,7 @@ sae_ui_onclick(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_margin(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "margin")
     if target == 0 { return sae_throw_type_error(ctx, "margin() must be called inside a container's block") }
@@ -626,7 +641,7 @@ sae_ui_margin(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_bg_color(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "bg_color")
     if target == 0 { return sae_throw_type_error(ctx, "bg_color() must be called inside a widget's block") }
@@ -637,20 +652,20 @@ sae_ui_bg_color(ctx: ptr, this_val: int, argv: int) -> int {
 // Reactive state, as in the Aether DSL: ui_state(v) makes a cell, ui_set
 // writes it, and every text_bound to it updates.
 sae_ui_state(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     return quickjs.new_int(ctx, ui.ui_state(arg_num_(ctx, argv, argc, 0, 0.0)))
 }
 
 sae_ui_set(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     ui.ui_set(arg_int_(ctx, argv, argc, 0, 0), arg_num_(ctx, argv, argc, 1, 0.0))
     return 0
 }
 
 sae_ui_text_bound(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     st = arg_int_(ctx, argv, argc, 0, 0)
@@ -773,7 +788,7 @@ own_arg_(ctx: ptr, argv: int, argc: int) -> int {
 
 // toggle(label, onChange(on)): a checkbox; on is 1 or 0.
 sae_ui_toggle(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     label = own_(arg_str_(ctx, argv, argc, 0))
@@ -786,7 +801,7 @@ sae_ui_toggle(ctx: ptr, this_val: int, argv: int) -> int {
 
 // slider(min, max, initial, onChange(value))
 sae_ui_slider(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     ref = held_fn_(ctx, argv, argc, 3)
@@ -799,7 +814,7 @@ sae_ui_slider(ctx: ptr, this_val: int, argv: int) -> int {
 
 // picker(onChange(index)): a drop-down; fill it with picker_add.
 sae_ui_picker(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     ref = held_fn_(ctx, argv, argc, 0)
@@ -810,7 +825,7 @@ sae_ui_picker(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_picker_add(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "picker_add(h, item): h is not a widget this page made") }
@@ -820,7 +835,7 @@ sae_ui_picker_add(ctx: ptr, this_val: int, argv: int) -> int {
 
 // progressbar(fraction): 0 to 1.
 sae_ui_progressbar(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     long t = now_ns_()
@@ -830,7 +845,7 @@ sae_ui_progressbar(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_set_progress(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "set_progress(h, f): h is not a widget this page made") }
@@ -839,7 +854,7 @@ sae_ui_set_progress(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_set_toggle(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "set_toggle(h, on): h is not a widget this page made") }
@@ -848,7 +863,7 @@ sae_ui_set_toggle(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_get_toggle(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "get_toggle(h): h is not a widget this page made") }
@@ -856,7 +871,7 @@ sae_ui_get_toggle(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_set_slider(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "set_slider(h, v): h is not a widget this page made") }
@@ -865,7 +880,7 @@ sae_ui_set_slider(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_ui_get_slider(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "get_slider(h): h is not a widget this page made") }
@@ -1022,7 +1037,7 @@ style_rule_(ctx: ptr, p: *Page, sel: string, rule: int) -> string {
 }
 
 sae_ui_styles(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     if argc < 1 { return sae_throw_type_error(ctx, "styles(sheet): sheet is missing") }
@@ -1058,7 +1073,7 @@ sae_ui_styles(ctx: ptr, this_val: int, argv: int) -> int {
 
 // add_class(h, "header"): opt a widget into "header" and "header.kind" rules.
 sae_ui_add_class(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "add_class(h, name): h is not a widget this page made") }
@@ -1068,7 +1083,7 @@ sae_ui_add_class(ctx: ptr, this_val: int, argv: int) -> int {
 
 // style_id(h, "status"): name a widget for "#status" rules.
 sae_ui_style_id(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "style_id(h, name): h is not a widget this page made") }
@@ -1079,7 +1094,7 @@ sae_ui_style_id(ctx: ptr, this_val: int, argv: int) -> int {
 // set_visible(h, on): show or hide a widget the page made, keeping it (and
 // anything drawing into it) alive. For views a page switches between.
 sae_ui_set_visible(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "set_visible(h, on): h is not a widget this page made") }
@@ -1090,40 +1105,425 @@ sae_ui_set_visible(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // --- the page API: timers ---
+//
+// Every timer a page starts (ui.timer, ui.after, ui.sleep, setTimeout,
+// setInterval) is a PageTimer in the page's own queue, and the queue runs on
+// ONE aether-ui one-shot (ui.timer_once) armed for its earliest due time: the
+// page's "wake". When it fires, the timers that are due run in order of due
+// time, then of creation (HTML's order for timers with the same delay), each
+// followed by the page's promise jobs, and the wake is re-armed. A one-shot
+// leaves the queue BEFORE its callback runs, so it runs exactly once however
+// slow its callback is or whatever it throws; an interval is rescheduled
+// before its callback runs, from now, so a slow one drifts rather than
+// bursting. A timer started while the batch runs waits for the next wake,
+// as a task queued by a task does.
+//
+// Ids are the page's own (1, 2, ...), shared by every kind, so timer_cancel,
+// clearTimeout and clearInterval each cancel any of them, as in a browser.
+// A page reaches only its own queue: there is no way to name another page's
+// timer. When the page goes, page_free_ cancels the wake and its frame
+// subscription and drops the queue: nothing fires afterwards, and a pending
+// ui.sleep promise is never settled (it goes with the runtime).
+//
+// Clamping, as HTML does it: a negative, NaN or overflowing (> 2^31-1)
+// delay is 0; a timer started from a timer callback nested more than 5 deep,
+// and an interval past its fifth run, has at least 4 ms. ui.timer keeps its
+// floor of 10 ms. A delay of 0 runs on the next turn of the event loop.
+//
+// requestAnimationFrame (and ui.frame) is a separate list: the page holds
+// one aether-ui on_frame subscription while the list is not empty, and each
+// display frame runs (and empties) the list as it stood when the frame began,
+// passing every callback the same timestamp, on performance.now()'s clock in
+// fractional milliseconds. A callback that requests again is in the next
+// frame. When nothing is waiting the subscription is cancelled, so an idle
+// page costs no frames.
 
-// timer(ms, fn): call fn every ms milliseconds (at least 10) until
-// timer_cancel(id) or the page goes. Returns the timer's id.
-sae_ui_timer(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    argc = quickjs.arg_count(ctx, argv)
-    p = page_of_(ctx)
-    ms = arg_int_(ctx, argv, argc, 0, 1000)
-    if ms < 10 { ms = 10 }
-    ref = held_fn_(ctx, argv, argc, 1)
-    if ref == 0 { return sae_throw_type_error(ctx, "timer(ms, fn): fn must be a function") }
-    id = ui.timer(ms, || { fire0_(ctx, ref, "a timer") })
-    list.add(p.timers, mem.long_to_ptr(id))
-    return quickjs.new_int(ctx, id)
+struct PageTimer {
+    id: int
+    due: long        // ms on the real monotonic clock
+    interval: int    // ms between runs; 0 for a one-shot
+    floor: int       // the interval's minimum (10 for ui.timer, else 0)
+    seq: int         // queue order among equal due times
+    nesting: int     // HTML's timer nesting level
+    fn_h: int        // the held JS function
+    args_h: int      // a held JS array of extra arguments, or 0
+    alive: int
 }
 
-// timer_cancel(id): stop one of this page's timers. Another id is ignored.
-sae_ui_timer_cancel(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    argc = quickjs.arg_count(ctx, argv)
-    p = page_of_(ctx)
-    id = arg_int_(ctx, argv, argc, 0, 0)
+struct PageRaf {
+    id: int          // 0 once cancelled
+    fn_h: int
+}
+
+// The real (unscaled) monotonic clock in ms: SAE_TIME_SCALE speeds up the
+// clocks a page reads, not its timers.
+real_ms_() -> long { return os.now_monotonic_ms() }
+
+// The clock requestAnimationFrame's timestamp is on: performance.now()'s,
+// with the fraction kept.
+raf_now_() -> float {
+    long ms = now_ms_()   // also starts SAE_TIME_SCALE's base
+    if time_scale_ == 1 { return (os.now_monotonic_ns() as float) / 1000000.0 }
+    return ms as float
+}
+
+// A delay argument as HTML reads it: NaN, negative and overflowing are 0.
+delay_arg_(ctx: ptr, argv: int, argc: int, i: int) -> int {
+    if i >= argc { return 0 }
+    d = quickjs.arg_float(ctx, argv, i)
+    if d != d || d < 0.0 || d > 2147483647.0 { return 0 }
+    return d as int
+}
+
+// Start a timer on page p: fn_h and args_h become the queue's (released when
+// the timer goes). Returns its id.
+timer_add_(p: *Page, fn_h: int, args_h: int, ms: int, repeat: int, floor: int) -> int {
+    level = p.timer_nesting
+    if ms < 0 { ms = 0 }
+    if level > 5 && ms < 4 { ms = 4 }
+    if ms < floor { ms = floor }
+    t = heap.new(PageTimer)
+    p.timer_ids = p.timer_ids + 1
+    t.id = p.timer_ids
+    t.due = real_ms_() + ms
+    t.interval = 0
+    if repeat == 1 { t.interval = ms }
+    if repeat == 1 && t.interval < 1 { t.interval = 0 - 1 }   // setInterval(fn, 0)
+    t.floor = floor
+    p.timer_seq = p.timer_seq + 1
+    t.seq = p.timer_seq
+    t.nesting = level + 1
+    t.fn_h = fn_h
+    t.args_h = args_h
+    t.alive = 1
+    list.add(p.timers, t as ptr)
+    if p.timers_running == 0 { timers_arm_(p) }
+    return t.id
+}
+
+// Release a timer's JS handles and free it.
+timer_drop_(p: *Page, t: *PageTimer) {
+    if t.fn_h != 0 { quickjs.release(p.ctx, t.fn_h) }
+    if t.args_h != 0 { quickjs.release(p.ctx, t.args_h) }
+    heap.free(t)
+}
+
+// Remove the cancelled and the finished from the queue.
+timers_sweep_(p: *Page) {
+    i = list.size(p.timers) - 1
+    while i >= 0 {
+        v, _ = list.get(p.timers, i)
+        t = v as *PageTimer
+        if t.alive == 0 {
+            list.list_remove(p.timers, i)
+            timer_drop_(p, t)
+        }
+        i = i - 1
+    }
+}
+
+// The index of the earliest timer due by `now` and queued by `seq_max`, -1
+// if none is.
+timers_next_(p: *Page, now: long, seq_max: int) -> int {
+    best = 0 - 1
+    long best_due = 0
+    best_seq = 0
     n = list.size(p.timers)
     i = 0
     while i < n {
         v, _ = list.get(p.timers, i)
-        if mem.ptr_to_long(v) == id && id != 0 {
-            ui.timer_cancel(id)
-            list.set(p.timers, i, mem.long_to_ptr(0))
-            return 0
+        t = v as *PageTimer
+        if t.alive == 1 && t.due <= now && t.seq <= seq_max {
+            if best < 0 || t.due < best_due || (t.due == best_due && t.seq < best_seq) {
+                best = i
+                best_due = t.due
+                best_seq = t.seq
+            }
         }
         i = i + 1
     }
+    return best
+}
+
+// Arm the page's wake for its earliest timer, or disarm it when none is left.
+timers_arm_(p: *Page) {
+    long due = 0
+    found = 0
+    n = list.size(p.timers)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.timers, i)
+        t = v as *PageTimer
+        if t.alive == 1 && (found == 0 || t.due < due) {
+            due = t.due
+            found = 1
+        }
+        i = i + 1
+    }
+    if found == 0 {
+        if p.wake != 0 { ui.timer_cancel(p.wake) }
+        p.wake = 0
+        return
+    }
+    if p.wake != 0 && p.wake_due == due { return }
+    if p.wake != 0 { ui.timer_cancel(p.wake) }
+    long wait = due - real_ms_()
+    if wait < 0 { wait = 0 }
+    ctx = p.ctx
+    p.wake_due = due
+    p.wake = ui.timer_once(wait as int, || { timers_wake_(ctx) })
+}
+
+// The wake fired: run what is due, in order, then re-arm.
+timers_wake_(ctx: ptr) {
+    p = page_of_(ctx)
+    if p == null { return }
+    p.wake = 0
+    long now = real_ms_()
+    seq_max = p.timer_seq   // what this batch started with
+    p.timers_running = 1
+    ti = timers_next_(p, now, seq_max)
+    while ti >= 0 {
+        tv, _ = list.get(p.timers, ti)
+        t = tv as *PageTimer
+        if t.interval == 0 {
+            t.alive = 0   // a one-shot leaves the queue before it runs
+        } else {
+            level = t.nesting
+            iv = t.interval
+            if iv < 0 { iv = 0 }
+            if level > 5 && iv < 4 { iv = 4 }
+            if iv < t.floor { iv = t.floor }
+            t.due = now + iv
+            t.nesting = level + 1
+            p.timer_seq = p.timer_seq + 1
+            t.seq = p.timer_seq   // not again in this batch, even at 0 ms
+        }
+        p.timer_nesting = t.nesting
+        r = 0
+        if t.args_h != 0 { r = calln_(ctx, t.fn_h, t.args_h) }
+        else { r = call0_(ctx, t.fn_h) }
+        p.timer_nesting = 0
+        if r < 0 { report_exception_(ctx, "a timer") }
+        settle_(ctx)
+        ti = timers_next_(p, now, seq_max)
+    }
+    p.timers_running = 0
+    timers_sweep_(p)
+    timers_arm_(p)
+}
+
+// Cancel one of page p's timers by id; any other id is ignored.
+timer_cancel_id_(p: *Page, id: int) {
+    if id <= 0 { return }
+    n = list.size(p.timers)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.timers, i)
+        t = v as *PageTimer
+        if t.id == id && t.alive == 1 {
+            t.alive = 0
+            if p.timers_running == 0 {
+                timers_sweep_(p)
+                timers_arm_(p)
+            }
+            return
+        }
+        i = i + 1
+    }
+}
+
+// The page goes: its wake, its frame subscription and every queued callback.
+timers_free_(p: *Page) {
+    if p.wake != 0 { ui.timer_cancel(p.wake) }
+    p.wake = 0
+    if p.frame_sub != 0 { ui.frame_cancel(p.frame_sub) }
+    p.frame_sub = 0
+    n = list.size(p.timers)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.timers, i)
+        timer_drop_(p, v as *PageTimer)
+        i = i + 1
+    }
+    list.free(p.timers)
+    rafs_drop_(p, p.rafs)
+    list.free(p.rafs)
+}
+
+// Extra arguments i.. of a call as a held JS array, or 0 when there are none.
+rest_args_(ctx: ptr, argv: int, argc: int, i: int) -> int {
+    if argc <= i { return 0 }
+    a = quickjs.new_array(ctx)
+    k = i
+    while k < argc {
+        h = quickjs.arg(ctx, argv, k)
+        _e = quickjs.set_index(ctx, a, k - i, h)
+        quickjs.release(ctx, h)
+        k = k + 1
+    }
+    return a
+}
+
+// timer(ms, fn): call fn every ms milliseconds (at least 10) until
+// timer_cancel(id) or the page goes. Returns the timer's id.
+sae_ui_timer(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    ms = arg_int_(ctx, argv, argc, 0, 1000)
+    ref = held_fn_(ctx, argv, argc, 1)
+    if ref == 0 { return sae_throw_type_error(ctx, "timer(ms, fn): fn must be a function") }
+    return quickjs.new_int(ctx, timer_add_(p, ref, 0, ms, 1, 10))
+}
+
+// after(ms, fn): call fn once, ms milliseconds from now. Returns an id that
+// timer_cancel (and clearTimeout) take.
+sae_ui_after(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    ms = delay_arg_(ctx, argv, argc, 0)
+    ref = held_fn_(ctx, argv, argc, 1)
+    if ref == 0 { return sae_throw_type_error(ctx, "after(ms, fn): fn must be a function") }
+    return quickjs.new_int(ctx, timer_add_(p, ref, 0, ms, 0, 0))
+}
+
+// sleep(ms): a promise that resolves (to undefined) ms milliseconds from now.
+// If the page goes first it never settles, and goes with the page's runtime.
+sae_ui_sleep(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    ms = delay_arg_(ctx, argv, argc, 0)
+    pr = quickjs.new_promise(ctx)
+    resolve, _e1 = quickjs.get(ctx, pr, "resolve")
+    promise, _e2 = quickjs.get(ctx, pr, "promise")
+    quickjs.release(ctx, pr)
+    _id = timer_add_(p, resolve, 0, ms, 0, 0)
+    return promise
+}
+
+// timer_cancel(id) / clearTimeout(id) / clearInterval(id): stop one of this
+// page's timers. Another id, or none, is ignored.
+sae_ui_timer_cancel(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if argc < 1 { return 0 }
+    timer_cancel_id_(page_of_(ctx), delay_arg_(ctx, argv, argc, 0))
     return 0
+}
+
+// setTimeout(fn, ms, ...args): call fn(...args) once, ms from now.
+sae_set_timeout(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    ref = held_fn_(ctx, argv, argc, 0)
+    if ref == 0 { return sae_throw_type_error(ctx, "setTimeout(fn, ms, ...args): fn must be a function (sae does not eval a string)") }
+    ms = delay_arg_(ctx, argv, argc, 1)
+    return quickjs.new_int(ctx, timer_add_(page_of_(ctx), ref, rest_args_(ctx, argv, argc, 2), ms, 0, 0))
+}
+
+// setInterval(fn, ms, ...args): call fn(...args) every ms until cleared.
+sae_set_interval(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    ref = held_fn_(ctx, argv, argc, 0)
+    if ref == 0 { return sae_throw_type_error(ctx, "setInterval(fn, ms, ...args): fn must be a function (sae does not eval a string)") }
+    ms = delay_arg_(ctx, argv, argc, 1)
+    return quickjs.new_int(ctx, timer_add_(page_of_(ctx), ref, rest_args_(ctx, argv, argc, 2), ms, 1, 0))
+}
+
+// Release a list of PageRaf records' handles and free them.
+rafs_drop_(p: *Page, l: ptr) {
+    n = list.size(l)
+    i = 0
+    while i < n {
+        v, _ = list.get(l, i)
+        r = v as *PageRaf
+        if r.fn_h != 0 { quickjs.release(p.ctx, r.fn_h) }
+        heap.free(r)
+        i = i + 1
+    }
+}
+
+// One display frame for the page: run the callbacks requested before it
+// began, each with the same timestamp, then stop the subscription if no
+// callback asked for another frame.
+rafs_frame_(ctx: ptr) {
+    p = page_of_(ctx)
+    if p == null { return }
+    batch = p.rafs
+    p.rafs = list.new()
+    p.raf_batch = batch
+    ts = raf_now_()
+    n = list.size(batch)
+    i = 0
+    while i < n {
+        v, _ = list.get(batch, i)
+        r = v as *PageRaf
+        if r.id != 0 {
+            r.id = 0
+            a = quickjs.new_array(ctx)
+            fh = quickjs.new_float(ctx, ts)
+            _e = quickjs.set_index(ctx, a, 0, fh)
+            quickjs.release(ctx, fh)
+            if calln_(ctx, r.fn_h, a) < 0 { report_exception_(ctx, "an animation frame callback") }
+            quickjs.release(ctx, a)
+            settle_(ctx)
+        }
+        i = i + 1
+    }
+    p.raf_batch = null
+    rafs_drop_(p, batch)
+    list.free(batch)
+    if list.size(p.rafs) == 0 && p.frame_sub != 0 {
+        ui.frame_cancel(p.frame_sub)
+        p.frame_sub = 0
+    }
+}
+
+// requestAnimationFrame(fn) / ui.frame(fn): call fn(timestamp) once, on the
+// next display frame. Returns an id for cancelAnimationFrame.
+sae_request_frame(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    ref = held_fn_(ctx, argv, argc, 0)
+    if ref == 0 { return sae_throw_type_error(ctx, "requestAnimationFrame(fn): fn must be a function") }
+    r = heap.new(PageRaf)
+    p.raf_ids = p.raf_ids + 1
+    r.id = p.raf_ids
+    r.fn_h = ref
+    list.add(p.rafs, r as ptr)
+    if p.frame_sub == 0 {
+        p.frame_sub = ui.on_frame(|t: float| { rafs_frame_(ctx) })
+    }
+    return quickjs.new_int(ctx, r.id)
+}
+
+// cancelAnimationFrame(id) / ui.frame_cancel(id): the callback will not run,
+// even if its frame has begun. Another id is ignored.
+sae_cancel_frame(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    id = arg_int_(ctx, argv, argc, 0, 0)
+    if id <= 0 { return 0 }
+    raf_cancel_in_(p.rafs, id)
+    if p.raf_batch != null { raf_cancel_in_(p.raf_batch, id) }
+    return 0
+}
+
+raf_cancel_in_(l: ptr, id: int) {
+    n = list.size(l)
+    i = 0
+    while i < n {
+        v, _ = list.get(l, i)
+        r = v as *PageRaf
+        if r.id == id { r.id = 0 }
+        i = i + 1
+    }
 }
 
 // --- the page API: http, on Aether's actor core ---
@@ -1147,11 +1547,13 @@ sae_ui_timer_cancel(ctx: ptr, this_val: int, argv: int) -> int {
 // or for a cancelled request, is dropped.
 //
 // Where a page may reach: in the browser, its own origin; in an app, the
-// origins app.json lists under "http" (Tauri's allowlist). The rest is
-// refused: res.ok false, res.error saying why, delivered the same way.
+// URL prefixes app.json lists under capabilities.http (Tauri's allowlist,
+// deny by default), checked in services/net before any socket and on every
+// redirect hop. The rest is refused: res.ok false, res.error saying why,
+// delivered the same way.
 
 sae_http_get(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     return http_start_(ctx, "GET", own_(arg_str_(ctx, argv, argc, 0)), "", "", null, held_fn_(ctx, argv, argc, 1))
 }
@@ -1159,14 +1561,14 @@ sae_http_get(ctx: ptr, this_val: int, argv: int) -> int {
 // http.cancel(id): what req.cancel() calls. The request may still run to
 // completion on its actor; its callback will not.
 sae_http_cancel(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     http_cancel_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     return 0
 }
 
 sae_http_post(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     return http_start_(ctx, "POST", own_(arg_str_(ctx, argv, argc, 0)),
                        own_(arg_str_(ctx, argv, argc, 1)), own_(arg_str_(ctx, argv, argc, 2)),
@@ -1176,7 +1578,7 @@ sae_http_post(ctx: ptr, this_val: int, argv: int) -> int {
 // http.request({ method, url, headers, body, contentType }, (res) => ...):
 // any method, request headers; res.headers holds the response's, lowercased.
 sae_http_request(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if argc < 2 { return sae_throw_type_error(ctx, "http.request(options, fn)") }
     opt = quickjs.arg(ctx, argv, 0)
@@ -1214,7 +1616,7 @@ sae_http_request(ctx: ptr, this_val: int, argv: int) -> int {
 // See docs/app-capabilities.md.
 
 sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     text, err = files.read_text(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
@@ -1222,7 +1624,7 @@ sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_fs_write_text(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = own_(arg_str_(ctx, argv, argc, 0))
     err = files.write_text(p, own_(arg_str_(ctx, argv, argc, 1)))
@@ -1231,7 +1633,7 @@ sae_fs_write_text(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_fs_exists(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     yes, why = files.exists(own_(arg_str_(ctx, argv, argc, 0)))
     if why != "" { return sae_throw_type_error(ctx, why) }
@@ -1239,7 +1641,7 @@ sae_fs_exists(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_fs_list(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     names, err = files.list_json(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
@@ -1248,7 +1650,7 @@ sae_fs_list(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_fs_mkdir(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     err = files.mkdir(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
@@ -1256,7 +1658,7 @@ sae_fs_mkdir(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_fs_remove(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     err = files.remove(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
@@ -1266,7 +1668,7 @@ sae_fs_remove(ctx: ptr, this_val: int, argv: int) -> int {
 // shell.open(url): hand a URL to the system (the default browser for https:),
 // if capabilities.shell.open lists a prefix of it. App mode only.
 sae_shell_open(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     why = shell.open(own_(arg_str_(ctx, argv, argc, 0)))
     if why != "" { return sae_throw_type_error(ctx, why) }
@@ -1282,7 +1684,7 @@ sae_shell_open(ctx: ptr, this_val: int, argv: int) -> int {
 // the kernel's (storage_file_ below); a page reaches only these three calls.
 
 sae_storage_get(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.get(key): key must be letters, digits, '.', '_' or '-'") }
@@ -1292,7 +1694,7 @@ sae_storage_get(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_storage_set(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.set(key, value): key must be letters, digits, '.', '_' or '-'") }
@@ -1303,7 +1705,7 @@ sae_storage_set(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_storage_remove(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.remove(key): key must be letters, digits, '.', '_' or '-'") }
@@ -1314,7 +1716,7 @@ sae_storage_remove(ctx: ptr, this_val: int, argv: int) -> int {
 // vg.scene(viewBox, w, h, block): a vector-graphics canvas w x h px under
 // the current ui container, drawing the viewBox.
 sae_vg_scene(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
     vb = own_(arg_str_(ctx, argv, argc, 0))
@@ -1325,7 +1727,7 @@ sae_vg_scene(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_circle(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.circle() must be called inside vg.scene()") }
     p = page_of_(ctx)
@@ -1334,7 +1736,7 @@ sae_vg_circle(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_rect(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rect() must be called inside vg.scene()") }
     p = page_of_(ctx)
@@ -1343,7 +1745,7 @@ sae_vg_rect(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_rrect(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rrect() must be called inside vg.scene()") }
     p = page_of_(ctx)
@@ -1352,7 +1754,7 @@ sae_vg_rrect(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_line(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.line() must be called inside vg.scene()") }
     p = page_of_(ctx)
@@ -1361,7 +1763,7 @@ sae_vg_line(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_path(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.path() must be called inside vg.scene()") }
     p = page_of_(ctx)
@@ -1371,7 +1773,7 @@ sae_vg_path(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_text(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text() must be called inside vg.scene()") }
     p = page_of_(ctx)
@@ -1382,7 +1784,7 @@ sae_vg_text(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.g(block): a group; its block's shapes nest under it.
 sae_vg_g(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.g() must be called inside vg.scene()") }
     p = page_of_(ctx)
@@ -1391,7 +1793,7 @@ sae_vg_g(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_fill(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.fill() must be called inside a shape's block") }
     vg.fill(vg_top_(page_of_(ctx)), arg_str_(ctx, argv, argc, 0))
@@ -1399,7 +1801,7 @@ sae_vg_fill(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_stroke(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.stroke() must be called inside a shape's block") }
     c = own_(arg_str_(ctx, argv, argc, 0))
@@ -1408,7 +1810,7 @@ sae_vg_stroke(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_opacity(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.opacity() must be called inside a shape's block") }
     vg.opacity(vg_top_(page_of_(ctx)), arg_num_(ctx, argv, argc, 0, 1.0))
@@ -1416,7 +1818,7 @@ sae_vg_opacity(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_transform(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.transform() must be called inside a shape's block") }
     t = own_(arg_str_(ctx, argv, argc, 0))
@@ -1427,7 +1829,7 @@ sae_vg_transform(ctx: ptr, this_val: int, argv: int) -> int {
 // vg.on_click(fn(x, y)): x and y are where the click landed, in the scene's
 // viewBox coordinates.
 sae_vg_on_click(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.on_click() must be called inside a shape's block") }
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 {
@@ -1447,7 +1849,7 @@ sae_vg_on_click(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_set_fill(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_fill(h, color): h is not a vg shape") }
@@ -1458,7 +1860,7 @@ sae_vg_set_fill(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.set_text(h, s): change a vg.text shape's text (a clock, a counter).
 sae_vg_set_text(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_text(h, s): h is not a vg shape") }
@@ -1468,7 +1870,7 @@ sae_vg_set_text(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_set_stroke(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_stroke(h, color, width): h is not a vg shape") }
@@ -1479,7 +1881,7 @@ sae_vg_set_stroke(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_vg_set_opacity(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     n = vg_node_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
     if n == null { return sae_throw_type_error(ctx, "vg.set_opacity(h, value): h is not a vg shape") }
@@ -1491,7 +1893,7 @@ sae_vg_set_opacity(ctx: ptr, this_val: int, argv: int) -> int {
 // --- the page API: browserContext ---
 
 sae_bc_change_page(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     b = browser_of_(ctx)
     href = arg_str_(ctx, argv, argc, 0)
@@ -1500,28 +1902,28 @@ sae_bc_change_page(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 sae_bc_back(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(ctx), NAV_BACK, "")
     return 0
 }
 
 sae_bc_forward(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(ctx), NAV_FORWARD, "")
     return 0
 }
 
 sae_bc_reload(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(ctx), NAV_RELOAD, "")
     return 0
 }
 
 sae_bc_current_url(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     return quickjs.new_string(ctx, page_of_(ctx).url)
 }
@@ -1531,7 +1933,7 @@ sae_bc_current_url(ctx: ptr, this_val: int, argv: int) -> int {
 // All of print's output goes through C stdio, then is flushed, so it cannot
 // interleave with the host's own println output. Objects print as JSON.
 js_print(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     out = sae_stdout()
     i = 0
@@ -1554,12 +1956,12 @@ js_print(ctx: ptr, this_val: int, argv: int) -> int {
 
 // Date.now() and performance.now(), on sae's clocks (SAE_TIME_SCALE).
 js_date_now(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return quickjs.new_float(ctx, now_unix_ms_() as float)
 }
 
 js_performance_now(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return quickjs.new_float(ctx, now_ms_() as float)
 }
 
@@ -1580,6 +1982,7 @@ struct HttpJob {
     resp: string
     resp_headers: string
     err: string
+    refused_hop: int // err is capabilities.http refusing a redirect hop: logged on delivery
 }
 
 // A request a page is waiting on: which page (by load), and its callback.
@@ -1659,9 +2062,12 @@ http_do_(jp: ptr) {
     cross = 0        // a hop left the first origin: credentials stay behind
     hops = 0
     while 1 == 1 {
-        req = client.request(method, url)
+        // services/net builds the request only if app.json capabilities.http
+        // covers the URL; every hop comes back through here.
+        req, nerr = net.open_request(method, url)
         if req == null {
-            j.err = "not a valid URL: ${url}"
+            j.err = own_(nerr)
+            if string.string_starts_with(nerr, "this app may not reach") == 1 { j.refused_hop = 1 }
             return
         }
         client.set_timeout(req, 15s)
@@ -1721,6 +2127,7 @@ http_do_(jp: ptr) {
         why = http_refusal_(j.page_url, j.scopes, method, next)
         if why != "" {
             j.err = "redirected to ${next}: ${why}"
+            if net.refusal(next) != "" { j.refused_hop = 1 }
             return
         }
         if string.string_substring(next, 0, origin_end_(next)) != host0 { cross = 1 }
@@ -1794,6 +2201,13 @@ scope_covers_(scopes: string, method: string, url: string) -> int {
     return 0
 }
 
+// A request app.json capabilities.http refused, on the console: once per
+// refusal, from the UI thread.
+net_log_(why: string) {
+    println("sae: refused: ${why}")
+    fflush(sae_stdout())
+}
+
 // "" if a page at page_url, with these scopes ("" when it seeks
 // outgoing-http unscoped), may make this request, else why not. The grant
 // (app.json, or a web page's own origin) is checked first, then the scopes.
@@ -1801,9 +2215,10 @@ http_refusal_(page_url: string, scopes: string, method: string, url: string) -> 
     if is_http_(url) == 0 { return "http.get/post takes an http(s) URL: ${url}" }
     granted = 0
     if app_dir_ != "" {
-        if prefix_in_(cap_http_, url) == 0 {
-            return "this app may not reach ${url} (app.json capabilities.http lists what it may)"
-        }
+        // app.json capabilities.http, held by services/net: the server first,
+        // then the path prefix.
+        nwhy = net.refusal(url)
+        if nwhy != "" { return nwhy }
         granted = 1
     }
     if granted == 0 {
@@ -1822,6 +2237,13 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     p = page_of_(ctx)
     if ref == 0 { return sae_throw_type_error(ctx, "http: the last argument must be a function") }
     url = resolve_(p.url, url_arg)
+    // A URL app.json capabilities.http does not cover is refused like any
+    // other (res.ok false, below), and logged once. Only in an app; in the
+    // browser services/net checks nothing.
+    if app_dir_ != "" && is_http_(url) == 1 {
+        nwhy = net.refusal(url)
+        if nwhy != "" { net_log_(nwhy) }
+    }
     if http_waits_ == null { http_waits_ = list.new() }
     http_ids_ = http_ids_ + 1
     j = heap.new(HttpJob)
@@ -1836,6 +2258,7 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     j.resp_headers = ""
     j.page_url = p.url
     j.scopes = p.http_scopes
+    j.refused_hop = 0
     j.err = http_refusal_(p.url, p.http_scopes, method, url)
     w = heap.new(HttpWait)
     w.id = j.id
@@ -1936,6 +2359,7 @@ http_poll_() {
 }
 
 http_deliver_(j: *HttpJob) {
+    if j.refused_hop == 1 { net_log_(j.err) }
     n = list.size(http_waits_)
     i = 0
     while i < n {
@@ -1997,20 +2421,8 @@ call_http_(p: *Page, ref: int, status: int, text: string, err: string, raw_heade
 
 // --- capabilities (the kernel side; docs/app-capabilities.md) ---
 
-var cap_http_: ptr = null    // strarr: URL prefixes http may reach (app mode)
-// The fs and shell grants live in services/files and services/shell.
-
-// 1 if `s` starts with one of the prefixes in `l`.
-prefix_in_(l: ptr, s: string) -> int {
-    if l == null { return 0 }
-    n = strarr.size(l)
-    i = 0
-    while i < n {
-        if string.string_starts_with(s, strarr.get(l, i)) == 1 { return 1 }
-        i = i + 1
-    }
-    return 0
-}
+// The http, fs and shell grants live in services/net, services/files and
+// services/shell.
 
 // The app's own data folder: $SAE_APPDATA_DIR, else the platform's place.
 app_data_dir_() -> string {
@@ -2036,10 +2448,7 @@ available_(nm: string) -> int {
         if nm == "outgoing-http" { return 1 }
         return 0
     }
-    if nm == "outgoing-http" {
-        if cap_http_ != null && strarr.size(cap_http_) > 0 { return 1 }
-        return 0
-    }
+    if nm == "outgoing-http" { return net.granted() }
     if nm == "local-filesystem" { return files.granted() }
     if nm == "open-urls" { return shell.granted() }
     return 0
@@ -2095,7 +2504,7 @@ http_scopes_for_(page_url: string, scopes: string) -> (string, string) {
                 lit = pat
                 star = string.index_of(pat, "*")
                 if star >= 0 { lit = string.string_substring(pat, 0, star) }
-                if prefix_in_(cap_http_, lit) == 0 {
+                if net.refusal(lit) != "" {
                     return "", "${page_url} ${shown}, beyond what this app's app.json grants (capabilities.http)"
                 }
             } else {
@@ -2125,6 +2534,21 @@ absent_of_(optional: string) -> string {
     return out
 }
 
+// The privileges a page seeks neither required nor optional
+// ("local-filesystem,open-urls,"), to leave out with the absent ones.
+unsought_(seeks: string, optional: string) -> string {
+    out = ""
+    names = string.split("outgoing-http,local-filesystem,open-urls", ",")
+    n = string.string_array_size(names)
+    i = 0
+    while i < n {
+        nm = string.string_array_get(names, i)
+        if string.contains(",${seeks},${optional},", ",${nm},") == 0 { out = string.concat(out, "${nm},") }
+        i = i + 1
+    }
+    return out
+}
+
 // The strings of a JSON array `key` in object `v` (none if absent), each
 // handed to `add`.
 grants_from_(v: ptr, key: string, add: fn) {
@@ -2143,16 +2567,22 @@ grants_from_(v: ptr, key: string, add: fn) {
 // The app's grants from app.json "capabilities", handed to the services
 // that enforce them (http's stay here, with the actors that make requests).
 read_capabilities_(manifest: ptr) {
-    cap_http_ = strarr.new()
     t = env_("TMPDIR")
     if t == "" { t = "/tmp" }
     while string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
     files.configure(1, app_data_dir_(), env_("HOME"), t)
     shell.configure(1, env_("SAE_SHELL_LOG"))
+    // capabilities.http is the app's whole network: absent or empty is none
+    // (Tauri's deny by default). An entry services/net does not understand
+    // allows nothing and is reported.
+    net.configure(1)
     if manifest == null { return }
     caps = json.json_object_get_raw(manifest, "capabilities")
     if caps == null { return }
-    grants_from_(caps, "http", |u: string| { strarr.push_copy(cap_http_, u) })
+    grants_from_(caps, "http", |u: string| {
+        nerr = net.allow(u)
+        if nerr != "" { println("sae: ${nerr}") }
+    })
     grants_from_(json.json_object_get_raw(caps, "shell"), "open", |u: string| { shell.grant(u) })
     fsg = json.json_object_get_raw(caps, "fs")
     grants_from_(fsg, "read", |r: string| { files.grant_read(r) })
@@ -2181,14 +2611,84 @@ storage_key_ok_(k: string) -> int {
     return 1
 }
 
-// The folder a page's storage lives in: one per app, or per origin.
-// $SAE_STORAGE_DIR, else ~/.sae/storage.
+// A short, stable hash of s as 16 hex digits: two 32-bit multiply-xor lanes
+// (FNV-1a, and the same with another seed and multiplier; the products stay
+// below 2^57, so nothing overflows). For naming storage folders,
+// not for security.
+hash_hex_(s: string) -> string {
+    long h1 = 2166136261
+    long h2 = 2654435761
+    n = string.length(s)
+    i = 0
+    while i < n {
+        long c = string.string_char_at(s, i) as long
+        h1 = ((h1 ^ c) * 16777619) % 4294967296
+        h2 = ((h2 ^ c) * 1000003) % 4294967296
+        i = i + 1
+    }
+    a = string.string_pad_start(string.string_from_int_radix(h1, 16), 8, 48)
+    b2 = string.string_pad_start(string.string_from_int_radix(h2, 16), 8, 48)
+    return "${a}${b2}"
+}
+
+// A directory as the OS spells it (symlinks and .. resolved), or as given if
+// it cannot be resolved.
+canonical_dir_(d: string) -> string {
+    p, _k, err = fs.realpath(d)
+    if err != "" || p == "" { return own_(d) }
+    return own_(p)
+}
+
+// The bundle identifier of the macOS .app whose executable is `exe`
+// (Contents/Info.plist, as tools/saepack.sh writes it), or "".
+bundle_id_(exe: string) -> string {
+    plist, err = fs.read(string.concat(dir_of_(exe), "../Info.plist"))
+    if err != "" { return "" }
+    k = string.index_of(plist, "<key>CFBundleIdentifier</key>")
+    if k < 0 { return "" }
+    rest = string.string_substring(plist, k, string.length(plist))
+    a = string.index_of(rest, "<string>")
+    z = string.index_of(rest, "</string>")
+    if a < 0 || z < a { return "" }
+    return own_(string.string_substring(rest, a + 8, z))
+}
+
+// What an installed app's storage is keyed by: never its display name (two
+// apps may share one). A packaged macOS .app: its bundle identifier. Any
+// other app (sae --app <dir>, an APK, whose pages are copied to app/ in the
+// package's own files folder): its folder, canonical, hashed, after the
+// folder's own name for a person reading the storage folder.
+app_storage_key_(dir: string, exe: string, bundled: int) -> string {
+    if bundled == 1 {
+        bid = bundle_id_(exe)
+        if bid != "" { return "id-${bid}" }
+    }
+    c = canonical_dir_(dir)
+    return "${base_name_(c)}-${hash_hex_(c)}"
+}
+
+var app_key_: string = ""   // app mode: app_storage_key_, set at start
+
+// The folder a page's storage lives in: one per installed app (app_key_),
+// per origin, or, for a page loaded from a file, per directory: the file
+// system's nearest thing to a site, so a folder of pages that link to one
+// another shares storage, and pages in another folder do not.
+// $SAE_STORAGE_DIR, else ~/.sae/storage, or .sae/storage in the working
+// directory where there is no $HOME (an Android app: its own files folder).
 storage_dir_(url: string) -> string {
     root = env_("SAE_STORAGE_DIR")
-    if root == "" { root = "${env_("HOME")}/.sae/storage" }
+    home = env_("HOME")
+    if home == "" { home = "." }
+    if root == "" { root = "${home}/.sae/storage" }
     scope = "file"
-    if is_app_(url) == 1 { scope = string.concat("app-", app_name_) }
+    if is_app_(url) == 1 { scope = string.concat("app-", app_key_) }
     if is_http_(url) == 1 { scope = string.string_substring(url, 0, origin_end_(url)) }
+    if is_app_(url) == 0 && is_http_(url) == 0 {
+        d = dir_of_(url)
+        if d == "" { d = "." }
+        cd = canonical_dir_(d)
+        scope = "file-${base_name_(cd)}-${hash_hex_(cd)}"
+    }
     // A folder name: anything but letters, digits, '.', '-' becomes '_'.
     out = ""
     i = 0
@@ -2307,12 +2807,15 @@ resolve_(base: string, href: string) -> string {
 // is "" unless nothing could be fetched at all.
 fetch_(url: string) -> (int, string, string, string) {
     if is_app_(url) == 1 { return fetch_app_(url) }
+    // An app's pages are its own (app.json "start" included): it loads no
+    // page from a file or the network, whatever capabilities.http lists.
+    if app_dir_ != "" { return 0, "", own_(url), "this app loads only its own pages (app:/...): ${url}" }
     if is_http_(url) == 0 {
         src, ferr = fs.read(url)
         if ferr != "" { return 0, "", url, ferr }
         return 200, src, url, ""
     }
-    req = client.request("GET", url)
+    req, nerr = net.open_request("GET", url)
     if req == null { return 0, "", url, "not a valid URL" }
     client.set_timeout(req, 10s)
     client.set_follow_redirects(req, 5)
@@ -2360,6 +2863,13 @@ reg_(q: ptr, obj: int, name: string, arity: int, f: fn) {
     quickjs.release(q, h)
 }
 
+// One global page-API function: globalThis[name] calls the Aether function f.
+glob_fn_(q: ptr, name: string, arity: int, f: fn) {
+    h = quickjs.function(q, name, arity, f)
+    quickjs.set_global(q, name, h)
+    quickjs.release(q, h)
+}
+
 // Install the page API in a page's runtime: everything a page can reach is
 // registered here, so this function is the sandbox boundary. fs and shell
 // exist only in app mode: a
@@ -2398,6 +2908,10 @@ api_register_(p: *Page) {
     reg_(q, u, "timer", 2, sae_ui_timer)
     reg_(q, u, "set_visible", 2, sae_ui_set_visible)
     reg_(q, u, "timer_cancel", 1, sae_ui_timer_cancel)
+    reg_(q, u, "after", 2, sae_ui_after)
+    reg_(q, u, "sleep", 1, sae_ui_sleep)
+    reg_(q, u, "frame", 1, sae_request_frame)
+    reg_(q, u, "frame_cancel", 1, sae_cancel_frame)
     reg_(q, u, "onclick", 1, sae_ui_onclick)
     reg_(q, u, "margin", 4, sae_ui_margin)
     reg_(q, u, "bg_color", 4, sae_ui_bg_color)
@@ -2488,6 +3002,14 @@ api_register_(p: *Page) {
     pr = quickjs.function(q, "print", 1, js_print)
     quickjs.set_global(q, "print", pr)
     quickjs.release(q, pr)
+    // The web's timer names, page-scoped like ui.timer: the same queue, so
+    // they need no grant and stop with the page ("the page API: timers").
+    glob_fn_(q, "setTimeout", 2, sae_set_timeout)
+    glob_fn_(q, "setInterval", 2, sae_set_interval)
+    glob_fn_(q, "clearTimeout", 1, sae_ui_timer_cancel)
+    glob_fn_(q, "clearInterval", 1, sae_ui_timer_cancel)
+    glob_fn_(q, "requestAnimationFrame", 1, sae_request_frame)
+    glob_fn_(q, "cancelAnimationFrame", 1, sae_cancel_frame)
     d, _e1 = quickjs.get_global(q, "Date")
     reg_(q, d, "now", 0, js_date_now)
     quickjs.release(q, d)
@@ -2515,6 +3037,16 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.sheet = null
     p.sheet_strs = list.new()
     p.timers = list.new()
+    p.timer_ids = 0
+    p.timer_seq = 0
+    p.timer_nesting = 0
+    p.timers_running = 0
+    p.wake = 0
+    p.wake_due = 0
+    p.rafs = list.new()
+    p.raf_batch = null
+    p.raf_ids = 0
+    p.frame_sub = 0
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
     p.http_res = 0
@@ -2531,17 +3063,9 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
 }
 
 page_free_(p: *Page) {
-    // A page's timers stop with it: a tick after this would call into a
-    // freed runtime.
-    nt = list.size(p.timers)
-    ti = 0
-    while ti < nt {
-        tv, _ = list.get(p.timers, ti)
-        tid = mem.ptr_to_long(tv)
-        if tid != 0 { ui.timer_cancel(tid) }
-        ti = ti + 1
-    }
-    list.free(p.timers)
+    // A page's timers and animation frames stop with it: a tick after this
+    // would call into a freed runtime.
+    timers_free_(p)
     list.free(p.vg_nodes)
     list.free(p.stacks)
     list.free(p.grids)
@@ -2645,6 +3169,10 @@ load_(b: *Browser, url: string) {
     // optional outgoing-http whose scope reaches past the grant goes the
     // same way as one not granted at all: the page does without.
     absent = absent_of_(lower.page_optional())
+    // A privilege the page does not seek at all has no object either. The
+    // lowerer refuses a page that names one unsought, but only by name:
+    // without this, globalThis["ht" + "tp"] would reach it.
+    absent = string.concat(absent, unsought_(lower.page_seeks(), lower.page_optional()))
     scopes, swhy = http_scopes_for_(final_url, lower.page_scopes())
     if swhy != "" {
         if string.contains(lower.page_optional(), ",outgoing-http,") == 1 {
@@ -2795,13 +3323,22 @@ browser_new_() -> *Browser {
 // <dir>/app.json:
 //   { "name": "Banking", "start": "/", "width": 800, "height": 600 }
 
-// The pages a packaged binary carries: <exe dir>/../Resources/app (the .app
-// layout tools/saepack.sh makes), or "" when there are none.
+// 1 if `d` holds an app: an app.json, index.ts or index.js.
+is_app_dir_(d: string) -> int {
+    if fs.exists("${d}/app.json") == 1 { return 1 }
+    if fs.exists("${d}/index.ts") == 1 { return 1 }
+    if fs.exists("${d}/index.js") == 1 { return 1 }
+    return 0
+}
+
+// The pages a packaged binary carries, or "" when there are none:
+// <exe dir>/../Resources/app (the .app layout tools/saepack.sh makes), else
+// app/ in the working directory (an APK from tools/saepack-android.sh: the
+// Android backend copies the app's assets out and runs it among them).
 bundled_app_dir_(exe: string) -> string {
     d = string.concat(dir_of_(exe), "../Resources/app")
-    if fs.exists("${d}/app.json") == 1 { return d }
-    if fs.exists("${d}/index.ts") == 1 { return d }
-    if fs.exists("${d}/index.js") == 1 { return d }
+    if is_app_dir_(d) == 1 { return d }
+    if is_app_dir_("app") == 1 { return "app" }
     return ""
 }
 
@@ -2832,7 +3369,12 @@ base_name_(d: string) -> string {
 // sae <url | page>             the browser
 // sae --app <dir>              an app, without browser chrome
 // sae (in a packaged .app)     the app bundled beside the binary
-@c_callback
+// sae (in an APK)              the app among the files it runs in
+main() {
+    code = sae_main(os.args_get(1), os.args_get(2), os.argv0())
+    if code != 0 { exit(code) }
+}
+
 sae_main(arg1: string, arg2: string, exe: string) -> int {
     app = ""
     start_url = arg1
@@ -2859,6 +3401,9 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         }
         title = app_setting_(manifest, "name", base_name_(app))
         app_name_ = own_(title)
+        bundled = 0
+        if arg1 == "" { bundled = 1 }
+        app_key_ = app_storage_key_(app, exe, bundled)
         w = app_setting_int_(manifest, "width", 800)
         h = app_setting_int_(manifest, "height", 600)
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
@@ -2879,7 +3424,10 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         pn, _ = string.to_int(port)
         ui.enable_test_server_root(pn, root)
     }
+    // The page lives as long as the window, so it is not freed here: a
+    // desktop backend's window_run returns as the process ends, and
+    // Android's returns at once (the platform's loop runs the app from
+    // then on, through the page's handlers).
     ui.window_run(title, w, h, root)
-    if b.page != null { page_free_(b.page as *Page) }
     return 0
 }

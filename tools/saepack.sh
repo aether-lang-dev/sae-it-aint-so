@@ -3,6 +3,10 @@
 #
 #   tools/saepack.sh <app-dir> [out-dir] [bundle.identifier]
 #
+# The bundle identifier (default dev.aether.sae.<name>) is what the app's
+# storage is keyed by at run time: give two apps with the same name
+# different ones.
+#
 # <app-dir> is what `sae --app <app-dir>` runs: its pages (index.ts, ...) and an
 # optional app.json ({ "name", "start", "width", "height" }). The result is
 # <out-dir>/<name>.app (out-dir defaults to target/apps):
@@ -97,6 +101,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# No entitlements: the app is not sandboxed, and app.json capabilities.http
+# is enforced by sae itself. A sandboxed (Mac App Store) build would add
+# com.apple.security.network.client exactly when that list is not empty.
 codesign --force --sign - "$fw"/*.dylib 2>/dev/null || true
 codesign --force --sign - "$app"
 echo "saepack: $app"

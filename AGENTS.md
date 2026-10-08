@@ -14,9 +14,9 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | Path | What |
 |---|---|
 | `src/sae_host.ae` | The browser: window and chrome, history, fetch, one `Page` (JSContext, a `ui` handle stack and a `vg` node stack) per load, and every page-API host function (`sae_ui_*`, `sae_vg_*`, `sae_bc_*`) |
-| `src/sae_rom.c` | The C that must be C: `main()` and the stdout handle |
+| `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
 | `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
-| `services/` | One module per effect a page can ask for (`files`, `shell`), each confined by its imports; `docs/architecture.md` |
+| `services/` | One module per effect a page can ask for (`files`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened), each confined by its imports; `docs/architecture.md` |
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`) |
@@ -38,8 +38,9 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
    veto hides, add a narrow kernel helper (as `now_ns_` wraps the clock)
    rather than dropping the line.
 2. Its `reg_(...)` line in `api_register_`.
-3. If it reaches the file system or the system, it goes through a service
-   (`services/`), never `std.fs` directly.
+3. If it reaches the file system, the system or the network, it goes
+   through a service (`services/`), never `std.fs` or `client.request`
+   directly; a network call in app mode is held to app.json `capabilities.http` there.
 4. A page in `site/` and an `it` in `tests/spec_nav.ae`. If the spec needs a
    new kind of question, add a verb to `tests/lib/saedriver.ae`.
 
@@ -61,9 +62,16 @@ lower/run-tests.sh                           # 38 lowerer tests
 tests/run_spec.sh                            # spec_nav: 45 specs
 tests/check_page_veto.sh                     # page veto present and enforced
 tests/check_layers.sh                        # services held to their imports
+../aether/build/ae run tests/spec_http_grants.ae   # capabilities.http matching, no window
+SAE_TEST_APP=tests/apps/httplist tests/run_spec.sh spec_app_httplist
+SAE_TEST_APP=tests/apps/nohttp tests/run_spec.sh spec_app_nohttp
+tests/check_storage_scope.sh                   # storage per installed app, per file folder
+tests/run_spec.sh spec_timers                  # ui.after/sleep/frame, setTimeout and friends
+tests/run_spec.sh spec_globals                 # the global surface, browser
+SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$PWD/target/globals-appdata tests/run_spec.sh spec_globals
 ```
 
-Toolchain: Aether 0.778.0 or later (`pins`), installed, or a dev tree
+Toolchain: Aether 0.791.0 or later (`pins`), installed, or a dev tree
 (`$SAE_AETHER_HOME`, default `../aether`, built with `make compiler ae
 stdlib`; `SAE_AETHER_HOME=none` builds against the installed one even when
 `../aether` exists), and aeb at `350dfc4` or

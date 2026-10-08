@@ -1,0 +1,80 @@
+// spec_app_httplist.ae — app.json capabilities.http, end to end: an app
+// reaches only the URLs its prefixes cover, server first, then path, each
+// redirect hop included, and is told why otherwise.
+//   SAE_TEST_APP=tests/apps/httplist tests/run_spec.sh spec_app_httplist
+// (spec_http_grants has the matching rules without a socket.)
+import std.spec
+import std.string
+import std.fs
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+const WHY = "(app.json capabilities.http lists what it may)"
+
+// How many times sae-driver's console has printed `text`.
+console_count(text: string) -> int {
+    p = os_getenv("SAE_TEST_LOG")
+    if p == null { return 0 }
+    body, err = fs.read(p)
+    if string.length(err) > 0 { return 0 }
+    parts = string.split(body, text)
+    return string.string_array_size(parts) - 1
+}
+
+refused(label: string, url: string, msg: string) {
+    b.assert_text("${label}: ok=false this app may not reach ${url} ${WHY}", msg)
+    spec.assert_true(b.wait_for_console("sae: refused: this app may not reach ${url} ${WHY}"), "${msg}: logged")
+    spec.assert_eq(console_count("this app may not reach ${url} "), 1, "${msg}: logged once")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "app mode: capabilities.http is the network") {
+        spec.it("a listed prefix is reachable, by callback and by await") callback {
+            b.click("Listed")
+            b.assert_text("listed: 200 echo: app", "the page server answered")
+            b.click("Await listed")
+            b.assert_text("await listed: 200 echo: awaited", "http.fetch too")
+        }
+        spec.it("the listed server outside the prefix is refused, and a .. segment cannot climb out") callback {
+            b.click("Outside the path")
+            refused("outside the path", "http://127.0.0.1:8091/old-home", "outside the path")
+            b.click("Dot segments")
+            refused("dot segments", "http://127.0.0.1:8091/api/../old-home", "dot segments")
+            b.click("Encoded dots")
+            refused("encoded dots", "http://127.0.0.1:8091/api/%2e%2e/old-home", "%2e%2e")
+        }
+        spec.it("another port is refused before any socket") callback {
+            b.click("Other port")
+            refused("other port", "http://127.0.0.1:8092/api/echo?msg=x", "8092, where nothing listens")
+            b.click("Await other port")
+            refused("await other port", "http://localhost:8091/api/json", "http://localhost means port 80, not the live 8091")
+        }
+        spec.it("*.localhost:8091 covers one leftmost label, not two") callback {
+            b.click("Wildcard")
+            b.assert_text("wildcard: 200 echo: wild", "api.localhost:8091 reached")
+            b.click("Two labels")
+            refused("two labels", "http://a.b.localhost:8091/api/echo?msg=x", "a.b.localhost")
+        }
+        spec.it("a redirect is followed only while every hop is covered") callback {
+            b.click("Redirect within")
+            b.assert_text("redirect within: 200 {\"n\":42,\"items\":[\"a\",\"b\",\"c\"]}", "a hop inside a prefix is followed")
+            b.click("Redirect out of the path")
+            b.assert_text("redirect path: ok=false redirected to http://127.0.0.1:8091/old-home: this app may not reach http://127.0.0.1:8091/old-home ${WHY}",
+                "the same server, outside the prefix")
+            b.click("Redirect out")
+            b.assert_text("redirect out: ok=false redirected to http://localhost:8091/api/json: this app may not reach http://localhost:8091/api/json ${WHY}",
+                "another server")
+            spec.assert_eq(console_count("sae: refused: redirected to http://localhost:8091/api/json"), 1, "logged once")
+        }
+        spec.it("app:/ pages are not network: navigation is unaffected") callback {
+            b.click("Next page")
+            b.assert_text("Second page", "navigated")
+            b.click("Back")
+            b.assert_text("result: (none)", "and back")
+        }
+    }
+    return spec.run_summary(fw)
+}

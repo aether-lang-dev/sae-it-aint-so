@@ -2,7 +2,7 @@
 # tests/check_page_veto.sh — the page veto is in place and enforced.
 #
 # 1. Every function a page can reach (each one api_register_ in
-#    src/sae_host.ae installs with reg_ or quickjs.function) opens with the
+#    src/sae_host.ae installs with reg_, glob_fn_ or quickjs.function) opens with the
 #    page veto: one `hide` line, the same in all of them (see "The page
 #    veto" in src/sae_host.ae).
 # 2. The compiler in use enforces that line where it matters: a hidden
@@ -42,7 +42,7 @@ n=0
 # The functions api_register_ hands the engine: the last argument of each
 # reg_(...) and quickjs.function(...) call inside it.
 fns=$(awk '/^api_register_\(/ { on = 1; next } on && /^}/ { exit }
-           on && /(reg_|quickjs\.function)\(/ { line = $0; sub(/\)[[:space:]]*$/, "", line); n = split(line, a, ","); f = a[n]; gsub(/[[:space:]]/, "", f); print f }' "$HOST" | sort -u)
+           on && /(reg_|glob_fn_|quickjs\.function)\(/ { line = $0; sub(/\)[[:space:]]*$/, "", line); n = split(line, a, ","); f = a[n]; gsub(/[[:space:]]/, "", f); print f }' "$HOST" | sort -u)
 for fn in $fns; do
     n=$((n + 1))
     first=$(awk -v fn="$fn" 'index($0, fn "(ctx: ptr") == 1 { getline; print; exit }' "$HOST")
@@ -68,7 +68,8 @@ for f in env_ fetch_ load_ go_ run_nav_ page_new_ page_free_ page_run_ browser_n
          build_chrome_ set_status_ sae_main engine_new_ engine_eval_ engine_dispose_; do
     echo "$f() -> int { return 0 }" >> "$work/head.ae"
 done
-lower_stub='lower() -> int { return 0 }'
+lower_stub='lower() -> int { return 0 }
+net() -> int { return 0 }'
 
 probe() {   # probe <name> <expect: accept|reject> <body lines>
     name=$1; expect=$2; body=$3
@@ -101,5 +102,6 @@ probe os_in_block reject '    {
 probe client_in_closure reject '    g = || { _r = client.request("GET", "http://example.com") }
     g()'
 probe kernel_fn reject '    if n > 0 { _x = fetch_() }'
+probe net_service reject '    if n > 0 { _x = net() }'
 
 exit $fails

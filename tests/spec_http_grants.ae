@@ -1,0 +1,111 @@
+// spec_http_grants.ae — services/net's matching of app.json
+// capabilities.http, without a window or a socket: which prefixes it
+// accepts, and which URLs each covers. spec_app_httplist is end to end.
+//
+//   ae run tests/spec_http_grants.ae          (from sae's root)
+import std.spec
+import std.string
+import services.net
+
+const WHY = " (app.json capabilities.http lists what it may)"
+
+allowed(url: string) -> int {
+    if net.refusal(url) == "" { return 1 }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    spec.describe(fw, "capabilities.http: deny by default") {
+        spec.it("the browser checks nothing") callback {
+            net.configure(0)
+            spec.assert_eq(allowed("https://anything.example/"), 1, "browser mode is not held to a list")
+        }
+        spec.it("an app with no list reaches nothing, and says why") callback {
+            net.configure(1)
+            spec.assert_eq(net.granted(), 0, "nothing granted")
+            spec.assert_str_eq(net.refusal("http://127.0.0.1:8091/api/echo"),
+                "this app may not reach http://127.0.0.1:8091/api/echo${WHY}", "names the URL and capabilities.http")
+        }
+    }
+    spec.describe(fw, "capabilities.http: server, then path") {
+        spec.it("scheme, host and port must all match; then the path prefix") callback {
+            net.configure(1)
+            spec.assert_str_eq(net.allow("http://127.0.0.1:8091/api/"), "", "accepted")
+            spec.assert_eq(net.granted(), 1, "granted")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/echo?x=1"), 1, "under the prefix")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/old-home"), 0, "outside the prefix")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/apix"), 0, "the prefix as written")
+            spec.assert_eq(allowed("http://127.0.0.1:8091"), 0, "no path is /")
+            spec.assert_eq(allowed("http://127.0.0.1:8092/api/"), 0, "another port")
+            spec.assert_eq(allowed("https://127.0.0.1:8091/api/"), 0, "another scheme")
+            spec.assert_eq(allowed("http://localhost:8091/api/"), 0, "another name for the host")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/../old-home"), 0, "a .. segment")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/./x"), 0, "a . segment")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/x?y=/../"), 1, "dots in the query are not segments")
+        }
+        spec.it("dot segments spelt with escapes or backslashes count as dot segments") callback {
+            net.configure(1)
+            _a = net.allow("http://127.0.0.1:8091/api/")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/%2e%2e/old-home"), 0, "%2e%2e")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/%2E%2E/old-home"), 0, "%2E%2E")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/.%2e/old-home"), 0, ".%2e")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/%2e./old-home"), 0, "%2e.")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/%2e/x"), 0, "%2e alone")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/x/%2e%2e"), 0, "%2e%2e at the end")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/x%2f..%2fold-home"), 0, "%2f hiding the segment boundaries")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/x%2F%2e%2e%2F%2e%2e%2Fold-home"), 0, "%2F and %2e together")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/..%5cold-home"), 0, "%5c, a backslash")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/..\\old-home"), 0, "a literal backslash")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/%252e%252e/old-home"), 0, "encoded twice")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/projects/group%2Fproject/issues"), 1, "an encoded slash that is not a dot segment stays usable")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api/v1.2/x..y/%2ex"), 1, "dots inside a segment are not dot segments")
+            spec.assert_eq(allowed("http://127.0.0.1:8091/api%2fx"), 0, "the prefix is matched as written, before decoding")
+        }
+        spec.it("the server is compared parsed, not as text") callback {
+            net.configure(1)
+            spec.assert_str_eq(net.allow("https://API.example.com"), "", "no path: any path")
+            spec.assert_eq(allowed("https://api.example.com/v1"), 1, "443 implied, host case")
+            spec.assert_eq(allowed("https://api.example.com:443/v1"), 1, "443 written")
+            spec.assert_eq(allowed("https://api.example.com:8443/v1"), 0, "another port")
+            spec.assert_eq(allowed("https://api.example.com.evil.test/"), 0, "a longer name the text prefix would match")
+            spec.assert_eq(allowed("https://api.example.com@evil.test/"), 0, "userinfo")
+            spec.assert_eq(allowed("http://api.example.com/v1"), 0, "http is not https")
+        }
+        spec.it("URLs that could be read two ways are refused") callback {
+            net.configure(1)
+            _a = net.allow("http://127.0.0.1:8091/")
+            spec.assert_eq(allowed("http://127.0.0.1:8091@evil.test/"), 0, "userinfo after the port")
+            spec.assert_eq(allowed("http://127.0.0.1:8091?x/"), 0, "a query in the authority")
+            spec.assert_eq(allowed("http://127.0.0.1%3a8091/"), 0, "an escape")
+            spec.assert_eq(allowed("http://[::1]:8091/"), 0, "IPv6, which the client does not parse")
+            spec.assert_eq(allowed("ftp://127.0.0.1:8091/"), 0, "not http(s)")
+        }
+    }
+    spec.describe(fw, "capabilities.http: the wildcard") {
+        spec.it("*. is exactly one leftmost label") callback {
+            net.configure(1)
+            spec.assert_str_eq(net.allow("https://*.example.com/"), "", "accepted")
+            spec.assert_eq(allowed("https://api.example.com/x"), 1, "one label")
+            spec.assert_eq(allowed("https://example.com/"), 0, "not the bare name")
+            spec.assert_eq(allowed("https://a.b.example.com/"), 0, "not two labels")
+            spec.assert_eq(allowed("https://api.example.com:444/"), 0, "the port still matches exactly")
+            spec.assert_eq(allowed("https://apiexample.com/"), 0, "a label boundary, not a suffix")
+            spec.assert_str_eq(net.allow("http://*.localhost:8091/api/"), "", "*.localhost is the one single-label exception")
+            spec.assert_eq(allowed("http://api.localhost:8091/api/x"), 1, "api.localhost")
+            spec.assert_eq(allowed("http://localhost:8091/api/x"), 0, "not localhost itself")
+        }
+        spec.it("entries it does not understand allow nothing, and say so") callback {
+            net.configure(1)
+            spec.assert_contains(net.allow("https://*.com/"), "at least two labels", "*.com")
+            spec.assert_contains(net.allow("http://*.lan:8000/"), "at least two labels", "*.lan")
+            spec.assert_contains(net.allow("https://a.*.example.com/"), "ignoring", "inner wildcard")
+            spec.assert_contains(net.allow("https://*example.com/"), "ignoring", "partial label")
+            spec.assert_contains(net.allow("https://api.example.com/v1/*"), "no wildcard in the path", "path wildcard")
+            spec.assert_contains(net.allow("api.example.com/"), "ignoring", "no scheme")
+            spec.assert_contains(net.allow("http://h:99999/"), "ignoring", "bad port")
+            spec.assert_eq(net.granted(), 0, "none of them granted anything")
+        }
+    }
+    return spec.run_summary(fw)
+}
