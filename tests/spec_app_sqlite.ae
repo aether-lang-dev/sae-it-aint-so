@@ -1,0 +1,146 @@
+// spec_app_sqlite.ae — app.json capabilities.sqlite, end to end, through
+// pages: sqlite.<name> for a sought, declared database; all/get/run with
+// bound parameters; a transaction committed, and one rolled back when its
+// callback throws; a burst of concurrent calls on one actor; the escape
+// routes refused; an unsought database absent, an undeclared one refused
+// at load; work in flight when a page is left.
+//
+//   SAE_TEST_APP=tests/apps/sqlite_demo tests/run_spec.sh spec_app_sqlite
+//
+// SAE_SQLITE_PHASE=2 is the second launch against the same storage
+// (tests/check_sqlite_relaunch.sh): rows kept, migrations not applied again.
+import std.spec
+import std.string
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+const WHY = "not available to an app: a database is one file (ATTACH, DETACH, load_extension, VACUUM and PRAGMAs naming a directory are switched off)"
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    phase = os_getenv("SAE_SQLITE_PHASE")
+    if phase != null && phase == "2" {
+        spec.describe(fw, "app mode: sqlite across a relaunch") {
+            spec.it("the rows written in the first launch are still there") callback {
+                b.assert_text("sqlite: object notes: object", "the page loaded")
+                b.click("List")
+                b.assert_text("result: list: 1:seed:1.5:0 2:milk:2.25:0", "the first launch's rows")
+            }
+            spec.it("the migrations were applied in the first launch only") callback {
+                b.click("Migrations")
+                b.assert_text("result: migrations: db/001_init.sql db/002_tags.sql", "both recorded")
+                spec.assert_true(b.wait_for_console("sae: sqlite notes: /"), "the database was opened")
+                spec.assert_false(b.console_contains("applied db/001_init.sql"), "001 not applied again")
+                spec.assert_false(b.console_contains("applied db/002_tags.sql"), "002 not applied again")
+            }
+        }
+        return spec.run_summary(fw)
+    }
+    spec.describe(fw, "app mode: sqlite.<name> for a sought, declared database") {
+        spec.it("the page gets sqlite.notes, and the migrations ran before it") callback {
+            b.assert_text("sqlite: object notes: object", "the page loaded with sqlite.notes")
+            b.click("Migrations")
+            b.assert_text("result: migrations: db/001_init.sql db/002_tags.sql", "both recorded in _sae_migrations")
+            b.click("Reset")
+            b.assert_text("result: reset: 1 row", "a known start: the seed row")
+        }
+        spec.it("run binds ? parameters and reports lastId and changes") callback {
+            b.click("Insert")
+            b.assert_text("result: inserted id=2 changes=1", "insert")
+        }
+        spec.it("all returns typed rows as objects; get takes $named parameters and gives null for no row") callback {
+            b.click("List")
+            b.assert_text("result: list: 1:seed:1.5:0 2:milk:2.25:0", "integer, text, real")
+            b.click("Get named")
+            b.assert_text("result: named: seed missing: null", "named, and null")
+        }
+        spec.it("a transaction commits as one, and resolves to the callback's value") callback {
+            b.click("Update in tx")
+            b.assert_text("result: tx done: 1 done, 3 rows", "update, insert, insert, count, inside the transaction")
+            b.click("List")
+            b.assert_text("result: list: 1:seed:1.5:0 2:milk:2.25:1 3:bread:null:0", "committed")
+        }
+        spec.it("a transaction whose callback throws is rolled back, and the error is the caller's") callback {
+            b.click("Failing tx")
+            b.assert_text("result: tx rolled back: changed my mind; 3 -> 3 rows", "nothing of it kept")
+        }
+        spec.it("a SQL error or a parameter mismatch rejects with an Error carrying the reason") callback {
+            b.click("Bad SQL")
+            b.assert_text("result: error: no such table: nowhere", "the engine's message")
+            b.click("Bad params")
+            b.assert_text("result: error: the statement has 2 parameter(s), 1 given", "counted")
+        }
+        spec.it("twenty concurrent calls run on one actor, in order") callback {
+            b.click("Burst")
+            b.assert_text("result: burst: 3 -> 23 rows, ids in order: true", "all ran, in the order asked")
+            b.click("Reset")
+            b.assert_text("result: reset: 1 row", "and cleared")
+        }
+    }
+    spec.describe(fw, "app mode: the escape routes are off") {
+        spec.it("ATTACH, DETACH, load_extension, VACUUM INTO and a directory PRAGMA are refused; a harmless PRAGMA is not") callback {
+            b.click("Escapes page")
+            b.assert_text("escape: (none)", "the escapes page")
+            b.click("ATTACH")
+            b.assert_text("escape: ATTACH: ${WHY}", "attach")
+            b.click("DETACH")
+            b.assert_text("escape: DETACH: ${WHY}", "detach")
+            b.click("load_extension")
+            b.assert_text("escape: load_extension: ${WHY}", "load_extension")
+            b.click("VACUUM INTO")
+            b.assert_text("escape: VACUUM INTO: ${WHY}", "vacuum into")
+            b.click("PRAGMA directory")
+            b.assert_text("escape: PRAGMA directory: ${WHY}", "temp_store_directory")
+            b.click("PRAGMA harmless")
+            b.assert_text("escape: PRAGMA harmless RAN", "user_version is the app's own")
+            b.click("Back home")
+            b.assert_text("sqlite: object notes: object", "home")
+        }
+    }
+    spec.describe(fw, "app mode: seeking databases") {
+        spec.it("a page that seeks no database has no sqlite object, by any route") callback {
+            b.click("No-seek page")
+            b.assert_text("nosql: undefined", "absent, not merely unnamed")
+            b.click("Back home")
+            b.assert_text("sqlite: object notes: object", "home")
+        }
+        spec.it("an optional database the app does not declare is simply absent") callback {
+            b.click("Optional page")
+            b.assert_text("optional: notes=object nope=undefined", "notes yes, nope no")
+            b.click("Back home")
+            b.assert_text("sqlite: object notes: object", "home")
+        }
+    }
+    spec.describe(fw, "app mode: two pages, one actor") {
+        spec.it("a slow query's answer for a page that was left is dropped; the next page's query runs after it") callback {
+            b.click("Slow then leave")
+            b.assert_text("second: stray rows=0", "the second page's query answered")
+            b.assert_no_text("should never show", "the first page's callback did not run")
+            b.click("Back home")
+            b.assert_text("sqlite: object notes: object", "home")
+        }
+        spec.it("a page left mid-transaction has it rolled back; the next page sees none of it and does not wait") callback {
+            b.click("Open tx then leave")
+            b.assert_text("second: stray rows=0", "rolled back before the second page's query")
+            spec.assert_true(b.wait_for_console("sae: sqlite notes: a page left its transaction open; rolled back"), "logged")
+            b.click("Back home")
+            b.assert_text("sqlite: object notes: object", "home")
+            b.click("List")
+            b.assert_text("result: list: 1:seed:1.5:0", "only the seed row")
+            b.click("Insert")
+            b.assert_text("result: inserted id=2 changes=1", "a row for the relaunch to find")
+        }
+    }
+    // Last: a refused page is a dead end in app mode (no chrome to go back with).
+    spec.describe(fw, "app mode: seeking a database app.json does not declare") {
+        spec.it("is refused before any of the page runs, naming the database") callback {
+            b.click("Unknown page")
+            b.assert_text("This page cannot run here:", "notice")
+            spec.assert_contains(b.page_texts(), "seeks database nope, which this app's app.json does not grant", "why")
+            b.assert_no_text("You should not see this", "none of it ran")
+        }
+    }
+    return spec.run_summary(fw)
+}

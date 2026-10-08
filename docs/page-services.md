@@ -327,7 +327,25 @@ outside-the-base dialog; and what the "Folder access" screen looks like.
 
 ## 6. SQLite databases (agreed design, app mode)
 
-**Status: agreed with Paul on 2026-10-08; version 1 not built yet.** The
+**Status: agreed with Paul on 2026-10-08; version 1 built on 2026-10-08
+(branch wave1/sqlite).** What is built: `capabilities.sqlite` with
+`migrations`; `"seeks database <name>"` in the lowerer; `sqlite.<name>`
+with `all`/`get`/`run`/`transaction` on one `SqliteWorker` actor per
+database (`src/sae_host.ae`, the `wave1/sqlite` section); the engine in
+`services/sqlite` (held by `tests/check_layers.sh` to importing
+`contrib.sqlite` alone); migrations applied once and recorded in
+`_sae_migrations`, a failing one refusing the app; the escape routes off in
+the engine (an authorizer written in Aether and handed to
+`sqlite3_set_authorizer` as a typed function pointer, `SQLITE_LIMIT_ATTACHED`
+0, extension loading off), which also costs a plain `VACUUM` in this
+version. `contrib.sqlite` exposes none of those calls, nor column names
+and types, so the service declares its own externs against libsqlite3
+(`asks/sqlite-authorizer.md`). Specs: `tests/spec_sqlite_service.ae` (the
+service, no window), `tests/spec_app_sqlite.ae` on `tests/apps/sqlite_demo`
+(pages, the escapes, two pages on one actor), `tests/check_sqlite_relaunch.sh`
+(migrations once across a relaunch; the refused app). Versions 2 and 3
+below are not built; an app.json naming `bundled` or `readonly` is refused
+at start saying so. The
 container creates, prepares and hands in a database; the page never deals
 with files. aether's `contrib.sqlite` is the engine (it already builds for
 Android: LisMusic).

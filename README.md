@@ -71,6 +71,13 @@ The `ui` object (each builder returns its widget handle):
 | showing | `set_visible(h, on)`: hide a view and keep it (and its timers, vg scenes) alive |
 | reactive state | `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` |
 
+An app's databases (`"seeks database <name>"`; App mode below), every call a promise, run on an actor off the UI thread:
+
+| | |
+|---|---|
+| `sqlite.<name>` | `all(sql, params?)` the rows as objects, `get(sql, params?)` the first or `null`, `run(sql, params?)` → `{ changes, lastId }`; `params` an array for `?` or an object for `$name` (a number, string, boolean or null each) |
+| transactions | `transaction(async tx => { ... })`: `BEGIN`, the callback with `tx.all/get/run`, `COMMIT`, or `ROLLBACK` if it throws; resolves to the callback's value |
+
 A page names only widgets it made: a handle below the page's first widget
 (the address bar, the status line, the browser's own content area, a
 previous page's widgets) makes `get_text`, `set_text`, `clear` and `into`
@@ -263,7 +270,9 @@ say it, in `app.json`; the kernel enforces it on every call:
   grant. `$APPDATA` is the app's own folder.
 - `shell.open(url)`: hands a URL to the system (the default browser), for
   the granted prefixes.
-- A web page has no `fs` and no `shell` at all.
+- `sqlite.<name>`: the app's databases, declared in `app.json` under
+  `capabilities.sqlite` with their migrations (App mode, below).
+- A web page has no `fs`, no `shell` and no `sqlite` at all.
 
 A page says at its top which privileges it seeks, one per line:
 
@@ -271,6 +280,7 @@ A page says at its top which privileges it seeks, one per line:
 "seeks local-filesystem";   // unlocks fs
 "seeks outgoing-http";      // unlocks http
 "seeks open-urls";          // unlocks shell.open
+"seeks database notes";     // unlocks sqlite.notes (one line per database)
 ```
 
 `ui`, `vg`, `storage`, `browserContext` and the timer globals (`setTimeout`
@@ -505,6 +515,51 @@ after Tauri's HTTP-plugin scopes:
 - Browser mode has no list: a web page reaches its own origin, and another
   origin only with that origin's consent (the CORS-alike, "Browser security
   rules").
+
+`capabilities.sqlite` gives an app databases it owns, by name, the engine
+being Aether's `contrib.sqlite` (the same one LisMusic builds for Android):
+
+```json
+"capabilities": { "sqlite": { "notes": { "migrations": ["db/001_init.sql", "db/002_tags.sql"] } } }
+```
+
+- **The name is the handle.** A page says `"seeks database notes";` and
+  gets `sqlite.notes`; sae decides where the file lives (the app's storage
+  folder, keyed per installed app as `storage` is, under `.sqlite/`), and no
+  page ever names a path. An unsought database is absent; one app.json does
+  not declare is refused at load (`seeks database nope, which this app's
+  app.json does not grant`).
+- **Migrations are sae's job.** At start, before any page runs, sae applies
+  in order the listed scripts (paths inside the app, each a file of SQL,
+  several statements allowed) the database has not seen, each in a
+  transaction, recording it in `_sae_migrations`. A migration that fails
+  keeps nothing and refuses the app with the reason (`sqlite notes:
+  migration db/002_tags.sql failed: no such table: x`, in the window and on
+  the console, exit status 1 under `SAE_NO_WINDOW`). Small starter data is
+  just `INSERT`s in a migration.
+- **One actor per database.** `all`, `get`, `run` and `transaction` return
+  promises; each call is a job on the database's own Aether actor, off the
+  UI thread, run in the order the page made them, its answer delivered on
+  the UI thread (the http pattern). A slow query never freezes the window.
+  A transaction holds the database: calls from other callers wait until it
+  ends (the page's own plain calls join it), and a page left mid-transaction
+  has it rolled back before anything else runs.
+- **Values are parameters.** `?` with an array, `$name` with an object; a
+  count that does not match the statement is an error, not a `NULL`. One
+  statement per call. Rows come back as plain objects, `INTEGER` as a
+  number, `REAL` as a number, `TEXT` as a string, `NULL` as `null` (`BLOB`
+  as text in this version).
+- **Escape routes off, in the engine.** Every connection has an authorizer
+  that denies `ATTACH`, `DETACH` (so `VACUUM` too, which attaches a file:
+  in place or `INTO`), `load_extension()` and the directory PRAGMAs
+  (`temp_store_directory`, `data_store_directory`); `SQLITE_LIMIT_ATTACHED`
+  is 0 and extension loading is off. A refused statement rejects with
+  `not available to an app: a database is one file (...)`. This is the
+  engine's answer, not a reading of the SQL: a statement handed to
+  `contrib.sqlite` on the same connection is refused the same way
+  (`tests/spec_sqlite_service.ae`).
+- Not yet (`docs/page-services.md`, 6): bundled read-only databases and
+  large seeds (versions 2 and 3), binary columns, a page-named database.
 
 Pages are `app:` URLs, mapped like the dev page server maps
 a site: `app:/about` is `<dir>/about.ts` (or `.js`), `app:/` the index, a

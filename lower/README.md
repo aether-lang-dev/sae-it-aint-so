@@ -54,11 +54,17 @@ including on a promise an http callback resolves.
 ## Directives: seeks and hide
 
 A page's first statements may be `"seeks ..."` lines, one privilege each
-(`local-filesystem`, `outgoing-http`, `open-urls`), optionally scoped
+(`local-filesystem`, `outgoing-http`, `open-urls`, `database <name>`),
+optionally scoped
 (`"seeks outgoing-http GET,POST /api/*"`) and optionally marked
-`, reduced functionality without`. They unlock `fs`, `http` and `shell`,
+`, reduced functionality without`. They unlock `fs`, `http`, `shell` and
+`sqlite`,
 which a page may not name otherwise: `page.ts:3:1: fs needs "seeks
-local-filesystem" at the top of the page`. The lowerer checks the grammar
+local-filesystem" at the top of the page`. `database` takes the database's
+name (a letter or `_`, then letters, digits and `_`), one line per database;
+the name is part of the privilege (`"database notes"` in `page_seeks()`),
+so `"seeks database notes"` unlocks `sqlite` and the host installs
+`sqlite.notes`. The lowerer checks the grammar
 (methods, patterns, one privilege per line, required or optional but not
 both) and keeps what it found for the host: `page_seeks()` (required
 privileges), `page_optional()` and `page_scopes()`. The host checks them

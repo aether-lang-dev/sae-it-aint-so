@@ -2525,7 +2525,7 @@ sqlite_start_(manifest: ptr) -> string {
                 _c3 = sqlite.close(db)
                 return "sqlite ${name}: migration ${mv} failed: ${merr}"
             }
-            if applied == 1 { println("sae: sqlite ${name}: applied ${mv}") }
+            if applied == 1 { say_("sae: sqlite ${name}: applied ${mv}") }
         }
         d = heap.new(SqliteDb)
         d.name = own_(name)
@@ -2537,7 +2537,7 @@ sqlite_start_(manifest: ptr) -> string {
         d.tx_seq = 0
         d.waiting = list.new()
         list.add(sqlite_dbs_, d as ptr)
-        println("sae: sqlite ${name}: ${path}")
+        say_("sae: sqlite ${name}: ${path}")
     }
     _ib = sqlite_inbox_()
     return ""
@@ -2549,7 +2549,7 @@ sqlite_refuse_app_(b: *Browser, why: string) {
     ui.text(mem.long_to_ptr(b.content), "This app cannot start:")
     ui.text(mem.long_to_ptr(b.content), why)
     set_status_(b, "error: ${why}")
-    println("sae: ${why}")
+    say_("sae: ${why}")
     b.last_ok = 0
 }
 
@@ -2661,7 +2661,7 @@ sqlite_rollback_stale_(d: *SqliteDb) {
     j.seq = d.tx_seq
     j.result = ""
     j.err = ""
-    println("sae: sqlite ${d.name}: a page left its transaction open; rolled back")
+    say_("sae: sqlite ${d.name}: a page left its transaction open; rolled back")
     sqlite_send_(d, j)
 }
 

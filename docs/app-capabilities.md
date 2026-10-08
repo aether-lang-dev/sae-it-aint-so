@@ -39,6 +39,13 @@ Aether's `hide` (`aether/docs/hide-and-seal.md`):
   refusal delivered as `res.ok === false` with the reason in `res.error`.
 - **`shell.open`**: URL prefixes the app may hand to the system (the default
   browser for `https:`, Mail for `mailto:`).
+- **`sqlite`**: databases the app owns, by name, each with its ordered
+  `migrations` (files of SQL inside the app), applied at start before any
+  page runs; a failing one refuses the app with the reason. The file lives in
+  the app's storage folder, keyed per installed app; no page names it. Held
+  in `services/sqlite`, the one module that opens a connection, with the
+  escape routes (`ATTACH`, `DETACH`, `VACUUM`, `load_extension`, directory
+  PRAGMAs) refused by the engine's own authorizer (README, App mode).
 - **`fs.read` / `fs.write`**: directory prefixes, with `$APPDATA` (the app's
   own folder, created on first use), `$HOME`, `$DOCUMENTS`, `$DOWNLOADS`,
   `$DESKTOP` and `$TEMP` expanded. Every path is made absolute, its `.` and
@@ -100,10 +107,14 @@ A line is `seeks <privilege> [<methods> <pattern>][, reduced functionality witho
   | `local-filesystem` | `fs` | never | if `app.json` grants `fs` |
   | `outgoing-http` | `http` | yes: its own origin, and others with their consent (the CORS-alike) | if `app.json` grants `http` |
   | `open-urls` | `shell.open` | never | if `app.json` grants `shell.open` |
+  | `database <name>` | `sqlite.<name>` (one line per database) | never | if `app.json` declares that name under `capabilities.sqlite` |
 
   `ui`, `vg`, `storage` and `browserContext` every page has; they are not
   sought.
-- **A scope** narrows it to what the page will actually do. Only
+- **A scope** narrows it to what the page will actually do. `database`
+  takes the database's name, which is the whole privilege: `"seeks database
+  notes"` and `"seeks database atlas"` are two privileges, each required or
+  optional on its own. Otherwise only
   `outgoing-http` takes one so far: a comma-separated list of methods and a
   URL pattern. Several lines give several scopes; a privilege is scoped on
   every line or on none. (Scopes for the other two are designed, below, and
@@ -126,10 +137,13 @@ page's own origin; an app's pages have none, so they name the full URL.
 ### Checked three times
 
 - **Naming needs seeking.** A page that does not seek a privilege has no
-  object for it at all (`globalThis["ht" + "tp"]` is undefined too), and
-  one that names `fs`, `http` or `shell`
+  object for it at all (`globalThis["ht" + "tp"]` is undefined too; a page
+  that seeks no database has no `sqlite`, and `sqlite` holds only the
+  databases sought), and
+  one that names `fs`, `http`, `shell` or `sqlite`
   without a line that unlocks it is refused when it is read, at the line:
-  `page.ts:12:5: fs needs "seeks local-filesystem" at the top of the page`.
+  `page.ts:12:5: fs needs "seeks local-filesystem" at the top of the page`
+  (`sqlite needs "seeks database <name>" at the top of the page`).
   A misspelt privilege, a method that is not one, a malformed pattern or
   two privileges on one line are refused the same way, at the line.
 - **Seeking needs granting.** Before a page runs, the kernel compares what

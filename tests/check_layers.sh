@@ -36,6 +36,21 @@ expect_imports services/shell/module.ae \
     "import ui (open_url)|import std.fs (read, write_atomic)|import std.string|import std.strarr"
 expect_imports services/net/module.ae \
     "import std.http.client (request)|import std.string|import std.strarr"
+expect_imports services/sqlite/module.ae \
+    "import contrib.sqlite as engine|import std.json|import std.string|import std.strarr"
+
+# contrib.sqlite (the engine) only in services/sqlite: every statement an app
+# runs goes through the one module that opens a connection with the escape
+# routes off (the authorizer, no attached databases, no extension loading).
+hits=$(grep -rnE '^import contrib\.sqlite' --include='*.ae' src services lower tools gen 2>/dev/null \
+      | grep -v '^services/sqlite/' || true)
+if [ -n "$hits" ]; then
+    echo "FAIL contrib.sqlite imported outside services/sqlite:"
+    echo "$hits" | sed 's/^/       /'
+    fail=1
+else
+    echo "ok   contrib.sqlite is imported only in services/sqlite"
+fi
 
 # ui.open_url, or a bare open_url from a selective import, only in services/shell.
 hits=$(grep -rnE '(^|[^_a-zA-Z0-9])open_url[[:space:]]*\(|import ui \([^)]*open_url' \

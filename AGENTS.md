@@ -15,8 +15,8 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 |---|---|
 | `src/sae_host.ae` | The browser: window and chrome, history, fetch, one `Page` (JSContext, a `ui` handle stack and a `vg` node stack) per load, and every page-API host function (`sae_ui_*`, `sae_vg_*`, `sae_bc_*`) |
 | `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
-| `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
-| `services/` | One module per effect a page can ask for (`files`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened), each confined by its imports; `docs/architecture.md` |
+| `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs`, `shell` and `sqlite` only in app mode) |
+| `services/` | One module per effect a page can ask for (`files`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `sqlite`: the app's databases, the one place the engine is named), each confined by its imports; `docs/architecture.md` |
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`) |
@@ -74,6 +74,9 @@ SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$PWD/target/globals-appdata test
 tests/run_spec.sh spec_webrules                # no ambient credentials, no Referer, the CORS-alike, coarse clocks
 SAE_TEST_APP=tests/apps/clocks tests/run_spec.sh spec_webrules   # app mode: full-resolution clocks
 tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 17 attempts, each refused and logged once
+../aether/build/ae run tests/spec_sqlite_service.ae   # services/sqlite: parameters, rows, migrations, escape routes, no window
+SAE_TEST_APP=tests/apps/sqlite_demo tests/run_spec.sh spec_app_sqlite   # sqlite.<name> through pages (resets its own rows)
+tests/check_sqlite_relaunch.sh                 # migrations once across a relaunch; a failing migration refuses the app
 ```
 
 Toolchain: Aether 0.791.0 or later (`pins`), installed, or a dev tree
