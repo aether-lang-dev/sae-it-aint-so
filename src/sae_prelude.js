@@ -99,7 +99,7 @@
 
   // each(list_state, key, render): a column of rows, one per item, keyed:
   // a row whose key stays is kept (re-rendered only if its item is another
-  // object), a row whose key goes is removed, new keys at the end are
+  // object or its index moved), a row whose key goes is removed, new keys at the end are
   // appended; a reorder or an insertion in the middle rebuilds the column.
   const each = (list, key, render) => {
     const keyOf = typeof key === "function" ? key : (it) => it[key];
@@ -116,7 +116,7 @@
       if (!incremental) {
         ui_.clear(container);
         rows = [];
-        ui_.into(container, () => { items.forEach((item, i) => rows.push({ key: keys[i], item, h: build(item, i) })); });
+        ui_.into(container, () => { items.forEach((item, i) => rows.push({ key: keys[i], item, i, h: build(item, i) })); });
         return;
       }
       for (const r of rows) if (!old.has(r.key) || !keys.includes(r.key)) ui_._remove_child(container, r.h);
@@ -124,10 +124,10 @@
       items.forEach((item, i) => {
         const r = old.get(keys[i]);
         if (r) {
-          if (r.item !== item) { ui_.clear(r.h); ui_.into(r.h, () => render(item, i)); r.item = item; }
+          if (r.item !== item || r.i !== i) { ui_.clear(r.h); ui_.into(r.h, () => render(item, i)); r.item = item; r.i = i; }
           next.push(r);
         } else {
-          ui_.into(container, () => next.push({ key: keys[i], item, h: build(item, i) }));
+          ui_.into(container, () => next.push({ key: keys[i], item, i, h: build(item, i) }));
         }
       });
       rows = next;

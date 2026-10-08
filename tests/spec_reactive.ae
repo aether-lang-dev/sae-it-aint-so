@@ -1,0 +1,68 @@
+// spec_reactive.ae -- the reactive surface (docs/roadmap.md 3.4) on
+// site/reactive.ts: state, computed, bind (one-way on a label, two-way on a
+// field, the bind`...` template), bind_enabled, bind_hidden, each with keyed
+// reconciliation, and batch (one recompute for two sets).
+//
+//   tests/run_spec.sh spec_reactive
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "the reactive surface") {
+        spec.it("a number state bound to a label, and the bind template, follow set") callback {
+            b.navigate(b.test_url("/reactive"))
+            b.assert_page("Reactive", "200 ", "reactive page")
+            b.assert_text("0", "the bound label shows the initial value")
+            b.assert_text("Count: 0 of 10", "the template renders its states and values")
+            b.click("Increment")
+            spec.assert_true(b.wait_for_text("Count: 1 of 10"), "the template follows the state")
+            b.assert_text("1", "and so does the plain binding")
+        }
+        spec.it("a text field bound two ways drives a computed string") callback {
+            b.assert_text("Hello, stranger", "computed from the empty state")
+            b.set_field_by("Your name", "Ada")
+            spec.assert_true(b.wait_for_text("Hello, Ada"), "typing set the state; the computed recomputed")
+        }
+        spec.it("each keeps rows by key: update in place, append, remove, rebuild on reorder") callback {
+            b.assert_text("1. Read the roadmap", "row 1")
+            b.assert_text("2. Build the camera", "row 2")
+            b.assert_text("2 left", "computed over the list")
+            baseline = b.widget_count()
+            b.click("Done 1")
+            spec.assert_true(b.wait_for_text("1. Read the roadmap (done)"), "the row whose item changed was re-rendered")
+            spec.assert_true(b.wait_for_text("1 left"), "the computed count followed")
+            spec.assert_true(b.wait_for_widget_count(baseline), "re-rendering one row made no extra widgets")
+            b.click("Add todo")
+            spec.assert_true(b.wait_for_text("3. Todo 3"), "a new key appends a row")
+            b.click("Drop first")
+            spec.assert_true(b.wait_for_text_gone("Read the roadmap"), "a gone key removes its row")
+            b.assert_text("1. Build the camera", "the kept rows are renumbered by a re-render")
+            b.click("Reverse")
+            spec.assert_true(b.wait_for_text("1. Todo 3"), "a reorder rebuilds the column")
+            b.assert_text("2. Build the camera", "in the new order")
+        }
+        spec.it("bind_enabled and bind_hidden follow a boolean state") callback {
+            spec.assert_eq(b.widget_bool("button", "Start", "enabled"), 1, "Start starts enabled")
+            spec.assert_eq(b.widget_bool("text", "Working...", "visible"), 0, "the spinner starts hidden")
+            b.click("Start")
+            spec.assert_true(b.wait_for_widget_bool("button", "Start", "enabled", 0), "busy: Start greys out")
+            spec.assert_true(b.wait_for_widget_bool("text", "Working...", "visible", 1), "busy: the spinner shows")
+            b.click("Done")
+            spec.assert_true(b.wait_for_widget_bool("button", "Start", "enabled", 1), "not busy: Start is back")
+        }
+        spec.it("batch runs a computed once for two sets; unbatched, once per set") callback {
+            b.assert_text("Grace Hopper", "the seeded computed")
+            b.click("Rename (batched)")
+            spec.assert_true(b.wait_for_console("recomputes: 1"), "one recompute inside the batch")
+            spec.assert_true(b.wait_for_text("Ada Lovelace"), "and the label shows the result")
+            b.click("Rename (unbatched)")
+            spec.assert_true(b.wait_for_console("recomputes: 2"), "two recomputes without it")
+            b.click("Home")
+        }
+    }
+    return spec.run_summary(fw)
+}

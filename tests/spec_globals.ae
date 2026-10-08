@@ -23,7 +23,11 @@ const LANGUAGE = "Object Function Error EvalError RangeError ReferenceError Synt
 // What api_register_ gives every page, in either mode. The six timer names
 // are sae's (the same page-scoped queue as ui.timer, so no grant), not
 // quickjs-libc's: added on purpose with them (docs/page-services.md, 4).
-const SAE_EVERY_PAGE = "performance ui vg storage browserContext print setTimeout setInterval clearTimeout clearInterval requestAnimationFrame cancelAnimationFrame"
+// The reactive surface (docs/roadmap.md 3.4; src/sae_prelude.js): state,
+// computed, bind, bind_enabled, bind_hidden, each and batch are page-scoped
+// (cells and bindings go with the page's widgets), so they are globals in
+// every page, browser or app.
+const SAE_EVERY_PAGE = "performance ui vg storage browserContext print setTimeout setInterval clearTimeout clearInterval requestAnimationFrame cancelAnimationFrame state computed bind bind_enabled bind_hidden each batch"
 
 // Object.prototype, the one prototype above globalThis.
 const OBJECT_PROTO = "toString toLocaleString valueOf hasOwnProperty isPrototypeOf propertyIsEnumerable __proto__ __defineGetter__ __defineSetter__ __lookupGetter__ __lookupSetter__ constructor"

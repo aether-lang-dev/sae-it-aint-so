@@ -37,6 +37,7 @@ exports(
     assert_url, assert_page, assert_text, assert_no_text,
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
     console_count, wait_for_console_n,
+    vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool,
     screenshot, console_contains, wait_for_console, url_encode
 )
 
@@ -471,6 +472,51 @@ fit_scale(cw: float, ch: float, vb_w: float, vb_h: float) -> float {
 // of whatever shape is there.
 vg_click(x: int, y: int) {
     uidriver.post_ok("/canvas/${vg_handle()}/click?x=${x}&y=${y}", "POST canvas click")
+}
+
+// Pointer motion over the canvas (hover, and a drag after vg_click), the
+// button's release, and a wheel step (dy < 0 is away from the user).
+vg_move(x: int, y: int) {
+    uidriver.post_ok("/canvas/${vg_handle()}/move?x=${x}&y=${y}", "POST canvas move")
+}
+
+vg_release(x: int, y: int) {
+    uidriver.post_ok("/canvas/${vg_handle()}/release?x=${x}&y=${y}", "POST canvas release")
+}
+
+vg_scroll(dx: int, dy: int) {
+    uidriver.post_ok("/canvas/${vg_handle()}/scroll?dx=${dx}&dy=${dy}", "POST canvas scroll")
+}
+
+// The canvas's rendered pixels on a grid: one 8-hex-digit AARRGGBB per
+// line, row by row, every `step` pixels across a w x h replay (the
+// driver's /pixelgrid), for a numeric comparison with a reference image.
+vg_grid(w: int, h: int, step: int) -> string {
+    return uidriver.get_body("/canvas/${vg_handle()}/pixelgrid?w=${w}&h=${h}&step=${step}")
+}
+
+// A boolean field ("enabled", "visible") of the last widget of a type with
+// a text: 1 or 0 (0 when there is no such widget).
+widget_bool(wtype: string, text: string, field: string) -> int {
+    id = uidriver.widget_id_last_of(wtype, text)
+    if id == 0 { return 0 }
+    v, _jerr = json.parse(uidriver.get_body("/widget/${id}"))
+    if v == null { return 0 }
+    f = json.json_object_get_raw(v, field)
+    r = 0
+    if f != null { r = json.json_get_bool(f) }
+    json.json_free(v)
+    return r
+}
+
+wait_for_widget_bool(wtype: string, text: string, field: string, want: int) -> int {
+    i = 0
+    while i < TRIES {
+        if widget_bool(wtype, text, field) == want { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
 }
 
 // The 0xAARRGGBB colour the canvas draws at canvas pixel (x, y).

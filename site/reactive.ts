@@ -34,7 +34,7 @@ btn("Add todo", () => todos.update((ts) => [...ts, { id: ts.length + 1, title: `
 btn("Drop first", () => todos.update((ts) => ts.slice(1)));
 btn("Reverse", () => todos.update((ts) => [...ts].reverse()));
 divider();
-const go = btn("Go", () => busy.set(true));
+const go = btn("Start", () => busy.set(true));
 bind_enabled(go, busy, true);                // greyed while busy
 const spinner = text("Working...");
 bind_hidden(spinner, busy, true);            // shown while busy
