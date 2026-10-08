@@ -51,7 +51,8 @@ Aether's `hide` (`aether/docs/hide-and-seal.md`):
   grant: /etc/passwd`.
 - **The browser never has `fs` or `shell`**, whatever a page asks: the
   objects throw "not available to a web page". In the browser `http`
-  reaches the page's own origin and nothing else.
+  reaches the page's own origin, and another origin only with that origin's
+  consent on its answer (`Sae-Allow-Origin`, README "Browser security rules").
 
 The grants are fixed when the app starts. A page cannot widen them; nothing a
 page does at run time can.
@@ -97,7 +98,7 @@ A line is `seeks <privilege> [<methods> <pattern>][, reduced functionality witho
   | Privilege | Unlocks | A web page in the browser | An app |
   |---|---|---|---|
   | `local-filesystem` | `fs` | never | if `app.json` grants `fs` |
-  | `outgoing-http` | `http` | yes, to the page's own origin | if `app.json` grants `http` |
+  | `outgoing-http` | `http` | yes: its own origin, and others with their consent (the CORS-alike) | if `app.json` grants `http` |
   | `open-urls` | `shell.open` | never | if `app.json` grants `shell.open` |
 
   `ui`, `vg`, `storage` and `browserContext` every page has; they are not
@@ -135,9 +136,10 @@ page's own origin; an app's pages have none, so they name the full URL.
   it seeks with what its context grants and refuses it with the reason if
   anything required is missing: `seeks local-filesystem, which a web page in
   the browser cannot have`; `seeks open-urls, which this app's app.json does
-  not grant`. A scope must lie inside the grant: on the page's own origin in
-  the browser (`seeks outgoing-http GET https://example.com/*, which is not
-  its own origin`), within app.json's `http` prefixes in an app (`seeks
+  not grant`. A scope must lie inside the grant: an http(s) origin in the
+  browser, and not `http:` from an `https:` page (`seeks outgoing-http GET
+  http://tiles.example/*, mixed content: ...`), within app.json's `http`
+  prefixes in an app (`seeks
   outgoing-http GET http://host/old-home, beyond what this app's app.json
   grants`). None of the page runs; nothing fails halfway. An optional
   privilege that cannot be granted, or whose scope reaches past the grant,

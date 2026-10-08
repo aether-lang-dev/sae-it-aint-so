@@ -61,10 +61,10 @@ btn("Cross, no consent", () =>
 // response that ends the chain.
 const hop = text("hop: (none)");
 btn("Redirect to consent", () =>
-  http.get(`/api/redirect?to=${encodeURIComponent(`${OTHER}/api/cors?allow=*`)}`, (res: Res) =>
+  http.get(`/api/redirect?to=${OTHER}/api/cors?allow=*`, (res: Res) =>
     set_text(hop, `hop: ok=${res.ok} ${res.status} origin=${originSent(res.text)}`)));
 const hopNone = text("hop-none: (none)");
 btn("Redirect without consent", () =>
-  http.get(`/api/redirect?to=${encodeURIComponent(`${OTHER}/api/cors?x=hop`)}`, (res: Res) => set_text(hopNone, refusedLine("hop-none", res))));
+  http.get(`/api/redirect?to=${OTHER}/api/cors?x=hop`, (res: Res) => set_text(hopNone, refusedLine("hop-none", res))));
 
 btn("Home", () => browserContext.changePage("/"));

@@ -52,7 +52,8 @@ An app declares in `app.json` what it may ever have (the **grants**):
 ```
 
 `capabilities.http` is also the app's whole network: an app without it has
-none. A web page in the browser has fixed grants: its own origin for http,
+none. A web page in the browser has fixed grants: its own origin for http
+(and any origin that consents to it with `Sae-Allow-Origin`),
 nothing else.
 
 ### Seeks: what each page asks for
@@ -111,8 +112,9 @@ and the timer names `setTimeout setInterval clearTimeout clearInterval
 requestAnimationFrame cancelAnimationFrame` (section 4). They are page-scoped
 services, so they need no capability grant.
 
-**From sae, only when sought and granted:** `http` (browser: own origin;
-app: `capabilities.http`), and in an app `fs` and `shell`.
+**From sae, only when sought and granted:** `http` (browser: own origin, and
+other origins with their consent, the CORS-alike; app: `capabilities.http`),
+and in an app `fs` and `shell`.
 
 **Checked and absent:**
 
@@ -133,6 +135,9 @@ app: `capabilities.http`), and in an app `fs` and `shell`.
   `performance.now` grant no authority, but they are nondeterministic and
   can be used to time things. Do we care, for reproducible specs or for
   timing side channels? `SAE_TIME_SCALE` already intercepts the clocks.
+  Partly answered (roadmap decision 1, behind a switch): `performance.now`
+  and frame timestamps are coarse (100 us) in the browser and full
+  resolution in an app, `SAE_COARSE_CLOCKS` overriding either.
 - **Memory and GC.** `SharedArrayBuffer`/`Atomics` are harmless with one
   thread per runtime, but would matter with workers (section 7).
   `WeakRef`/`FinalizationRegistry` make garbage collection observable.

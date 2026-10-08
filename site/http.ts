@@ -26,14 +26,15 @@ btn("POST echo", () =>
 const fetched = text("fetch: (none)");
 btn("Fetch POST", async () => {
   const res = await http.fetch({ method: "POST", url: "/api/echo", body: "awaited body", contentType: "text/plain" });
-  const other = await http.fetch("http://example.com/");
+  const other = await http.fetch("http://localhost:8091/api/echo?msg=fetch");   // another origin, no consent
   set_text(fetched, `fetch: ${res.status} ${res.text} | other origin ok=${other.ok}`);
 });
 // Redirects are followed by sae, each hop checked as the first URL was: a
-// same-origin URL that redirects elsewhere is refused, not followed.
+// same-origin URL that redirects to another origin is answered only with
+// that origin's consent (Sae-Allow-Origin), which /api/json does not give.
 const away = text("away: (none)");
 btn("Redirect away", () =>
-  http.get("/api/redirect?to=http://example.com/", (res: Res) =>
+  http.get("/api/redirect?to=http://localhost:8091/api/json", (res: Res) =>
     set_text(away, res.ok ? `away: followed to ${res.status}` : `away: ${res.error}`)));
 btn("GET json", () =>
   http.get("/api/json", (res: Res) => {
@@ -46,8 +47,10 @@ btn("Slow GET", () => {
 });
 // Proves the UI thread is free while a request is out.
 btn("Click me", () => { clicks++; set_text(counter, `clicks: ${clicks}`); });
+// http://localhost:8091 is the same page server as http://127.0.0.1:8091 and
+// another origin; without Sae-Allow-Origin on its answer the page gets nothing.
 btn("Other origin", () =>
-  http.get("https://example.com/", (res: Res) =>
+  http.get("http://localhost:8091/api/echo?msg=other", (res: Res) =>
     set_text(refused, `refused: ok=${res.ok} status=${res.status} ${res.error}`)));
 btn("Slow, then cancel", () => {
   const req = http.get("/api/slow?ms=500", (res: Res) => print("a cancelled request's callback ran"));

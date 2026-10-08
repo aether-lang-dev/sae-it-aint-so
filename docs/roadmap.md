@@ -41,18 +41,18 @@ they *cannot* be reintroduced as the browser grows.
 
 | Rule | Today | To do |
 |---|---|---|
-| **Same-origin by construction.** A page's `http` reaches its own origin and nothing else. | done | keep, and add the CORS-alike below for the one legitimate cross-origin case |
-| **No ambient credentials.** No cookie jar, no `Authorization` sae attaches on a page's behalf. A page that wants to be logged in holds a token in its per-origin `storage` and sends it itself. CSRF cannot exist. | done by absence | write it down as a rule; a test that the browser never adds a header a page did not set |
-| **No `Referer`.** Cross-origin requests (once allowed) carry `Origin` only. | n/a | with the CORS-alike |
-| **No mixed content.** A page from `https:` may not fetch `http:`. | not checked | refuse, with the page-level reason |
+| **Same-origin by construction.** A page's `http` reaches its own origin and nothing else. | done; the CORS-alike (1.2) is the one cross-origin case, done | keep |
+| **No ambient credentials.** No cookie jar, no `Authorization` sae attaches on a page's behalf. A page that wants to be logged in holds a token in its per-origin `storage` and sends it itself. CSRF cannot exist. | done: written down (README "Browser security rules"), `spec_webrules` holds that sae adds no header a page did not set and ignores `Set-Cookie` | keep |
+| **No `Referer`.** Cross-origin requests (once allowed) carry `Origin` only. | done: `Origin` across origins, never `Referer`, a page-set `Origin`/`Referer` dropped (`spec_webrules`) | keep |
+| **No mixed content.** A page from `https:` may not fetch `http:`. | done: refused with the page-level reason, logged once; scopes too (`services/net mixed_content`, `spec_origin_rules`) | an https: lane for the corpus's end-to-end attempt (the harness serves http:) |
 | **Certificate failure is a refusal, not a warning.** The pure TLS client fails closed. No "proceed anyway" in v1: the web's lesson is that warnings get clicked. | done (TLS) | surface the reason in the chrome; show scheme and host as the lock-icon-alike |
-| **A page cannot touch the chrome.** The handle floor already makes `set_text` on the address bar throw. | done | keep as a red-team case |
-| **A page cannot open windows, frames or pop-ups,** and has no opener. | done by absence | keep |
-| **Navigation is a full page load.** Each page has its own runtime, timers, handles, storage scope; nothing survives across except per-origin `storage`. | done | keep |
-| **Resource caps per page.** 5 s per entry into JS, 32 MB heap. | done | add: in-flight http (N), timers and frames (M), total storage per origin, and a per-origin memory budget |
-| **Coarse clocks in browser mode.** `performance.now()` and frame timestamps rounded (100 µs), as browsers did after Spectre; app mode keeps full resolution. | open question in `page-services.md` section 2 | decide; cheap to do |
-| **No fingerprinting surface.** No `navigator`, no device details; `browserContext` exposes the URL and navigation only. | done | keep as a red-team case |
-| **No code from anywhere else.** No module loader, no `data:`/`http:` imports. | done | section 3 adds same-origin `import`, hashed; nothing else |
+| **A page cannot touch the chrome.** The handle floor already makes `set_text` on the address bar throw. | done; in the corpus (`chrome_set_text`), and a web page navigates only to http(s) URLs (`chrome_navigate`) | keep |
+| **A page cannot open windows, frames or pop-ups,** and has no opener. | done by absence; in the corpus (`second_window`) | keep |
+| **Navigation is a full page load.** Each page has its own runtime, timers, handles, storage scope; nothing survives across except per-origin `storage`. | done; in the corpus (`handle_across`) | keep |
+| **Resource caps per page.** 5 s per entry into JS, 32 MB heap. | done, and: 8 http in flight, 256 timers and frames, 4 MB storage per origin (`cap_*` in the corpus) | a per-origin memory budget |
+| **Coarse clocks in browser mode.** `performance.now()` and frame timestamps rounded (100 µs), as browsers did after Spectre; app mode keeps full resolution. | implemented behind one switch (`SAE_COARSE_CLOCKS`, on in the browser, off in an app; `spec_webrules` in both modes) | decision 1: confirm the default, then drop the switch or keep it |
+| **No fingerprinting surface.** No `navigator`, no device details; `browserContext` exposes the URL and navigation only. | done (`spec_globals` pins the surface) | keep |
+| **No code from anywhere else.** No module loader, no `data:`/`http:` imports. | done; in the corpus (`import_url`) | section 3 adds same-origin `import`, hashed; nothing else |
 
 ### 1.2 The one cross-origin case: a CORS-alike
 
@@ -64,7 +64,10 @@ credentials with it. sae's version:
   response carries `Sae-Allow-Origin: https://shop.example` (or `*`). sae
   sends `Origin` and no `Referer`, never credentials, and discards the body
   if the header is absent. No preflight: there are no custom headers to
-  negotiate, and no cookies to protect.
+  negotiate, and no cookies to protect. **Done** (wave 1): README "Browser
+  security rules", `spec_webrules`; a redirect that leaves the origin needs
+  the consent on the final answer, and a browser page may scope another
+  origin.
 - In app mode this is moot: `capabilities.http` is the allowlist and the
   installer saw it.
 
@@ -107,9 +110,10 @@ residual risk, which items 4 and 5 address.
 
 ### 1.4 A red-team corpus, run on every lane
 
-`site/misuse.ts` and `site/vgmisuse.ts` exist. Grow them into
-`tests/escape/*.ts`, one page per attempt, each expected to be refused and
-logged:
+`site/misuse.ts` and `site/vgmisuse.ts` exist. `tests/escape/*.ts` is the
+corpus (wave 1), one page per attempt, each refused and logged once, held
+by `tests/spec_escape.ae` (17 attempts; mixed content's end-to-end attempt
+waits for an https: lane):
 
 fetch another origin · `http:` from `https:` · a redirect out of origin ·
 reach `fs`/`shell` by computed name · navigate the chrome · read another

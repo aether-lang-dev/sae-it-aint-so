@@ -117,18 +117,17 @@ main() {
             b.click("Home")
             b.assert_page(HOME, "200 ", "home")
         }
-        spec.it("a web page that seeks another origin is refused before it runs") callback {
+        spec.it("a web page may scope another origin; each request there needs that origin's consent") callback {
             b.click("A page that seeks another origin")
-            b.assert_text("This page cannot run here:", "notice")
-            spec.assert_contains(b.page_texts(), "seeks outgoing-http GET https://example.com/*, which is not its own origin", "why")
-            b.assert_no_text("You should not see this", "none of it ran")
-            b.back()
-            b.assert_page(HOME, "200 ", "Back from the refused page")
+            b.assert_text("far: ok=true 200", "the scope is allowed, and the consenting answer arrives")
+            b.assert_text("far-none: ok=false", "the same origin without consent is refused")
+            b.click("Home")
+            b.assert_page(HOME, "200 ", "home")
         }
         spec.it("a page that can do without what it seeks loads, and finds it absent") callback {
             b.click("A page that can do without")
             b.assert_text("files: not available, working without", "fs is absent, not refused")
-            b.assert_text("network: not available, working without", "an optional scope beyond the grant leaves http absent")
+            b.assert_text("open-urls: not available, working without", "an optional privilege the browser cannot give leaves shell absent")
             b.back()
             b.assert_page(HOME, "200 ", "Back from the page that did without")
         }
@@ -343,10 +342,10 @@ main() {
             b.click("Fetch POST")
             b.assert_text("fetch: 200 posted: awaited body | other origin ok=false", "awaited POST, then a refusal as res.ok false")
         }
-        spec.it("a redirect to another origin is refused, not followed") callback {
+        spec.it("a redirect to another origin is answered only with that origin's consent") callback {
             b.click("Redirect away")
-            b.assert_text("away: redirected to http://example.com/: a page may reach only its own origin: http://example.com/",
-                "each hop checked as the first URL was")
+            b.assert_text("away: http://localhost:8091/api/json did not allow this page's origin http://127.0.0.1:8091: the response carries no Sae-Allow-Origin: http://127.0.0.1:8091 (or *)",
+                "each hop checked as the first URL was; the final answer needs the CORS-alike's consent")
         }
         spec.it("res.json() parses the body") callback {
             b.click("GET json")
@@ -361,9 +360,9 @@ main() {
             b.assert_text("slow: waiting", "and the request is still out")
             b.assert_text("slow: 200 slow done", "then it lands")
         }
-        spec.it("another origin is refused, through the callback") callback {
+        spec.it("another origin without its consent is refused, through the callback") callback {
             b.click("Other origin")
-            b.assert_text("refused: ok=false status=0 a page may reach only its own origin: https://example.com/",
+            b.assert_text("refused: ok=false status=0 http://localhost:8091/api/echo?msg=other did not allow this page's origin http://127.0.0.1:8091: the response carries no Sae-Allow-Origin: http://127.0.0.1:8091 (or *)",
                 "refused: ok false, status 0, the reason in res.error")
         }
         spec.it("req.cancel(): the callback never runs") callback {

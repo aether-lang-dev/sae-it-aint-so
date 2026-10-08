@@ -22,6 +22,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`) |
 | `tools/saelower.ae` | CLI for the lowerer |
 | `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
+| `tests/escape/` | The escape corpus: one page per attempt to get out (README "Browser security rules"); `tests/spec_escape.ae` holds each to "refused, logged once". A new browser rule is not done until its attempt is here |
 | `tests/lib/saedriver.ae` | The browser-test driver: Tsyne's TsyneBrowserTest verbs (navigate, back, forward, reload, current_url, assert_url, screenshot) plus page, vg and console queries, on aether-ui's uidriver |
 | `tests/run_spec.sh` | Starts the page server and sae-driver, runs a spec, stops both |
 | `aether-ui`, `ui`, `vg` | Symlinks into the sibling checkout `../aether-ui`; the README's "Build and run" says why each exists |
@@ -69,6 +70,10 @@ tests/check_storage_scope.sh                   # storage per installed app, per 
 tests/run_spec.sh spec_timers                  # ui.after/sleep/frame, setTimeout and friends
 tests/run_spec.sh spec_globals                 # the global surface, browser
 SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$PWD/target/globals-appdata tests/run_spec.sh spec_globals
+../aether/build/ae run tests/spec_origin_rules.ae  # origins, mixed content, Sae-Allow-Origin: no window
+tests/run_spec.sh spec_webrules                # no ambient credentials, no Referer, the CORS-alike, coarse clocks
+SAE_TEST_APP=tests/apps/clocks tests/run_spec.sh spec_webrules   # app mode: full-resolution clocks
+tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 17 attempts, each refused and logged once
 ```
 
 Toolchain: Aether 0.791.0 or later (`pins`), installed, or a dev tree

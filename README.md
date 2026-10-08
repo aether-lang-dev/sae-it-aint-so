@@ -150,7 +150,9 @@ takes any method and request headers; `res.headers` holds the response's,
 with lowercased names.
 
 Where a page may reach is the kernel's decision, behind the page veto: in
-the browser, the page's own origin; in an app, the URL prefixes its
+the browser, the page's own origin, and any other origin that consents to
+that page with a `Sae-Allow-Origin` header on its answer (the CORS-alike,
+under "Browser security rules" below); in an app, the URL prefixes its
 `app.json` grants under `capabilities.http` (below, and App mode for the
 matching rules), and nothing at all without them.
 
@@ -168,6 +170,78 @@ if (res.ok) render(res.json());
 After every handler, timer, animation frame and http callback sae runs the
 page's pending promise jobs, so an `await` carries on as soon as its answer
 is delivered.
+
+### Browser security rules
+
+Thirty years of the web's security is a list of things that were ambient
+and had to be fenced afterwards (`docs/roadmap.md`, section 1). sae has no
+DOM, no HTML and no cookies, so most of those classes do not exist here;
+these are the rules that keep them out as the browser grows, each enforced
+in the kernel, each with its attempt in the escape corpus
+(`tests/escape/*.ts`, `tests/spec_escape.ae`: sandbox-breakout-alike, after
+Tsyne's `examples/sandbox-breakout`) and its happy path in
+`tests/spec_webrules.ae`.
+
+- **Same-origin by construction.** A page's `http` reaches its own origin
+  without asking. Another origin it may *request*, under the CORS-alike
+  below; nothing else.
+- **The CORS-alike** (roadmap 1.2; the header name is decision 3). A page
+  may request another origin; sae sends `Origin: <the page's origin>` (its
+  own, never one the page sets), never a `Referer`, and drops the page's own
+  `Cookie` and `Authorization` on the way out. The answer reaches the page
+  only if the response that ends the request carries
+  `Sae-Allow-Origin: <that origin>` or `Sae-Allow-Origin: *`; otherwise the
+  body, status and headers are withheld, `res.ok` is false and `res.error`
+  says `<url> did not allow this page's origin <origin>: the response
+  carries no Sae-Allow-Origin: <origin> (or *)`, logged once. No preflight:
+  there are no cookies to protect. A redirect that leaves the origin is
+  held to the same consent on the final answer, and a scope may name another
+  origin (`"seeks outgoing-http GET https://tiles.example/**"`). App mode is
+  unaffected: `capabilities.http` is the list, and the installer saw it.
+  `tools/pageserver`'s `/api/cors?allow=<origin or *>` is the consenting
+  route the specs use; `http://localhost:8091` is its second origin.
+- **No ambient credentials.** No cookie jar (a `Set-Cookie` is never kept),
+  no `Authorization` sae attaches on a page's behalf; a page that wants to
+  be logged in holds a token in its per-origin `storage` and sends it
+  itself. sae adds no header a page did not set, but `Origin` across
+  origins. CSRF cannot exist.
+- **No `Referer`, ever.** A page-set `Referer` or `Origin` is dropped in the
+  browser.
+- **No mixed content.** A page from `https:` may not fetch `http:`, from any
+  origin: refused before any socket, with `mixed content: a page from https:
+  may not fetch http: (<url>)`, logged once; an `https:` page's scope on an
+  `http:` origin is refused before the page runs. (A redirect from `https:`
+  to `http:` was already refused.) The rule's logic is held without a
+  window in `tests/spec_origin_rules.ae`; the spec harness serves pages
+  over `http:`, so its end-to-end attempt waits for a lane that serves the
+  corpus over TLS.
+- **Certificate failure is a refusal.** The TLS client fails closed; there
+  is no "proceed anyway".
+- **A page cannot touch the chrome.** The handle floor makes `set_text`,
+  `get_text` and `clear` on the address bar, the status line or a previous
+  page's widgets throw; and a web page navigates only to `http(s)` URLs
+  (not to an `app:` page, which the browser would map onto a file by path,
+  nor to a file), refused and logged.
+- **No windows, frames, pop-ups or opener.** There is no `ui.window`, no
+  `open`.
+- **Navigation is a full page load.** Each page has its own runtime,
+  timers, handles and storage scope; nothing survives across except
+  per-origin `storage`.
+- **Resource caps per page:** 5 s per entry into JS and a 32 MB heap, as
+  before, and now 8 http requests in flight, 256 timers and animation frames
+  pending, and 4 MB of `storage` per origin. Over a cap the call throws a
+  `TypeError` naming it (`http: this page has 8 requests in flight (the
+  cap); wait for one to finish`), logged once per page per cap. The numbers
+  are `ESC_*` constants at the top of the "wave1/escape" section of
+  `src/sae_host.ae`.
+- **Coarse clocks in the browser** (roadmap decision 1, implemented behind
+  one switch). `performance.now()` and animation-frame timestamps are
+  rounded down to 100 us in the browser; an app has full resolution.
+  `SAE_COARSE_CLOCKS=0` turns it off, `=1` turns it on, in either mode.
+  `Date.now()` stays whole milliseconds.
+- **No fingerprinting surface, no code from anywhere else.** No
+  `navigator`, no device details, no module loader: `import()` of any URL
+  rejects (`tests/spec_globals.ae` pins the whole global surface).
 
 ### App capabilities: fs, shell, and what each page may name
 
@@ -428,7 +502,9 @@ after Tauri's HTTP-plugin scopes:
   is logged once on the console.
 - `app:/` pages are not network: they load and navigate whatever the list
   says, and an app loads no page from anywhere else (`start` included).
-- Browser mode has no list: a web page reaches its own origin, as before.
+- Browser mode has no list: a web page reaches its own origin, and another
+  origin only with that origin's consent (the CORS-alike, "Browser security
+  rules").
 
 Pages are `app:` URLs, mapped like the dev page server maps
 a site: `app:/about` is `<dir>/about.ts` (or `.js`), `app:/` the index, a
