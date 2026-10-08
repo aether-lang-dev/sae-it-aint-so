@@ -1,0 +1,449 @@
+// aevg: sae's model of a page's AeVG scenes, one layer above aether-ui's
+// deferred `vg` verbs (wave1/aevg, docs/roadmap.md section 4).
+//
+// aether-ui's live scene (vg/live.ae) records shapes and flushes them with
+// their final cached style; its `g()` is a passthrough (no cascade), its
+// shape verbs take geometry only, and it wires click alone. A page needs
+// more: groups whose transform, opacity, fill and stroke reach their
+// children (and can be changed later: a dial that turns), named gradients
+// and clip paths registered as defs, a viewBox that changes (zoom and pan),
+// hover/drag/scroll dispatch, and bindings that re-evaluate when state
+// changes. This module keeps the per-page record that makes those possible:
+//
+//   AeModel   one per page: its scenes and every node the page made
+//   AeScene   one per vg.scene(): the aether-ui scene, canvas, viewBox, the
+//             defs and CSS registered on its context (re-registered when the
+//             context is rebuilt), hover/drag/double-click state
+//   AeRec     one per node (scene root, group, shape, text): parent, own
+//             transform/opacity, the effective values pushed onto the element
+//
+// The host (src/sae_host.ae, "wave1/aevg") owns the JS side: it reads a
+// page's arguments, calls in here, and runs the page's handlers. This module
+// never names the engine or the kernel; it is pure Aether over vg and ui.
+//
+// Group cascade: SVG composes transforms outer-first, so a child's effective
+// transform is `parent_effective + " " + own`; opacity multiplies (the same
+// flattening aether-ui's transpiler does for its headless form, so a page
+// and the parity harness agree); fill and stroke are inherited at creation
+// when the child sets none. aether-ui's true group opacity (group_begin/
+// group_end markers) needs the alpha before the block runs, which the
+// block form cannot give; multiplying through is the documented gap.
+
+exports (
+    AeModel, AeScene, AeRec,
+    model_new, model_free,
+    scene_add, scene_of_node, rec_of, rec_add,
+    rec_set_transform, rec_set_opacity, rec_set_fill, rec_set_stroke,
+    rec_inherit, rec_set_visible,
+    scene_mark_dirty, repaint_dirty, repaint_scene,
+    defs_register, css_register, scene_set_view_box, scene_resize,
+    join_transform, attr_str, esc_attr,
+    K_SCENE, K_GROUP, K_SHAPE, K_TEXT
+)
+
+import ui
+import vg
+import vg.live
+import vg.grammar.factories
+import vg.grammar.events
+import vg.grammar.css
+import vg.grammar.element
+import vg.svg.loader
+import std.list
+import std.string
+import std.strbuilder
+
+const K_SCENE = 0
+const K_GROUP = 1
+const K_SHAPE = 2
+const K_TEXT = 3
+
+struct AeScene {
+    scene: ptr       // aether-ui's VgScene
+    root: ptr        // its root VgNode
+    cid: int         // the canvas
+    vb: string       // the viewBox in force
+    w: int           // canvas size the context was built for
+    h: int
+    defs: string     // every def registered so far, as SVG (re-registered on a rebuild)
+    css: string      // every CSS rule registered so far
+    dirty: int       // 1: repaint before returning to the page
+    pressed: int     // pointer button down on the canvas (drag in progress)
+    last_click_ms: long   // double-click detection
+    last_cx: float
+    last_cy: float
+    tooltip: string  // the native tooltip currently shown ("" for none)
+}
+
+struct AeRec {
+    node: ptr        // the VgNode (payload: the element, or null for a group/root)
+    el: ptr          // the element (null for a group/root)
+    kind: int        // K_*
+    parent: ptr      // *AeRec, or null for a scene root
+    scene: ptr       // *AeScene
+    tf: string       // own transform ("" for none)
+    eff_tf: string   // effective: ancestors', then own
+    op: float        // own opacity
+    eff_op: float    // product of ancestors' and own
+    fill: string     // a group's fill for its children ("" for none)
+    stroke: string   // a group's stroke colour for its children
+    sw: float        // and its width
+    has_own_fill: int   // a shape that set its own fill keeps it over the group's
+    has_own_stroke: int
+    interactive: int // has a handler/tooltip/cursor: re-tracked on a context rebuild
+    visible: int
+    children: ptr    // std.list of *AeRec
+}
+
+struct AeModel {
+    scenes: ptr      // std.list of *AeScene
+    recs: ptr        // std.list of *AeRec
+}
+
+model_new() -> *AeModel {
+    m = heap.new(AeModel)
+    m.scenes = list.new()
+    m.recs = list.new()
+    return m
+}
+
+model_free(m: *AeModel) {
+    n = list.size(m.recs)
+    i = 0
+    while i < n {
+        v, _ = list.get(m.recs, i)
+        r = v as *AeRec
+        list.free(r.children)
+        heap.free(r)
+        i = i + 1
+    }
+    list.free(m.recs)
+    n = list.size(m.scenes)
+    i = 0
+    while i < n {
+        v2, _2 = list.get(m.scenes, i)
+        heap.free(v2 as *AeScene)
+        i = i + 1
+    }
+    list.free(m.scenes)
+    heap.free(m)
+}
+
+own_(s: string) -> string { return string.concat(s, "") }
+
+// Register a live scene the host made with live.vg(): its record, and the
+// root node's record (kind K_SCENE) so shapes at the top level have a parent.
+scene_add(m: *AeModel, scene: ptr, root: ptr, cid: int, vb: string, w: int, h: int) -> *AeScene {
+    sc = heap.new(AeScene)
+    sc.scene = scene
+    sc.root = root
+    sc.cid = cid
+    sc.vb = own_(vb)
+    sc.w = w
+    sc.h = h
+    sc.defs = ""
+    sc.css = ""
+    sc.dirty = 0
+    sc.pressed = 0
+    sc.last_click_ms = 0
+    sc.last_cx = 0.0
+    sc.last_cy = 0.0
+    sc.tooltip = ""
+    list.add(m.scenes, sc as ptr)
+    _r = rec_add(m, root, null, K_SCENE, null, sc)
+    return sc
+}
+
+// The scene record a node belongs to, or null.
+scene_of_node(m: *AeModel, node: ptr) -> *AeScene {
+    r = rec_of(m, node)
+    if r == null { return null }
+    return r.scene as *AeScene
+}
+
+rec_of(m: *AeModel, node: ptr) -> *AeRec {
+    n = list.size(m.recs)
+    i = 0
+    while i < n {
+        v, _ = list.get(m.recs, i)
+        r = v as *AeRec
+        if r.node == node { return r }
+        i = i + 1
+    }
+    return null
+}
+
+// Record a node under `parent` (an *AeRec, or null for a root) and apply what
+// it inherits: the parent's effective transform and opacity, and its fill and
+// stroke (which the node's own block may override afterwards).
+rec_add(m: *AeModel, node: ptr, el: ptr, kind: int, parent: *AeRec, sc: *AeScene) -> *AeRec {
+    r = heap.new(AeRec)
+    r.node = node
+    r.el = el
+    r.kind = kind
+    r.parent = parent
+    r.scene = sc
+    r.tf = ""
+    r.eff_tf = ""
+    r.op = 1.0
+    r.eff_op = 1.0
+    r.fill = ""
+    r.stroke = ""
+    r.sw = 1.0
+    r.has_own_fill = 0
+    r.has_own_stroke = 0
+    r.interactive = 0
+    r.visible = 1
+    r.children = list.new()
+    list.add(m.recs, r as ptr)
+    if parent != null {
+        list.add(parent.children, r as ptr)
+        rec_inherit(r)
+    }
+    return r
+}
+
+// Push a parent's effective transform/opacity (and a group's fill/stroke) onto
+// a freshly made node.
+rec_inherit(r: *AeRec) {
+    p = r.parent as *AeRec
+    if p == null { return }
+    r.eff_tf = own_(p.eff_tf)
+    r.eff_op = p.eff_op
+    if r.el != null {
+        if string.length(r.eff_tf) > 0 { element.element_set_transform(r.el, r.eff_tf) }
+        if r.eff_op < 1.0 { element.element_set_opacity(r.el, r.eff_op) }
+        if string.length(p.fill) > 0 { element.element_set_fill(r.el, p.fill) }
+        if string.length(p.stroke) > 0 { element.element_set_stroke(r.el, p.stroke, p.sw) }
+    } else {
+        // A group inherits its parent's paint for its own children.
+        r.fill = own_(p.fill)
+        r.stroke = own_(p.stroke)
+        r.sw = p.sw
+    }
+}
+
+// SVG transform lists compose left to right, outer first.
+join_transform(outer: string, inner: string) -> string {
+    if string.length(outer) == 0 { return own_(inner) }
+    if string.length(inner) == 0 { return own_(outer) }
+    return "${outer} ${inner}"
+}
+
+// Set a node's own transform and push the composed result down its subtree.
+rec_set_transform(r: *AeRec, t: string) {
+    r.tf = own_(t)
+    push_transform_(r)
+    sc = r.scene as *AeScene
+    if sc != null { sc.dirty = 1 }
+}
+
+push_transform_(r: *AeRec) {
+    p = r.parent as *AeRec
+    ptf = ""
+    if p != null { ptf = p.eff_tf }
+    r.eff_tf = join_transform(ptf, r.tf)
+    if r.el != null { element.element_set_transform(r.el, r.eff_tf) }
+    n = list.size(r.children)
+    i = 0
+    while i < n {
+        v, _ = list.get(r.children, i)
+        push_transform_(v as *AeRec)
+        i = i + 1
+    }
+}
+
+rec_set_opacity(r: *AeRec, v: float) {
+    r.op = v
+    push_opacity_(r)
+    sc = r.scene as *AeScene
+    if sc != null { sc.dirty = 1 }
+}
+
+push_opacity_(r: *AeRec) {
+    p = r.parent as *AeRec
+    pop = 1.0
+    if p != null { pop = p.eff_op }
+    r.eff_op = pop * r.op
+    if r.el != null { element.element_set_opacity(r.el, r.eff_op) }
+    n = list.size(r.children)
+    i = 0
+    while i < n {
+        v, _ = list.get(r.children, i)
+        push_opacity_(v as *AeRec)
+        i = i + 1
+    }
+}
+
+// A fill on a shape is its own; on a group it reaches the children that set
+// none (those made later, and those already made).
+rec_set_fill(r: *AeRec, c: string) {
+    sc = r.scene as *AeScene
+    if sc != null { sc.dirty = 1 }
+    if r.el != null {
+        r.has_own_fill = 1
+        vg.element_set_fill(r.el, c)
+        return
+    }
+    r.fill = own_(c)
+    n = list.size(r.children)
+    i = 0
+    while i < n {
+        v, _ = list.get(r.children, i)
+        ch = v as *AeRec
+        if ch.el != null {
+            if ch.has_own_fill == 0 { element.element_set_fill(ch.el, c) }
+        } else {
+            if string.length(ch.fill) == 0 { rec_set_fill(ch, c) }
+        }
+        i = i + 1
+    }
+}
+
+rec_set_stroke(r: *AeRec, c: string, w: float) {
+    sc = r.scene as *AeScene
+    if sc != null { sc.dirty = 1 }
+    if r.el != null {
+        r.has_own_stroke = 1
+        element.element_set_stroke(r.el, c, w)
+        return
+    }
+    r.stroke = own_(c)
+    r.sw = w
+    n = list.size(r.children)
+    i = 0
+    while i < n {
+        v, _ = list.get(r.children, i)
+        ch = v as *AeRec
+        if ch.el != null {
+            if ch.has_own_stroke == 0 { element.element_set_stroke(ch.el, c, w) }
+        } else {
+            if string.length(ch.stroke) == 0 { rec_set_stroke(ch, c, w) }
+        }
+        i = i + 1
+    }
+}
+
+// Show or hide a node; a hidden group hides its subtree. A hidden element is
+// neither drawn nor hit-tested.
+rec_set_visible(r: *AeRec, on: int) {
+    r.visible = on
+    push_visible_(r, on)
+    sc = r.scene as *AeScene
+    if sc != null { sc.dirty = 1 }
+}
+
+push_visible_(r: *AeRec, on: int) {
+    eff = on
+    if r.visible == 0 { eff = 0 }
+    if r.el != null { element.element_set_visible(r.el, eff) }
+    n = list.size(r.children)
+    i = 0
+    while i < n {
+        v, _ = list.get(r.children, i)
+        push_visible_(v as *AeRec, eff)
+        i = i + 1
+    }
+}
+
+scene_mark_dirty(sc: *AeScene) { sc.dirty = 1 }
+
+// Repaint: clear, re-flush every shape with its current style, present. The
+// same steps the host's vg_repaint_ takes for set_fill.
+repaint_scene(sc: *AeScene) {
+    sc.dirty = 0
+    if sc.cid == 0 { return }
+    ui.canvas_clear(sc.cid)
+    live.vg_flush_live(sc.scene, sc.cid, 0.0)
+    ui.canvas_redraw(sc.cid)
+}
+
+// Repaint every scene a change touched since the last call.
+repaint_dirty(m: *AeModel) {
+    n = list.size(m.scenes)
+    i = 0
+    while i < n {
+        v, _ = list.get(m.scenes, i)
+        sc = v as *AeScene
+        if sc.dirty == 1 { repaint_scene(sc) }
+        i = i + 1
+    }
+}
+
+// Register SVG defs (gradients, clip paths, filters) on the scene's context,
+// and keep them for a rebuild. `svg` is the defs' inner markup.
+defs_register(sc: *AeScene, svg: string) {
+    sc.defs = string.concat(sc.defs, svg)
+    loader.register_defs_into(vg.scene_ctx(sc.scene), "<svg><defs>${svg}</defs></svg>")
+    sc.dirty = 1
+}
+
+css_register(sc: *AeScene, text: string) {
+    sc.css = string.concat(sc.css, text)
+    css.register_css_style(vg.scene_ctx(sc.scene), text)
+    sc.dirty = 1
+}
+
+// A new viewBox (zoom and pan): rebuild the viewBox-to-canvas mapping, as
+// aether-ui's resize hook does, then put back what the old context carried:
+// the defs and CSS (a fresh context has none), and the interactive elements'
+// tracking (the flush tracks each once; a new context starts empty).
+scene_set_view_box(m: *AeModel, sc: *AeScene, vb: string) {
+    sc.vb = own_(vb)
+    rebuild_ctx_(m, sc)
+}
+
+// The canvas was resized: the same rebuild at the new size.
+scene_resize(m: *AeModel, sc: *AeScene, w: int, h: int) {
+    sc.w = w
+    sc.h = h
+    rebuild_ctx_(m, sc)
+}
+
+rebuild_ctx_(m: *AeModel, sc: *AeScene) {
+    opts = factories.opts_new()
+    factories.opts_set_view_box(opts, sc.vb)
+    factories.opts_set_width(opts, sc.w / 1.0)
+    factories.opts_set_height(opts, sc.h / 1.0)
+    ctx = factories.create_aevg_context(opts)
+    vg.scene_set_ctx(sc.scene, ctx)
+    if string.length(sc.defs) > 0 {
+        loader.register_defs_into(ctx, "<svg><defs>${sc.defs}</defs></svg>")
+    }
+    if string.length(sc.css) > 0 { css.register_css_style(ctx, sc.css) }
+    n = list.size(m.recs)
+    i = 0
+    while i < n {
+        v, _ = list.get(m.recs, i)
+        r = v as *AeRec
+        if r.scene == sc as ptr && r.interactive == 1 && r.el != null {
+            events.track_element(ctx, r.el)
+        }
+        i = i + 1
+    }
+    sc.dirty = 1
+}
+
+// `k="v"` for an SVG attribute, or "" when v is empty.
+attr_str(k: string, v: string) -> string {
+    if string.length(v) == 0 { return "" }
+    return " ${k}=\"${esc_attr(v)}\""
+}
+
+// Escape an attribute value: the page's strings go into markup the loader
+// parses, so quotes and angle brackets must not end the attribute early.
+esc_attr(v: string) -> string {
+    n = string.length(v)
+    sb = strbuilder.new(n + 8)
+    i = 0
+    while i < n {
+        c = string.char_at(v, i)
+        if c == 34 { _ = strbuilder.append(sb, "&quot;") }
+        else if c == 60 { _ = strbuilder.append(sb, "&lt;") }
+        else if c == 62 { _ = strbuilder.append(sb, "&gt;") }
+        else if c == 38 { _ = strbuilder.append(sb, "&amp;") }
+        else { _ = strbuilder.append_byte(sb, c) }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
