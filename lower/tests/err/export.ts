@@ -1,2 +1,2 @@
 export const x = 1;
-// error: 1:1: a page is a script: export is not supported
+// error: 1:1: a page cannot export: nothing imports a page

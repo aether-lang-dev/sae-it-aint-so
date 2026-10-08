@@ -1,7 +1,11 @@
-// saelower: lower one page file to ES5 on stdout (for tests and servers that
-// precompile). Errors go to stderr as name:line:col: message, exit status 1.
+// saelower: lower one page file to the JavaScript sae runs, on stdout (for
+// tests and servers that precompile). Errors go to stderr as
+// name:line:col: message, exit status 1.
 //
 //   saelower page.ts > page.js
+//   saelower --module m.ts > m.js      lower a module (exports allowed)
+//   saelower --imports page.ts         list what it imports: spec, line, col
+//   saelower --module-imports m.ts     the same for a module
 
 import lower
 import std.fs
@@ -10,19 +14,34 @@ import std.os
 
 main() {
     if os.args_count() < 2 {
-        println("usage: saelower <page.ts>")
+        println("usage: saelower [--module | --imports | --module-imports] <page.ts>")
         exit(2)
     }
+    mode = ""
     path = os.args_get(1)
+    if os.args_count() > 2 {
+        mode = path
+        path = os.args_get(2)
+    }
     src, err = fs.read(path)
     if err != "" {
         println("saelower: cannot read ${path}: ${err}")
         exit(2)
     }
-    out, lerr = lower.lower_source(src, path)
+    out = ""
+    lerr = ""
+    if mode == "--module" || mode == "--module-imports" {
+        out, lerr = lower.lower_module(src, path, "")
+    } else {
+        out, lerr = lower.lower_source(src, path)
+    }
     if lerr != "" {
         println(lerr)
         exit(1)
+    }
+    if mode == "--imports" || mode == "--module-imports" {
+        print(lower.page_imports())
+        return
     }
     print(out)
 }

@@ -12,23 +12,30 @@
 // unlock fs, http and shell, and a "hide" at the top of a function takes
 // names away from it (docs/app-capabilities.md).
 //
-// Refused, each with an error naming line and column: import/export (a page
-// is a script), and the TypeScript that is not erasable (enum, namespace,
-// parameter properties), and decorators.
+// The one rewrite that is not an erasure: a static `import` or `export`
+// statement becomes a call on `$sae`, the loader object the host hands the
+// page (README, "Modules"), and a unit that imports, exports or awaits at
+// its top level is wrapped in one function expression (its first line gets
+// a prefix, its last a suffix) so the host can call it with that object.
+// The line count still holds.
+//
+// Refused, each with an error naming line and column: the TypeScript that
+// is not erasable (enum, namespace, parameter properties), decorators,
+// import.meta, export in a page, top-level await in a module.
 
 import std.string
 import std.strbuilder
 import std.strarr
 import std.mem
 
-exports (lower_source, page_seeks, page_optional, page_scopes, LOWER_VERSION)
+exports (lower_source, lower_module, page_seeks, page_optional, page_scopes, page_imports, page_wrapped, LOWER_VERSION)
 
 extern malloc(n: long) -> ptr
 extern realloc(p: ptr, n: long) -> ptr
 extern free(p: ptr)
 
 // Part of sae's bytecode cache key: bump it whenever output changes.
-const LOWER_VERSION = "lower-3"
+const LOWER_VERSION = "lower-4"
 
 // ---------------------------------------------------------------------------
 // A growable int vector.
@@ -126,6 +133,13 @@ struct Lx {
     scopes: string   // scoped seeks, one per line: "privilege\tVERBS\tpattern\n"
     hides: ptr       // std.strarr: "hide" names in force, stacked by function
     hide_base: ptr   // per function: hides length at its start
+    // modules (README, "Modules")
+    is_module: int   // 1: lowering a module (exports allowed, $exports given)
+    has_io: int      // 1 once an import or export was rewritten
+    tla: int         // 1 once an `await` was seen outside every function
+    tla_off: int     // where the first one was
+    imports: string  // what the unit imports: "spec\tline\tcol\n" per import
+    wrapped: int     // 1: the output is a function expression (see wrap_)
 }
 
 ch_(x: *Lx, i: int) -> int {
@@ -1111,10 +1125,26 @@ cap_check_(x: *Lx, i: int) {
 }
 
 parse_program_(x: *Lx) {
-    page_seeks_(x)
+    if x.is_module == 1 {
+        if tk_kind_(x, x.pos) == T_STR && string.starts_with(str_inner_(x, x.pos), "seeks ") == 1 {
+            fail_at_(x, tk_start_(x, x.pos), "a module cannot seek; the page that imports it does, and the module may then name what it sought")
+            return
+        }
+    } else {
+        page_seeks_(x)
+    }
     while tk_kind_(x, x.pos) != T_EOF && x.err == "" {
         parse_statement_(x)
     }
+    if x.err == "" { wrap_(x) }
+}
+
+// An `await` at token i: outside every function it makes the unit a
+// top-level-await page (wrap_ makes the wrapper async).
+note_await_(x: *Lx, i: int) {
+    if (x.fn_varbase as *IVec).len > 0 { return }
+    if x.tla == 0 { x.tla_off = tk_start_(x, i) }
+    x.tla = 1
 }
 
 parse_block_body_(x: *Lx) {
@@ -1250,12 +1280,16 @@ parse_statement_(x: *Lx) {
             return
         }
         if tk_is_(x, i, "import") == 1 && at_off_(x, 1, "(") == 0 && at_off_(x, 1, ".") == 0 {
-            if tk_is_(x, i + 1, "type") == 1 {
+            if tk_is_(x, i + 1, "type") == 1 && (is_ident_tok_(x, i + 2) == 1 || tk_is_(x, i + 2, "{") == 1 || tk_is_(x, i + 2, "*") == 1) && tk_is_(x, i + 2, "from") == 0 {
                 j = skip_stmt_(x, i)
                 erase_tokens_(x, i, j)
                 return
             }
-            fail_at_(x, tk_start_(x, i), "a page is a script: import is not supported")
+            parse_import_(x)
+            return
+        }
+        if tk_is_(x, i, "import") == 1 && at_off_(x, 1, ".") == 1 {
+            fail_at_(x, tk_start_(x, i), "import.meta is not available: a page has no module URL of its own")
             return
         }
         if tk_is_(x, i, "export") == 1 {
@@ -1264,12 +1298,12 @@ parse_statement_(x: *Lx) {
                 erase_tokens_(x, i, j)
                 return
             }
-            if tk_is_(x, i + 1, "type") == 1 || tk_is_(x, i + 1, "interface") == 1 {
+            if tk_is_(x, i + 1, "type") == 1 || tk_is_(x, i + 1, "interface") == 1 || tk_is_(x, i + 1, "declare") == 1 {
                 j = skip_decl_(x, i)
                 erase_tokens_(x, i, j)
                 return
             }
-            fail_at_(x, tk_start_(x, i), "a page is a script: export is not supported")
+            parse_export_(x)
             return
         }
         if tk_is_(x, i, "if") == 1 {
@@ -1388,9 +1422,346 @@ is_reserved_(x: *Lx, i: int) -> int {
     return 0
 }
 
+// ---------------------------------------------------------------------------
+// Modules: static import and export, rewritten in place (README, "Modules").
+//
+// The host resolves, fetches and runs a page's imports before the page, and
+// hands each unit a loader object, `$sae`, as the parameter of the function
+// the unit is wrapped in (wrap_ below); a module also gets `$exports`, the
+// object its importers see. The rewrites, each on the statement's own
+// lines so the line count holds:
+//
+//   import { a, b as c } from "./m.ts"   const { a, b: c } = $sae.m("./m.ts")
+//   import * as ns from "./m.ts"         const ns = $sae.m("./m.ts")
+//   import d from "./m.ts"               const d = $sae.m("./m.ts").default
+//   import "./m.ts"                      $sae.m("./m.ts")
+//   export const a = 1, b = 2            const a = 1, b = 2;$sae.x($exports, "a", () => a, "b", () => b)
+//   export function f() {}               function f() {};$sae.x($exports, "f", () => f)
+//   export { a, b as c }                 $sae.x($exports, "a", () => a, "c", () => b)
+//   export { a as b } from "./m.ts"      $sae.x($exports, "b", () => $sae.m("./m.ts").a)
+//   export * from "./m.ts"               $sae.all($exports, $sae.m("./m.ts"))
+//   export default expr                  $exports.default = expr
+//
+// `$sae.m(spec)` is the namespace object of a module the host already ran
+// (the page's import closure, in dependency order); `$sae.x` defines each
+// export as a getter, so a namespace reads a module's `let` as it is now;
+// an imported binding is a `const` copy taken when the import runs.
+
+// 1 if the parser is outside every function and block (a module statement's
+// place).
+top_level_(x: *Lx) -> int {
+    if (x.fn_varbase as *IVec).len > 0 { return 0 }
+    if (x.sc_mark as *IVec).len > 0 { return 0 }
+    return 1
+}
+
+// The 1-based line and column of offset off.
+line_col_(x: *Lx, off: int) -> (int, int) {
+    line = 1
+    col = 1
+    i = 0
+    while i < off && i < x.n {
+        if ch_(x, i) == 10 {
+            line = line + 1
+            col = 1
+        } else {
+            col = col + 1
+        }
+        i = i + 1
+    }
+    return line, col
+}
+
+// The module specifier at string token j, checked and recorded for the host
+// with the position of the statement at offset at. "" if refused.
+module_spec_(x: *Lx, j: int, at: int) -> string {
+    if tk_kind_(x, j) != T_STR {
+        fail_at_(x, tk_start_(x, j), "expected a module name in quotes")
+        return ""
+    }
+    spec = str_inner_(x, j)
+    if spec == "" || string.contains(spec, "\\") == 1 {
+        fail_at_(x, tk_start_(x, j), "a module name is a path on this origin (\"./m.ts\", \"/lib/m.ts\") or \"sae:<name>\"")
+        return ""
+    }
+    line, col = line_col_(x, at)
+    x.imports = string.concat(x.imports, "${spec}\t${line}\t${col}\n")
+    return spec
+}
+
+// One `name [as alias]` of an import or export list, at the cursor. Type-only
+// entries (`type A`, `type A as B`) are skipped. Returns (name, alias),
+// both "" for a skipped one. bind 1 declares the alias (an import binds a
+// name of the code's own).
+parse_spec_name_(x: *Lx, bind: int) -> (string, string) {
+    if at_(x, "type") == 1 && is_ident_tok_(x, x.pos + 1) == 1 && tk_is_(x, x.pos + 1, "as") == 0 {
+        advance_(x)
+        advance_(x)
+        if at_(x, "as") == 1 {
+            advance_(x)
+            advance_(x)
+        }
+        return "", ""
+    }
+    if is_ident_tok_(x, x.pos) == 0 {
+        fail_at_(x, tk_start_(x, x.pos), "expected a name in an import or export list (string names are not supported)")
+        return "", ""
+    }
+    nm = tk_text_(x, x.pos)
+    ai = x.pos
+    advance_(x)
+    alias = nm
+    if at_(x, "as") == 1 {
+        advance_(x)
+        if is_ident_tok_(x, x.pos) == 0 {
+            fail_at_(x, tk_start_(x, x.pos), "expected a name after 'as'")
+            return "", ""
+        }
+        alias = tk_text_(x, x.pos)
+        ai = x.pos
+        advance_(x)
+    }
+    if bind == 1 { declare_(x, ai, 0) }
+    return nm, alias
+}
+
+// `import ...`, at `import`.
+parse_import_(x: *Lx) {
+    i = x.pos
+    s0 = tk_start_(x, i)
+    if top_level_(x) == 0 {
+        fail_at_(x, s0, "import belongs at the top level of a page, outside every function and block")
+        return
+    }
+    advance_(x)
+    defname = ""
+    ns = ""
+    named = ""
+    if tk_kind_(x, x.pos) != T_STR {
+        if is_ident_tok_(x, x.pos) == 1 && at_(x, "from") == 0 {
+            defname = tk_text_(x, x.pos)
+            declare_(x, x.pos, 0)
+            advance_(x)
+            if at_(x, ",") == 1 { advance_(x) }
+        }
+        if at_(x, "*") == 1 {
+            advance_(x)
+            if expect_(x, "as") == 0 { return }
+            if is_ident_tok_(x, x.pos) == 0 {
+                fail_at_(x, tk_start_(x, x.pos), "expected a name after 'as'")
+                return
+            }
+            ns = tk_text_(x, x.pos)
+            declare_(x, x.pos, 0)
+            advance_(x)
+        } else if at_(x, "{") == 1 {
+            advance_(x)
+            while at_(x, "}") == 0 && x.err == "" {
+                nm, alias = parse_spec_name_(x, 1)
+                if x.err != "" { return }
+                if nm != "" {
+                    if named != "" { named = string.concat(named, ", ") }
+                    if alias == nm { named = string.concat(named, nm) } else { named = string.concat(named, "${nm}: ${alias}") }
+                }
+                if at_(x, ",") == 1 { advance_(x) } else { break }
+            }
+            if expect_(x, "}") == 0 { return }
+        }
+        if expect_(x, "from") == 0 { return }
+    }
+    j = x.pos
+    _spec = module_spec_(x, j, s0)
+    if x.err != "" { return }
+    e = tk_end_(x, j)
+    advance_(x)
+    m = "$sae.m(${tk_text_(x, j)})"
+    parts = ""
+    if defname != "" { parts = "${defname} = ${m}.default" }
+    if ns != "" {
+        if parts != "" { parts = string.concat(parts, ", ") }
+        parts = string.concat(parts, "${ns} = ${m}")
+    }
+    if named != "" {
+        if parts != "" { parts = string.concat(parts, ", ") }
+        parts = string.concat(parts, "{ ${named} } = ${m}")
+    }
+    text = m
+    if parts != "" { text = "const ${parts}" }
+    replace_keep_lines_(x, s0, e, text)
+    x.has_io = 1
+    semi_(x)
+}
+
+// The names declared since the strarr `a` had `from` entries, as
+// `, "n", () => n` pairs for $sae.x. (A truncated scope leaves "" entries,
+// which are skipped.)
+export_pairs_(a: ptr, from: int) -> string {
+    out = ""
+    sz = strarr.size(a)
+    k = from
+    while k < sz {
+        nm = strarr.get(a, k)
+        if nm != "" { out = string.concat(out, ", \"${nm}\", () => ${nm}") }
+        k = k + 1
+    }
+    return out
+}
+
+// `export ...`, at `export`, in a module.
+parse_export_(x: *Lx) {
+    i = x.pos
+    s0 = tk_start_(x, i)
+    if top_level_(x) == 0 {
+        fail_at_(x, s0, "export belongs at the top level of a module, outside every function and block")
+        return
+    }
+    if x.is_module == 0 {
+        fail_at_(x, s0, "a page cannot export: nothing imports a page (export belongs in a module)")
+        return
+    }
+    x.has_io = 1
+    if tk_is_(x, i + 1, "default") == 1 {
+        replace_keep_lines_(x, s0, tk_end_(x, i + 1), "$exports.default =")
+        x.pos = i + 2
+        x.last_end = tk_end_(x, i + 1)
+        if at_(x, "function") == 1 || (at_(x, "async") == 1 && at_off_(x, 1, "function") == 1) {
+            parse_function_(x, 0, 0)
+            if at_(x, ";") == 1 { advance_(x) }
+            return
+        }
+        if at_(x, "class") == 1 {
+            parse_class_(x, 0)
+            if at_(x, ";") == 1 { advance_(x) }
+            return
+        }
+        parse_assign_(x)
+        semi_(x)
+        return
+    }
+    if tk_is_(x, i + 1, "*") == 1 {
+        x.pos = i + 2
+        alias = ""
+        if at_(x, "as") == 1 {
+            advance_(x)
+            if is_ident_tok_(x, x.pos) == 0 {
+                fail_at_(x, tk_start_(x, x.pos), "expected a name after 'as'")
+                return
+            }
+            alias = tk_text_(x, x.pos)
+            advance_(x)
+        }
+        if expect_(x, "from") == 0 { return }
+        j = x.pos
+        _s = module_spec_(x, j, s0)
+        if x.err != "" { return }
+        e = tk_end_(x, j)
+        advance_(x)
+        m = "$sae.m(${tk_text_(x, j)})"
+        if alias == "" {
+            replace_keep_lines_(x, s0, e, "$sae.all($exports, ${m})")
+        } else {
+            replace_keep_lines_(x, s0, e, "$sae.x($exports, \"${alias}\", () => ${m})")
+        }
+        semi_(x)
+        return
+    }
+    if tk_is_(x, i + 1, "{") == 1 {
+        x.pos = i + 2
+        names = strarr.new()
+        aliases = strarr.new()
+        while at_(x, "}") == 0 && x.err == "" {
+            nm, alias = parse_spec_name_(x, 0)
+            if x.err != "" { return }
+            if nm != "" {
+                _n = strarr.push_copy(names, nm)
+                _a = strarr.push_copy(aliases, alias)
+            }
+            if at_(x, ",") == 1 { advance_(x) } else { break }
+        }
+        if expect_(x, "}") == 0 { return }
+        e = x.last_end
+        from = ""
+        if at_(x, "from") == 1 {
+            advance_(x)
+            j = x.pos
+            _s = module_spec_(x, j, s0)
+            if x.err != "" { return }
+            e = tk_end_(x, j)
+            advance_(x)
+            from = "$sae.m(${tk_text_(x, j)})."
+        }
+        pairs = ""
+        n = strarr.size(names)
+        k = 0
+        while k < n {
+            pairs = string.concat(pairs, ", \"${strarr.get(aliases, k)}\", () => ${from}${strarr.get(names, k)}")
+            k = k + 1
+        }
+        strarr.free(names)
+        strarr.free(aliases)
+        replace_keep_lines_(x, s0, e, "$sae.x($exports${pairs})")
+        semi_(x)
+        return
+    }
+    // a declaration: `export` goes, the declaration stays, and its names are
+    // registered after it
+    blank_(x, s0, tk_end_(x, i))
+    advance_(x)
+    sc0 = strarr.size(x.sc_names)
+    fv0 = strarr.size(x.fn_vars)
+    if at_(x, "var") == 1 || at_(x, "let") == 1 || at_(x, "const") == 1 {
+        parse_var_decl_(x, 0)
+        semi_(x)
+    } else if at_(x, "function") == 1 || (at_(x, "async") == 1 && at_off_(x, 1, "function") == 1) {
+        parse_function_(x, 1, 0)
+    } else if at_(x, "class") == 1 {
+        parse_class_(x, 1)
+    } else if at_(x, "abstract") == 1 && at_off_(x, 1, "class") == 1 {
+        blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
+        advance_(x)
+        parse_class_(x, 1)
+    } else if at_(x, "enum") == 1 {
+        fail_at_(x, tk_start_(x, x.pos), "enum is not erasable TypeScript (--erasableSyntaxOnly); use a const object")
+        return
+    } else {
+        fail_at_(x, tk_start_(x, x.pos), "expected a declaration, { names }, * or default after export")
+        return
+    }
+    if x.err != "" { return }
+    pairs = string.concat(export_pairs_(x.sc_names, sc0), export_pairs_(x.fn_vars, fv0))
+    insert_(x, x.last_end, ";$sae.x($exports${pairs})")
+}
+
+// Wrap the unit in a function expression the host calls with the loader
+// object (and a module's exports object): a prefix before the first
+// character and a suffix after the last, so the line count holds. Only a
+// unit that imports, exports or awaits at its top level is wrapped; any
+// other page is the erased script it always was. A unit whose last line has
+// no newline gets one before the suffix (that is the one line added).
+wrap_(x: *Lx) {
+    if x.is_module == 1 && x.tla == 1 {
+        fail_at_(x, x.tla_off, "top-level await belongs in a page, not a module: a module's exports are ready when the page runs")
+        return
+    }
+    if x.is_module == 0 && x.has_io == 0 && x.tla == 0 { return }
+    prefix = "(function ($sae) {"
+    if x.tla == 1 { prefix = "(async function ($sae) {" }
+    if x.is_module == 1 { prefix = "(function ($sae, $exports) {" }
+    insert_(x, 0, prefix)
+    // Before any rewrite that starts at offset 0 (an import on line 1).
+    iv_set_(x.eq as *IVec, (x.eq as *IVec).len - 1, -1)
+    suffix = "})"
+    if x.n == 0 || ch_(x, x.n - 1) != 10 { suffix = "\n})" }
+    insert_(x, x.n, suffix)
+    x.wrapped = 1
+}
+
 parse_for_(x: *Lx) {
     advance_(x)    // for
-    if at_(x, "await") == 1 { advance_(x) }
+    if at_(x, "await") == 1 {
+        note_await_(x, x.pos)
+        advance_(x)
+    }
     expect_(x, "(")
     block_push_(x)
     if at_(x, "let") == 1 || at_(x, "const") == 1 || at_(x, "var") == 1 {
@@ -1967,6 +2338,7 @@ parse_unary_(x: *Lx) {
             return
         }
         if at_(x, "await") == 1 && tk_nlb_(x, x.pos + 1) == 0 && starts_expr_(x, x.pos + 1) == 1 {
+            note_await_(x, x.pos)
             advance_(x)
             parse_unary_(x)
             return
@@ -2117,6 +2489,10 @@ parse_primary_(x: *Lx) {
             parse_class_(x, 0)
             return
         }
+        if tk_is_(x, i, "import") == 1 && tk_is_(x, i + 1, ".") == 1 {
+            fail_at_(x, tk_start_(x, i), "import.meta is not available: a page has no module URL of its own")
+            return
+        }
         cap_check_(x, i)
         advance_(x)
         return
@@ -2262,6 +2638,12 @@ lx_new_(src: string) -> *Lx {
     x.scopes = ""
     x.hides = strarr.new()
     x.hide_base = iv_new_()
+    x.is_module = 0
+    x.has_io = 0
+    x.tla = 0
+    x.tla_off = 0
+    x.imports = ""
+    x.wrapped = 0
     return x
 }
 
@@ -2291,15 +2673,44 @@ lx_free_(x: *Lx) {
 var last_seeks_: string = ""
 var last_optional_: string = ""
 var last_scopes_: string = ""
+// ... and what it imports ("spec\tline\tcol" per line), and whether its
+// output is a function expression to call with the loader object.
+var last_imports_: string = ""
+var last_wrapped_: int = 0
 
 page_seeks() -> string { return last_seeks_ }
 page_optional() -> string { return last_optional_ }
 page_scopes() -> string { return last_scopes_ }
+page_imports() -> string { return last_imports_ }
+page_wrapped() -> int { return last_wrapped_ }
 
-// Lower one page. Returns (es5_source, error): error is "" on success, or
+// Lower one page. Returns (js_source, error): error is "" on success, or
 // "name:line:col: message".
 lower_source(src: string, name: string) -> (string, string) {
+    return lower_unit_(src, name, 0, "")
+}
+
+// Lower one module: exports allowed, no seeks of its own; it may name the
+// privileged objects of `seeks`, the importing page's (",outgoing-http,"),
+// as if it had sought them. Its output is always a function expression
+// (page_wrapped() is 1) taking ($sae, $exports).
+lower_module(src: string, name: string, seeks: string) -> (string, string) {
+    return lower_unit_(src, name, 1, seeks)
+}
+
+lower_unit_(src: string, name: string, is_module: int, seeks: string) -> (string, string) {
     x = lx_new_(src)
+    x.is_module = is_module
+    if is_module == 1 {
+        parts = string.split(seeks, ",")
+        np = string.string_array_size(parts)
+        k = 0
+        while k < np {
+            obj = object_of_(string.string_array_get(parts, k))
+            if obj != "" && string.contains(x.sealed, ",${obj},") == 0 { x.sealed = string.concat(x.sealed, "${obj},") }
+            k = k + 1
+        }
+    }
     lex_(x)
     if x.err == "" { match_brackets_(x) }
     if x.err == "" { parse_program_(x) }
@@ -2307,11 +2718,15 @@ lower_source(src: string, name: string) -> (string, string) {
     last_seeks_ = ""
     last_optional_ = ""
     last_scopes_ = ""
+    last_imports_ = ""
+    last_wrapped_ = 0
     if x.err == "" {
         out = apply_edits_(x)
         last_seeks_ = string.copy(x.sought)
         last_optional_ = string.copy(x.optional)
         last_scopes_ = string.copy(x.scopes)
+        last_imports_ = string.copy(x.imports)
+        last_wrapped_ = x.wrapped
     }
     err = ""
     if x.err != "" { err = "${name}:${x.err_line}:${x.err_col}: ${x.err}" }
