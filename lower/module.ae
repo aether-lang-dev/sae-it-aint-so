@@ -860,7 +860,7 @@ erase_tokens_(x: *Lx, i: int, j: int) {
 // names away from it. Checked by name where each object is used.
 // docs/app-capabilities.md.
 
-const CAPS = ",ui,vg,http,fs,shell,storage,browserContext,"
+const CAPS = ",ui,vg,http,fs,shell,sqlite,storage,browserContext,"
 
 // The text of string token i, without its quotes.
 str_inner_(x: *Lx, i: int) -> string {
@@ -885,9 +885,11 @@ names_of_(list: string) -> string {
 
 // The privileges a page can seek, by the name a page uses for each, and the
 // page-API object each one unlocks. ui, vg, storage and browserContext every
-// page has, so they are not sought.
-const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,"
-const PRIVILEGED = ",fs,http,shell,"
+// page has, so they are not sought. "database" takes the database's name
+// ("seeks database fred", one line per database) and unlocks sqlite.fred;
+// it is kept as "database fred" in the sought and optional lists.
+const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,database:sqlite,"
+const PRIVILEGED = ",fs,http,shell,sqlite,"
 
 // The object a privilege unlocks ("local-filesystem" -> "fs"), or "".
 object_of_(privilege: string) -> string {
@@ -915,6 +917,7 @@ privilege_of_(obj: string) -> string {
 //     "seeks outgoing-http";
 //     "seeks outgoing-http GET,PATCH https://api.github.com/notifications/*";
 //     "seeks outgoing-http GET /api/*, reduced functionality without";
+//     "seeks database fred";
 //
 // The page may then name the objects those unlock. The kernel checks each
 // against what the context grants before the page runs, and checks every
@@ -934,6 +937,25 @@ words_of_(s: string) -> ptr {
         i = i + 1
     }
     return out
+}
+
+// 1 if `s` can name a database: a letter or "_", then letters, digits and
+// "_" (it becomes a property of `sqlite`, and a file name).
+db_name_ok_(s: string) -> int {
+    n = string.length(s)
+    if n == 0 || n > 64 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        ok = 0
+        if c >= 97 && c <= 122 { ok = 1 }
+        if c >= 65 && c <= 90 { ok = 1 }
+        if c == 95 { ok = 1 }
+        if i > 0 && c >= 48 && c <= 57 { ok = 1 }
+        if ok == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
 }
 
 // Why an outgoing-http scope ("GET,POST" and a URL pattern) is malformed, or "".
@@ -986,10 +1008,20 @@ page_seeks_(x: *Lx) {
         }
         obj = object_of_(nm)
         if obj == "" {
-            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls)")
+            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls, database <name>)")
             return
         }
         scoped = 0
+        if nm == "database" {
+            // The name is part of the privilege: "database fred" is one
+            // privilege, "database atlas" another; each line names one.
+            if nw != 2 || db_name_ok_(strarr.get(ws, 1)) == 0 {
+                fail_at_(x, tk_start_(x, j), "\"seeks database\" takes the database's name, as app.json capabilities.sqlite spells it: \"seeks database fred\"")
+                return
+            }
+            nm = "database ${strarr.get(ws, 1)}"
+            nw = 1
+        }
         if nw > 1 {
             if nm != "outgoing-http" {
                 fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\" cannot take a scope yet; seek it without one (only outgoing-http can be scoped so far)")
@@ -1067,9 +1099,13 @@ cap_check_(x: *Lx, i: int) {
         fail_at_(x, tk_start_(x, i), "${nm} is hidden here (a \"hide\" directive)")
         return
     }
-    // fs, http and shell need a "seeks" line; ui, vg, storage and
+    // fs, http, shell and sqlite need a "seeks" line; ui, vg, storage and
     // browserContext every page has.
     if string.contains(PRIVILEGED, ",${nm},") == 1 && string.contains(x.sealed, ",${nm},") == 0 {
+        if nm == "sqlite" {
+            fail_at_(x, tk_start_(x, i), "sqlite needs \"seeks database <name>\" at the top of the page")
+            return
+        }
         fail_at_(x, tk_start_(x, i), "${nm} needs \"seeks ${privilege_of_(nm)}\" at the top of the page")
     }
 }
