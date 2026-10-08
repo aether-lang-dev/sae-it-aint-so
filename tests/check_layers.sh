@@ -51,6 +51,8 @@ if [ -n "$hits" ]; then
 else
     echo "ok   contrib.sqlite is imported only in services/sqlite"
 fi
+expect_imports services/stdlib/module.ae \
+    "import std.fs (read, exists)|import std.string|import std.strarr|import std.cryptography (sha256_hex)"
 
 # ui.open_url, or a bare open_url from a selective import, only in services/shell.
 hits=$(grep -rnE '(^|[^_a-zA-Z0-9])open_url[[:space:]]*\(|import ui \([^)]*open_url' \

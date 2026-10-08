@@ -1,0 +1,28 @@
+// spec_app_imports.ae — an app's pages import from their own bundle (app:
+// paths, relative or absolute) and from sae:, and nothing from elsewhere.
+// (An app has no Back chrome, so one refusal per run; the other refusals
+// are tests/check_module_rules.sh, headless.)
+//   SAE_TEST_APP=tests/apps/imports tests/run_spec.sh spec_app_imports
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "app mode: imports from the bundle") {
+        spec.it("the start page imports from its bundle, through a module that imports another, and sae:") callback {
+            spec.assert_true(b.wait_for_text("app imports: HELLO SAE! true"), "./lib/greet.ts and app:/lib/greet.ts are one module")
+            b.assert_text("band: 50", "sae:scales band")
+        }
+        spec.it("an http import is refused in an app, whatever the network grants") callback {
+            b.click("Outside")
+            spec.assert_true(b.wait_for_text("This page's imports could not be loaded:"), "notice")
+            spec.assert_contains(b.page_texts(), "an app imports only from its own bundle", "why")
+            b.assert_no_text("You should not see this", "none of it ran")
+            spec.assert_true(b.wait_for_console("app:/outside:1:1: import refused"), "logged")
+        }
+    }
+    return spec.run_summary(fw)
+}

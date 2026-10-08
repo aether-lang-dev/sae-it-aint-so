@@ -20,12 +20,38 @@ struct Site {
     dir: string
 }
 
-// A page is <name>.ts, or <name>.js if there is no .ts.
+// A page is <name>.ts, or <name>.js if there is no .ts; a path that already
+// ends in .ts or .js (a module, imported as written) is that file.
 page_file_(site: *Site, path: string) -> string {
     stem = "${site.dir}${path}"
     if path == "/" || path == "" { stem = "${site.dir}/index" }
+    if string.string_ends_with(stem, ".ts") == 1 || string.string_ends_with(stem, ".js") == 1 { return stem }
     if fs.exists("${stem}.ts") == 1 { return "${stem}.ts" }
     return "${stem}.js"
+}
+
+// Routes for the pages of <site>/<sub> (sub "" or "lib/", say), one level
+// of subdirectories under the root.
+route_dir_(server: ptr, site: *Site, sub: string) {
+    l, lerr = dir.list("${site.dir}/${sub}")
+    if lerr != "" {
+        println("pageserver: cannot list ${site.dir}/${sub}")
+        exit(1)
+    }
+    n = dir.list_count(l)
+    i = 0
+    while i < n {
+        name = dir.list_get(l, i)
+        is_page = string.string_ends_with(name, ".js") == 1 || string.string_ends_with(name, ".ts") == 1
+        if is_page && name != "index.js" && name != "index.ts" {
+            route = "/${sub}${string.string_substring(name, 0, string.length(name) - 3)}"
+            http.server_get(server, route, serve_page_, site)
+            http.server_get(server, "/${sub}${name}", serve_page_, site)
+        } else if is_page == 0 && sub == "" && string.contains(name, ".") == 0 {
+            route_dir_(server, site, "${name}/")
+        }
+        i = i + 1
+    }
 }
 
 serve_page_(req: ptr, res: ptr, ud: ptr) {
@@ -291,23 +317,10 @@ main() {
     http.server_get(server, "/api/setcookie", api_setcookie_, 0)
     http.server_get(server, "/api/cors", api_cors_, 0)
 
-    // One route per page file (routes are exact paths, no wildcard).
-    l, lerr = dir.list(site.dir)
-    if lerr != "" {
-        println("pageserver: cannot list ${site.dir}")
-        exit(1)
-    }
-    n = dir.list_count(l)
-    i = 0
-    while i < n {
-        name = dir.list_get(l, i)
-        is_page = string.string_ends_with(name, ".js") == 1 || string.string_ends_with(name, ".ts") == 1
-        if is_page && name != "index.js" && name != "index.ts" {
-            route = string.concat("/", string.string_substring(name, 0, string.length(name) - 3))
-            http.server_get(server, route, serve_page_, site)
-        }
-        i = i + 1
-    }
+    // One route per page file (routes are exact paths, no wildcard), and
+    // for the files of each subdirectory (site/lib/card.ts: a module a page
+    // imports) both as written (/lib/card.ts) and as a page (/lib/card).
+    route_dir_(server, site, "")
 
     // Anything unrouted gets the site's own 404 page.
     nf, nerr = fs.read(page_file_(site, "/404"))

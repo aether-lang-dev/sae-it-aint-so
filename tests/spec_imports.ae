@@ -1,0 +1,87 @@
+// spec_imports.ae — static import and export for pages (README "Modules"):
+// a site page importing a shared component from site/lib/, the sae: page
+// standard library, an integrity hash, top-level await, and the refusals
+// (another origin, data:, a cycle, a hash mismatch, a missing module,
+// dynamic import()), each with its reason on the page and the console.
+//
+//   tests/run_spec.sh spec_imports
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+refused(button: string, reason: string, logged: string) {
+    b.navigate(b.test_url("/imports"))
+    spec.assert_true(b.wait_for_text("imports page: card 1"), "back on the imports page")
+    b.click(button)
+    spec.assert_true(b.wait_for_text("This page's imports could not be loaded:"), "the notice")
+    spec.assert_contains(b.page_texts(), reason, "the reason, on the page")
+    b.assert_no_text("You should not see this", "none of the page ran")
+    spec.assert_true(b.wait_for_console(logged), "logged: ${logged}")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "modules: static import and export") {
+        spec.it("a page imports a shared component from its own origin, every import form") callback {
+            b.navigate(b.test_url("/imports"))
+            spec.assert_true(b.wait_for_text("imports page: card 1"), "the page ran")
+            b.assert_text("[First]", "the component built a card")
+            b.assert_text("  three", "and another")
+            b.assert_text("made: 0 at import, 2 now; card 1, 2 made", "a named import is a copy, a namespace is live, default export")
+            b.assert_text("scale: 25", "sae:scales linear")
+        }
+        spec.it("sae:noise and sae:easing load with no capability and give fixed values") callback {
+            b.click("Noise page")
+            spec.assert_true(b.wait_for_text("noise: 0.1398 0.2197 0.2197 -0.1104"), "the same numbers as lower/tests/mod")
+            b.assert_text("easing: 0.875 8.75", "easeOutCubic(0.5), tween")
+            b.click("Imports page")
+            spec.assert_true(b.wait_for_text("imports page: card 1"), "and back")
+        }
+        spec.it("an import may name the hash of the bytes it expects") callback {
+            b.click("Good hash")
+            spec.assert_true(b.wait_for_text("hash ok: card 1"), "matched")
+        }
+        spec.it("a top-level await: the page continues when its promise settles") callback {
+            b.navigate(b.test_url("/imports"))
+            spec.assert_true(b.wait_for_text("imports page: card 1"), "back")
+            b.click("Top-level await")
+            spec.assert_true(b.wait_for_text("before await"), "the first half ran at once")
+            spec.assert_true(b.wait_for_text("after await: 5"), "then the rest")
+            spec.assert_true(b.wait_for_text("done"), "and after ui.sleep")
+        }
+        spec.it("an import from another origin is refused") callback {
+            refused("Cross-origin", "is not on this page's origin (http://127.0.0.1:8091)", "import_cross:1:1: import refused")
+        }
+        spec.it("a data: import is refused") callback {
+            refused("Data URL", "data: imports are refused", "import_data:1:1: import refused")
+        }
+        spec.it("an import cycle is refused, naming the cycle") callback {
+            refused("Cycle", "import cycle: http://127.0.0.1:8091/import_cycle -> http://127.0.0.1:8091/lib/cycle_a.ts -> http://127.0.0.1:8091/lib/cycle_b.ts -> http://127.0.0.1:8091/lib/cycle_a.ts", "lib/cycle_b.ts:1:1: import \"./cycle_a.ts\": import cycle")
+        }
+        spec.it("a hash that does not match the fetched bytes is refused") callback {
+            refused("Bad hash", "does not match the import's #sha256-0000", "import_hash:1:1: import \"./lib/card.ts#sha256-")
+        }
+        spec.it("a module the server does not have is refused") callback {
+            refused("Missing", "answered 404, not 200", "import_missing:1:1: import \"./lib/nowhere.ts\": http://127.0.0.1:8091/lib/nowhere.ts: answered 404")
+        }
+        spec.it("dynamic import() is still refused: no loader is installed for it") callback {
+            b.navigate(b.test_url("/imports"))
+            spec.assert_true(b.wait_for_text("imports page: card 1"), "back")
+            b.click("Dynamic")
+            spec.assert_true(b.wait_for_text("dynamic: rejected ReferenceError"), "rejected")
+        }
+        spec.it("the page's widgets and runtime go with it") callback {
+            n = b.widget_count()
+            b.navigate(b.test_url("/imports"))
+            spec.assert_true(b.wait_for_text("imports page: card 1"), "loaded")
+            b.navigate(b.test_url("/about"))
+            spec.assert_true(b.wait_for_text_gone("imports page: card 1"), "left")
+            b.navigate(b.test_url("/import_dynamic"))
+            spec.assert_true(b.wait_for_text("dynamic: rejected ReferenceError"), "a plain page again")
+            spec.assert_true(b.wait_for_widget_count(n), "the census is back where it was (${n})")
+        }
+    }
+    return spec.run_summary(fw)
+}

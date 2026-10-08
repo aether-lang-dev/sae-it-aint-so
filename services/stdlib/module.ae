@@ -1,0 +1,122 @@
+// services/stdlib — the `sae:` page standard library (lib/sae/*.ts, bundled
+// with sae), and the integrity checks of the module loader. See
+// docs/architecture.md and README "Modules".
+//
+// A page imports `sae:noise`, `sae:scales`, `sae:easing` with no
+// capability: the modules are files sae carries, never fetched from the
+// network, and this service is the one place they are read. Each one is
+// hashed at build time into lib/sae/MANIFEST ("<name> <sha256>" per line,
+// tools/hash-lib.sh, run by build.sh); a module whose bytes do not match
+// its manifest line is refused, so an edited or corrupted install cannot
+// hand a page something other than what was built.
+//
+// What it can reach is its imports: two fs calls on the one directory the
+// kernel configures, and the digest.
+
+import std.fs (read, exists)
+import std.string
+import std.strarr
+import std.cryptography (sha256_hex)
+
+exports (configure, dir, read_module, sha256, integrity_of, name_ok)
+
+var dir_: string = ""        // lib/sae, as the kernel found it ("" if none)
+var manifest_: string = ""   // its MANIFEST text, read once
+
+// Where the library is (the kernel locates it: $SAE_LIB_DIR, or beside the
+// binary); "" when there is none.
+configure(d: string) {
+    dir_ = string.copy(d)
+    manifest_ = ""
+    if dir_ != "" {
+        m, err = read("${dir_}/MANIFEST")
+        if err == "" { manifest_ = string.copy(m) }
+    }
+}
+
+dir() -> string { return dir_ }
+
+// The SHA-256 of text, as lowercase hex ("" if the digest is unavailable).
+sha256(text: string) -> string {
+    n = string.length(text)
+    hex, err = sha256_hex(string.bytes(text)[0..n])
+    if err != "" { return "" }
+    return hex
+}
+
+// Is `name` a library module name: letters, digits and dashes, starting
+// with a letter (so it names one file under lib/sae and nothing else).
+name_ok(name: string) -> int {
+    n = string.length(name)
+    if n == 0 || n > 64 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(name, i)
+        ok = 0
+        if c >= 97 && c <= 122 { ok = 1 }
+        if c >= 48 && c <= 57 && i > 0 { ok = 1 }
+        if c == 45 && i > 0 { ok = 1 }
+        if ok == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// The hash MANIFEST records for name, or "".
+manifest_hash_(name: string) -> string {
+    lines = string.split(manifest_, "\n")
+    n = string.string_array_size(lines)
+    i = 0
+    while i < n {
+        l = string.trim(string.string_array_get(lines, i))
+        if string.starts_with(l, "${name} ") == 1 {
+            return string.trim(string.substring(l, string.length(name) + 1, string.length(l)))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// The source of library module `name` (as in "sae:<name>"), checked against
+// the manifest. Returns (source, "") or ("", why).
+read_module(name: string) -> (string, string) {
+    if name_ok(name) == 0 { return "", "\"sae:${name}\" is not a library module name (letters, digits and dashes)" }
+    if dir_ == "" { return "", "sae:${name}: this sae has no page standard library (no lib/sae beside the binary and no SAE_LIB_DIR)" }
+    path = "${dir_}/${name}.ts"
+    if exists(path) == 0 { return "", "sae:${name}: no such library module (${path})" }
+    src, err = read(path)
+    if err != "" { return "", "sae:${name}: ${err}" }
+    want = manifest_hash_(name)
+    if want == "" { return "", "sae:${name} is not in lib/sae/MANIFEST (run tools/hash-lib.sh after adding a module)" }
+    got = sha256(src)
+    if got != want {
+        return "", "sae:${name} does not match lib/sae/MANIFEST (sha256 ${got}, manifest ${want}): the module was changed after sae was built"
+    }
+    return src, ""
+}
+
+// An import specifier's integrity fragment: "./x.ts#sha256-<hex>" gives
+// ("./x.ts", "<hex>", ""); no fragment gives (spec, "", ""); any other
+// fragment is an error.
+integrity_of(spec: string) -> (string, string, string) {
+    hash_at = string.index_of(spec, "#")
+    if hash_at < 0 { return string.copy(spec), "", "" }
+    clean = string.substring(spec, 0, hash_at)
+    frag = string.substring(spec, hash_at + 1, string.length(spec))
+    if string.starts_with(frag, "sha256-") == 0 {
+        return clean, "", "\"${spec}\": the only integrity form is #sha256-<64 hex digits>"
+    }
+    hex = string.substring(frag, 7, string.length(frag))
+    n = string.length(hex)
+    if n != 64 { return clean, "", "\"${spec}\": #sha256- takes 64 hex digits, not ${n}" }
+    i = 0
+    while i < n {
+        c = string.char_at(hex, i)
+        ok = 0
+        if c >= 48 && c <= 57 { ok = 1 }
+        if c >= 97 && c <= 102 { ok = 1 }
+        if ok == 0 { return clean, "", "\"${spec}\": #sha256- takes lowercase hex digits" }
+        i = i + 1
+    }
+    return clean, hex, ""
+}

@@ -33,6 +33,7 @@ import services.files
 import services.shell
 import services.net
 import services.sqlite
+import services.stdlib
 import contrib.quickjs
 
 extern malloc(n: long) -> ptr
@@ -127,6 +128,12 @@ struct Page {
                      //   per line, or "" when it seeks outgoing-http unscoped
     absent: string   // privileges it can do without and was not granted, as
                      //   ",local-filesystem,": their objects are not installed
+    // ===== wave1/imports: the page's module registry (README "Modules") =====
+    modules: ptr     // std.list of *PageModule: the page's import closure, run
+    mod_get: int     // $sae.m, the host function (api_register_)
+    mod_fail: int    // reports a rejection after a top-level await
+    mod_factory: int // the JS factory making each unit's $sae object, or 0
+    wrapped: int     // 1: the lowered page is a function to call with $sae
 }
 
 // The pages whose runtimes are live (one in the browser, as a rule).
@@ -4025,6 +4032,11 @@ api_register_(p: *Page) {
     reg_(q, perf, "now", 0, js_performance_now)
     quickjs.set_global(q, "performance", perf)
     quickjs.release(q, perf)
+
+    // ===== wave1/imports: the loader's two functions. Not globals: each
+    // unit meets them on the $sae object its wrapper takes (modules_prepare_).
+    p.mod_get = quickjs.function(q, "m", 1, sae_mod_get)
+    p.mod_fail = quickjs.function(q, "fail", 1, sae_mod_fail)
 }
 
 page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Page {
@@ -4075,6 +4087,7 @@ page_free_(p: *Page) {
     // A page's timers and animation frames stop with it: a tick after this
     // would call into a freed runtime.
     timers_free_(p)
+    modules_free_(p)   // wave1/imports: its module registry
     list.free(p.vg_nodes)
     list.free(p.stacks)
     list.free(p.grids)
@@ -4110,6 +4123,8 @@ page_run_(p: *Page, src: string, times_ns: ptr) -> int {
     long t0 = os.now_monotonic_ns()
     mem.set_long(times_ns, 0, 0)
     v, err = engine_eval_(p.ctx, src, p.url)
+    // wave1/imports: a page with imports or a top-level await is a function
+    if err == "" && p.wrapped == 1 { v, err = modules_run_page_(p, v) }
     mem.set_long(times_ns, 8, os.now_monotonic_ns() - t0)
     if err != "" {
         say_("sae: uncaught exception in ${p.url}:\n${err}")
@@ -4118,6 +4133,379 @@ page_run_(p: *Page, src: string, times_ns: ptr) -> int {
     quickjs.release(p.ctx, v)
     settle_(p.ctx)
     return 1
+}
+
+// ===== wave1/imports: static import, the module registry, and the sae: =====
+// ===== library (README "Modules", lower/README.md "Modules") =====
+//
+// A page's `import` statements are resolved and run before the page. The
+// lowerer rewrites each into `$sae.m(spec)` and wraps the page in a function
+// taking `$sae`; modules_prepare_ walks the import closure (fetched on the
+// same path and rules as pages, each module lowered as a module, hashed,
+// cycles refused), runs each module in dependency order into the page's
+// registry (url -> namespace object, freed with the page), and
+// modules_run_page_ then calls the page with its $sae. `$sae.m` is the one
+// page-reachable function here: it looks a resolved URL up in the registry
+// and nothing else, so a page can reach only what it imported statically.
+//
+// Resolution (module_resolve_): "sae:<name>" is the library bundled with
+// sae (services/stdlib, no capability needed); "./x.ts", "../x.ts" and
+// "/x.ts" resolve against the importer, and must stay on the page's origin
+// (browser), inside the bundle (app: URLs), or inside the page's folder
+// (a page loaded from a file); an absolute http(s) URL is allowed only on
+// the page's own origin. Everything else is refused: another origin, data:,
+// any other scheme, bare names. An import may name the bytes it expects,
+// "./x.ts#sha256-<hex>", and is refused on a mismatch.
+//
+// The loader lives here, in the kernel, because it is page lifecycle: it
+// needs fetch_ (the one page-fetch path, with its own-origin and app rules)
+// and the engine's eval. The library and the integrity checks are a
+// service (services/stdlib), an effect held to its imports: it reads one
+// directory and digests bytes, and nothing else.
+
+struct PageModule {
+    url: string
+    ns: int          // the module's namespace ($exports) object, held
+}
+
+const MODULES_MAX = 64
+
+// Where lib/sae is: $SAE_LIB_DIR, or beside the binary (an install's
+// lib/sae next to bin/, a packaged .app's Resources/lib/sae, or this
+// repository's lib/sae above target/build/bin/). "" if nowhere.
+lib_dir_(exe: string) -> string {
+    d = env_("SAE_LIB_DIR")
+    if d != "" { return d }
+    base = dir_of_(exe)
+    cands = strarr.new()
+    _c1 = strarr.push_copy(cands, "${base}../lib/sae")
+    _c2 = strarr.push_copy(cands, "${base}../Resources/lib/sae")
+    _c3 = strarr.push_copy(cands, "${base}../../../lib/sae")
+    _c4 = strarr.push_copy(cands, "${base}lib/sae")
+    out = ""
+    i = 0
+    while i < strarr.size(cands) {
+        c = strarr.get(cands, i)
+        if out == "" && fs.exists("${c}/MANIFEST") == 1 { out = own_(c) }
+        i = i + 1
+    }
+    strarr.free(cands)
+    return out
+}
+
+// A path with its "." and ".." segments collapsed (a leading "/" is kept,
+// a relative path stays relative). Returns (path, climbed): climbed 1 if a
+// ".." reached above the root.
+norm_path_(path: string) -> (string, int) {
+    abs = string.string_starts_with(path, "/")
+    parts = string.split(path, "/")
+    n = string.string_array_size(parts)
+    kept = strarr.new()
+    nk = 0      // entries of kept in use (strarr has no pop)
+    climbed = 0
+    i = 0
+    while i < n {
+        seg = string.string_array_get(parts, i)
+        if seg == ".." {
+            if nk == 0 { climbed = 1 } else { nk = nk - 1 }
+        } else if seg != "." && (seg != "" || i == n - 1) {
+            if nk < strarr.size(kept) { strarr.set(kept, nk, seg) } else { _k = strarr.push_copy(kept, seg) }
+            nk = nk + 1
+        }
+        i = i + 1
+    }
+    out = ""
+    k = 0
+    while k < nk {
+        out = string.concat(out, "/${strarr.get(kept, k)}")
+        k = k + 1
+    }
+    strarr.free(kept)
+    if out == "" { out = "/" }
+    if abs == 0 { out = string.string_substring(out, 1, string.length(out)) }
+    return out, climbed
+}
+
+// The origin of an http(s) URL, lowercased.
+origin_of_(u: string) -> string {
+    return string.string_to_lower(string.string_substring(u, 0, origin_end_(u)))
+}
+
+// Resolve an import specifier against the URL of the unit that imports it.
+// Returns (url, why): why is "" when the import is allowed.
+module_resolve_(importer: string, spec: string) -> (string, string) {
+    clean, _hex, ierr = stdlib.integrity_of(spec)
+    if ierr != "" { return "", ierr }
+    if string.string_starts_with(clean, "sae:") == 1 {
+        name = string.string_substring(clean, 4, string.length(clean))
+        if stdlib.name_ok(name) == 0 { return "", "\"${clean}\" is not a library module name: sae:<letters, digits and dashes>" }
+        return own_(clean), ""
+    }
+    if string.string_starts_with(clean, "data:") == 1 {
+        return "", "\"${clean}\": data: imports are refused; a page's code comes from its own origin, its bundle, or sae:"
+    }
+    rel = 0
+    if string.string_starts_with(clean, "./") == 1 || string.string_starts_with(clean, "../") == 1 || string.string_starts_with(clean, "/") == 1 { rel = 1 }
+    if rel == 0 && is_http_(clean) == 0 && is_app_(clean) == 0 {
+        return "", "\"${clean}\" cannot be imported: no bare names (there is no npm here) and no other scheme; a path on this origin (\"./m.ts\", \"/lib/m.ts\") or \"sae:<name>\""
+    }
+    if app_dir_ != "" {
+        if is_http_(clean) == 1 { return "", "\"${clean}\": an app imports only from its own bundle (app:/...) or sae:" }
+        u = clean
+        if rel == 1 { u = resolve_(importer, clean) }
+        path, climbed = norm_path_(string.string_substring(u, 4, string.length(u)))
+        if climbed == 1 { return "", "\"${clean}\" climbs above the app's bundle" }
+        return string.concat("app:", path), ""
+    }
+    if is_app_(clean) == 1 { return "", "\"${clean}\": app: pages exist only in an app" }
+    if is_http_(importer) == 1 {
+        u = clean
+        if rel == 1 { u = resolve_(importer, clean) }
+        if origin_of_(u) != origin_of_(importer) {
+            return "", "\"${clean}\" is not on this page's origin (${origin_of_(importer)}): a page imports only from its own origin or sae:"
+        }
+        oe = origin_end_(u)
+        path, climbed = norm_path_(string.string_substring(u, oe, string.length(u)))
+        if climbed == 1 { return "", "\"${clean}\" climbs above the site's root" }
+        return string.concat(string.string_substring(u, 0, oe), path), ""
+    }
+    // a page loaded from a file: its folder is its origin
+    if is_http_(clean) == 1 { return "", "\"${clean}\": a page loaded from a file imports only from its own folder or sae:" }
+    folder = dir_of_(importer)
+    u = resolve_(importer, clean)
+    path, climbed = norm_path_(u)
+    if climbed == 1 || string.string_starts_with(path, folder) == 0 {
+        return "", "\"${clean}\" is outside this page's folder (${folder}): a page loaded from a file imports only from there or sae:"
+    }
+    return path, ""
+}
+
+// The JavaScript side of the loader: a factory making each unit's $sae
+// object (its url, $sae.m, and the two helpers the export rewrites use).
+const MOD_FACTORY_JS = "(function (m) { return function (url) { return { url: url, m: m, x: function (e) { for (var i = 1; i + 1 < arguments.length; i += 2) Object.defineProperty(e, arguments[i], { get: arguments[i + 1], enumerable: true, configurable: true }); }, all: function (e, ns) { Object.keys(ns).forEach(function (k) { if (k !== 'default' && !(k in e)) Object.defineProperty(e, k, { get: function () { return ns[k]; }, enumerable: true, configurable: true }); }); } }; }; })"
+
+// A one-element arguments array for quickjs.call (released by the caller).
+args1_(ctx: ptr, h: int) -> int {
+    a = quickjs.new_array(ctx)
+    _e = quickjs.set_index(ctx, a, 0, h)
+    return a
+}
+
+// A unit's $sae object (a new handle).
+mod_loader_(p: *Page, url: string) -> (int, string) {
+    us = quickjs.new_string(p.ctx, url)
+    a = args1_(p.ctx, us)
+    lo, err = quickjs.call(p.ctx, p.mod_factory, 0, a)
+    quickjs.release(p.ctx, a)
+    quickjs.release(p.ctx, us)
+    return lo, err
+}
+
+// The registry entry for url, or null.
+mod_find_(p: *Page, url: string) -> *PageModule {
+    if p.modules == null { return null }
+    n = list.size(p.modules)
+    i = 0
+    while i < n {
+        mv, _ = list.get(p.modules, i)
+        m = mv as *PageModule
+        if m.url == url { return m }
+        i = i + 1
+    }
+    return null
+}
+
+// Fetch, check, lower and run one module and, first, the modules it
+// imports. chain is the import path so far ("a -> b"), for cycles. Returns
+// "" or why not.
+mod_load_(p: *Page, url: string, seeks: string, hex: string, chain: string, loading: ptr) -> string {
+    if mod_find_(p, url) != null { return "" }
+    if list.size(p.modules) >= MODULES_MAX { return "${url}: more than ${MODULES_MAX} modules in one page" }
+    n = strarr.size(loading)
+    i = 0
+    while i < n {
+        if strarr.get(loading, i) == url { return "import cycle: ${chain} -> ${url}" }
+        i = i + 1
+    }
+    src = ""
+    if string.string_starts_with(url, "sae:") == 1 {
+        s, rerr = stdlib.read_module(string.string_substring(url, 4, string.length(url)))
+        if rerr != "" { return rerr }
+        src = s
+    } else {
+        status, body, _final, ferr = fetch_(url)
+        if ferr != "" { return "${url}: ${ferr}" }
+        if status != 200 { return "${url}: answered ${status}, not 200 (a module must be served as itself)" }
+        src = body
+    }
+    if hex != "" {
+        got = stdlib.sha256(src)
+        if got != hex { return "${url}: sha256 ${got} does not match the import's #sha256-${hex}" }
+    }
+    text, lerr = lower.lower_module(src, url, seeks)
+    if lerr != "" { return lerr }
+    imports = own_(lower.page_imports())
+    _l = strarr.push_copy(loading, url)
+    why = mod_imports_(p, url, imports, seeks, "${chain} -> ${url}", loading)
+    strarr.set(loading, strarr.size(loading) - 1, "")   // popped (no pop in strarr)
+    if why != "" { return why }
+    return mod_run_(p, url, text)
+}
+
+// Load each import of a unit at url, from the lowerer's list ("spec\tline\tcol").
+mod_imports_(p: *Page, url: string, imports: string, seeks: string, chain: string, loading: ptr) -> string {
+    lines = string.split(imports, "\n")
+    n = string.string_array_size(lines)
+    i = 0
+    while i < n {
+        l = string.string_array_get(lines, i)
+        if l != "" {
+            f = string.split(l, "\t")
+            spec = string.string_array_get(f, 0)
+            at = "${url}:${string.string_array_get(f, 1)}:${string.string_array_get(f, 2)}"
+            target, why = module_resolve_(url, spec)
+            if why != "" { return "${at}: import refused: ${why}" }
+            _c, hex, _e = stdlib.integrity_of(spec)
+            why2 = mod_load_(p, target, seeks, hex, chain, loading)
+            if why2 != "" { return "${at}: import \"${spec}\": ${why2}" }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Run a lowered module (a function of ($sae, $exports)) and register its
+// namespace.
+mod_run_(p: *Page, url: string, text: string) -> string {
+    fn, err = engine_eval_(p.ctx, text, url)
+    if err != "" { return "${url}: ${err}" }
+    lo, lerr = mod_loader_(p, url)
+    if lerr != "" {
+        quickjs.release(p.ctx, fn)
+        return "${url}: ${lerr}"
+    }
+    ns = quickjs.new_object(p.ctx)
+    a = quickjs.new_array(p.ctx)
+    _e1 = quickjs.set_index(p.ctx, a, 0, lo)
+    _e2 = quickjs.set_index(p.ctx, a, 1, ns)
+    r, cerr = quickjs.call(p.ctx, fn, 0, a)
+    quickjs.release(p.ctx, a)
+    quickjs.release(p.ctx, lo)
+    quickjs.release(p.ctx, fn)
+    if cerr != "" {
+        quickjs.release(p.ctx, ns)
+        return "${url}: ${cerr}"
+    }
+    quickjs.release(p.ctx, r)
+    m = heap.new(PageModule)
+    m.url = own_(url)
+    m.ns = ns
+    list.add(p.modules, m as ptr)
+    return ""
+}
+
+// After the page is lowered and made, before it runs: load its import
+// closure. Reads the lowerer's record of the page (what it imports, whether
+// it is wrapped) before any module is lowered over it. Returns "" or why
+// the page cannot run.
+modules_prepare_(p: *Page) -> string {
+    p.modules = list.new()
+    p.mod_factory = 0
+    p.wrapped = lower.page_wrapped()
+    imports = own_(lower.page_imports())
+    seeks = string.concat(lower.page_seeks(), lower.page_optional())
+    if imports == "" && p.wrapped == 0 { return "" }
+    f, ferr = engine_eval_(p.ctx, MOD_FACTORY_JS, "sae:loader")
+    if ferr != "" { return "the module loader could not start: ${ferr}" }
+    a = args1_(p.ctx, p.mod_get)
+    fac, cerr = quickjs.call(p.ctx, f, 0, a)
+    quickjs.release(p.ctx, a)
+    quickjs.release(p.ctx, f)
+    if cerr != "" { return "the module loader could not start: ${cerr}" }
+    p.mod_factory = fac
+    loading = strarr.new()
+    _l = strarr.push_copy(loading, p.url)
+    why = mod_imports_(p, p.url, imports, seeks, p.url, loading)
+    strarr.free(loading)
+    return why
+}
+
+// Run a wrapped page: call its function with the page's $sae. An async
+// wrapper (a top-level await) gives a promise; a rejection of it is
+// reported as an uncaught exception, through $sae.fail. Returns (value, "")
+// or (0, error).
+modules_run_page_(p: *Page, fn: int) -> (int, string) {
+    lo, lerr = mod_loader_(p, p.url)
+    if lerr != "" {
+        quickjs.release(p.ctx, fn)
+        return 0, lerr
+    }
+    a = args1_(p.ctx, lo)
+    r, err = quickjs.call(p.ctx, fn, 0, a)
+    quickjs.release(p.ctx, a)
+    quickjs.release(p.ctx, lo)
+    quickjs.release(p.ctx, fn)
+    if err != "" { return 0, err }
+    if quickjs.type_of(p.ctx, r) == "promise" {
+        then, terr = quickjs.get(p.ctx, r, "then")
+        if terr == "" {
+            ta = quickjs.new_array(p.ctx)
+            und = quickjs.new_undefined(p.ctx)
+            _t1 = quickjs.set_index(p.ctx, ta, 0, und)
+            _t2 = quickjs.set_index(p.ctx, ta, 1, p.mod_fail)
+            r2, _e = quickjs.call(p.ctx, then, r, ta)
+            quickjs.release(p.ctx, r2)
+            quickjs.release(p.ctx, und)
+            quickjs.release(p.ctx, ta)
+            quickjs.release(p.ctx, then)
+        }
+    }
+    return r, ""
+}
+
+modules_free_(p: *Page) {
+    if p.modules == null { return }
+    n = list.size(p.modules)
+    i = 0
+    while i < n {
+        mv, _ = list.get(p.modules, i)
+        m = mv as *PageModule
+        quickjs.release(p.ctx, m.ns)
+        heap.free(m)
+        i = i + 1
+    }
+    list.free(p.modules)
+    p.modules = null
+    if p.mod_factory != 0 { quickjs.release(p.ctx, p.mod_factory) }
+    quickjs.release(p.ctx, p.mod_get)
+    quickjs.release(p.ctx, p.mod_fail)
+}
+
+// --- the page API: $sae, the loader object a unit's wrapper takes ---
+
+// $sae.m(spec): the namespace of a module this page imported, resolved
+// against the unit's own URL (this.url). Nothing is fetched here: a module
+// not in the registry (not imported statically) is a TypeError.
+sae_mod_get(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    spec = arg_str_(ctx, argv, argc, 0)
+    url = js_prop_str_(ctx, this_val, "url", p.url)
+    target, why = module_resolve_(url, spec)
+    if why != "" { return sae_throw_type_error(ctx, "import refused: ${why}") }
+    m = mod_find_(p, target)
+    if m == null { return sae_throw_type_error(ctx, "\"${spec}\" is not imported by this page (imports are static: an import statement at the top of the page)") }
+    return quickjs.dup(ctx, m.ns)
+}
+
+// $sae.fail(e): what a page's top-level await left unhandled.
+sae_mod_fail(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    say_("sae: uncaught exception in ${p.url} (after a top-level await):\n${arg_str_(ctx, argv, argc, 0)}")
+    return 0
 }
 
 // --- navigation ---
@@ -4201,6 +4589,17 @@ load_(b: *Browser, url: string) {
 
     p = page_new_(b, final_url, absent, scopes)
     b.page = p
+    // ===== wave1/imports: the page's static imports, fetched, lowered and
+    // run before the page (README "Modules"); refused with the reason.
+    mwhy = modules_prepare_(p)
+    if mwhy != "" {
+        ui.text(mem.long_to_ptr(b.content), "This page's imports could not be loaded:")
+        ui.text(mem.long_to_ptr(b.content), mwhy)
+        set_status_(b, "${status} ${final_url}")
+        say_("sae: ${mwhy}")
+        b.last_ok = 0
+        return
+    }
     times = malloc(16)
     ok = page_run_(p, es5, times)
     long parse_ns = mem.get_long(times, 0)
@@ -4399,6 +4798,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     h = 600
     b = browser_new_()
     browser_ = b as ptr
+    stdlib.configure(lib_dir_(exe))   // wave1/imports: the sae: library
     root = aether_ui_vstack_create(6)
     sqlite_why = ""   // wave1/sqlite: why the app cannot start, if a database cannot be opened or migrated
     if app != "" {

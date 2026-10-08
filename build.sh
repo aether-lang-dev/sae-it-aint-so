@@ -41,5 +41,7 @@ if [ -n "${SAE_AETHER_HOME:-}" ] && [ -f "$SAE_AETHER_HOME/scripts/fetch-quickjs
         exit 1
     }
 fi
+# The page standard library's hashes (lib/sae/MANIFEST) are the build's.
+sh "$ROOT/tools/hash-lib.sh"
 cd "$ROOT"
 exec aeb "${1:-.build.ae}"
