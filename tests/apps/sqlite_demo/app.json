@@ -1,0 +1,9 @@
+{
+  "name": "Sqlite demo",
+  "width": 520, "height": 480,
+  "capabilities": {
+    "sqlite": {
+      "notes": { "migrations": ["db/001_init.sql", "db/002_tags.sql"] }
+    }
+  }
+}

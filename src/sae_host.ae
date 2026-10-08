@@ -32,6 +32,7 @@ import std.actors
 import services.files
 import services.shell
 import services.net
+import services.sqlite
 import contrib.quickjs
 
 extern malloc(n: long) -> ptr
@@ -2284,6 +2285,649 @@ esc_nav_refused_(b: *Browser, url: string) -> int {
 }
 
 // ===== end wave1/escape =====
+// ===== wave1/sqlite: the page API: sqlite.<name> (app mode), one actor per database =====
+//
+//   const rows = await sqlite.fred.all("select * from notes where tag = ?", [tag]);
+//   const one  = await sqlite.fred.get("select * from notes where id = ?", [id]);
+//   const r    = await sqlite.fred.run("insert into notes(body) values (?)", [text]);  // r.changes, r.lastId
+//   await sqlite.fred.transaction(async tx => { await tx.run(...); });   // rolled back if it throws
+//
+// app.json declares each database under capabilities.sqlite, with its
+// migrations; a page seeks "database fred" and gets sqlite.fred, an object
+// holding the name (__db) and these calls. The kernel opened the file at
+// start (sqlite_start_: the app's private data folder, keyed per installed
+// app, never a page-named path), applied the migrations the database had
+// not seen, and gave the connection to one SqliteWorker actor per database.
+// Each call becomes a SqliteJob run on that actor, off the UI thread, in the
+// order the page made them; the finished job goes to the SqliteInbox actor,
+// and a UI timer takes it and settles the page's promise on the UI thread,
+// where the engine lives (the http pattern). A reply for a page that has
+// since been left is dropped. Values reach the service as JSON and rows
+// come back as JSON (services/sqlite, the one module that names the
+// engine; docs/page-services.md, 6).
+//
+// A transaction is a BEGIN job, the page's callback with a tx object whose
+// calls carry the transaction's id, then COMMIT or ROLLBACK as the callback's
+// promise settles. While one is open, jobs from any other caller wait in
+// the database's queue until it ends (the owning page's own plain calls
+// join it, so a page cannot deadlock itself); a page left mid-transaction
+// has it rolled back before anything else runs.
+
+const SQLITE_OP_QUERY = 0
+const SQLITE_OP_BEGIN = 1
+const SQLITE_OP_END = 2
+
+// One declared database: its connection (used only on its worker once the
+// app has started), its worker, and the open transaction, if any.
+struct SqliteDb {
+    name: string
+    path: string
+    db: ptr          // the connection (services/sqlite opened it)
+    worker: ptr      // its SqliteWorker actor
+    tx_owner: int    // the open transaction's id, or 0
+    tx_page: ptr     // the page that owns it, and its load
+    tx_seq: int
+    waiting: ptr     // std.list of *SqliteJob held until the transaction ends
+}
+
+struct SqliteJob {
+    id: int          // 0 for the kernel's own (an automatic rollback)
+    db: ptr          // *SqliteDb
+    kind: int        // sqlite.KIND_*
+    op: int          // SQLITE_OP_*
+    sql: string
+    params: string   // the page's parameters as JSON, or ""
+    tx: int          // the transaction it belongs to, or 0
+    page: ptr        // the page that asked, and its load
+    seq: int
+    result: string   // JSON, when err is ""
+    err: string
+}
+
+// A call a page is waiting on: its promise's resolve and reject.
+struct SqliteWait {
+    id: int
+    page: ptr
+    seq: int
+    resolve: int
+    reject: int
+}
+
+// The two small JS functions the sqlite API hands a page, compiled once per
+// page and held: one makes an Error (a rejection carries a real Error), one
+// runs a transaction around the page's callback.
+struct SqlitePageFns {
+    page: ptr
+    seq: int
+    err_fn: int
+    tx_fn: int
+}
+
+message SqliteRun { job: ptr }
+message SqliteDone { job: ptr }
+message SqliteTake {}
+
+// Runs one job on a scheduler thread, then hands it to the inbox. One per
+// database, so a database's statements run one at a time, in order.
+actor SqliteWorker {
+    receive {
+        SqliteRun(job) -> {
+            sqlite_do_(job)
+            ib = actors.whereis("sae-sqlite-inbox")
+            ib ! SqliteDone { job: job }
+        }
+    }
+}
+
+// Finished jobs, until the UI thread takes them. sqlite_done_ is touched only
+// in these handlers, so the actor serializes every access to it.
+var sqlite_done_: ptr = null
+
+actor SqliteInbox {
+    receive {
+        SqliteDone(job) -> {
+            if sqlite_done_ == null { sqlite_done_ = list.new() }
+            list.add(sqlite_done_, job)
+        }
+        SqliteTake() -> {
+            long r = 0
+            if sqlite_done_ != null {
+                if list.size(sqlite_done_) > 0 {
+                    j, _ = list.get(sqlite_done_, 0)
+                    list.list_remove(sqlite_done_, 0)
+                    r = mem.ptr_to_long(j)
+                }
+            }
+            reply r
+        }
+    }
+}
+
+var sqlite_dbs_: ptr = null      // std.list of *SqliteDb, from app.json, at start
+var sqlite_waits_: ptr = null    // std.list of *SqliteWait
+var sqlite_fns_: ptr = null      // std.list of *SqlitePageFns
+var sqlite_ids_ = 0
+var sqlite_tx_ids_ = 0
+var sqlite_timer_ = 0
+
+// On the worker: run the job's statement.
+sqlite_do_(jp: ptr) {
+    j = jp as *SqliteJob
+    d = j.db as *SqliteDb
+    res, err = sqlite.execute(d.db, j.kind, j.sql, j.params)
+    if err != "" && j.op == SQLITE_OP_END && j.sql == "COMMIT" {
+        // A COMMIT that fails leaves the transaction open: close it.
+        _r, _e = sqlite.execute(d.db, sqlite.KIND_EXEC, "ROLLBACK", "")
+    }
+    j.result = own_(res)
+    j.err = own_(err)
+}
+
+sqlite_inbox_() -> ptr {
+    ib = actors.whereis("sae-sqlite-inbox")
+    if ib == null {
+        ib = spawn(SqliteInbox())
+        actors.register("sae-sqlite-inbox", ib)
+    }
+    return ib
+}
+
+// The declared database called `name`, or null.
+sqlite_db_(name: string) -> ptr {
+    if sqlite_dbs_ == null { return null }
+    n = list.size(sqlite_dbs_)
+    i = 0
+    while i < n {
+        dv, _ = list.get(sqlite_dbs_, i)
+        if (dv as *SqliteDb).name == name { return dv }
+        i = i + 1
+    }
+    return null
+}
+
+// 1 if app.json declares a database called `name` (available_ asks, for
+// "seeks database <name>").
+sqlite_granted_(name: string) -> int {
+    if sqlite_db_(name) != null { return 1 }
+    return 0
+}
+
+// 1 if the database's name can be a sqlite property and a file name: a
+// letter or "_", then letters, digits and "_" (the lowerer's rule).
+sqlite_name_ok_(s: string) -> int {
+    n = string.length(s)
+    if n == 0 || n > 64 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        ok = 0
+        if c >= 97 && c <= 122 { ok = 1 }
+        if c >= 65 && c <= 90 { ok = 1 }
+        if c == 95 { ok = 1 }
+        if i > 0 && c >= 48 && c <= 57 { ok = 1 }
+        if ok == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// At start, in app mode: open each database app.json declares under
+// capabilities.sqlite, apply its migrations in order, and give it a worker.
+// Returns "" or why the app cannot start (a database that cannot be opened,
+// a migration that fails: nothing of it is kept, and the app is refused with
+// the reason rather than run against a schema it did not ask for).
+sqlite_start_(manifest: ptr) -> string {
+    sqlite_dbs_ = list.new()
+    if manifest == null { return "" }
+    caps = json.json_object_get_raw(manifest, "capabilities")
+    if caps == null { return "" }
+    decl = json.json_object_get_raw(caps, "sqlite")
+    if decl == null { return "" }
+    if json.json_type(decl) != 5 { return "app.json capabilities.sqlite must be an object: { \"<name>\": { \"migrations\": [...] } }" }
+    dir = "${storage_dir_("app:/")}/.sqlite"
+    n = json.json_object_size_raw(decl)
+    i = 0
+    while i < n {
+        name = json.json_object_key_at(decl, i)
+        spec_ = json.json_object_value_at(decl, i)
+        i = i + 1
+        if sqlite_name_ok_(name) == 0 { return "app.json capabilities.sqlite: \"${name}\" is not a database name (a letter or _, then letters, digits and _)" }
+        if json.json_type(spec_) != 5 { return "app.json capabilities.sqlite.${name} must be an object with \"migrations\"" }
+        if json.json_object_has(spec_, "bundled") == 1 || json.json_object_has(spec_, "readonly") == 1 {
+            return "app.json capabilities.sqlite.${name}: \"bundled\" and \"readonly\" databases are not built yet (version 2); version 1 is app-owned databases with migrations"
+        }
+        _m = fs.mkdir_p(dir)
+        path = "${dir}/${name}.db"
+        db, oerr = sqlite.open(path)
+        if db == null { return "sqlite ${name}: ${oerr}" }
+        migs = json.json_object_get_raw(spec_, "migrations")
+        nm = 0
+        if migs != null { nm = json.json_array_size(migs) }
+        k = 0
+        while k < nm {
+            mv, merr0 = json.get_string(json.json_array_get_raw(migs, k))
+            k = k + 1
+            if merr0 != "" {
+                _c0 = sqlite.close(db)
+                return "sqlite ${name}: app.json capabilities.sqlite.${name}.migrations: each entry is a path in the app, like \"db/001_init.sql\""
+            }
+            if string.string_starts_with(mv, "/") == 1 || string.contains(mv, "..") == 1 || string.contains(mv, "\\") == 1 {
+                _c1 = sqlite.close(db)
+                return "sqlite ${name}: migration ${mv}: a migration is a file inside the app (no \"..\", no absolute path)"
+            }
+            text, rerr = fs.read("${app_dir_}/${mv}")
+            if rerr != "" {
+                _c2 = sqlite.close(db)
+                return "sqlite ${name}: migration ${mv}: ${rerr}"
+            }
+            applied, merr = sqlite.migrate(db, mv, text)
+            if merr != "" {
+                _c3 = sqlite.close(db)
+                return "sqlite ${name}: migration ${mv} failed: ${merr}"
+            }
+            if applied == 1 { println("sae: sqlite ${name}: applied ${mv}") }
+        }
+        d = heap.new(SqliteDb)
+        d.name = own_(name)
+        d.path = own_(path)
+        d.db = db
+        d.worker = spawn(SqliteWorker())
+        d.tx_owner = 0
+        d.tx_page = null
+        d.tx_seq = 0
+        d.waiting = list.new()
+        list.add(sqlite_dbs_, d as ptr)
+        println("sae: sqlite ${name}: ${path}")
+    }
+    _ib = sqlite_inbox_()
+    return ""
+}
+
+// An app sqlite_start_ refused: say why in the window and the console, and
+// run no page.
+sqlite_refuse_app_(b: *Browser, why: string) {
+    ui.text(mem.long_to_ptr(b.content), "This app cannot start:")
+    ui.text(mem.long_to_ptr(b.content), why)
+    set_status_(b, "error: ${why}")
+    println("sae: ${why}")
+    b.last_ok = 0
+}
+
+// The databases a page gets, as ",fred,atlas,": those it seeks (required
+// or optional) that app.json declares and were not left out (p.absent).
+// Runs from api_register_, in page_new_, in load_, right after the page was
+// lowered, so the lowerer's answers are this page's.
+sqlite_page_dbs_(p: *Page) -> string {
+    out = ","
+    if app_dir_ == "" { return out }
+    parts = string.split("${lower.page_seeks()},${lower.page_optional()}", ",")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        e = string.string_array_get(parts, i)
+        i = i + 1
+        if string.string_starts_with(e, "database ") == 0 { continue }
+        name = string.string_substring(e, 9, string.length(e))
+        if string.contains(p.absent, ",${e},") == 1 { continue }
+        if sqlite_db_(name) == null { continue }
+        if string.contains(out, ",${name},") == 0 { out = string.concat(out, "${name},") }
+    }
+    return out
+}
+
+// 1 if the page `pg` (as loaded `seq`) is the one on screen.
+sqlite_page_live_(pg: ptr, seq: int) -> int {
+    b = browser_
+    if b == null { return 0 }
+    cur = (b as *Browser).page
+    if cur == null || cur != pg { return 0 }
+    if (cur as *Page).seq != seq { return 0 }
+    return 1
+}
+
+// The page's helper functions (SqlitePageFns), made on first use.
+sqlite_fns_for_(ctx: ptr, p: *Page) -> *SqlitePageFns {
+    if sqlite_fns_ == null { sqlite_fns_ = list.new() }
+    // Entries for pages that are gone go first (their handles went with
+    // the runtime; nothing to release).
+    i = 0
+    while i < list.size(sqlite_fns_) {
+        fv, _ = list.get(sqlite_fns_, i)
+        f = fv as *SqlitePageFns
+        if f.page == p as ptr && f.seq == p.seq { return f }
+        if sqlite_page_live_(f.page, f.seq) == 0 {
+            list.list_remove(sqlite_fns_, i)
+            heap.free(f)
+        } else {
+            i = i + 1
+        }
+    }
+    es = "(function (m) { return new Error(m); })"
+    ts = "(function (db, fn, id) { return db.__begin(id).then(function () { var tx = { __db: db.__db, __tx: id, all: db.all, get: db.get, run: db.run }; var r; try { r = Promise.resolve(fn(tx)); } catch (e) { r = Promise.reject(e); } return r.then(function (v) { return db.__end(id, true).then(function () { return v; }); }, function (e) { return db.__end(id, false).then(function () { throw e; }, function () { throw e; }); }); }); })"
+    ef, e1 = quickjs.eval(ctx, es, "sae:sqlite")
+    if e1 != "" { return null }
+    tf, e2 = quickjs.eval(ctx, ts, "sae:sqlite")
+    if e2 != "" { return null }
+    f = heap.new(SqlitePageFns)
+    f.page = p as ptr
+    f.seq = p.seq
+    f.err_fn = ef
+    f.tx_fn = tf
+    list.add(sqlite_fns_, f as ptr)
+    return f
+}
+
+// Send a job to its database's worker, or hold it while another caller's
+// transaction is open. Jobs reach the worker in the order they are sent,
+// and the worker runs them in that order, so the transaction's bracket is
+// exactly the jobs sent between its BEGIN and its END.
+sqlite_enqueue_(d: *SqliteDb, j: *SqliteJob) {
+    // A transaction whose page has gone is rolled back before anything
+    // else runs on the database.
+    if d.tx_owner != 0 && sqlite_page_live_(d.tx_page, d.tx_seq) == 0 {
+        sqlite_rollback_stale_(d)
+    }
+    if d.tx_owner != 0 && j.tx != d.tx_owner && (j.page != d.tx_page || j.seq != d.tx_seq) {
+        list.add(d.waiting, j as ptr)
+        return
+    }
+    sqlite_send_(d, j)
+    if j.op == SQLITE_OP_END { sqlite_flush_(d) }
+}
+
+sqlite_send_(d: *SqliteDb, j: *SqliteJob) {
+    if j.op == SQLITE_OP_BEGIN {
+        d.tx_owner = j.tx
+        d.tx_page = j.page
+        d.tx_seq = j.seq
+    }
+    if j.op == SQLITE_OP_END { d.tx_owner = 0 }
+    w = d.worker
+    w ! SqliteRun { job: j as ptr }
+}
+
+// The open transaction's page is gone: send its ROLLBACK (no page waits on
+// it) and free the lock.
+sqlite_rollback_stale_(d: *SqliteDb) {
+    j = heap.new(SqliteJob)
+    j.id = 0
+    j.db = d as ptr
+    j.kind = sqlite.KIND_EXEC
+    j.op = SQLITE_OP_END
+    j.sql = "ROLLBACK"
+    j.params = ""
+    j.tx = d.tx_owner
+    j.page = d.tx_page
+    j.seq = d.tx_seq
+    j.result = ""
+    j.err = ""
+    println("sae: sqlite ${d.name}: a page left its transaction open; rolled back")
+    sqlite_send_(d, j)
+}
+
+// After a transaction ends: send what waited, in order, until the next
+// BEGIN among them opens another transaction (then its own jobs go, the
+// rest keep waiting). Jobs for pages that have gone are dropped.
+sqlite_flush_(d: *SqliteDb) {
+    held = d.waiting
+    d.waiting = list.new()
+    n = list.size(held)
+    i = 0
+    while i < n {
+        jv, _ = list.get(held, i)
+        i = i + 1
+        j = jv as *SqliteJob
+        if sqlite_page_live_(j.page, j.seq) == 0 {
+            // Its promise can never settle; the wait goes when the inbox is
+            // next polled (sqlite_deliver_ frees a wait whose page is gone).
+            ib = sqlite_inbox_()
+            j.err = "the page is gone"
+            ib ! SqliteDone { job: j as ptr }
+            continue
+        }
+        if d.tx_owner != 0 && j.tx != d.tx_owner && (j.page != d.tx_page || j.seq != d.tx_seq) {
+            list.add(d.waiting, j as ptr)
+            continue
+        }
+        sqlite_send_(d, j)
+    }
+    list.free(held)
+}
+
+// On the UI thread: take every finished job and settle its page's promise.
+sqlite_poll_() {
+    ib = sqlite_inbox_()
+    while true {
+        jl = ib ? SqliteTake {}
+        if jl == 0 { break }
+        sqlite_deliver_(mem.long_to_ptr(jl) as *SqliteJob)
+    }
+    // A transaction whose page has gone, with nothing else asking: roll it
+    // back now rather than at the next call.
+    if sqlite_dbs_ != null {
+        k = 0
+        while k < list.size(sqlite_dbs_) {
+            dv, _ = list.get(sqlite_dbs_, k)
+            d = dv as *SqliteDb
+            if d.tx_owner != 0 && sqlite_page_live_(d.tx_page, d.tx_seq) == 0 {
+                sqlite_rollback_stale_(d)
+                sqlite_flush_(d)
+            }
+            k = k + 1
+        }
+    }
+    if list.size(sqlite_waits_) == 0 {
+        ui.timer_cancel(sqlite_timer_)
+        sqlite_timer_ = 0
+    }
+}
+
+sqlite_deliver_(j: *SqliteJob) {
+    n = list.size(sqlite_waits_)
+    i = 0
+    while i < n {
+        wv, _ = list.get(sqlite_waits_, i)
+        w = wv as *SqliteWait
+        if w.id == j.id && j.id != 0 {
+            list.list_remove(sqlite_waits_, i)
+            if sqlite_page_live_(w.page, w.seq) == 1 {
+                p = w.page as *Page
+                ctx = p.ctx
+                args = quickjs.new_array(ctx)
+                r = 0
+                e = ""
+                if j.err == "" {
+                    vh, perr = quickjs.parse_json(ctx, j.result)
+                    if perr != "" {
+                        j.err = "bad JSON from the database actor: ${perr}"
+                    } else {
+                        _s = quickjs.set_index(ctx, args, 0, vh)
+                        quickjs.release(ctx, vh)
+                        r, e = quickjs.call(ctx, w.resolve, 0, args)
+                    }
+                }
+                if j.err != "" {
+                    f = sqlite_fns_for_(ctx, p)
+                    eh = 0
+                    if f != null {
+                        margs = quickjs.new_array(ctx)
+                        ms = quickjs.new_string(ctx, j.err)
+                        _s1 = quickjs.set_index(ctx, margs, 0, ms)
+                        quickjs.release(ctx, ms)
+                        eh, _ee = quickjs.call(ctx, f.err_fn, 0, margs)
+                        quickjs.release(ctx, margs)
+                    }
+                    if eh == 0 { eh = quickjs.new_string(ctx, j.err) }
+                    _s2 = quickjs.set_index(ctx, args, 0, eh)
+                    quickjs.release(ctx, eh)
+                    r, e = quickjs.call(ctx, w.reject, 0, args)
+                }
+                quickjs.release(ctx, args)
+                if e != "" { report_exception_(ctx, "a sqlite promise") }
+                if r != 0 { quickjs.release(ctx, r) }
+                quickjs.release(ctx, w.resolve)
+                quickjs.release(ctx, w.reject)
+                settle_(ctx)
+            }
+            heap.free(w)
+            break
+        }
+        i = i + 1
+    }
+    heap.free(j)
+}
+
+// The page's database `name` from this_val (sqlite.<name>, or a tx object),
+// with the transaction id it carries, or 0; "" if this is neither.
+sqlite_this_(ctx: ptr, this_val: int) -> (string, int) {
+    if quickjs.type_of(ctx, this_val) != "object" { return "", 0 }
+    name = js_prop_str_(ctx, this_val, "__db", "")
+    tx = 0
+    th, terr = quickjs.get(ctx, this_val, "__tx")
+    if terr == "" {
+        if quickjs.type_of(ctx, th) == "number" { tx = quickjs.to_int(ctx, th) }
+        quickjs.release(ctx, th)
+    }
+    return name, tx
+}
+
+// Queue one job for the page and return the promise it settles.
+sqlite_submit_(ctx: ptr, kind: int, op: int, sql: string, params: string, name: string, tx: int) -> int {
+    p = page_of_(ctx)
+    dv = sqlite_db_(name)
+    if dv == null { return sae_throw_type_error(ctx, "sqlite: no database called \"${name}\" (call it as sqlite.<name>.all/get/run)") }
+    d = dv as *SqliteDb
+    if string.contains(sqlite_page_dbs_(p), ",${name},") == 0 {
+        return sae_throw_type_error(ctx, "sqlite.${name}: this page did not seek it")
+    }
+    if op == SQLITE_OP_END && tx != d.tx_owner {
+        return sae_throw_type_error(ctx, "sqlite.${name}: no such open transaction")
+    }
+    if sqlite_waits_ == null { sqlite_waits_ = list.new() }
+    pr = quickjs.new_promise(ctx)
+    resolve, _e1 = quickjs.get(ctx, pr, "resolve")
+    reject, _e2 = quickjs.get(ctx, pr, "reject")
+    promise, _e3 = quickjs.get(ctx, pr, "promise")
+    quickjs.release(ctx, pr)
+    sqlite_ids_ = sqlite_ids_ + 1
+    j = heap.new(SqliteJob)
+    j.id = sqlite_ids_
+    j.db = dv
+    j.kind = kind
+    j.op = op
+    j.sql = own_(sql)
+    j.params = own_(params)
+    j.tx = tx
+    j.page = p as ptr
+    j.seq = p.seq
+    j.result = ""
+    j.err = ""
+    w = heap.new(SqliteWait)
+    w.id = j.id
+    w.page = p as ptr
+    w.seq = p.seq
+    w.resolve = resolve
+    w.reject = reject
+    list.add(sqlite_waits_, w as ptr)
+    sqlite_enqueue_(d, j)
+    if sqlite_timer_ == 0 { sqlite_timer_ = ui.timer(10, || { sqlite_poll_() }) }
+    return promise
+}
+
+// sqlite.<name>.all(sql, params?) / get / run: the page's SQL with its
+// values as parameters (an array for ?, an object for $name), never spliced
+// in. A promise of the rows (all), the first row or null (get), or
+// { changes, lastId } (run); rejected with an Error carrying the engine's
+// message.
+sqlite_call_(ctx: ptr, this_val: int, argv: int, argc: int, kind: int, what: string) -> int {
+    name, tx = sqlite_this_(ctx, this_val)
+    if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.${what}(sql, params)") }
+    if argc < 1 { return sae_throw_type_error(ctx, "sqlite.${name}.${what}(sql, params?)") }
+    sql = arg_str_(ctx, argv, argc, 0)
+    params = ""
+    if argc > 1 {
+        ph = quickjs.arg(ctx, argv, 1)
+        params = quickjs.to_json(ctx, ph)
+        quickjs.release(ctx, ph)
+    }
+    return sqlite_submit_(ctx, kind, SQLITE_OP_QUERY, sql, params, name, tx)
+}
+
+sae_sqlite_all(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return sqlite_call_(ctx, this_val, argv, argc, sqlite.KIND_ALL, "all")
+}
+
+sae_sqlite_get(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return sqlite_call_(ctx, this_val, argv, argc, sqlite.KIND_GET, "get")
+}
+
+sae_sqlite_run(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return sqlite_call_(ctx, this_val, argv, argc, sqlite.KIND_RUN, "run")
+}
+
+// sqlite.<name>.transaction(async tx => { ... }): BEGIN, the callback with
+// a tx object whose all/get/run run inside the transaction, then COMMIT,
+// or ROLLBACK if the callback throws or its promise rejects (the promise
+// returned rejects with the same error). Resolves to the callback's value.
+sae_sqlite_transaction(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    name, _tx = sqlite_this_(ctx, this_val)
+    if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.transaction(fn)") }
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "sqlite.${name}.transaction(fn): fn must be a function") }
+    p = page_of_(ctx)
+    if string.contains(sqlite_page_dbs_(p), ",${name},") == 0 { return sae_throw_type_error(ctx, "sqlite.${name}: this page did not seek it") }
+    f = sqlite_fns_for_(ctx, p)
+    if f == null { return sae_throw_type_error(ctx, "sqlite: could not set up the transaction helper") }
+    sqlite_tx_ids_ = sqlite_tx_ids_ + 1
+    args = quickjs.new_array(ctx)
+    fh = quickjs.arg(ctx, argv, 0)
+    idh = quickjs.new_int(ctx, sqlite_tx_ids_)
+    _s0 = quickjs.set_index(ctx, args, 0, this_val)
+    _s1 = quickjs.set_index(ctx, args, 1, fh)
+    _s2 = quickjs.set_index(ctx, args, 2, idh)
+    quickjs.release(ctx, fh)
+    quickjs.release(ctx, idh)
+    r, err = quickjs.call(ctx, f.tx_fn, 0, args)
+    quickjs.release(ctx, args)
+    if err != "" { return rethrow_(ctx) }
+    return r
+}
+
+// sqlite.<name>.__begin(id): the transaction helper's BEGIN (a job in the
+// database's order; waits while another caller's transaction is open).
+sae_sqlite_begin(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    name, _tx = sqlite_this_(ctx, this_val)
+    if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.transaction(fn)") }
+    id = arg_int_(ctx, argv, argc, 0, 0)
+    if id <= 0 || id > sqlite_tx_ids_ { return sae_throw_type_error(ctx, "sqlite.${name}: no such transaction") }
+    return sqlite_submit_(ctx, sqlite.KIND_EXEC, SQLITE_OP_BEGIN, "BEGIN", "", name, id)
+}
+
+// sqlite.<name>.__end(id, commit): its COMMIT (true) or ROLLBACK (false).
+sae_sqlite_end(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    name, _tx = sqlite_this_(ctx, this_val)
+    if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.transaction(fn)") }
+    id = arg_int_(ctx, argv, argc, 0, 0)
+    sql = "ROLLBACK"
+    if argc > 1 {
+        bh = quickjs.arg(ctx, argv, 1)
+        if quickjs.to_bool(ctx, bh) == 1 { sql = "COMMIT" }
+        quickjs.release(ctx, bh)
+    }
+    return sqlite_submit_(ctx, sqlite.KIND_EXEC, SQLITE_OP_END, sql, "", name, id)
+}
+// ===== end wave1/sqlite =====
 
 // --- URLs and fetching ---
 
@@ -2784,6 +3428,7 @@ available_(nm: string) -> int {
     if nm == "outgoing-http" { return net.granted() }
     if nm == "local-filesystem" { return files.granted() }
     if nm == "open-urls" { return shell.granted() }
+    if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
     return 0
 }
 
@@ -3315,6 +3960,35 @@ api_register_(p: *Page) {
         quickjs.release(q, sho)
     }
 
+    // ===== wave1/sqlite: sqlite.<name> for each database the page seeks and app.json declares =====
+    sdbs = sqlite_page_dbs_(p)
+    if sdbs != "," {
+        so = quickjs.new_object(q)
+        snames = string.split(sdbs, ",")
+        sn = string.string_array_size(snames)
+        si = 0
+        while si < sn {
+            sname = string.string_array_get(snames, si)
+            si = si + 1
+            if sname == "" { continue }
+            dbo = quickjs.new_object(q)
+            nmh = quickjs.new_string(q, sname)
+            _sd = quickjs.set(q, dbo, "__db", nmh)
+            quickjs.release(q, nmh)
+            reg_(q, dbo, "all", 2, sae_sqlite_all)
+            reg_(q, dbo, "get", 2, sae_sqlite_get)
+            reg_(q, dbo, "run", 2, sae_sqlite_run)
+            reg_(q, dbo, "transaction", 1, sae_sqlite_transaction)
+            reg_(q, dbo, "__begin", 1, sae_sqlite_begin)
+            reg_(q, dbo, "__end", 2, sae_sqlite_end)
+            _so = quickjs.set(q, so, sname, dbo)
+            quickjs.release(q, dbo)
+        }
+        quickjs.set_global(q, "sqlite", so)
+        quickjs.release(q, so)
+    }
+    // ===== end wave1/sqlite =====
+
     st = quickjs.new_object(q)
     reg_(q, st, "get", 1, sae_storage_get)
     reg_(q, st, "set", 2, sae_storage_set)
@@ -3726,6 +4400,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     b = browser_new_()
     browser_ = b as ptr
     root = aether_ui_vstack_create(6)
+    sqlite_why = ""   // wave1/sqlite: why the app cannot start, if a database cannot be opened or migrated
     if app != "" {
         while string.string_ends_with(app, "/") == 1 { app = string.string_substring(app, 0, string.length(app) - 1) }
         app_dir_ = own_(app)
@@ -3744,11 +4419,12 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         h = app_setting_int_(manifest, "height", 600)
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
         read_capabilities_(manifest)
+        sqlite_why = sqlite_start_(manifest)   // wave1/sqlite: before any page runs
         build_content_(b, mem.long_to_ptr(root))
     } else {
         build_chrome_(b, root)
     }
-    go_(b, start_url)
+    if sqlite_why != "" { sqlite_refuse_app_(b, sqlite_why) } else { go_(b, start_url) }   // wave1/sqlite
 
     if env_("SAE_NO_WINDOW") != "" {
         if b.page != null { page_free_(b.page as *Page) }
