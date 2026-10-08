@@ -1,0 +1,132 @@
+// spec_sqlite_service.ae — services/sqlite without a window: a database
+// opened by the service runs statements with bound parameters, returns
+// typed rows, applies a migration once, and refuses every escape route in
+// the engine itself (the authorizer, not a reading of the SQL), so even a
+// statement handed straight to contrib.sqlite on the service's connection
+// is refused. spec_app_sqlite is end to end, through a page.
+//
+//   ae run tests/spec_sqlite_service.ae          (from sae's root)
+import std.spec
+import std.string
+import std.fs
+import services.sqlite
+import contrib.sqlite as raw
+
+const DB = "target/spec_sqlite_service.db"
+
+main() {
+    fw = spec.init()
+    _r = fs.remove_tree(DB)
+    db, oerr = sqlite.open(DB)
+    spec.describe(fw, "services/sqlite: one file, statements with parameters") {
+        spec.it("opens a database file") callback {
+            spec.assert_str_eq(oerr, "", "open")
+            spec.assert_not_null(db, "a connection")
+        }
+        spec.it("applies a migration once, and records it") callback {
+            n1, e1 = sqlite.migrate(db, "db/001_init.sql", "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL, score REAL, done INTEGER NOT NULL DEFAULT 0); INSERT INTO notes (body, score) VALUES ('seed', 1.5);")
+            spec.assert_str_eq(e1, "", "first run")
+            spec.assert_eq(n1, 1, "applied")
+            n2, e2 = sqlite.migrate(db, "db/001_init.sql", "INSERT INTO notes (body) VALUES ('again')")
+            spec.assert_str_eq(e2, "", "second run")
+            spec.assert_eq(n2, 0, "not applied again")
+            seen, _se = sqlite.applied(db, "db/001_init.sql")
+            spec.assert_eq(seen, 1, "recorded in ${sqlite.MIGRATIONS_TABLE}")
+            cnt, _ce = sqlite.execute(db, sqlite.KIND_GET, "SELECT count(*) AS n FROM notes", "")
+            spec.assert_str_eq(cnt, "{\"n\":1}", "the seed row, once")
+        }
+        spec.it("a failing migration keeps nothing of itself") callback {
+            n, e = sqlite.migrate(db, "db/bad.sql", "INSERT INTO notes (body) VALUES ('half'); INSERT INTO nowhere VALUES (1);")
+            spec.assert_eq(n, 0, "not applied")
+            spec.assert_contains(e, "no such table: nowhere", "the reason")
+            cnt, _ce = sqlite.execute(db, sqlite.KIND_GET, "SELECT count(*) AS n FROM notes WHERE body = 'half'", "")
+            spec.assert_str_eq(cnt, "{\"n\":0}", "rolled back")
+            seen, _se = sqlite.applied(db, "db/bad.sql")
+            spec.assert_eq(seen, 0, "not recorded")
+        }
+        spec.it("run binds ? parameters and reports changes and lastId") callback {
+            r, e = sqlite.execute(db, sqlite.KIND_RUN, "INSERT INTO notes (body, score) VALUES (?, ?)", "[\"two\", 2.25]")
+            spec.assert_str_eq(e, "", "insert")
+            spec.assert_str_eq(r, "{\"changes\":1,\"lastId\":2}", "changes and lastId")
+            r2, e2 = sqlite.execute(db, sqlite.KIND_RUN, "UPDATE notes SET done = ? WHERE id > ?", "[true, 0]")
+            spec.assert_str_eq(e2, "", "update")
+            spec.assert_str_eq(r2, "{\"changes\":2,\"lastId\":2}", "two rows changed")
+        }
+        spec.it("all returns typed rows as objects; get the first or null") callback {
+            rows, e = sqlite.execute(db, sqlite.KIND_ALL, "SELECT id, body, score, done, NULL AS nil FROM notes ORDER BY id", "[]")
+            spec.assert_str_eq(e, "", "select")
+            spec.assert_str_eq(rows, "[{\"id\":1,\"body\":\"seed\",\"score\":1.5,\"done\":1,\"nil\":null},{\"id\":2,\"body\":\"two\",\"score\":2.25,\"done\":1,\"nil\":null}]", "integer, text, real, null")
+            one, e1 = sqlite.execute(db, sqlite.KIND_GET, "SELECT body FROM notes WHERE id = ?", "[2]")
+            spec.assert_str_eq(e1, "", "get")
+            spec.assert_str_eq(one, "{\"body\":\"two\"}", "one object")
+            absent, e2 = sqlite.execute(db, sqlite.KIND_GET, "SELECT body FROM notes WHERE id = ?", "[99]")
+            spec.assert_str_eq(e2, "", "get, no row")
+            spec.assert_str_eq(absent, "null", "null")
+        }
+        spec.it("named $parameters bind from an object") callback {
+            r, e = sqlite.execute(db, sqlite.KIND_GET, "SELECT body FROM notes WHERE id = $id AND done = $done", "{\"id\":1,\"done\":true}")
+            spec.assert_str_eq(e, "", "named")
+            spec.assert_str_eq(r, "{\"body\":\"seed\"}", "bound by name")
+            _r, e2 = sqlite.execute(db, sqlite.KIND_GET, "SELECT body FROM notes WHERE id = $id", "{\"nope\":1}")
+            spec.assert_contains(e2, "no parameter named $nope", "an unknown name is an error")
+        }
+        spec.it("a parameter count that does not match is an error, not a NULL") callback {
+            _r, e = sqlite.execute(db, sqlite.KIND_ALL, "SELECT * FROM notes WHERE id = ? AND body = ?", "[1]")
+            spec.assert_contains(e, "has 2 parameter(s), 1 given", "too few")
+            _r2, e2 = sqlite.execute(db, sqlite.KIND_ALL, "SELECT * FROM notes WHERE id = ?", "[1, 2]")
+            spec.assert_contains(e2, "has 1 parameter(s), 2 given", "too many")
+            _r3, e3 = sqlite.execute(db, sqlite.KIND_ALL, "SELECT * FROM notes WHERE id = ?", "[[1]]")
+            spec.assert_contains(e3, "not an array or object", "a nested value")
+        }
+        spec.it("a SQL error is the engine's message") callback {
+            _r, e = sqlite.execute(db, sqlite.KIND_ALL, "SELECT * FROM nowhere", "")
+            spec.assert_str_eq(e, "no such table: nowhere", "sqlite's text")
+        }
+    }
+    spec.describe(fw, "services/sqlite: the escape routes are off, in the engine") {
+        why = "not available to an app: a database is one file"
+        spec.it("ATTACH is refused") callback {
+            _r, e = sqlite.execute(db, sqlite.KIND_RUN, "ATTACH DATABASE 'target/spec_sqlite_other.db' AS other", "")
+            spec.assert_contains(e, why, "attach")
+            spec.assert_eq(fs.exists("target/spec_sqlite_other.db"), 0, "no file was made")
+        }
+        spec.it("DETACH is refused") callback {
+            _r, e = sqlite.execute(db, sqlite.KIND_RUN, "DETACH DATABASE main", "")
+            spec.assert_contains(e, why, "detach")
+        }
+        spec.it("load_extension is refused") callback {
+            _r, e = sqlite.execute(db, sqlite.KIND_ALL, "SELECT load_extension('target/nothing')", "")
+            spec.assert_contains(e, why, "load_extension")
+        }
+        spec.it("VACUUM INTO a file is refused (and so, in version 1, is a plain VACUUM: it attaches a temporary file)") callback {
+            _r, e = sqlite.execute(db, sqlite.KIND_RUN, "VACUUM INTO 'target/spec_sqlite_copy.db'", "")
+            spec.assert_contains(e, why, "vacuum into")
+            spec.assert_eq(fs.exists("target/spec_sqlite_copy.db"), 0, "no copy was made")
+            _r2, e2 = sqlite.execute(db, sqlite.KIND_RUN, "VACUUM", "")
+            spec.assert_contains(e2, why, "vacuum in place")
+        }
+        spec.it("a PRAGMA naming a directory is refused; others are not") callback {
+            _r, e = sqlite.execute(db, sqlite.KIND_RUN, "PRAGMA temp_store_directory = 'target'", "")
+            spec.assert_contains(e, why, "temp_store_directory")
+            _r2, e2 = sqlite.execute(db, sqlite.KIND_RUN, "PRAGMA data_store_directory = 'target'", "")
+            spec.assert_contains(e2, why, "data_store_directory")
+            v, e3 = sqlite.execute(db, sqlite.KIND_GET, "PRAGMA foreign_keys", "")
+            spec.assert_str_eq(e3, "", "a harmless pragma")
+            spec.assert_str_eq(v, "{\"foreign_keys\":1}", "foreign keys are on")
+        }
+        spec.it("the refusal is the engine's, not a reading of the text: contrib.sqlite on the same connection is refused too") callback {
+            e = raw.exec(db, "ATTACH DATABASE 'target/spec_sqlite_other2.db' AS o2")
+            spec.assert_str_eq(e, "not authorized", "the authorizer answered")
+            spec.assert_eq(fs.exists("target/spec_sqlite_other2.db"), 0, "no file")
+            // Spelled to defeat any text scan: the authorizer sees the operation.
+            e2 = raw.exec(db, "/* attach */ AtTaCh 'target/spec_sqlite_other3.db' as [o3]")
+            spec.assert_str_eq(e2, "not authorized", "however it is spelt")
+        }
+    }
+    spec.describe(fw, "services/sqlite: close") {
+        spec.it("closes cleanly") callback {
+            spec.assert_str_eq(sqlite.close(db), "", "close")
+        }
+    }
+    return spec.run_summary(fw)
+}
