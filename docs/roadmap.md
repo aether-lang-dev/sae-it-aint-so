@@ -281,6 +281,11 @@ installable packages that exercise the trust strategy.
 | 11 | **Remote table.** A chess or Go board whose opponent is a server in any language; state changes stream in, rendering stays local. Shows sae as a smart display: a 50-byte "move" where a framebuffer would send pixels. | streaming, `svg`, `items` | 3 | Tsyne `REMOTE_GAMES_ETC` (idea: semantic network transparency) |
 | 12 | **Particles, kaleidoscope, terrain.** The Cosyne GPU demos. Need the `gfx` scene API of `docs/gpu-pages.md`: a page describes, native code draws, shaders are validated. Last, because a page that writes shaders is a page that can hang a GPU. | `gfx` | gpu-pages | Cosyne `particles`, `kaleidoscope-shader`, `procedural-terrain-gpu` |
 
+| 13 | **Terrain.** Sliders for noise scale, octaves and water level drive a Perlin/FBM heightmap, coloured by height, drawn as a raster the page computes; seed and smoothing as buttons. The first page that needs pixels. | `vg.raster` (8.2), `sae:noise` (8.1), `bind` | 8 | Cosyne `procedural-terrain-canvas` (idea: a library noise function feeding a 2D heightmap) |
+| 14 | **Life.** Conway's Game of Life on a raster, with the frame clock, click to toggle cells, patterns from a picker, generations bound to a label. | `vg.raster`, `frame`, `on_click` | 8.2 | Tsyne `ported-apps/game-of-life` (idea only) |
+| 15 | **TodoMVC.** The classic, as the bindings showcase: a list state, `each` with keys, `computed` counts, filters as `visible_when`, no `set_text` anywhere. | `state`, `computed`, `each`, `bind` | 3.4 | Tsyne `examples/todomvc-when` (idea: `when` conditions over state) |
+| 16 | **Reversi, then 2048, then chess.** The scene-graph game tier: the board is AeVG-TS with bindings, moves are tweens, legal moves are `visible_when`; the engine is pure TypeScript locally, then a server over a stream for demo 11. | AeVG-TS, tweens, data joins, `on_drag`, streaming | 4, 8.6 | Tsyne `REMOTE_GAMES_ETC` #179-#182 (idea: send intent, not frames) |
+
 Corpus files carry their own licences: `AJ_Digital_Camera` says public
 domain; `USStates` (a map worth a data-join demo) is GFDL and GPL from
 Wikimedia; the small W3C test shapes state none. Check before a demo is built
@@ -291,7 +296,7 @@ The demos ship as a gallery: `site/` grows an index page that launches each
 (Cosyne's demo launcher is the model), and the app demos are packages the
 installer can read before it says yes.
 
-## 6. Build order
+## 6. Build order (sections 1 to 5 and 8)
 
 Each wave is what a few agent-days can finish and verify on every lane
 (GTK4, AppKit, Win32, UIKit, Android), with specs that fail before.
@@ -311,24 +316,175 @@ Each wave is what a few agent-days can finish and verify on every lane
    the transpiler's TypeScript output.
 6. SQLite v1 (`page-services.md` section 6), which is independent and can
    run alongside.
+7. Pixels from a page (8.2) and the first `sae:` library modules (8.1):
+   `noise`, `scales`, `easing`, through the loader of 3.1. Demos 13 and 15
+   follow directly.
 
 **Wave 2, trust and files (section 2):**
 
-7. Purpose strings, `saepack` least-privilege checks, ed25519 signing with
+8. Purpose strings, `license` and `author` (8.4), `saepack` least-privilege checks, ed25519 signing with
    fingerprint and domain-bound keys, reproducible packaging, the Privacy
    screen and runtime revocation through optional seeks.
-8. The files powerbox (`page-services.md` section 5), starting with real iOS
+9. The files powerbox (`page-services.md` section 5), starting with real iOS
    pickers in aether-ui.
-9. `http.stream`, and sub-page embedding (demo 10's engine, and the
+10. The page-API parity list of 8.8: `table`, `listbox`, `vlist`, `tree`,
+    menus, `alert`, links, commands and keymap.
+11. `http.stream`, and sub-page embedding (demo 10's engine, and the
    third-party-component story).
 
 **Wave 3, the gallery and the long tail:**
 
-10. Demos 1 to 9 and 11 as the gallery, each with specs on every backend.
-11. The page host in its own process (1.3 item 5).
-12. `gfx` and demo 12 (`docs/gpu-pages.md`).
+12. The gallery: demos 1 to 9, 11 and 13 to 16, the tutorial ladder (8.9),
+    each with specs on every backend.
+13. The sae desktop shell (8.5).
+14. The page host in its own process (1.3 item 5).
+15. `gfx` and demo 12 (`docs/gpu-pages.md`).
 
-## 7. Decisions needed
+## 8. Mining Tsyne: a map of what to borrow
+
+Tsyne is about 150 examples, 60 ported apps, 40 Cosyne demos, a library
+tier, two launchers and a set of design notes. It never shipped, so what it
+offers is vision and shape, not lessons; and `not-ours` is ideas only, each
+credited by name. Where a ported app's *design* belongs to its original
+author under a copyleft licence, the idea is theirs and stays theirs.
+
+### 8.1 A page standard library, served by sae
+
+Cosyne had a pure-TypeScript library tier under its demos: Perlin and FBM
+noise, d3-style scales and axes, line charts, markers, zoom-pan, a particle
+system, trails, 3D-to-2D projections, symmetry, easing. None of it touches
+the system; all of it is what a page author reaches for first. sae's answer
+is a **page standard library** at a reserved origin: `import { perlin } from
+"sae:noise"`, resolved by the loader of section 3.1 from modules bundled
+with sae and hashed, never from the network, usable in browser and app mode
+with no capability. First modules: `sae:noise`, `sae:scales`, `sae:easing`,
+`sae:projections`, `sae:zoom-pan`, `sae:particles`, and `sae:charts`
+(axes, line and bar charts as AeVG components). Written fresh, in the
+dialect, so they are also the dialect's own test corpus. Where speed matters
+(`perf-gap.md`), a module can be backed by an Aether verb later without the
+page noticing.
+
+### 8.2 The missing capability: pixels from a page
+
+Terrain, Life, pixel art, waveforms, a Mandelbrot: half of Tsyne's canvas
+demos are "a grid of pixels the page computes", and a sae page cannot make
+one. aether-ui has `image_from_bytes` (decode PNG, JPEG, GIF, BMP) and a
+canvas raster path; pages see neither. Add:
+
+- `vg.raster(w, h, rgba)`: an image element in the scene from a
+  `Uint8Array` the page fills, updated in place, hit-testable and
+  transformable like any element.
+- `ui.image(bytes)`: an encoded image as a widget, and `vg.image` in a
+  scene, for photos fetched over `http` or read through the files powerbox.
+- Budgets: a raster counts against the page's heap; a per-page cap on total
+  raster bytes (say 32 MB of pixels) and on dimensions, refused with the
+  usual message.
+
+Typed arrays are already in the page's global surface (`page-services.md`
+section 2), so no engine change is needed.
+
+### 8.3 The attacker page
+
+Tsyne had an "attacker app" whose only job was to try to break out (require
+the file system, reach the process, read another app's widgets) and print
+what happened. sae's escape corpus (section 1.4) is the same idea in sae's
+terms, with the twist that each attempt is a spec that must be refused on
+every backend, not a console log to read. Credit: Tsyne
+`examples/sandbox-breakout`.
+
+### 8.4 Licences travel with the catalogue
+
+Tsyne's launchers register every app in one of two lists, permissive and
+copyleft, each entry annotated with its licence and author, and a shell
+filters by what it may ship. For sae: `app.json` gains `license` and
+`author`, `saepack` requires them (as it will require purpose strings), and
+the gallery shows them beside the trust tier of section 2. A copyleft app is
+still installable; the catalogue says what it is. Credit: Tsyne
+`launchers/all-apps`.
+
+### 8.5 A sae desktop: the shell that shows containment
+
+Tsyne's Desktop (windows, a dock, icons, files, remote control) and
+PhoneTop/TabletTop (a phone-style grid) are hosting shells that launch each
+app inside a sandboxed view. For sae, the same thing is an app-mode app
+built on the sub-page engine of demo 10: it lists installed sae apps with
+their trust tier and grants, launches each as a sub-page with its own
+runtime and grants, and owns the chrome. On Android it is how one APK would
+host many sae apps; on a desktop it makes the containment story visible.
+Wave 3.
+
+### 8.6 Games, and sending intent instead of frames
+
+Tsyne's remote-games note planned four rendering tiers and found its sweet
+spot in "1b, the scene graph": send the scene once with bindings, then only
+state deltas, and let the display animate, hit-test and highlight locally.
+That tier is exactly AeVG-TS with bindings (section 4), and its open
+question ("does the scene grammar need a wire format for non-TypeScript
+servers?") answers itself here: the page *is* the wire format. A server in
+any language serves the page once and streams state; the bindings do the
+rest. Its ladder (Reversi, the smallest complete game; 2048, which proves
+data joins and transitions; chess, which proves drag and legal-move
+highlighting) is demo 16, and its tier 3 (a 320x200 framebuffer streamed
+from a C engine) is a fun stress test of 8.2 over `http.stream`, not a
+product.
+
+### 8.7 Everyday apps worth re-imagining
+
+Ideas, not ports, each named for the capability it would prove:
+
+| Idea | Proves | Ancestor (idea only) |
+|---|---|---|
+| Kanban board with drag and drop | `on_drag` between containers | Tsyne `kanban-board` |
+| Text editor with document tabs | tabs, textarea, files powerbox | Tsyne `text-editor` |
+| Terminal | an `exec` grant with a purpose string, app mode only | Tsyne `terminal-emulator` |
+| Command palette | aether-ui's commands and keymap, exposed to pages | Tsyne `command-palette` |
+| Wizard | navstack | Tsyne `wizard` |
+| Theme creator | `styles`, live | Tsyne `theme-creator` |
+| Download manager | `http` plus the powerbox `pick_save` | Tsyne `download-manager` |
+| Weather viewer | the CORS-alike against a public API | Tsyne `weather-viewer` |
+| Photo gallery | a `files` read grant on Pictures, `ui.image` | Tsyne `photo-gallery` |
+| Clipboard manager | a `clipboard` capability | Tsyne `clipboard-manager` |
+| Appointment scheduler, expense tracker, notes | SQLite v1 | Tsyne examples and ported apps |
+| Disk usage map | nothing new: OpenDisk-ae already exists in Aether | Tsyne `grand-perspective`, `disk-tree` |
+| Wikipedia reader, DuckDuckGo search | the CORS-alike, and text layout at scale | Tsyne ported apps |
+| Sudoku, Connect Four, solitaire, peg solitaire, slider and zip puzzles | AeVG-TS, bindings, `on_drag`, `on_key` | Tsyne ported apps (licences vary, see 8.4) |
+
+### 8.8 The browser demo site, as a parity checklist
+
+Tsyne's browser-mode sample site had pages for alerts, context menus,
+dynamic content, forms with POST-redirect-GET, hyperlinks, images, layout,
+lists, menus, scrolling, tables, text features, URL fragments and widget
+interactions, plus a 404. sae's `site/` has about half. The gap is a list of
+page-API additions, each with a page and a spec: `ui.image` (8.2), `table`,
+`listbox`, `vlist` and `tree` (aether-ui has them), menus and context menus,
+`alert`, a `link(label, url)` widget, URL fragments, and a POST-redirect-GET
+flow against `tools/pageserver`. Credit: Tsyne `examples/pages`.
+
+### 8.9 A tutorial ladder
+
+Tsyne's numbered examples climb from hello world through a counter, forms,
+a live clock, lists, a multiplication table, a shopping list, tabs, a colour
+mixer, a tip calculator, a password generator, a stopwatch, dice, BMI,
+rock-paper-scissors and a quiz. sae's site should carry the same ladder,
+written fresh in the dialect, each step with a spec: it is the first thing a
+new page author reads, and it doubles as the regression suite for the
+dialect and the page API.
+
+### 8.10 Tools that write source back
+
+Tsyne's designer edited TypeScript files round trip, and its inspector read
+the live widget tree. sae's Playground (demo 10) is the first step, and
+aether-ui's inspector already reads the driver surface a sae designer would
+use. Later.
+
+### 8.11 What not to take
+
+The npm pitch ("2 million packages") is the opposite of sae: no ambient
+modules is the point, and `sae:` plus same-origin `import` replace it. The
+gRPC bridge: sae is in-process. The three.js-over-fake-WebGL route:
+`docs/gpu-pages.md` says why. Fyne-specific widgets: aether-ui has its own.
+
+## 9. Decisions needed
 
 1. **Coarse clocks in browser mode** (100 µs), full resolution in app mode?
 2. **No cookie jar, ever**: page-held tokens are the only credential. Yes?
@@ -339,7 +495,9 @@ Each wave is what a few agent-days can finish and verify on every lane
 6. **JSX stays out**, the trailing-block form stays the house style?
 7. **The gate spec's format** (one table in a `.md` the generator reads, or a
    small `.ae` DSL)?
-8. **Which demo first.** My pick: 4 (the shop) and 1b (the camera), because
+8. **The `sae:` library origin**: that name, and the first modules (8.1)?
+9. **Raster budgets** (8.2): 32 MB of pixels per page, and a dimension cap?
+10. **Which demo first.** My pick: 4 (the shop) and 1b (the camera), because
    together they exercise every security rule and the whole AeVG surface
    from a corpus file through to bindings, and both are browser pages that
    need no packaging work.
