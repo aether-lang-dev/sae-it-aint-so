@@ -37,7 +37,7 @@ exports(
     assert_url, assert_page, assert_text, assert_no_text,
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
     console_count, wait_for_console_n,
-    vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool,
+    vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool, vg_px_x_in, vg_px_y_in,
     screenshot, console_contains, wait_for_console, url_encode
 )
 
@@ -466,6 +466,22 @@ fit_scale(cw: float, ch: float, vb_w: float, vb_h: float) -> float {
     sy = ch / vb_h
     if sx < sy { return sx }
     return sy
+}
+
+// The same for a viewBox that does not start at the origin ("minx miny w h"):
+// a zoomed or panned scene.
+vg_px_x_in(vb_x: float, min_x: float, vb_w: float, vb_h: float) -> int {
+    cw = uidriver.widget_int_field_by_id(vg_canvas(), "w") * 1.0
+    ch = uidriver.widget_int_field_by_id(vg_canvas(), "h") * 1.0
+    s = fit_scale(cw, ch, vb_w, vb_h)
+    return ((cw - vb_w * s) / 2.0 + (vb_x - min_x) * s) as int
+}
+
+vg_px_y_in(vb_y: float, min_y: float, vb_w: float, vb_h: float) -> int {
+    cw = uidriver.widget_int_field_by_id(vg_canvas(), "w") * 1.0
+    ch = uidriver.widget_int_field_by_id(vg_canvas(), "h") * 1.0
+    s = fit_scale(cw, ch, vb_w, vb_h)
+    return ((ch - vb_h * s) / 2.0 + (vb_y - min_y) * s) as int
 }
 
 // Click the vg canvas at canvas pixel (x, y): runs the on_click handler

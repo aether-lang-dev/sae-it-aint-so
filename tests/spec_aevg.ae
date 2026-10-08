@@ -1,0 +1,130 @@
+// spec_aevg.ae -- the AeVG surface for pages (docs/roadmap.md section 4):
+// the grammar on site/aevg.ts (polygon, polyline, ellipse, gradients, the
+// group cascade, set_transform) and the live surface on site/aevg_live.ts
+// (bindings, a data join, tweens, hover/drag/scroll/double click, the
+// viewBox as state). Every assertion is a rendered pixel or the console.
+//
+//   tests/run_spec.sh spec_aevg
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// A viewBox point of the 100x100 scenes, in canvas pixels.
+px(v: float) -> int { return b.vg_px_x(v, 100.0, 100.0) }
+py(v: float) -> int { return b.vg_px_y(v, 100.0, 100.0) }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "the AeVG grammar") {
+        spec.it("polygon, polyline and ellipse draw") callback {
+            b.navigate(b.test_url("/aevg"))
+            b.assert_page("AeVG grammar", "200 ", "grammar page")
+            spec.assert_true(b.wait_for_vg_pixel(px(75.0), py(10.0), 0xdd8800), "the polygon's inside is orange")
+            spec.assert_true(b.vg_pixel_near(px(20.0), py(22.0), 0x008800, 40), "the polyline's stroke is green")
+            spec.assert_true(b.vg_pixel_near(px(70.0), py(30.0), 0xffffff, 24), "the ellipse's centre is the radial gradient's white")
+        }
+        // Named gradients are registered on the scene (vg.defs) and a shape
+        // takes one with fill("url(#id)"); aether-ui's live deferred path
+        // paints nothing for it on macOS today (a raw canvas gradient paints,
+        // so the loss is between the shape and the canvas: see the wave1/aevg
+        // report), hence a skip, not a pass.
+        spec.skip_it("a linear gradient shades across a rect; a radial one rims the ellipse",
+                     "aether-ui: gradient fills paint nothing on the live deferred path (macOS)") callback {
+            spec.assert_true(b.vg_pixel_near(px(6.0), py(11.0), 0xff0000, 60), "the linear gradient starts red")
+            spec.assert_true(b.vg_pixel_near(px(44.0), py(11.0), 0x0000ff, 60), "and ends blue")
+            spec.assert_true(b.vg_pixel_near(px(88.0), py(30.0), 0x008800, 60), "the ellipse's rim is green")
+        }
+        spec.it("a group's fill and opacity reach its shapes; its own fill wins") callback {
+            spec.assert_true(b.vg_pixel_near(px(15.0), py(50.0), 0x8080ff, 40), "the group's blue at half opacity over white")
+            spec.assert_true(b.vg_pixel_near(px(35.0), py(50.0), 0xff8080, 40), "its own red at the group's half")
+        }
+        spec.it("a group's transform moves its shapes, and nests") callback {
+            spec.assert_true(b.vg_pixel_near(px(60.0), py(50.0), 0xaa00aa, 24), "the translated rect")
+            spec.assert_true(b.vg_pixel_near(px(85.0), py(50.0), 0x00aaaa, 24), "the nested one, both translations")
+            spec.assert_true(b.vg_pixel_near(px(47.0), py(50.0), 0xffffff, 24), "nothing just left of the translated rect")
+        }
+        // Text (text, text_sized, text_anchored) draws on screen but the
+        // driver's pixel replay carries no text on macOS, so it is not
+        // asserted here; site/camera.ts shows it.
+        spec.it("set_transform turns a group from a button") callback {
+            spec.assert_true(b.vg_pixel_near(px(65.0), py(68.0), 0x333333, 24), "the dial's bar lies flat")
+            b.click("Turn dial")
+            spec.assert_true(b.wait_for_vg_pixel(px(62.0), py(95.0), 0x333333), "turned 90 degrees about (50, 80): the bar stands")
+            spec.assert_true(b.vg_pixel_near(px(65.0), py(68.0), 0xffffff, 24), "and left where it was")
+        }
+    }
+    spec.describe(fw, "AeVG alive") {
+        spec.it("bind_fill, visible_when and bind_text follow page state") callback {
+            b.click("Home")
+            b.click("AeVG alive")
+            b.assert_page("AeVG alive", "200 ", "live page")
+            spec.assert_true(b.wait_for_vg_pixel(px(15.0), py(15.0), 0x0000ff), "the square starts blue")
+            spec.assert_true(b.vg_pixel_near(px(60.0), py(15.0), 0xffffff, 24), "the circle is hidden")
+            b.click("Heat")
+            spec.assert_true(b.wait_for_vg_pixel(px(15.0), py(15.0), 0xff0000), "hot: the bound fill is red")
+            spec.assert_true(b.vg_pixel_near(px(60.0), py(15.0), 0x008800, 24), "and the circle shows")
+        }
+        spec.it("bind_pos moves a shape as its state moves; a drag sets the state") callback {
+            spec.assert_true(b.vg_pixel_near(px(20.0), py(45.0), 0xaa00aa, 24), "the circle at x = 20")
+            b.click("Move right")
+            spec.assert_true(b.wait_for_vg_pixel(px(40.0), py(45.0), 0xaa00aa), "at x = 40")
+            spec.assert_true(b.vg_pixel_near(px(20.0), py(45.0), 0xffffff, 24), "and gone from 20")
+            b.vg_click(px(40.0), py(45.0))
+            b.vg_move(px(50.0), py(45.0))
+            b.vg_move(px(60.0), py(45.0))
+            b.vg_release(px(60.0), py(45.0))
+            spec.assert_true(b.wait_for_vg_pixel(px(60.0), py(45.0), 0xaa00aa), "dragged to x = 60")
+        }
+        spec.it("hover, scroll and double click reach the page") callback {
+            b.vg_move(px(15.0), py(15.0))
+            spec.assert_true(b.wait_for_console("hover in"), "entering the square")
+            b.vg_move(px(15.0), py(35.0))
+            spec.assert_true(b.wait_for_console("hover out"), "leaving it")
+            b.vg_move(px(60.0), py(45.0))
+            b.vg_scroll(0, 0 - 3)
+            spec.assert_true(b.wait_for_console("scroll in"), "the wheel over the circle")
+            b.vg_click(px(15.0), py(15.0))
+            b.vg_release(px(15.0), py(15.0))
+            b.vg_click(px(15.0), py(15.0))
+            b.vg_release(px(15.0), py(15.0))
+            spec.assert_true(b.wait_for_console("double at 15,15"), "two clicks in a row, in viewBox units")
+        }
+        spec.it("a data join adds, updates and removes bars by key") callback {
+            spec.assert_true(b.vg_pixel_near(px(66.0), py(80.0), 0xff8800, 24), "bar 2, 20 high")
+            spec.assert_true(b.vg_pixel_near(px(78.0), py(80.0), 0xffffff, 24), "no third bar")
+            b.click("Add bar")
+            spec.assert_true(b.wait_for_vg_pixel(px(78.0), py(80.0), 0xff8800), "a third bar, 30 high")
+            b.click("Grow bars")
+            spec.assert_true(b.wait_for_vg_pixel(px(66.0), py(70.0), 0xff8800), "bar 2 updated in place to 30")
+            b.click("Drop bar")
+            spec.assert_true(b.wait_for_vg_pixel(px(78.0), py(80.0), 0xffffff), "the third bar removed")
+        }
+        spec.it("animate tweens a fill and a position, and spins a group, on the frame clock") callback {
+            spec.assert_true(b.vg_pixel_near(px(80.0), py(50.0), 0xff0000, 24), "the ball starts red at 80")
+            b.click("Tween ball")
+            spec.assert_true(b.wait_for_console("tween done"), "the tween finished")
+            spec.assert_true(b.wait_for_vg_pixel(px(50.0), py(50.0), 0x00ff00), "green, at 50")
+            spec.assert_true(b.vg_pixel_near(px(72.0), py(77.0), 0x444444, 24), "the rotor lies flat")
+            b.click("Spin rotor")
+            spec.assert_true(b.wait_for_vg_pixel(px(80.0), py(85.0), 0x444444), "spun 90 degrees about its centre")
+        }
+        spec.it("the viewBox follows a state: zoom in and out") callback {
+            // The ball (green now, cx 50 r 8) in the full view: outside it,
+            // below the dragged circle, is white.
+            spec.assert_true(b.vg_pixel_near(px(59.0), py(55.0), 0xffffff, 24), "full view: nothing at (59, 55)")
+            b.click("Zoom")
+            // viewBox "25 25 50 50": the same points through the zoomed
+            // mapping; (56, 54) is inside the ball, (59, 55) outside.
+            zx = b.vg_px_x_in(56.0, 25.0, 50.0, 50.0)
+            zy = b.vg_px_y_in(54.0, 25.0, 50.0, 50.0)
+            spec.assert_true(b.wait_for_vg_pixel(zx, zy, 0x00ff00), "zoomed: the ball at the new scale")
+            spec.assert_true(b.vg_pixel_near(b.vg_px_x_in(59.0, 25.0, 50.0, 50.0), b.vg_px_y_in(55.0, 25.0, 50.0, 50.0), 0xffffff, 24), "and its edge where the new scale puts it")
+            b.click("Zoom")
+            spec.assert_true(b.wait_for_vg_pixel(zx, zy, 0xffffff), "zoomed out: that pixel is background again")
+            b.click("Home")
+        }
+    }
+    return spec.run_summary(fw)
+}

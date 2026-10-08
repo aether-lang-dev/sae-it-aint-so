@@ -3643,6 +3643,9 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
         sc.last_cy = y
         sc.pressed = 1
         events.dispatch_click(es, vg.scene_ctx(scene), x, y)
+        // A drag's target is whatever is under the press: capture it now
+        // (the handler sees one zero-delta call at the press).
+        events.dispatch_drag(es, vg.scene_ctx(scene), x, y, 0.0, 0.0)
         if dbl == 1 {
             sc.last_click_ms = 0
             events.dispatch_double_click(es, vg.scene_ctx(scene), x, y)
@@ -3653,11 +3656,9 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
         if ae_live_(ctx, seq) == 0 { return }
         c = vg.scene_ctx(scene)
         events.dispatch_hover(es, c, x, y)
-        if sc.pressed == 1 {
-            events.dispatch_drag(es, c, x, y, x - sc.last_cx, y - sc.last_cy)
-            sc.last_cx = x
-            sc.last_cy = y
-        }
+        if sc.pressed == 1 { events.dispatch_drag(es, c, x, y, x - sc.last_cx, y - sc.last_cy) }
+        sc.last_cx = x
+        sc.last_cy = y
         tip = events.tooltip_at(c, x, y)
         if ui.vg_tooltip_drawn() == 1 {
             if string.length(tip) > 0 { _t = ui.vg_tooltip_show(cid, tip, x, y) } else { ui.vg_tooltip_hide() }
@@ -4030,7 +4031,8 @@ sae_ae_on_hover(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // on_drag(fn(x, y, dx, dy)): the pointer moving with the button down over
-// this shape, in viewBox units; on_drag_end(fn(x, y)) when it is released.
+// this shape, in viewBox units (once at the press, with zero deltas, then
+// per move); on_drag_end(fn(x, y)) when it is released.
 sae_ae_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
