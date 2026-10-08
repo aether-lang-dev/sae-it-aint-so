@@ -1163,7 +1163,7 @@ real_ms_() -> long { return os.now_monotonic_ms() }
 // with the fraction kept.
 raf_now_() -> float {
     long ms = now_ms_()   // also starts SAE_TIME_SCALE's base
-    if time_scale_ == 1 { return (os.now_monotonic_ns() as float) / 1000000.0 }
+    if time_scale_ == 1 { return esc_perf_now_() }   // wave1/escape: coarse in the browser
     return ms as float
 }
 
@@ -1371,6 +1371,7 @@ sae_ui_timer(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
+    if esc_timers_pending_(p) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, p) }   // wave1/escape: the timers cap
     ms = arg_int_(ctx, argv, argc, 0, 1000)
     ref = held_fn_(ctx, argv, argc, 1)
     if ref == 0 { return sae_throw_type_error(ctx, "timer(ms, fn): fn must be a function") }
@@ -1383,6 +1384,7 @@ sae_ui_after(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
+    if esc_timers_pending_(p) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, p) }   // wave1/escape: the timers cap
     ms = delay_arg_(ctx, argv, argc, 0)
     ref = held_fn_(ctx, argv, argc, 1)
     if ref == 0 { return sae_throw_type_error(ctx, "after(ms, fn): fn must be a function") }
@@ -1395,6 +1397,7 @@ sae_ui_sleep(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
+    if esc_timers_pending_(p) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, p) }   // wave1/escape: the timers cap
     ms = delay_arg_(ctx, argv, argc, 0)
     pr = quickjs.new_promise(ctx)
     resolve, _e1 = quickjs.get(ctx, pr, "resolve")
@@ -1418,6 +1421,7 @@ sae_ui_timer_cancel(ctx: ptr, this_val: int, argv: int) -> int {
 sae_set_timeout(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
+    if esc_timers_pending_(page_of_(ctx)) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, page_of_(ctx)) }   // wave1/escape: the timers cap
     ref = held_fn_(ctx, argv, argc, 0)
     if ref == 0 { return sae_throw_type_error(ctx, "setTimeout(fn, ms, ...args): fn must be a function (sae does not eval a string)") }
     ms = delay_arg_(ctx, argv, argc, 1)
@@ -1428,6 +1432,7 @@ sae_set_timeout(ctx: ptr, this_val: int, argv: int) -> int {
 sae_set_interval(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
+    if esc_timers_pending_(page_of_(ctx)) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, page_of_(ctx)) }   // wave1/escape: the timers cap
     ref = held_fn_(ctx, argv, argc, 0)
     if ref == 0 { return sae_throw_type_error(ctx, "setInterval(fn, ms, ...args): fn must be a function (sae does not eval a string)") }
     ms = delay_arg_(ctx, argv, argc, 1)
@@ -1489,6 +1494,7 @@ sae_request_frame(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
+    if esc_timers_pending_(p) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, p) }   // wave1/escape: the timers cap
     ref = held_fn_(ctx, argv, argc, 0)
     if ref == 0 { return sae_throw_type_error(ctx, "requestAnimationFrame(fn): fn must be a function") }
     r = heap.new(PageRaf)
@@ -1700,6 +1706,7 @@ sae_storage_set(ctx: ptr, this_val: int, argv: int) -> int {
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.set(key, value): key must be letters, digits, '.', '_' or '-'") }
     val = own_(arg_str_(ctx, argv, argc, 1))
     if string.length(val) > STORAGE_MAX { return sae_throw_type_error(ctx, "storage.set: value over 1 MB") }
+    if esc_storage_over_(page_of_(ctx).url, key, string.length(val)) == 1 { return esc_storage_refuse_(ctx, page_of_(ctx)) }   // wave1/escape: the origin's cap
     if storage_write_(page_of_(ctx).url, key, val) == 0 { return sae_throw_type_error(ctx, "storage.set: could not save") }
     return 0
 }
@@ -1962,8 +1969,321 @@ js_date_now(ctx: ptr, this_val: int, argv: int) -> int {
 
 js_performance_now(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    return quickjs.new_float(ctx, now_ms_() as float)
+    return quickjs.new_float(ctx, esc_perf_now_())
 }
+
+// ===== wave1/escape: the browser's security rules (docs/roadmap.md 1.1, 1.2) =====
+//
+// What a web page is held to beyond same-origin-by-construction, each rule
+// with its attempt in tests/escape (the red-team corpus, spec_escape) and
+// its happy path in site/webrules.ts (spec_webrules). The pure parts (what an
+// origin is, mixed content, the consent header) are services/net's, held
+// without a window by spec_origin_rules; this section is the kernel wiring.
+//
+// - Mixed content: a page from https: may not fetch http:, from any origin.
+//   Refused before any socket, with the page-level reason, logged once.
+// - The CORS-alike: in the browser a page may request another origin. sae
+//   sends `Origin: <the page's origin>`, never a Referer, and drops the
+//   page's own Origin, Referer, Cookie and Authorization on the way out;
+//   the answer reaches the page only if its final response carries
+//   `Sae-Allow-Origin: <that origin>` or `*`. Otherwise the body, status
+//   and headers are withheld and res.error says why (logged once). No
+//   preflight: there are no cookies to protect. A redirect chain that ever
+//   leaves the origin needs the consent on the response that ends it. App
+//   mode is unaffected: capabilities.http is the list, and the installer
+//   saw it.
+// - No ambient credentials: nothing here adds a header a page did not set;
+//   there is no cookie jar (a Set-Cookie is never kept). Written down as a
+//   rule and held by spec_webrules.
+// - Caps per page: ESC_HTTP_INFLIGHT_MAX requests in flight; ESC_TIMERS_MAX
+//   timers and animation frames pending. Per origin: ESC_STORAGE_ORIGIN_MAX
+//   bytes of storage. Over a cap the call throws a TypeError naming it,
+//   logged once per page per cap (not once per call: a page in a loop must
+//   not fill the console).
+// - Coarse clocks (roadmap decision 1, implemented behind one switch):
+//   performance.now() and frame timestamps are rounded down to 100 us in
+//   the browser; an app has full resolution. SAE_COARSE_CLOCKS=0 (or off)
+//   turns it off, =1 (or on) turns it on, in either mode. Date.now stays
+//   whole milliseconds, as before.
+// - A web page navigates only to http(s) URLs: not into app: pages (which
+//   the browser would map onto a file by path) nor to a file.
+//
+// A page-reachable function here carries the page veto as its neighbours
+// do; the esc_* helpers are the kernel's, reached from the gates as now_ns_
+// is.
+
+const ESC_HTTP_INFLIGHT_MAX = 8
+const ESC_TIMERS_MAX = 256
+const ESC_STORAGE_ORIGIN_MAX = 4194304   // 4 MB, in bytes of values
+const ESC_CLOCK_UNIT_NS = 100000         // 100 us: the coarse clocks' tick
+
+// Per-page state this section keeps beside the Page (which stays as it is):
+// which caps have been logged for the page. Keyed by the page's runtime,
+// freed with the page (esc_free_).
+struct EscState {
+    ctx: ptr
+    logged_http: int
+    logged_timers: int
+    logged_storage: int
+}
+
+var esc_states_: ptr = null   // std.list of *EscState
+
+esc_state_(p: *Page) -> *EscState {
+    if esc_states_ == null { esc_states_ = list.new() }
+    n = list.size(esc_states_)
+    i = 0
+    while i < n {
+        v, _ = list.get(esc_states_, i)
+        s = v as *EscState
+        if s.ctx == p.ctx { return s }
+        i = i + 1
+    }
+    ns = heap.new(EscState)
+    ns.ctx = p.ctx
+    ns.logged_http = 0
+    ns.logged_timers = 0
+    ns.logged_storage = 0
+    list.add(esc_states_, ns as ptr)
+    return ns
+}
+
+// The page goes: so does its state here.
+esc_free_(p: *Page) {
+    if esc_states_ == null { return }
+    i = list.size(esc_states_) - 1
+    while i >= 0 {
+        v, _ = list.get(esc_states_, i)
+        s = v as *EscState
+        if s.ctx == p.ctx {
+            list.list_remove(esc_states_, i)
+            heap.free(s)
+        }
+        i = i - 1
+    }
+}
+
+// A refusal on the console, once, in the form every refusal takes.
+esc_log_(why: string) { say_("sae: refused: ${why}") }
+
+// 1 in the browser (no app folder): where these rules apply.
+esc_browser_() -> int {
+    if app_dir_ == "" { return 1 }
+    return 0
+}
+
+// --- mixed content, and crossing an origin ---
+
+// Why a page at page_url may not even try `url`, another origin, or "" when
+// it may (the CORS-alike then decides on the response). Only mixed content
+// stops a web page here; an app never reaches this (capabilities.http is
+// checked first).
+esc_cross_why_(page_url: string, url: string) -> string {
+    return net.mixed_content(page_url, url)
+}
+
+// Log a mixed-content refusal at the call, once, as a capabilities.http
+// refusal is logged (the callback gets the same reason).
+esc_log_mixed_(p: *Page, url: string) {
+    why = net.mixed_content(p.url, url)
+    if why != "" { esc_log_(why) }
+}
+
+// Why a web page's scope may not name `pat`'s origin, or "". In the browser
+// a scope may name any http(s) origin (the CORS-alike holds each request to
+// that origin's consent), but not http: from an https: page.
+esc_scope_why_(page_url: string, pat: string) -> string {
+    if is_http_(page_url) == 0 || is_http_(pat) == 0 { return "which is not its own origin; a web page may reach only http(s) origins" }
+    return net.mixed_content(page_url, pat)
+}
+
+// (On the fetcher actor.) 1 if the request's first URL already leaves the
+// page's origin, in the browser: credentials stay behind from the start.
+esc_cross_start_(j: *HttpJob) -> int {
+    if app_dir_ != "" { return 0 }
+    return net.cross_origin(j.page_url, j.url)
+}
+
+// (On the fetcher actor.) 1 if a page-set header named `lname` (lowercased)
+// is sent. In the browser Origin and Referer are sae's to send, never the
+// page's: a forged Origin would be the page naming another site.
+esc_header_kept_(lname: string) -> int {
+    if app_dir_ == "" && (lname == "origin" || lname == "referer") { return 0 }
+    return 1
+}
+
+// (On the fetcher actor.) Across origins, in the browser, the one header sae
+// adds: Origin, the page's origin as its URL spells it.
+esc_send_origin_(req: ptr, j: *HttpJob, cross: int) {
+    if cross == 1 && app_dir_ == "" && is_http_(j.page_url) == 1 {
+        _s = client.set_header(req, "Origin", string.string_substring(j.page_url, 0, origin_end_(j.page_url)))
+    }
+}
+
+// (On the fetcher actor.) The CORS-alike, on the response that ends the
+// request: 1 if the page may not read it, with j.err saying why and the
+// body, status and headers withheld; the refusal is logged once when it is
+// delivered (j.refused_hop, as a refused redirect hop is).
+esc_cors_refused_(j: *HttpJob, resp: ptr, cross: int, url: string) -> int {
+    if cross == 0 || app_dir_ != "" { return 0 }
+    allow = client.response_header(resp, "Sae-Allow-Origin")
+    if net.allows_origin(j.page_url, allow) == 1 { return 0 }
+    po = string.string_substring(j.page_url, 0, origin_end_(j.page_url))
+    j.err = "${url} did not allow this page's origin ${po}: the response carries no Sae-Allow-Origin: ${po} (or *)"
+    j.status = 0
+    j.resp = ""
+    j.resp_headers = ""
+    j.refused_hop = 1
+    return 1
+}
+
+// --- caps ---
+
+// How many requests page p has in flight: its callbacks still waiting.
+esc_http_inflight_(p: *Page) -> int {
+    if http_waits_ == null { return 0 }
+    c = 0
+    n = list.size(http_waits_)
+    i = 0
+    while i < n {
+        wv, _ = list.get(http_waits_, i)
+        w = wv as *HttpWait
+        if w.page == p as ptr && w.seq == p.seq { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+// The in-flight cap: release the held callback, log once per page, throw.
+esc_http_refuse_(ctx: ptr, p: *Page, ref: int) -> int {
+    quickjs.release(ctx, ref)
+    why = "http: this page has ${ESC_HTTP_INFLIGHT_MAX} requests in flight (the cap); wait for one to finish"
+    s = esc_state_(p)
+    if s.logged_http == 0 {
+        s.logged_http = 1
+        esc_log_(why)
+    }
+    return sae_throw_type_error(ctx, why)
+}
+
+// How many timers (alive) and animation frames (requested, not cancelled)
+// page p has pending.
+esc_timers_pending_(p: *Page) -> int {
+    c = 0
+    n = list.size(p.timers)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.timers, i)
+        t = v as *PageTimer
+        if t.alive == 1 { c = c + 1 }
+        i = i + 1
+    }
+    m = list.size(p.rafs)
+    k = 0
+    while k < m {
+        rv, _ = list.get(p.rafs, k)
+        r = rv as *PageRaf
+        if r.id != 0 { c = c + 1 }
+        k = k + 1
+    }
+    return c
+}
+
+// The timers cap: log once per page, throw. Called before anything is held.
+esc_timers_refuse_(ctx: ptr, p: *Page) -> int {
+    why = "this page has ${ESC_TIMERS_MAX} timers and animation frames pending (the cap); cancel or let some run first"
+    s = esc_state_(p)
+    if s.logged_timers == 0 {
+        s.logged_timers = 1
+        esc_log_(why)
+    }
+    return sae_throw_type_error(ctx, why)
+}
+
+// The bytes the storage folder `dir` holds, less the file `key` (which is
+// about to be replaced). 0 for a folder that is not there yet.
+esc_storage_used_(dir: string, key: string) -> long {
+    long total = 0
+    l, err = fs.list_dir(dir)
+    if err != "" || l == null { return total }
+    n = fs.dir_list_count(l)
+    i = 0
+    while i < n {
+        name = fs.dir_list_get(l, i)
+        if name != key {
+            sz, serr = fs.size("${dir}/${name}")
+            if serr == "" { total = total + sz }
+        }
+        i = i + 1
+    }
+    fs.dir_list_free(l)
+    return total
+}
+
+// 1 if writing `add` bytes under `key` would take the page's origin (or
+// app, or file folder) over its storage cap.
+esc_storage_over_(url: string, key: string, add: int) -> int {
+    long cap = ESC_STORAGE_ORIGIN_MAX
+    long more = add
+    if esc_storage_used_(storage_dir_(url), key) + more > cap { return 1 }
+    return 0
+}
+
+// The storage cap: log once per page, throw.
+esc_storage_refuse_(ctx: ptr, p: *Page) -> int {
+    why = "storage.set: this origin's storage would exceed 4 MB (the cap); remove something first"
+    s = esc_state_(p)
+    if s.logged_storage == 0 {
+        s.logged_storage = 1
+        esc_log_(why)
+    }
+    return sae_throw_type_error(ctx, why)
+}
+
+// --- coarse clocks ---
+
+var esc_coarse_ = 0   // 0 not decided yet, 1 off, 2 on
+
+// 1 when the clocks a page reads are coarse: in the browser unless
+// SAE_COARSE_CLOCKS=0, in an app only with SAE_COARSE_CLOCKS=1.
+esc_coarse_on_() -> int {
+    if esc_coarse_ == 0 {
+        esc_coarse_ = 1
+        if app_dir_ == "" { esc_coarse_ = 2 }
+        v = env_("SAE_COARSE_CLOCKS")
+        if v == "0" || v == "off" { esc_coarse_ = 1 }
+        if v == "1" || v == "on" { esc_coarse_ = 2 }
+    }
+    if esc_coarse_ == 2 { return 1 }
+    return 0
+}
+
+// performance.now() and the frame clock: milliseconds with the fraction
+// kept, rounded down to 100 us when the clocks are coarse. Under
+// SAE_TIME_SCALE the scaled clock is whole milliseconds, as before.
+esc_perf_now_() -> float {
+    long ms = now_ms_()   // also starts SAE_TIME_SCALE's base
+    if time_scale_ != 1 { return ms as float }
+    long ns = os.now_monotonic_ns()
+    if esc_coarse_on_() == 1 { return ((ns / ESC_CLOCK_UNIT_NS) as float) / 10.0 }
+    return (ns as float) / 1000000.0
+}
+
+// --- navigation ---
+
+// 1, having logged it, if a web page in the browser asked to navigate to
+// something that is not an http(s) URL (an app: page, a file). A page
+// loaded from a file may open files, as the address bar may.
+esc_nav_refused_(b: *Browser, url: string) -> int {
+    if app_dir_ != "" { return 0 }
+    if b.page == null { return 0 }
+    if is_http_((b.page as *Page).url) == 0 { return 0 }
+    if is_http_(url) == 1 { return 0 }
+    esc_log_("a web page may navigate only to http(s) URLs; refused ${url}")
+    return 1
+}
+
+// ===== end wave1/escape =====
 
 // --- URLs and fetching ---
 
@@ -2060,6 +2380,7 @@ http_do_(jp: ptr) {
     body = j.body
     host0 = string.string_substring(url, 0, origin_end_(url))
     cross = 0        // a hop left the first origin: credentials stay behind
+    if esc_cross_start_(j) == 1 { cross = 1 }   // wave1/escape: or the first URL already did
     hops = 0
     while 1 == 1 {
         // services/net builds the request only if app.json capabilities.http
@@ -2080,13 +2401,14 @@ http_do_(jp: ptr) {
                 if c > 0 {
                     hname = string.string_substring(line, 0, c)
                     lname = string.to_lower(hname)
-                    if cross == 0 || (lname != "authorization" && lname != "cookie" && lname != "proxy-authorization") {
+                    if esc_header_kept_(lname) == 1 && (cross == 0 || (lname != "authorization" && lname != "cookie" && lname != "proxy-authorization")) {
                         _sh = client.set_header(req, hname, string.string_substring(line, c + 2, string.length(line)))
                     }
                 }
                 hi = hi + 1
             }
         }
+        esc_send_origin_(req, j, cross)   // wave1/escape: Origin across origins, in the browser
         if body != "" || method == "POST" || method == "PUT" || method == "PATCH" {
             ct = j.ctype
             if ct == "" { ct = "text/plain" }
@@ -2102,6 +2424,10 @@ http_do_(jp: ptr) {
         loc = ""
         if is_redirect_(status) == 1 { loc = client.response_header(resp, "Location") }
         if loc == "" {
+            if esc_cors_refused_(j, resp, cross, url) == 1 {   // wave1/escape: the CORS-alike
+                client.response_free(resp)
+                return
+            }
             j.status = status
             j.resp = own_(client.response_body(resp))
             j.resp_headers = own_(client.response_headers(resp))
@@ -2225,7 +2551,12 @@ http_refusal_(page_url: string, scopes: string, method: string, url: string) -> 
         if is_http_(page_url) == 0 { return "a page may reach only its own origin: ${url}" }
         po = string.string_substring(page_url, 0, origin_end_(page_url))
         uo = string.string_substring(url, 0, origin_end_(url))
-        if po != uo { return "a page may reach only its own origin: ${url}" }
+        // wave1/escape: another origin may be tried (the CORS-alike decides on
+        // the response); mixed content may not.
+        if po != uo {
+            ew = esc_cross_why_(page_url, url)
+            if ew != "" { return ew }
+        }
     }
     if scopes != "" && scope_covers_(scopes, method, url) == 0 {
         return "this page's seeks do not cover ${method} ${url}"
@@ -2244,6 +2575,8 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
         nwhy = net.refusal(url)
         if nwhy != "" { net_log_(nwhy) }
     }
+    esc_log_mixed_(p, url)   // wave1/escape: mixed content, logged once here
+    if esc_http_inflight_(p) >= ESC_HTTP_INFLIGHT_MAX { return esc_http_refuse_(ctx, p, ref) }   // wave1/escape: the in-flight cap
     if http_waits_ == null { http_waits_ = list.new() }
     http_ids_ = http_ids_ + 1
     j = heap.new(HttpJob)
@@ -2508,9 +2841,10 @@ http_scopes_for_(page_url: string, scopes: string) -> (string, string) {
                     return "", "${page_url} ${shown}, beyond what this app's app.json grants (capabilities.http)"
                 }
             } else {
-                if is_http_(page_url) == 0 || string.string_substring(pat, 0, origin_end_(pat)) != string.string_substring(page_url, 0, origin_end_(page_url)) {
-                    return "", "${page_url} ${shown}, which is not its own origin; a web page may reach only that"
-                }
+                // wave1/escape: any http(s) origin, held to the CORS-alike per
+                // request; not http: from an https: page.
+                ew = esc_scope_why_(page_url, pat)
+                if ew != "" { return "", "${page_url} ${shown}, ${ew}" }
             }
             out = string.concat(out, "${verbs}\t${pat}\n")
         }
@@ -3063,6 +3397,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
 }
 
 page_free_(p: *Page) {
+    esc_free_(p)   // wave1/escape: the page's cap state
     // A page's timers and animation frames stop with it: a tick after this
     // would call into a freed runtime.
     timers_free_(p)
@@ -3238,6 +3573,7 @@ run_nav_(b: *Browser) {
             fflush(sae_stdout())
             return
         }
+        if esc_nav_refused_(b, url) == 1 { return }   // wave1/escape: a web page stays on http(s)
         go_(b, url)
     }
     if kind == NAV_BACK {

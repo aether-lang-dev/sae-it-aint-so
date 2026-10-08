@@ -39,7 +39,8 @@ import std.http.client (request)
 import std.string
 import std.strarr
 
-exports (configure, allow, granted, refusal, open_request, origin_of)
+exports (configure, allow, granted, refusal, open_request, origin_of,
+         origin_text, cross_origin, mixed_content, allows_origin)
 
 var enabled_: int = 0     // 0 in the browser: no allowlist applies
 var entries_: ptr = null  // strarr: "scheme://host:port\tpath", host maybe "*.rest"
@@ -256,4 +257,53 @@ open_request(method: string, url: string) -> (ptr, string) {
     req = request(method, url)
     if req == null { return null, "not a valid URL: ${url}" }
     return req, ""
+}
+
+// --- wave1/escape: the browser's origin rules (docs/roadmap.md 1.1, 1.2) ---
+//
+// Pure functions the kernel applies to a web page's requests, here so a
+// spec can hold them without a window (tests/spec_origin_rules.ae), and so
+// the one module that knows what an origin is says what crosses one.
+
+// The origin of an http(s) URL as text, "scheme://host:port" with the port
+// always written and the host lowercased, so two spellings of one origin
+// compare equal ("http://H" is "http://h:80"); "" for anything else.
+origin_text(url: string) -> string {
+    scheme, host, port, err = origin_of(url)
+    if err != "" { return "" }
+    return "${scheme}://${host}:${port}"
+}
+
+// 1 if `url` is on another origin than the page at `page_url`. A page or a
+// URL that has no http(s) origin counts as another: a page from a file has
+// no origin to share.
+cross_origin(page_url: string, url: string) -> int {
+    a = origin_text(page_url)
+    b = origin_text(url)
+    if a == "" || b == "" || a != b { return 1 }
+    return 0
+}
+
+// Mixed content: why a page from https: may not fetch `url`, or "". The
+// web's rule, applied at birth: a secure page never carries plain http:
+// data, whatever origin it comes from.
+mixed_content(page_url: string, url: string) -> string {
+    if string.string_starts_with(page_url, "https://") == 1 && string.string_starts_with(url, "http://") == 1 {
+        return "mixed content: a page from https: may not fetch http: (${url})"
+    }
+    return ""
+}
+
+// The CORS-alike: 1 if a response whose Sae-Allow-Origin header is `header`
+// may be handed to the page at `page_url`: "*" (anyone), or that page's
+// origin, compared parsed (a trailing "/" or a written default port makes
+// no difference). "" (no header) allows nobody.
+allows_origin(page_url: string, header: string) -> int {
+    h = string.trim(header)
+    if h == "*" { return 1 }
+    if h == "" { return 0 }
+    po = origin_text(page_url)
+    if po == "" { return 0 }
+    if origin_text(h) == po { return 1 }
+    return 0
 }

@@ -200,6 +200,51 @@ api_redirect_(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, "")
 }
 
+// --- wave1/escape: the browser's security rules (spec_webrules, spec_escape) ---
+//
+// The request's headers, one "name: value" line each, names lowercased, in
+// the order they came: what sae actually sent (no Referer, no Cookie, an
+// Origin only across origins).
+req_headers_text_(req: ptr) -> string {
+    out = ""
+    n = http.request_header_count(req)
+    i = 0
+    while i < n {
+        out = string.concat(out, "${string.to_lower(http.request_header_name(req, i))}: ${http.request_header_value(req, i)}\n")
+        i = i + 1
+    }
+    return out
+}
+
+//   GET /api/reqheaders   -> the request's headers (req_headers_text_)
+api_reqheaders_(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, req_headers_text_(req))
+}
+
+//   GET /api/setcookie    -> "cookie set", with a Set-Cookie sae must ignore
+api_setcookie_(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "Set-Cookie", "sae=1; Path=/")
+    http.response_set_body(res, "cookie set")
+}
+
+//   GET /api/cors?allow=<origin or *>  -> "cors: ok" then the request's
+//   headers, with Sae-Allow-Origin: <allow> when `allow` is given (the
+//   CORS-alike's consent), and no such header otherwise. A page on another
+//   origin (http://localhost:8091 is one, beside http://127.0.0.1:8091) is
+//   handed the body only when the header names its origin or is *.
+api_cors_(req: ptr, res: ptr, ud: ptr) {
+    allow = http.http_get_query_param(req, "allow")
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "X-Secret", "the body and headers stay out of reach without consent")
+    if allow != null && allow != "" { http.response_set_header(res, "Sae-Allow-Origin", allow) }
+    http.response_set_body(res, "cors: ok\n${req_headers_text_(req)}")
+}
+
 main() {
     if os.args_count() < 2 {
         println("usage: pageserver <site-dir> [port]")
@@ -241,6 +286,10 @@ main() {
         t = t + 1
     }
     http.server_get(server, "/api/slow", api_slow_, 0)
+    // wave1/escape: the browser's security rules
+    http.server_get(server, "/api/reqheaders", api_reqheaders_, 0)
+    http.server_get(server, "/api/setcookie", api_setcookie_, 0)
+    http.server_get(server, "/api/cors", api_cors_, 0)
 
     // One route per page file (routes are exact paths, no wildcard).
     l, lerr = dir.list(site.dir)

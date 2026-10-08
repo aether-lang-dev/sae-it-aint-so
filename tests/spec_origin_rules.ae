@@ -1,0 +1,70 @@
+// spec_origin_rules.ae — the browser's origin rules as services/net states
+// them, without a window or a socket: what an origin is, what crosses one,
+// mixed content (a page from https: may not fetch http:), and the CORS-alike's
+// consent header. spec_webrules and spec_escape are the same rules end to
+// end; the https: half of mixed content is only here until a lane serves a
+// page over TLS (docs/roadmap.md 1.1).
+//
+//   ae run tests/spec_origin_rules.ae          (from sae's root)
+import std.spec
+import std.string
+import services.net
+
+main() {
+    fw = spec.init()
+    spec.describe(fw, "an origin, as text") {
+        spec.it("is scheme, lowercased host and the port, written or not") callback {
+            spec.assert_str_eq(net.origin_text("http://127.0.0.1:8091/about?x=1"), "http://127.0.0.1:8091", "as written")
+            spec.assert_str_eq(net.origin_text("https://Shop.Example/x"), "https://shop.example:443", "default port filled in, host lowercased")
+            spec.assert_str_eq(net.origin_text("http://h.example"), "http://h.example:80", "no path at all")
+            spec.assert_str_eq(net.origin_text("app:/about"), "", "an app page has no origin")
+            spec.assert_str_eq(net.origin_text("/Users/me/page.ts"), "", "nor a file")
+        }
+    }
+    spec.describe(fw, "crossing an origin") {
+        spec.it("another host, port or scheme is another origin; another path is not") callback {
+            spec.assert_eq(net.cross_origin("http://127.0.0.1:8091/", "http://127.0.0.1:8091/api/json"), 0, "same origin")
+            spec.assert_eq(net.cross_origin("http://127.0.0.1:8091/", "http://localhost:8091/api/json"), 1, "another host name, even for one machine")
+            spec.assert_eq(net.cross_origin("http://127.0.0.1:8091/", "http://127.0.0.1:8092/"), 1, "another port")
+            spec.assert_eq(net.cross_origin("http://h.example/", "https://h.example/"), 1, "another scheme")
+            spec.assert_eq(net.cross_origin("http://h.example:80/", "http://H.example/"), 0, "spelling makes no difference")
+        }
+        spec.it("a page without an origin crosses to anything") callback {
+            spec.assert_eq(net.cross_origin("/Users/me/page.ts", "http://127.0.0.1:8091/"), 1, "a file page")
+            spec.assert_eq(net.cross_origin("http://127.0.0.1:8091/", "ftp://x/"), 1, "and a URL that is not http(s)")
+        }
+    }
+    spec.describe(fw, "mixed content") {
+        spec.it("a page from https: may not fetch http:, from any origin") callback {
+            spec.assert_str_eq(net.mixed_content("https://shop.example/", "http://shop.example/api"),
+                "mixed content: a page from https: may not fetch http: (http://shop.example/api)", "its own host, plain")
+            spec.assert_str_eq(net.mixed_content("https://shop.example/", "http://tiles.example/1.png"),
+                "mixed content: a page from https: may not fetch http: (http://tiles.example/1.png)", "another host, plain")
+        }
+        spec.it("https: to https:, and anything from an http: page, is not mixed") callback {
+            spec.assert_str_eq(net.mixed_content("https://shop.example/", "https://tiles.example/"), "", "secure to secure")
+            spec.assert_str_eq(net.mixed_content("http://shop.example/", "http://tiles.example/"), "", "plain to plain")
+            spec.assert_str_eq(net.mixed_content("http://shop.example/", "https://tiles.example/"), "", "plain to secure")
+        }
+    }
+    spec.describe(fw, "the CORS-alike: Sae-Allow-Origin") {
+        spec.it("* allows any page") callback {
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", "*"), 1, "star")
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", " * "), 1, "trimmed")
+        }
+        spec.it("the page's own origin allows it, however spelt") callback {
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", "http://127.0.0.1:8091"), 1, "exact")
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", "http://127.0.0.1:8091/"), 1, "with a slash")
+            spec.assert_eq(net.allows_origin("https://shop.example/x", "https://SHOP.example:443"), 1, "case and the default port")
+        }
+        spec.it("no header, another origin, or a non-origin allows nobody") callback {
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", ""), 0, "absent")
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", "http://localhost:8091"), 0, "another host")
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", "https://127.0.0.1:8091"), 0, "another scheme")
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", "http://127.0.0.1:8091, *"), 0, "a list is not an origin")
+            spec.assert_eq(net.allows_origin("http://127.0.0.1:8091/x", "null"), 0, "nor is null")
+            spec.assert_eq(net.allows_origin("/Users/me/page.ts", "http://127.0.0.1:8091"), 0, "a page with no origin is allowed nothing but *")
+        }
+    }
+    return spec.run_summary(fw)
+}

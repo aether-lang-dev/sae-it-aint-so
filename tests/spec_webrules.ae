@@ -1,0 +1,116 @@
+// spec_webrules.ae — the browser's security rules, end to end
+// (docs/roadmap.md 1.1 and 1.2; README "Browser security rules"): no
+// ambient credentials, no Referer, an Origin only across origins, the
+// CORS-alike (Sae-Allow-Origin), and coarse clocks in the browser against
+// full resolution in an app. The pages are site/webrules.ts and
+// site/clocks.ts; tests/apps/clocks links the latter as an app.
+//
+//   tests/run_spec.sh spec_webrules                                   (browser)
+//   SAE_COARSE_CLOCKS=0 tests/run_spec.sh spec_webrules               (browser, fine clocks)
+//   SAE_TEST_APP=tests/apps/clocks tests/run_spec.sh spec_webrules    (app: clocks only)
+//
+// tests/spec_origin_rules.ae holds the same rules without a window, where
+// the https: half of mixed content lives until a lane serves a page over TLS.
+import std.spec
+import std.string
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+const ME = "http://127.0.0.1:8091"
+const OTHER = "http://localhost:8091"
+
+// The line of the page's texts that starts with `prefix`, or what is there.
+line_of(prefix: string) -> string {
+    lines = string.split(b.page_texts(), "\n")
+    n = string.string_array_size(lines)
+    i = 0
+    while i < n {
+        l = string.string_array_get(lines, i)
+        if string.starts_with(l, prefix) == 1 { return l }
+        i = i + 1
+    }
+    return "(no line ${prefix})"
+}
+
+// Wait for the line starting with `prefix` to change from its "(none)" start.
+wait_for_line(prefix: string) -> string {
+    i = 0
+    while i < 60 {
+        l = line_of(prefix)
+        if string.ends_with(l, "(none)") == 0 && string.starts_with(l, "(no line") == 0 { return l }
+        sleep(50)
+        i = i + 1
+    }
+    return line_of(prefix)
+}
+
+no_consent(url: string) -> string {
+    return "${url} did not allow this page's origin ${ME}: the response carries no Sae-Allow-Origin: ${ME} (or *)"
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    in_app = 0
+    if os_getenv("SAE_TEST_APP") != null { in_app = 1 }
+    env = os_getenv("SAE_COARSE_CLOCKS")
+    if env == null { env = "" }
+
+    if in_app == 0 {
+        spec.describe(fw, "no ambient credentials, no Referer") {
+            spec.it("sae adds no header a page did not set: no Referer, no Origin, no Cookie, no Authorization") callback {
+                b.navigate(b.test_url("/webrules"))
+                b.assert_page("The browser's security rules", "200 ", "loaded")
+                b.click("Same origin")
+                spec.assert_str_eq(wait_for_line("same: "), "same: 200 referer=no origin=no cookie=no authorization=no x-test=yes", "only the page's own X-Test")
+            }
+            spec.it("a Set-Cookie in a response is ignored: there is no cookie jar") callback {
+                b.click("Set cookie")
+                spec.assert_str_eq(wait_for_line("cookie: "), "cookie: 200 offered, then cookie=no", "the next request carries no cookie")
+            }
+        }
+        spec.describe(fw, "the CORS-alike: another origin, with its consent") {
+            spec.it("Sae-Allow-Origin: * hands over the answer; sae sent Origin and dropped the page's Origin, Referer, Cookie and Authorization") callback {
+                b.click("Cross, allowed *")
+                spec.assert_str_eq(wait_for_line("star: "),
+                    "star: ok=true 200 origin=${ME} referer=no cookie=no authorization=no x-test=yes secret=seen", "allowed, with sae's Origin only")
+            }
+            spec.it("Sae-Allow-Origin naming the page's origin does too") callback {
+                b.click("Cross, allowed exactly")
+                spec.assert_str_eq(wait_for_line("exact: "), "exact: ok=true 200", "allowed")
+            }
+            spec.it("another origin named, or no header: res.ok false with the reason, and nothing of the answer") callback {
+                b.click("Cross, allowed another")
+                spec.assert_str_eq(wait_for_line("wrong: "),
+                    "wrong: ok=false status=0 text=\"\" headers=0 ${no_consent("${OTHER}/api/cors?allow=http://other.example")}", "another origin's consent is not this page's")
+                b.click("Cross, no consent")
+                spec.assert_str_eq(wait_for_line("none: "),
+                    "none: ok=false status=0 text=\"\" headers=0 ${no_consent("${OTHER}/api/cors?x=none")}", "no header")
+                spec.assert_true(b.wait_for_console("sae: refused: ${no_consent("${OTHER}/api/cors?x=none")}"), "logged")
+            }
+            spec.it("a redirect that leaves the origin is held to the consent on the answer that ends it") callback {
+                b.click("Redirect to consent")
+                spec.assert_str_eq(wait_for_line("hop: "), "hop: ok=true 200 origin=${ME}", "consent on the final answer, Origin sent on the cross hop")
+                b.click("Redirect without consent")
+                spec.assert_str_eq(wait_for_line("hop-none: "),
+                    "hop-none: ok=false status=0 text=\"\" headers=0 ${no_consent("${OTHER}/api/cors?x=hop")}", "no consent, nothing handed over")
+            }
+        }
+    }
+
+    mode = "browser"
+    if in_app == 1 { mode = "app" }
+    want = "coarse"
+    if in_app == 1 { want = "fine" }
+    if env == "0" || env == "off" { want = "fine" }
+    if env == "1" || env == "on" { want = "coarse" }
+    spec.describe(fw, "clocks (${mode}, SAE_COARSE_CLOCKS=\"${env}\")") {
+        spec.it("performance.now() and frame timestamps are ${want}") callback {
+            if in_app == 0 { b.navigate(b.test_url("/clocks")) }
+            l = wait_for_line("clock: perf=")
+            spec.assert_contains(l, "clock: perf=${want} raf=${want} ", "${want}: ${l}")
+        }
+    }
+    return spec.run_summary(fw)
+}

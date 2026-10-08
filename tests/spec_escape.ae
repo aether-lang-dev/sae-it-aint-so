@@ -1,0 +1,154 @@
+// spec_escape.ae — the red-team corpus (docs/roadmap.md 1.4, 8.3):
+// tests/escape/*.ts, one page per attempt to get out of the browser, each
+// loaded here and held to "refused, and logged exactly once". The corpus is
+// the security spec: a rule in 1.1 is not done until its attempt is here and
+// refused. Sandbox-breakout-alike: Tsyne's examples/sandbox-breakout.
+//
+//   tests/run_spec.sh spec_escape tests/escape
+//
+// Each page reports one line, "<name>: refused: <why>" (or "<name>: ESCAPED
+// ..."), on the page and on the console, so the console count of
+// "<name>: refused" is the page's own once; where sae itself refuses (the
+// CORS-alike, a cap, a navigation) its "sae: refused: ..." line is counted
+// too, and must also be exactly one.
+import std.spec
+import std.string
+import std.fs
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+const ME = "http://127.0.0.1:8091"
+const OTHER = "http://localhost:8091"
+
+// How many times sae-driver's console has printed `text`.
+console_count(text: string) -> int {
+    p = os_getenv("SAE_TEST_LOG")
+    if p == null { return 0 }
+    body, err = fs.read(p)
+    if string.length(err) > 0 { return 0 }
+    parts = string.split(body, text)
+    return string.string_array_size(parts) - 1
+}
+
+// The line of the page's texts that starts with `prefix`, or what is there.
+line_of(prefix: string) -> string {
+    lines = string.split(b.page_texts(), "\n")
+    n = string.string_array_size(lines)
+    i = 0
+    while i < n {
+        l = string.string_array_get(lines, i)
+        if string.starts_with(l, prefix) == 1 { return l }
+        i = i + 1
+    }
+    return "(no line ${prefix})"
+}
+
+// Wait for the page's report line: "<name>: " not ending in "trying".
+wait_for_report(name: string) -> string {
+    i = 0
+    while i < 60 {
+        l = line_of("${name}: ")
+        if string.starts_with(l, "(no line") == 0 && string.ends_with(l, "trying") == 0 { return l }
+        sleep(50)
+        i = i + 1
+    }
+    return line_of("${name}: ")
+}
+
+// Load the attempt `name`, wait for its report, and hold it to: refused,
+// said so once by the page, and (when `sae_log` is not "") once by sae.
+attempt(name: string, sae_log: string) -> string {
+    b.navigate(b.test_url("/${name}"))
+    l = wait_for_report(name)
+    spec.assert_true(string.starts_with(l, "${name}: refused: "), "${name} is refused: ${l}")
+    spec.assert_eq(console_count("${name}: refused: "), 1, "${name}: the page said so once")
+    if sae_log != "" {
+        spec.assert_true(b.wait_for_console(sae_log), "${name}: sae logged the refusal")
+        spec.assert_eq(console_count(sae_log), 1, "${name}: and exactly once")
+    }
+    return l
+}
+
+no_consent(url: string) -> string {
+    return "sae: refused: ${url} did not allow this page's origin ${ME}: the response carries no Sae-Allow-Origin: ${ME} (or *)"
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "the escape corpus: the network") {
+        spec.it("fetch another origin without its consent") callback {
+            attempt("other_origin", no_consent("${OTHER}/api/echo?msg=other_origin"))
+        }
+        spec.it("a redirect out of the origin, to one that has not consented") callback {
+            attempt("redirect_out", no_consent("${OTHER}/api/json?from=redirect_out"))
+        }
+        spec.it("forge Sae-Allow-Origin and Origin from the page side") callback {
+            attempt("forge_allow_origin", no_consent("${OTHER}/api/echo?msg=forged"))
+        }
+        spec.it("http: from this page (mixed content needs an https: page; here it is an allowed cross-origin request)") callback {
+            b.navigate(b.test_url("/mixed_content"))
+            l = wait_for_report("mixed_content")
+            spec.assert_str_eq(l, "mixed_content: not mixed: this page is http:, and the other origin consented (200)", "not mixed from http:")
+            spec.assert_eq(console_count("mixed_content: ESCAPED"), 0, "never escaped")
+        }
+    }
+    spec.describe(fw, "the escape corpus: the kernel's objects and the chrome") {
+        spec.it("reach fs and shell by a computed name") callback {
+            attempt("computed_fs", "")
+        }
+        spec.it("set_text, get_text and clear on the chrome's handles") callback {
+            attempt("chrome_set_text", "")
+        }
+        spec.it("navigate the browser to a file as an app: page") callback {
+            l = attempt("chrome_navigate", "sae: refused: a web page may navigate only to http(s) URLs; refused app:/etc/hosts.ts")
+            sleep(300)   // past the deferred navigation
+            spec.assert_str_eq(line_of("chrome_navigate: "), l, "the page is still here")
+            b.assert_no_text("Could not load app:/etc/hosts.ts", "and nothing was loaded from the file system")
+            spec.assert_true(b.wait_for_url("${ME}/chrome_navigate"), "the chrome still shows the page's URL")
+        }
+        spec.it("read another origin's storage by key") callback {
+            attempt("other_storage", "")
+        }
+        spec.it("hold a widget handle across a navigation") callback {
+            attempt("handle_across", "")
+        }
+        spec.it("open a second window") callback {
+            attempt("second_window", "")
+        }
+    }
+    spec.describe(fw, "the escape corpus: the engine") {
+        spec.it("import() a URL") callback {
+            attempt("import_url", "")
+        }
+        spec.it("Atomics.wait") callback {
+            attempt("atomics_wait", "")
+        }
+        spec.it("loop forever: stopped by the time limit, reported once") callback {
+            b.navigate(b.test_url("/cpu"))
+            b.assert_text("This page failed: see the console.", "the page was stopped")
+            spec.assert_true(b.wait_for_console("InternalError: interrupted"), "the time limit")
+            spec.assert_eq(console_count("sae: uncaught exception in ${ME}/cpu"), 1, "reported once")
+            b.assert_no_text("cpu: ESCAPED", "nothing after the loop ran")
+        }
+        spec.it("allocate past the heap cap") callback {
+            attempt("heap", "")
+        }
+    }
+    spec.describe(fw, "the escape corpus: the caps") {
+        spec.it("more http requests in flight than the cap (8)") callback {
+            l = attempt("cap_http", "sae: refused: http: this page has 8 requests in flight (the cap)")
+            spec.assert_contains(l, "cap_http: refused: after 8: ", "the ninth was refused")
+        }
+        spec.it("more timers and frames pending than the cap (256)") callback {
+            l = attempt("cap_timers", "sae: refused: this page has 256 timers and animation frames pending (the cap)")
+            spec.assert_contains(l, "cap_timers: refused: after 256: ", "the 257th was refused")
+        }
+        spec.it("more storage than the origin's cap (4 MB)") callback {
+            l = attempt("cap_storage", "sae: refused: storage.set: this origin's storage would exceed 4 MB (the cap)")
+            spec.assert_contains(l, "cap_storage: refused: after 4 MB: ", "the fifth megabyte was refused")
+        }
+    }
+    return spec.run_summary(fw)
+}
