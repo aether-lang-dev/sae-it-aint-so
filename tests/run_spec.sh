@@ -19,7 +19,20 @@ SPEC="${1:-spec_nav}"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SITE=$(cd "${2:-$ROOT/site}" && pwd)
 SITE_PORT="${SAE_TEST_SITE_PORT:-8091}"
-DRIVER_PORT=9222
+DRIVER_PORT="${AETHER_UI_TEST_PORT:-9222}"
+
+# One spec at a time per machine: the page server and the driver bind fixed
+# ports (the app specs' app.json lists 8091), so concurrent runs -- several
+# worktrees, several agents -- would collide. A mkdir lock is atomic on every
+# platform sae builds on (macOS has no flock); a stale lock from a killed run
+# is reclaimed after 10 minutes.
+LOCK="${TMPDIR:-/tmp}/sae-run_spec.lock"
+_now() { date +%s; }
+while ! mkdir "$LOCK" 2>/dev/null; do
+    if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rmdir "$LOCK" 2>/dev/null; continue; fi
+    sleep 1
+done
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
 # Same toolchain choice as build.sh: an Aether dev tree beside sae wins.
 if [ "${SAE_AETHER_HOME:-}" = none ]; then
@@ -60,7 +73,7 @@ else
         "${SAE_TEST_START:-http://127.0.0.1:$SITE_PORT/}" >"$LOG" 2>&1 &
 fi
 SAE=$!
-trap 'kill $SAE $SERVER 2>/dev/null || true' EXIT INT TERM
+trap 'kill $SAE $SERVER 2>/dev/null || true; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
 cd "$ROOT/tests"
 status=0
