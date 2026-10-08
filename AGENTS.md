@@ -15,6 +15,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 |---|---|
 | `src/sae_host.ae` | The browser: window and chrome, history, fetch, one `Page` (JSContext, a `ui` handle stack and a `vg` node stack) per load, and every page-API host function (`sae_ui_*`, `sae_vg_*`, `sae_bc_*`) |
 | `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
+| `src/sae_raster.c` | A page's `Uint8Array` bytes for `vg.raster` and friends: a labelled workaround over contrib.quickjs's handle table until it can read a typed array (`asks/quickjs-typed-array-bytes.md`) |
 | `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
 | `services/` | One module per effect a page can ask for (`files`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `stdlib`: the `sae:` library and import hashes), each confined by its imports; `docs/architecture.md` |
 | `lib/sae/` | The `sae:` page standard library (`noise`, `scales`, `easing`), written in the dialect; `MANIFEST` holds their build-time hashes (`tools/hash-lib.sh`) |
@@ -81,6 +82,9 @@ tests/check_sqlite_relaunch.sh                 # migrations once across a relaun
 tests/run_spec.sh spec_imports                 # static import/export, sae:, top-level await, refusals: 11
 SAE_TEST_APP=tests/apps/imports tests/run_spec.sh spec_app_imports   # an app importing from its bundle
 tests/check_module_rules.sh                    # the loader's rules, headless (file pages, an app's refusals, the library manifest)
+tests/run_spec.sh spec_raster                  # pixels from a page: vg.raster/image, ui.image, budgets
+tests/run_spec.sh spec_terrain                 # demo 13
+tests/run_spec.sh spec_life                    # demo 14
 ```
 
 Toolchain: Aether 0.791.0 or later (`pins`), installed, or a dev tree

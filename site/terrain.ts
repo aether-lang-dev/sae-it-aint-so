@@ -56,7 +56,7 @@ const render = () => {
         const deep = h < level * 0.6;
         [r, g, b] = deep ? [24, 64, 160] : [60, 120, 210];
       } else {
-        const t = level >= 1 ? 1 : 0.2 + 0.81 * (h - level) / (1 - level);
+        const t = level >= 1 ? 1 : 0.14 + 0.87 * (h - level) / (1 - level);
         let i = 2;
         while (i < bands.length - 1 && t >= bands[i][0]) i++;
         [r, g, b] = [bands[i][1], bands[i][2], bands[i][3]];

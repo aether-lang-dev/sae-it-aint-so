@@ -457,6 +457,36 @@ vg.scene("0 0 100 100", 300, 300, () => {
 | shapes (each returns a handle) | `circle(cx, cy, r, fn?)`, `rect(x, y, w, h, fn?)`, `rrect(x, y, w, h, r, fn?)`, `line(x1, y1, x2, y2, fn?)`, `path(d, fn?)`, `text(x, y, s, fn?)`, `g(fn)` |
 | modifiers (inside a shape's block) | `fill(color)`, `stroke(color, width)`, `opacity(v)`, `transform(t)`, `on_click(fn(x, y))` (viewBox coordinates) |
 | later, from anywhere | `set_fill(h, color)`, `set_stroke(h, color, width)`, `set_opacity(h, v)`: change a shape and repaint |
+| pixels | `raster(w, h, rgba, fn?)`: a w x h image element from a `Uint8Array` of RGBA8 (w*h*4 bytes), at (0, 0), one viewBox unit a pixel; `raster_update(h, rgba)` new pixels in place; `image(bytes, fn?)`: a PNG/JPEG/GIF/BMP decoded by the toolkit, at its own size; `raster_size(h)` → `[w, h]` |
+| in a raster's or image's block | `box(x, y, w, h)` where it draws, `fit(mode)`: `"stretch"` (default), `"contain"`, `"cover"`, `"original"`; and `on_click`, `opacity`, `transform` as for any shape |
+
+### Pixels from a page
+
+```ts
+const px = new Uint8Array(64 * 64 * 4);              // straight RGBA8, row-major
+const life = vg.raster(64, 64, px, () => {
+  vg.box(0, 0, 64, 64);
+  vg.on_click((x, y) => toggle(Math.floor(x), Math.floor(y)));   // viewBox units
+});
+... write into px, then
+vg.raster_update(life, px);                            // copied in, repainted
+vg.image(pngBytes, () => { vg.box(10, 10, 40, 30); vg.fit("contain"); });
+ui.image(pngBytes);                                    // the picture as a widget
+```
+
+A raster is an AeVG image element (aether-ui's `vg.image`), so it is
+transformable, hit-testable and has opacity like any shape, and the scene
+repaints it on `raster_update`. The host copies the page's bytes (a
+`Uint8Array` or `Uint8ClampedArray`; anything else is a `TypeError`), so
+the page may reuse its array at once. Budgets, per page and provisional
+(roadmap decision 9): 4096 on either dimension and 32 MB of pixels in total,
+decoded images included, refused with a `TypeError` that says which; a
+page's rasters are freed with the page. Page-scoped, no capability.
+`site/raster.ts`, `site/terrain.ts` (demo 13) and `site/life.ts` (demo 14)
+use it; `tests/spec_raster.ae`, `spec_terrain.ae` and `spec_life.ae` read
+the pixels back. The engine side is a labelled workaround:
+`contrib.quickjs` cannot read a typed array yet (`src/sae_raster.c`,
+`asks/quickjs-typed-array-bytes.md`).
 
 Where a Cosyne app writes `c.circle(30, 40, 18).fill("#c44").onClick(f)`, a
 sae page writes `vg.circle(30, 40, 18, () => { vg.fill("#c44"); vg.on_click(f) })`.

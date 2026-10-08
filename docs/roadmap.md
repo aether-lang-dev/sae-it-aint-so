@@ -285,8 +285,8 @@ installable packages that exercise the trust strategy.
 | 11 | **Remote table.** A chess or Go board whose opponent is a server in any language; state changes stream in, rendering stays local. Shows sae as a smart display: a 50-byte "move" where a framebuffer would send pixels. | streaming, `svg`, `items` | 3 | Tsyne `REMOTE_GAMES_ETC` (idea: semantic network transparency) |
 | 12 | **Particles, kaleidoscope, terrain.** The Cosyne GPU demos. Need the `gfx` scene API of `docs/gpu-pages.md`: a page describes, native code draws, shaders are validated. Last, because a page that writes shaders is a page that can hang a GPU. | `gfx` | gpu-pages | Cosyne `particles`, `kaleidoscope-shader`, `procedural-terrain-gpu` |
 
-| 13 | **Terrain.** Sliders for noise scale, octaves and water level drive a Perlin/FBM heightmap, coloured by height, drawn as a raster the page computes; seed and smoothing as buttons. The first page that needs pixels. | `vg.raster` (8.2), `sae:noise` (8.1), `bind` | 8 | Cosyne `procedural-terrain-canvas` (idea: a library noise function feeding a 2D heightmap) |
-| 14 | **Life.** Conway's Game of Life on a raster, with the frame clock, click to toggle cells, patterns from a picker, generations bound to a label. | `vg.raster`, `frame`, `on_click` | 8.2 | Tsyne `ported-apps/game-of-life` (idea only) |
+| 13 | **Terrain.** Sliders for noise scale, octaves and water level drive a Perlin/FBM heightmap, coloured by height, drawn as a raster the page computes; seed and smoothing as buttons. The first page that needs pixels. **Landed 2026-10-08** as `site/terrain.ts` (value noise in the page until `sae:noise`; `tests/spec_terrain.ae`). | `vg.raster` (8.2), `sae:noise` (8.1), `bind` | 8 | Cosyne `procedural-terrain-canvas` (idea: a library noise function feeding a 2D heightmap) |
+| 14 | **Life.** Conway's Game of Life on a raster, with the frame clock, click to toggle cells, patterns from a picker, generations bound to a label. **Landed 2026-10-08** as `site/life.ts` (`tests/spec_life.ae`: a blinker evolves, a click toggles, the frame clock runs it). | `vg.raster`, `frame`, `on_click` | 8.2 | Tsyne `ported-apps/game-of-life` (idea only) |
 | 15 | **TodoMVC.** The classic, as the bindings showcase: a list state, `each` with keys, `computed` counts, filters as `visible_when`, no `set_text` anywhere. | `state`, `computed`, `each`, `bind` | 3.4 | Tsyne `examples/todomvc-when` (idea: `when` conditions over state) |
 | 16 | **Reversi, then 2048, then chess.** The scene-graph game tier: the board is AeVG-TS with bindings, moves are tweens, legal moves are `visible_when`; the engine is pure TypeScript locally, then a server over a stream for demo 11. | AeVG-TS, tweens, data joins, `on_drag`, streaming | 4, 8.6 | Tsyne `REMOTE_GAMES_ETC` #179-#182 (idea: send intent, not frames) |
 
@@ -371,6 +371,15 @@ dialect, so they are also the dialect's own test corpus
 can be backed by an Aether verb later without the page noticing.
 
 ### 8.2 The missing capability: pixels from a page
+
+**Landed 2026-10-08:** `vg.raster(w, h, rgba, fn?)`, `vg.raster_update(h,
+rgba)`, `vg.image(bytes, fn?)`, `ui.image(bytes, fn?)`, with `vg.box` and
+`vg.fit` in the block and `vg.raster_size(h)`; budgets 32 MB of pixels and
+4096 a side per page, refused with a TypeError; rasters freed with the
+page. On aether-ui's new AeVG image element (`vg.image`, all five
+backends). The engine side is a labelled workaround until contrib.quickjs
+can read a typed array (`src/sae_raster.c`,
+`asks/quickjs-typed-array-bytes.md`). README "Pixels from a page".
 
 Terrain, Life, pixel art, waveforms, a Mandelbrot: half of Tsyne's canvas
 demos are "a grid of pixels the page computes", and a sae page cannot make
@@ -506,6 +515,8 @@ gRPC bridge: sae is in-process. The three.js-over-fake-WebGL route:
    **Built as `sae:`** with `noise`, `scales`, `easing`; the name is one
    constant to change.
 9. **Raster budgets** (8.2): 32 MB of pixels per page, and a dimension cap?
+   (Provisionally yes, as built: 32 MB in total per page, decoded images
+   included, and 4096 on either dimension; `tests/spec_raster.ae` pins both.)
 10. **Which demo first.** My pick: 4 (the shop) and 1b (the camera), because
    together they exercise every security rule and the whole AeVG surface
    from a corpus file through to bindings, and both are browser pages that
