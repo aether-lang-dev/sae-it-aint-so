@@ -67,6 +67,7 @@ lower/run-tests.sh                           # 59 lowerer tests (run, err, mod, 
 tests/run_spec.sh                            # spec_nav: 45 specs
 tests/check_page_veto.sh                     # page veto present and enforced
 tests/check_layers.sh                        # services held to their imports
+tests/check_android_sources.sh               # the APK compiles the same C as .build.ae
 ../aether/build/ae run tests/spec_http_grants.ae   # capabilities.http matching, no window
 SAE_TEST_APP=tests/apps/httplist tests/run_spec.sh spec_app_httplist
 SAE_TEST_APP=tests/apps/nohttp tests/run_spec.sh spec_app_nohttp
