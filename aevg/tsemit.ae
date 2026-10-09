@@ -1,0 +1,739 @@
+// aevg.tsemit: SVG to AeVG-TS, the TypeScript emitter behind
+// `saelower --from-svg` (docs/roadmap.md section 4, "the transpiler as a dev
+// tool"). The same walk as aether-ui's vg/svg/transpiler.ae (which emits the
+// Aether DSL), emitting a sae page in the house style: shapes read like the
+// SVG they came from, modifiers sit in each shape's block, groups nest as
+// `g(() => { ... })` (sae's host cascades a group's transform, opacity, fill
+// and stroke to its children, so nothing is flattened), gradients and clip
+// paths go into one `defs(() => { ... })`, and every path's d is normalised
+// to absolute M/L/C/Z. Run once, then edit: the output is source.
+//
+//   emit_ts(svg, name, size, solid) -> string
+//     name: for the header comment; size: the canvas's pixel size (0: the
+//     root's width/height, else its viewBox extents); solid: 1 replaces
+//     gradient fills with their middle stop's colour (for a backend that
+//     cannot paint them yet).
+//
+// What it skips, saying so in a comment: <filter> and filter=, clip-path=
+// on a shape (the clipPath def is emitted, the attribute waits for a shape
+// attribute in aether-ui), <image>, <style> sheets, <switch>, markers.
+
+exports ( emit_ts )
+
+import std.string
+import std.strbuilder
+import std.list
+import std.map
+import std.floatarr
+import vg.svg.parser
+import vg.svg.normalizer
+import vg.grammar.utils
+import vg.geom.bbox
+
+extern string_array_size(arr: ptr) -> int
+
+struct Emit {
+    sb: ptr          // the output
+    root: ptr        // the <svg>
+    defs: ptr        // strbuilder: the defs block's lines
+    solid: int       // gradient fills as solid colours
+    grad_colors: ptr // map id -> the gradient's middle stop colour
+    grad_stops: ptr  // map id -> the gradient node (for href chains)
+    skipped: int     // how many elements were skipped (reported in a comment)
+}
+
+// The page for an SVG document.
+emit_ts(svg: string, name: string, size: int, solid: int) -> string {
+    root = parser.parse_svg(svg)
+    e = heap.new(Emit)
+    e.sb = strbuilder.new(4096)
+    e.root = root
+    e.defs = strbuilder.new(512)
+    e.solid = solid
+    e.grad_colors = map.new()
+    e.grad_stops = map.new()
+    e.skipped = 0
+    sb = e.sb
+    vb = root_view_box(root)
+    w = px_of(root, "width", vb, 2)
+    h = px_of(root, "height", vb, 3)
+    if size > 0 {
+        w = size
+        h = size
+    }
+    _0 = strbuilder.append(sb, "// ${name}: AeVG-TS emitted from ${name}.svg by `saelower --from-svg`.\n")
+    _1 = strbuilder.append(sb, "// The scene is source now: edit it, bind it to state, wire its events.\n")
+    desc = first_text(root, "title")
+    if string.length(desc) == 0 { desc = first_text(root, "desc") }
+    if string.length(desc) > 0 { _2 = strbuilder.append(sb, "// ${one_line(desc)}\n") }
+    _3 = strbuilder.append(sb, "const { scene, g, rect, rrect, circle, ellipse, line, path, polygon, polyline, text, text_sized, text_anchored,\n        fill, stroke, opacity, transform, linecap, linejoin, defs, linear_gradient, radial_gradient, clip_path } = vg;\n\n")
+    // Gradients first: the defs block, and the colours a solid rendering uses.
+    index_gradients(e, root)
+    collect_defs(e, root, 2)
+    _4 = strbuilder.append(sb, "scene(\"${vb}\", ${w}, ${h}, () => {\n")
+    if strbuilder.length(e.defs) > 0 {
+        _5 = strbuilder.append(sb, "  defs(() => {\n")
+        _6 = strbuilder.append(sb, strbuilder.finish(e.defs))
+        _7 = strbuilder.append(sb, "  });\n")
+    }
+    // The root's own presentation attributes cascade to everything: one
+    // group carries them.
+    root_mods = modifiers_of(e, root, 1, "", "")
+    rs = style_attr(root, "stroke")
+    rsw = style_attr(root, "stroke-width")
+    if string.length(root_mods) > 0 {
+        _8 = strbuilder.append(sb, "  g(() => { ${root_mods}\n")
+        emit_children(e, root, 2, rs, rsw)
+        _9 = strbuilder.append(sb, "  });\n")
+    } else {
+        emit_children(e, root, 1, rs, rsw)
+    }
+    _a = strbuilder.append(sb, "});\n")
+    if e.skipped > 0 { _b = strbuilder.append(sb, "// ${e.skipped} element(s) skipped: see the comments above.\n") }
+    return strbuilder.finish(sb)
+}
+
+// ─── the walk ────────────────────────────────────────────────────
+
+// in_stroke / in_sw: the stroke colour and width inherited from the
+// groups above (a shape with one but not the other completes it from them;
+// the host cascades a group's stroke only as a colour-and-width pair).
+emit_children(e: *Emit, node: ptr, indent: int, in_stroke: string, in_sw: string) {
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        emit_node(e, parser.node_child_at(node, i), indent, in_stroke, in_sw)
+        i = i + 1
+    }
+}
+
+// What a node passes down: its own stroke colour / width, else the inherited.
+inherit(node: ptr, key: string, inherited: string) -> string {
+    own = style_attr(node, key)
+    if string.length(own) > 0 { return own }
+    return inherited
+}
+
+emit_node(e: *Emit, node: ptr, indent: int, in_stroke: string, in_sw: string) {
+    tag = parser.node_tag(node)
+    if tag == "desc" || tag == "title" || tag == "metadata" || tag == "defs" { return }
+    if tag == "linearGradient" || tag == "radialGradient" || tag == "clipPath" || tag == "filter" { return }
+    if string.contains(tag, ":") == 1 { return }   // sodipodi:namedview and friends
+    if hidden(node) == 1 { return }
+    if tag == "g" || tag == "svg" || tag == "a" || tag == "switch" {
+        mods = modifiers_of(e, node, 1, in_stroke, in_sw)
+        pad(e, indent)
+        if string.length(mods) > 0 {
+            _1 = strbuilder.append(e.sb, "g(() => { ${mods}\n")
+        } else {
+            _2 = strbuilder.append(e.sb, "g(() => {\n")
+        }
+        note_unsupported(e, node, indent + 1)
+        emit_children(e, node, indent + 1, inherit(node, "stroke", in_stroke), inherit(node, "stroke-width", in_sw))
+        pad(e, indent)
+        _3 = strbuilder.append(e.sb, "});\n")
+        return
+    }
+    if tag == "use" {
+        target = resolve_use(e, node)
+        if target == null { return }
+        tf = use_transform(node)
+        mods = modifiers_of(e, node, 1, in_stroke, in_sw)
+        if string.length(tf) > 0 {
+            mods = "transform(\"${esc(tf)}\"); ${mods}"
+        }
+        pad(e, indent)
+        _4 = strbuilder.append(e.sb, "g(() => { ${mods}\n")
+        emit_node(e, target, indent + 1, inherit(node, "stroke", in_stroke), inherit(node, "stroke-width", in_sw))
+        pad(e, indent)
+        _5 = strbuilder.append(e.sb, "});\n")
+        return
+    }
+    note_unsupported(e, node, indent)
+    mods = modifiers_of(e, node, 0, in_stroke, in_sw)
+    if tag == "rect" { emit_rect(e, node, indent, mods); return }
+    if tag == "circle" { emit_call(e, indent, mods, "circle(${num(node, "cx")}, ${num(node, "cy")}, ${num(node, "r")}"); return }
+    if tag == "ellipse" { emit_call(e, indent, mods, "ellipse(${num(node, "cx")}, ${num(node, "cy")}, ${num(node, "rx")}, ${num(node, "ry")}"); return }
+    if tag == "line" { emit_call(e, indent, mods, "line(${num(node, "x1")}, ${num(node, "y1")}, ${num(node, "x2")}, ${num(node, "y2")}"); return }
+    if tag == "path" {
+        d = ""
+        if parser.node_has_attr(node, "d") == 1 { d = normalize_d(parser.node_attr(node, "d")) }
+        emit_call(e, indent, mods, "path(\"${esc(d)}\"")
+        return
+    }
+    if tag == "polygon" || tag == "polyline" {
+        pts = ""
+        if parser.node_has_attr(node, "points") == 1 { pts = string.trim(parser.node_attr(node, "points")) }
+        emit_call(e, indent, mods, "${tag}(\"${esc(pts)}\"")
+        return
+    }
+    if tag == "text" { emit_text(e, node, indent, mods); return }
+    if tag == "image" || tag == "foreignObject" || tag == "marker" || tag == "pattern" || tag == "symbol" || tag == "style" || tag == "script" {
+        pad(e, indent)
+        _6 = strbuilder.append(e.sb, "// <${tag}> skipped: not in the page grammar yet\n")
+        e.skipped = e.skipped + 1
+        return
+    }
+    // Anything else (tspan at top level, unknown): walk through it.
+    emit_children(e, node, indent, in_stroke, in_sw)
+}
+
+// rect, or rrect when it has corners.
+emit_rect(e: *Emit, node: ptr, indent: int, mods: string) {
+    rx = attr_num(node, "rx")
+    ry = attr_num(node, "ry")
+    if rx <= 0.0 { rx = ry }
+    if rx > 0.0 {
+        emit_call(e, indent, mods, "rrect(${num(node, "x")}, ${num(node, "y")}, ${num(node, "width")}, ${num(node, "height")}, ${string.from_float(rx)}")
+        return
+    }
+    emit_call(e, indent, mods, "rect(${num(node, "x")}, ${num(node, "y")}, ${num(node, "width")}, ${num(node, "height")}")
+}
+
+// `verb(args` + either `);` or `, () => { mods });`.
+emit_call(e: *Emit, indent: int, mods: string, head: string) {
+    pad(e, indent)
+    _1 = strbuilder.append(e.sb, head)
+    if string.length(mods) > 0 {
+        _2 = strbuilder.append(e.sb, ", () => { ${mods} });\n")
+    } else {
+        _3 = strbuilder.append(e.sb, ");\n")
+    }
+}
+
+emit_text(e: *Emit, node: ptr, indent: int, mods: string) {
+    t = text_content(node)
+    fs = style_attr(node, "font-size")
+    anch = style_attr(node, "text-anchor")
+    size = "0"
+    if string.length(fs) > 0 { size = string.from_float(utils.parse_length_to_px(fs)) }
+    head = ""
+    if anch == "middle" || anch == "end" {
+        head = "text_anchored(${num(node, "x")}, ${num(node, "y")}, ${size}, \"${anch}\", \"${esc(t)}\""
+    } else if string.length(fs) > 0 {
+        head = "text_sized(${num(node, "x")}, ${num(node, "y")}, ${size}, \"${esc(t)}\""
+    } else {
+        head = "text(${num(node, "x")}, ${num(node, "y")}, \"${esc(t)}\""
+    }
+    emit_call(e, indent, mods, head)
+}
+
+// The modifiers a node's block carries, as one line: transform first (it
+// is what a reader looks for), then fill, stroke, opacity, caps and joins.
+// A group (is_group) keeps "none" fills and strokes so its children inherit
+// them; a shape's stroke completes its colour or width from the inherited
+// in_stroke / in_sw when it sets only one.
+modifiers_of(e: *Emit, node: ptr, is_group: int, in_stroke: string, in_sw: string) -> string {
+    out = strbuilder.new(64)
+    tf = node_transform(node)
+    if parser.node_tag(node) == "use" { tf = "" }
+    if string.length(tf) > 0 { add_mod(out, "transform(\"${esc(tf)}\")") }
+    f = style_attr(node, "fill")
+    if string.length(f) > 0 {
+        if string.starts_with(f, "url(") == 1 && e.solid == 1 { f = solid_color(e, f) }
+        add_mod(out, "fill(\"${esc(f)}\")")
+    }
+    s = style_attr(node, "stroke")
+    sw = style_attr(node, "stroke-width")
+    if string.length(s) == 0 && string.length(sw) > 0 && is_group == 0 { s = in_stroke }
+    if string.length(sw) == 0 { sw = in_sw }
+    if string.length(s) > 0 && s != "none" {
+        if string.starts_with(s, "url(") == 1 && e.solid == 1 { s = solid_color(e, s) }
+        wv = 1.0
+        if string.length(sw) > 0 { wv = utils.parse_length_to_px(sw) }
+        add_mod(out, "stroke(\"${esc(s)}\", ${string.from_float(wv)})")
+    } else if s == "none" {
+        if is_group == 1 || string.length(in_stroke) > 0 { add_mod(out, "stroke(\"none\", 0)") }
+    }
+    op = compose_opacity(node)
+    if string.length(op) > 0 { add_mod(out, "opacity(${op})") }
+    lc = style_attr(node, "stroke-linecap")
+    if string.length(lc) > 0 && is_group == 0 { add_mod(out, "linecap(\"${lc}\")") }
+    lj = style_attr(node, "stroke-linejoin")
+    if string.length(lj) > 0 && is_group == 0 { add_mod(out, "linejoin(\"${lj}\")") }
+    return strbuilder.finish(out)
+}
+
+add_mod(out: ptr, m: string) {
+    if strbuilder.length(out) > 0 { _1 = strbuilder.append(out, "; ") }
+    _2 = strbuilder.append(out, m)
+}
+
+// A comment for what the grammar cannot carry on this node yet.
+note_unsupported(e: *Emit, node: ptr, indent: int) {
+    cp = style_attr(node, "clip-path")
+    fl = style_attr(node, "filter")
+    if string.length(cp) > 0 {
+        pad(e, indent)
+        _1 = strbuilder.append(e.sb, "// clip-path=\"${esc(cp)}\" not applied: shapes cannot carry one yet\n")
+    }
+    if string.length(fl) > 0 {
+        pad(e, indent)
+        _2 = strbuilder.append(e.sb, "// filter=\"${esc(fl)}\" not applied: filters are not in the page grammar\n")
+    }
+}
+
+// display:none or visibility:hidden.
+hidden(node: ptr) -> int {
+    if style_attr(node, "display") == "none" { return 1 }
+    if style_attr(node, "visibility") == "hidden" { return 1 }
+    return 0
+}
+
+// ─── defs: gradients and clip paths ──────────────────────────────
+
+// Every gradient in the document, keyed by id, so href chains resolve and a
+// solid rendering can pick a colour.
+index_gradients(e: *Emit, node: ptr) {
+    tag = parser.node_tag(node)
+    if tag == "linearGradient" || tag == "radialGradient" {
+        if parser.node_has_attr(node, "id") == 1 {
+            _1 = map.put(e.grad_stops, string.trim(parser.node_attr(node, "id")), node)
+        }
+    }
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        index_gradients(e, parser.node_child_at(node, i))
+        i = i + 1
+    }
+}
+
+// The node whose <stop>s a gradient uses: its own, else its href's (chained).
+stops_node(e: *Emit, node: ptr, depth: int) -> ptr {
+    if count_stops(node) > 0 || depth > 8 { return node }
+    href = href_of(node)
+    if string.length(href) == 0 { return node }
+    parent, _ = map.get(e.grad_stops, href)
+    if parent == null { return node }
+    return stops_node(e, parent, depth + 1)
+}
+
+count_stops(node: ptr) -> int {
+    n = parser.node_child_count(node)
+    c = 0
+    i = 0
+    while i < n {
+        if parser.node_tag(parser.node_child_at(node, i)) == "stop" { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+href_of(node: ptr) -> string {
+    h = ""
+    if parser.node_has_attr(node, "xlink:href") == 1 { h = parser.node_attr(node, "xlink:href") }
+    else if parser.node_has_attr(node, "href") == 1 { h = parser.node_attr(node, "href") }
+    h = string.trim(h)
+    if string.starts_with(h, "#") == 1 { h = string.substring(h, 1, string.length(h)) }
+    return h
+}
+
+// The middle stop's colour of url(#id), for a solid rendering; "#808080"
+// when the gradient is unknown.
+solid_color(e: *Emit, url: string) -> string {
+    id = utils.extract_url_id(url)
+    gnode, _ = map.get(e.grad_stops, id)
+    if gnode == null { return "#808080" }
+    sn = stops_node(e, gnode, 0)
+    n = parser.node_child_count(sn)
+    stops = list.new()
+    i = 0
+    while i < n {
+        ch = parser.node_child_at(sn, i)
+        if parser.node_tag(ch) == "stop" { list.add(stops, ch) }
+        i = i + 1
+    }
+    if list.size(stops) == 0 { return "#808080" }
+    mid, _m = list.get(stops, list.size(stops) / 2)
+    c = stop_attr(mid, "stop-color")
+    if string.length(c) == 0 { c = "#000000" }
+    op = stop_attr(mid, "stop-opacity")
+    if string.length(op) > 0 {
+        ov, oe = string.to_double(op)
+        if oe == "" && ov < 1.0 { c = utils.apply_opacity_to_color(c, ov) }
+    }
+    return c
+}
+
+stop_attr(node: ptr, key: string) -> string {
+    return style_attr(node, key)
+}
+
+// Walk the document for gradients and clip paths; each becomes a line of
+// the defs block.
+collect_defs(e: *Emit, node: ptr, indent: int) {
+    tag = parser.node_tag(node)
+    if tag == "linearGradient" || tag == "radialGradient" {
+        emit_gradient(e, node, indent)
+        return
+    }
+    if tag == "clipPath" {
+        emit_clip_path(e, node, indent)
+        return
+    }
+    if tag == "filter" {
+        pad_to(e.defs, indent)
+        _1 = strbuilder.append(e.defs, "// <filter id=\"${esc(attr_or(node, "id", ""))}\"> skipped: filters are not in the page grammar\n")
+        e.skipped = e.skipped + 1
+        return
+    }
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        collect_defs(e, parser.node_child_at(node, i), indent)
+        i = i + 1
+    }
+}
+
+emit_gradient(e: *Emit, node: ptr, indent: int) {
+    id = attr_or(node, "id", "")
+    if string.length(id) == 0 { return }
+    tag = parser.node_tag(node)
+    sb = e.defs
+    pad_to(sb, indent)
+    if tag == "linearGradient" {
+        _1 = strbuilder.append(sb, "linear_gradient(\"${esc(id)}\", ${lit(attr_or(node, "x1", "0"))}, ${lit(attr_or(node, "y1", "0"))}, ${lit(attr_or(node, "x2", "1"))}, ${lit(attr_or(node, "y2", "0"))}, ")
+    } else {
+        _2 = strbuilder.append(sb, "radial_gradient(\"${esc(id)}\", ${lit(attr_or(node, "cx", "0.5"))}, ${lit(attr_or(node, "cy", "0.5"))}, ${lit(attr_or(node, "r", "0.5"))}, ")
+    }
+    _3 = strbuilder.append(sb, stops_literal(node))
+    opts = strbuilder.new(64)
+    if tag == "radialGradient" {
+        if parser.node_has_attr(node, "fx") == 1 { add_opt(opts, "fx: ${lit(parser.node_attr(node, "fx"))}") }
+        if parser.node_has_attr(node, "fy") == 1 { add_opt(opts, "fy: ${lit(parser.node_attr(node, "fy"))}") }
+    }
+    if parser.node_has_attr(node, "gradientUnits") == 1 { add_opt(opts, "units: \"${esc(parser.node_attr(node, "gradientUnits"))}\"") }
+    if parser.node_has_attr(node, "gradientTransform") == 1 { add_opt(opts, "transform: \"${esc(string.trim(parser.node_attr(node, "gradientTransform")))}\"") }
+    if parser.node_has_attr(node, "spreadMethod") == 1 { add_opt(opts, "spread: \"${esc(parser.node_attr(node, "spreadMethod"))}\"") }
+    href = href_of(node)
+    if string.length(href) > 0 && count_stops(node) == 0 { add_opt(opts, "href: \"${esc(href)}\"") }
+    if strbuilder.length(opts) > 0 {
+        _4 = strbuilder.append(sb, ", { ${strbuilder.finish(opts)} }")
+    }
+    _5 = strbuilder.append(sb, ");\n")
+}
+
+add_opt(opts: ptr, o: string) {
+    if strbuilder.length(opts) > 0 { _1 = strbuilder.append(opts, ", ") }
+    _2 = strbuilder.append(opts, o)
+}
+
+// [[offset, color, opacity?], ...] from the node's own stops ("[]" with a
+// href, whose stops the host resolves).
+stops_literal(node: ptr) -> string {
+    sb = strbuilder.new(64)
+    _1 = strbuilder.append(sb, "[")
+    n = parser.node_child_count(node)
+    i = 0
+    k = 0
+    while i < n {
+        ch = parser.node_child_at(node, i)
+        if parser.node_tag(ch) == "stop" {
+            if k > 0 { _2 = strbuilder.append(sb, ", ") }
+            c = stop_attr(ch, "stop-color")
+            if string.length(c) == 0 { c = "#000000" }
+            _3 = strbuilder.append(sb, "[${lit(attr_or(ch, "offset", "0"))}, \"${esc(c)}\"")
+            op = stop_attr(ch, "stop-opacity")
+            if string.length(op) > 0 { _4 = strbuilder.append(sb, ", ${lit(op)}") }
+            _5 = strbuilder.append(sb, "]")
+            k = k + 1
+        }
+        i = i + 1
+    }
+    _6 = strbuilder.append(sb, "]")
+    return strbuilder.finish(sb)
+}
+
+emit_clip_path(e: *Emit, node: ptr, indent: int) {
+    id = attr_or(node, "id", "")
+    if string.length(id) == 0 { return }
+    sb = e.defs
+    pad_to(sb, indent)
+    _1 = strbuilder.append(sb, "clip_path(\"${esc(id)}\", [")
+    n = parser.node_child_count(node)
+    i = 0
+    k = 0
+    while i < n {
+        ch = parser.node_child_at(node, i)
+        t = parser.node_tag(ch)
+        item = ""
+        if t == "rect" { item = "[\"rect\", ${num(ch, "x")}, ${num(ch, "y")}, ${num(ch, "width")}, ${num(ch, "height")}]" }
+        if t == "circle" { item = "[\"circle\", ${num(ch, "cx")}, ${num(ch, "cy")}, ${num(ch, "r")}]" }
+        if t == "ellipse" { item = "[\"ellipse\", ${num(ch, "cx")}, ${num(ch, "cy")}, ${num(ch, "rx")}, ${num(ch, "ry")}]" }
+        if t == "path" && parser.node_has_attr(ch, "d") == 1 { item = "[\"path\", \"${esc(normalize_d(parser.node_attr(ch, "d")))}\"]" }
+        if t == "polygon" && parser.node_has_attr(ch, "points") == 1 { item = "[\"polygon\", \"${esc(string.trim(parser.node_attr(ch, "points")))}\"]" }
+        if string.length(item) > 0 {
+            if k > 0 { _2 = strbuilder.append(sb, ", ") }
+            _3 = strbuilder.append(sb, item)
+            k = k + 1
+        }
+        i = i + 1
+    }
+    _4 = strbuilder.append(sb, "]")
+    tf = node_transform(node)
+    if string.length(tf) > 0 { _5 = strbuilder.append(sb, ", { transform: \"${esc(tf)}\" }") }
+    _6 = strbuilder.append(sb, ");\n")
+}
+
+// ─── attributes and styles ───────────────────────────────────────
+
+// A presentation property: the attribute, else the inline style's.
+style_attr(node: ptr, key: string) -> string {
+    if parser.node_has_attr(node, key) == 1 { return string.trim(parser.node_attr(node, key)) }
+    if parser.node_has_attr(node, "style") == 1 { return style_from_inline(parser.node_attr(node, "style"), key) }
+    return ""
+}
+
+style_from_inline(style: string, key: string) -> string {
+    decls = string.split(style, ";")
+    n = string_array_size(decls)
+    i = 0
+    while i < n {
+        d = string.string_array_get(decls, i)
+        ci = string.index_of(d, ":")
+        if ci > 0 {
+            k = string.trim(string.substring(d, 0, ci))
+            if k == key { return string.trim(string.substring(d, ci + 1, string.length(d))) }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+attr_or(node: ptr, key: string, dflt: string) -> string {
+    if parser.node_has_attr(node, key) == 1 { return string.trim(parser.node_attr(node, key)) }
+    return dflt
+}
+
+attr_num(node: ptr, key: string) -> float {
+    v = attr_or(node, key, "")
+    if string.length(v) == 0 { return 0.0 }
+    return utils.parse_length_to_px(v)
+}
+
+node_transform(node: ptr) -> string {
+    if parser.node_has_attr(node, "transform") == 1 { return string.trim(parser.node_attr(node, "transform")) }
+    return ""
+}
+
+// opacity x fill-opacity as a literal, "" when 1.
+compose_opacity(node: ptr) -> string {
+    prod = 1.0
+    own = style_attr(node, "opacity")
+    if string.length(own) > 0 {
+        v, e = string.to_double(own)
+        if e == "" { prod = prod * v }
+    }
+    fo = style_attr(node, "fill-opacity")
+    if string.length(fo) > 0 {
+        v2, e2 = string.to_double(fo)
+        if e2 == "" { prod = prod * v2 }
+    }
+    if prod >= 0.999 { return "" }
+    return string.from_float(prod)
+}
+
+// A geometry attribute as a TypeScript number ("0" when absent).
+num(node: ptr, key: string) -> string {
+    v = attr_or(node, key, "")
+    if string.length(v) == 0 { return "0" }
+    return lit(v)
+}
+
+// A numeric string as a literal: as written when it already is one (a
+// leading "+" dropped), else its px value, else quoted (a percentage).
+lit(s: string) -> string {
+    t = string.trim(s)
+    if string.starts_with(t, "+") == 1 { t = string.substring(t, 1, string.length(t)) }
+    _v, e = string.to_double(t)
+    if e == "" && string.contains(t, " ") == 0 { return trim_zeros(t) }
+    if string.ends_with(t, "%") == 1 { return "\"${t}\"" }
+    px = utils.parse_length_to_px(t)
+    return string.from_float(px)
+}
+
+// "406.25000" -> "406.25", "0.00000000" -> "0"
+trim_zeros(t: string) -> string {
+    if string.contains(t, ".") == 0 { return t }
+    if string.contains(t, "e") == 1 || string.contains(t, "E") == 1 { return t }
+    n = string.length(t)
+    while n > 0 && string.char_at(t, n - 1) == 48 { n = n - 1 }
+    if n > 0 && string.char_at(t, n - 1) == 46 { n = n - 1 }
+    if n == 0 { return "0" }
+    r = string.substring(t, 0, n)
+    if r == "-" { return "0" }
+    return r
+}
+
+// ─── <use> ───────────────────────────────────────────────────────
+
+resolve_use(e: *Emit, node: ptr) -> ptr {
+    id = href_of(node)
+    if string.length(id) == 0 { return null }
+    return find_by_id(e.root, id)
+}
+
+use_transform(node: ptr) -> string {
+    tf = ""
+    if parser.node_has_attr(node, "x") == 1 || parser.node_has_attr(node, "y") == 1 {
+        tf = "translate(${lit(attr_or(node, "x", "0"))} ${lit(attr_or(node, "y", "0"))})"
+    }
+    own = node_transform(node)
+    if string.length(own) == 0 { return tf }
+    if string.length(tf) == 0 { return own }
+    return "${tf} ${own}"
+}
+
+find_by_id(node: ptr, id: string) -> ptr {
+    if parser.node_has_attr(node, "id") == 1 {
+        if string.trim(parser.node_attr(node, "id")) == id { return node }
+    }
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        hit = find_by_id(parser.node_child_at(node, i), id)
+        if hit != null { return hit }
+        i = i + 1
+    }
+    return null
+}
+
+// ─── text, paths, the viewBox ────────────────────────────────────
+
+// A <text>'s content with its <tspan>s' text run together.
+text_content(node: ptr) -> string {
+    sb = strbuilder.new(32)
+    _1 = strbuilder.append(sb, parser.node_text(node))
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        ch = parser.node_child_at(node, i)
+        if parser.node_tag(ch) == "tspan" { _2 = strbuilder.append(sb, text_content(ch)) }
+        i = i + 1
+    }
+    return string.trim(strbuilder.finish(sb))
+}
+
+first_text(node: ptr, tag: string) -> string {
+    if parser.node_tag(node) == tag { return string.trim(parser.node_text(node)) }
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        t = first_text(parser.node_child_at(node, i), tag)
+        if string.length(t) > 0 { return t }
+        i = i + 1
+    }
+    return ""
+}
+
+one_line(s: string) -> string {
+    return string.replace_all(string.replace_all(s, "\r", " "), "\n", " ")
+}
+
+// A path's d, normalised to absolute M/L/C/Z (the transpiler's form).
+normalize_d(d: string) -> string {
+    cmds = normalizer.normalize_path_to_list(d)
+    sb = strbuilder.new(128)
+    n = list.size(cmds)
+    i = 0
+    while i < n {
+        item, _ = list.get(cmds, i)
+        ct = normalizer.cmd_type(item)
+        if i > 0 { _1 = strbuilder.append(sb, " ") }
+        if ct == 90 {
+            _2 = strbuilder.append(sb, "Z")
+        } else {
+            if ct == 77 { _3 = strbuilder.append(sb, "M") }
+            if ct == 76 { _4 = strbuilder.append(sb, "L") }
+            if ct == 67 { _5 = strbuilder.append(sb, "C") }
+            args = normalizer.cmd_args(item)
+            an = floatarr.size(args)
+            j = 0
+            while j < an {
+                _6 = strbuilder.append(sb, " ")
+                _7 = strbuilder.append(sb, string.from_float(floatarr.get_unchecked(args, j)))
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return strbuilder.finish(sb)
+}
+
+root_view_box(root: ptr) -> string {
+    if parser.node_has_attr(root, "viewBox") == 1 { return string.trim(parser.node_attr(root, "viewBox")) }
+    if parser.node_has_attr(root, "viewbox") == 1 { return string.trim(parser.node_attr(root, "viewbox")) }
+    if parser.node_has_attr(root, "width") == 1 && parser.node_has_attr(root, "height") == 1 {
+        w = utils.parse_length_to_px(string.trim(parser.node_attr(root, "width")))
+        h = utils.parse_length_to_px(string.trim(parser.node_attr(root, "height")))
+        if w > 0.0 && h > 0.0 { return "0 0 ${string.from_float(w)} ${string.from_float(h)}" }
+    }
+    b = bbox.compute_content_bounds(root)
+    if bbox.bounds_is_null(b) == 0 {
+        minx = bbox.bounds_min_x(b)
+        miny = bbox.bounds_min_y(b)
+        w2 = bbox.bounds_max_x(b) - minx
+        h2 = bbox.bounds_max_y(b) - miny
+        if w2 > 0.0 && h2 > 0.0 { return "${string.from_float(minx)} ${string.from_float(miny)} ${string.from_float(w2)} ${string.from_float(h2)}" }
+    }
+    return "0 0 100 100"
+}
+
+// The canvas size for a dimension: the root's width/height in px when it
+// has one that is not a percentage, else the viewBox's extent, else 400.
+px_of(root: ptr, attr: string, vb: string, vb_index: int) -> int {
+    if parser.node_has_attr(root, attr) == 1 {
+        v = string.trim(parser.node_attr(root, attr))
+        if string.ends_with(v, "%") == 0 {
+            p = utils.parse_length_to_px(v)
+            if p > 0.0 { return p as int }
+        }
+    }
+    parts = string.split(vb, " ")
+    n = string_array_size(parts)
+    seen = 0 - 1
+    i = 0
+    while i < n {
+        p2 = string.trim(string.string_array_get(parts, i))
+        if string.length(p2) > 0 {
+            seen = seen + 1
+            if seen == vb_index {
+                f, e = string.to_double(p2)
+                if e == "" && f > 0.0 { return f as int }
+            }
+        }
+        i = i + 1
+    }
+    return 400
+}
+
+// ─── output helpers ──────────────────────────────────────────────
+
+pad(e: *Emit, indent: int) { pad_to(e.sb, indent) }
+
+pad_to(sb: ptr, indent: int) {
+    i = 0
+    while i < indent {
+        _1 = strbuilder.append(sb, "  ")
+        i = i + 1
+    }
+}
+
+// A string inside a TypeScript double-quoted literal.
+esc(s: string) -> string {
+    n = string.length(s)
+    out = strbuilder.new(n + 8)
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        if c == 92 { _1 = strbuilder.append(out, "\\\\") }
+        else if c == 34 { _2 = strbuilder.append(out, "\\\"") }
+        else if c == 10 { _3 = strbuilder.append(out, "\\n") }
+        else if c == 13 { _4 = strbuilder.append(out, "\\r") }
+        else if c == 9 { _5 = strbuilder.append(out, " ") }
+        else { _6 = strbuilder.append_byte(out, c) }
+        i = i + 1
+    }
+    return strbuilder.finish(out)
+}

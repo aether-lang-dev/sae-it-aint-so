@@ -6,16 +6,63 @@
 //   saelower --module m.ts > m.js      lower a module (exports allowed)
 //   saelower --imports page.ts         list what it imports: spec, line, col
 //   saelower --module-imports m.ts     the same for a module
+//
+// Or turn an SVG into a page: AeVG-TS in the house style (aevg/tsemit.ae),
+// run once and then edited. --size N makes the canvas N x N (the parity
+// harness's square); --solid replaces gradient fills with a solid colour.
+//
+//   saelower --from-svg drawing.svg [--size 400] [--solid] > drawing.ts
 
 import lower
+import aevg.tsemit
 import std.fs
 import std.os
+import std.string
 
+
+// --from-svg: the SVG at argument 2 as an AeVG-TS page, on stdout.
+from_svg_() {
+    if os.args_count() < 3 {
+        println("usage: saelower --from-svg <drawing.svg> [--size N] [--solid]")
+        exit(2)
+    }
+    path = os.args_get(2)
+    size = 0
+    solid = 0
+    i = 3
+    while i < os.args_count() {
+        a = os.args_get(i)
+        if a == "--solid" { solid = 1 }
+        if a == "--size" && i + 1 < os.args_count() {
+            n, nerr = string.to_int(os.args_get(i + 1))
+            if nerr == "" { size = n }
+            i = i + 1
+        }
+        i = i + 1
+    }
+    svg, serr = fs.read(path)
+    if serr != "" {
+        println("saelower: cannot read ${path}: ${serr}")
+        exit(2)
+    }
+    name = path
+    slash = string.index_of(name, "/")
+    while slash >= 0 {
+        name = string.substring(name, slash + 1, string.length(name))
+        slash = string.index_of(name, "/")
+    }
+    if string.ends_with(name, ".svg") == 1 { name = string.substring(name, 0, string.length(name) - 4) }
+    print(tsemit.emit_ts(svg, name, size, solid))
+}
 
 main() {
     if os.args_count() < 2 {
-        println("usage: saelower [--module | --imports | --module-imports] <page.ts>")
+        println("usage: saelower [--module | --imports | --module-imports] <page.ts> | saelower --from-svg <drawing.svg> [--size N] [--solid]")
         exit(2)
+    }
+    if os.args_get(1) == "--from-svg" {
+        from_svg_()
+        return
     }
     mode = ""
     path = os.args_get(1)

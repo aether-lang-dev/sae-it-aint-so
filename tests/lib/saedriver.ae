@@ -37,7 +37,7 @@ exports(
     assert_url, assert_page, assert_text, assert_no_text,
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
     console_count, wait_for_console_n,
-    vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool, vg_px_x_in, vg_px_y_in,
+    vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool, vg_px_x_in, vg_px_y_in, wait_for_vg_canvas,
     screenshot, console_contains, wait_for_console, url_encode
 )
 
@@ -466,6 +466,22 @@ fit_scale(cw: float, ch: float, vb_w: float, vb_h: float) -> float {
     sy = ch / vb_h
     if sx < sy { return sx }
     return sy
+}
+
+// 1 once the page has a canvas (a vg.scene) and it has painted.
+wait_for_vg_canvas() -> int {
+    i = 0
+    while i < TRIES {
+        if vg_canvas() > 0 {
+            if uidriver.widget_int_field_by_id(vg_canvas(), "w") > 0 {
+                sleep(POLL_MS * 3)
+                return 1
+            }
+        }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
 }
 
 // The same for a viewBox that does not start at the origin ("minx miny w h"):
