@@ -67,8 +67,11 @@ aeb(cap) {
             if string.length(aether_root_()) > 0 { aether_home(aether_root_()) }
             // ui reads theme files (std.fs) and the environment (std.os);
             // the host reads and fetches pages (std.fs, std.http). Pages
-            // themselves get none of these.
-            aether_caps("fs,os,net")
+            // themselves get none of these. `extern`: the host is the
+            // trusted kernel and names C directly (malloc, the stdout handle,
+            // aether-ui's _impl entry points, sae_raster.c, the prelude);
+            // from aether 0.801 (#2709) a library build must say so.
+            aether_caps("fs,os,net,extern")
 
             // The engine, contrib.quickjs, comes with the import: aeb
             // compiles the C its module ships (@source) and the amalgamation
