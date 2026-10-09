@@ -2279,16 +2279,45 @@ esc_perf_now_() -> float {
 
 // --- navigation ---
 
-// 1, having logged it, if a web page in the browser asked to navigate to
-// something that is not an http(s) URL (an app: page, a file). A page
-// loaded from a file may open files, as the address bar may.
-esc_nav_refused_(b: *Browser, url: string) -> int {
-    if app_dir_ != "" { return 0 }
-    if b.page == null { return 0 }
-    if is_http_((b.page as *Page).url) == 0 { return 0 }
-    if is_http_(url) == 1 { return 0 }
-    esc_log_("a web page may navigate only to http(s) URLs; refused ${url}")
-    return 1
+// A navigation a page asked for, checked and cleaned: returns (url, why).
+// why is "" and url the one to load (its "." and ".." collapsed, as the
+// import loader's norm_path_ does), or why names the refusal, logged once:
+//   - a web page navigates only to http(s) URLs (not an app: page, which the
+//     browser would map onto a file by path, nor a file); a page loaded from
+//     a file may open files, as the address bar may;
+//   - a path may not climb: above the app's bundle (app:/../x would read
+//     <dir>/../x.ts), above the site root in the browser, or out of the
+//     page's own folder for a page loaded from a file.
+esc_nav_check_(b: *Browser, url: string) -> (string, string) {
+    if b.page == null { return own_(url), "" }
+    cur = (b.page as *Page).url
+    if app_dir_ != "" {
+        if is_app_(url) == 0 { return own_(url), "" }   // run_nav_ refuses it, as before
+        path, climbed = norm_path_(string.string_substring(url, 4, string.length(url)))
+        if climbed == 1 { return own_(url), "a page may not navigate above the app's bundle; refused ${url}" }
+        return string.concat("app:", path), ""
+    }
+    if is_http_(cur) == 1 {
+        if is_http_(url) == 0 { return own_(url), "a web page may navigate only to http(s) URLs; refused ${url}" }
+        oe = origin_end_(url)
+        rest = string.string_substring(url, oe, string.length(url))
+        q = string.index_of(rest, "?")
+        h = string.index_of(rest, "#")
+        cut = string.length(rest)
+        if q >= 0 && q < cut { cut = q }
+        if h >= 0 && h < cut { cut = h }
+        path, climbed = norm_path_(string.string_substring(rest, 0, cut))
+        if climbed == 1 { return own_(url), "a page may not navigate above its site's root; refused ${url}" }
+        if string.string_starts_with(path, "/") == 0 { path = string.concat("/", path) }
+        return string.concat(string.string_substring(url, 0, oe), string.concat(path, string.string_substring(rest, cut, string.length(rest)))), ""
+    }
+    if is_http_(url) == 1 || is_app_(url) == 1 { return own_(url), "" }
+    // A file page: stays in its own folder.
+    path, _c = norm_path_(url)
+    folder, _c2 = norm_path_(dir_of_(cur))
+    if string.string_ends_with(folder, "/") == 0 { folder = string.concat(folder, "/") }
+    if string.string_starts_with(path, folder) == 0 { return own_(url), "a page loaded from a file may navigate only within its own folder; refused ${url}" }
+    return own_(path), ""
 }
 
 // ===== end wave1/escape =====
@@ -4922,8 +4951,13 @@ run_nav_(b: *Browser) {
             fflush(sae_stdout())
             return
         }
-        if esc_nav_refused_(b, url) == 1 { return }   // wave1/escape: a web page stays on http(s)
-        go_(b, url)
+        // wave1/escape: a web page stays on http(s); no path climbs out.
+        nurl, nwhy = esc_nav_check_(b, url)
+        if nwhy != "" {
+            esc_log_(nwhy)
+            return
+        }
+        go_(b, nurl)
     }
     if kind == NAV_BACK {
         if b.hist_index > 0 {

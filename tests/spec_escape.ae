@@ -108,6 +108,12 @@ main() {
             b.assert_no_text("Could not load app:/etc/hosts.ts", "and nothing was loaded from the file system")
             spec.assert_true(b.wait_for_url("${ME}/chrome_navigate"), "the chrome still shows the page's URL")
         }
+        spec.it("navigate above the site's root with ..") callback {
+            l = attempt("climb", "sae: refused: a page may not navigate above its site's root; refused ${ME}/../../../etc/hosts")
+            sleep(300)
+            spec.assert_str_eq(line_of("climb: "), l, "the page is still here")
+            spec.assert_true(b.wait_for_url("${ME}/climb"), "the chrome still shows the page's URL")
+        }
         spec.it("read another origin's storage by key") callback {
             attempt("other_storage", "")
         }

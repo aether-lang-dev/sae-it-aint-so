@@ -11,6 +11,7 @@ const attempts: [string, string][] = [
   ["computed_fs", "reach fs and shell by a computed name"],
   ["chrome_set_text", "set_text on the chrome's handles"],
   ["chrome_navigate", "navigate the browser to a file, as an app: page"],
+  ["climb", "navigate above the site's root with .. (an app: above its bundle)"],
   ["other_storage", "read another origin's storage by key"],
   ["cap_http", "more http requests in flight than the cap"],
   ["cap_timers", "more timers and frames pending than the cap"],

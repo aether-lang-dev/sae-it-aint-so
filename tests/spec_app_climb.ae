@@ -1,0 +1,40 @@
+// spec_app_climb.ae — an app page may not navigate out of its bundle:
+// "../../x" is normalised like an import, a climb above app:/ refused and
+// logged once; dots within the bundle collapse and work.
+//   SAE_TEST_APP=tests/apps/climb tests/run_spec.sh spec_app_climb
+import std.spec
+import std.string
+import std.fs
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+console_count(text: string) -> int {
+    p = os_getenv("SAE_TEST_LOG")
+    if p == null { return 0 }
+    body, err = fs.read(p)
+    if string.length(err) > 0 { return 0 }
+    parts = string.split(body, text)
+    return string.string_array_size(parts) - 1
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "app mode: navigation stays in the bundle") {
+        spec.it("dots within the bundle collapse: ./sub/../second is /second") callback {
+            b.click("Dots within")
+            b.assert_text("Second page: ./sub/../second collapsed to /second", "loaded as app:/second")
+            b.click("Back")
+            b.assert_text("climb: trying", "back on the index")
+        }
+        spec.it("a climb above app:/ is refused and logged once; the page stays") callback {
+            b.click("Climb")
+            b.assert_text("climb: refused: still here 200 ms after asking for ../../escape/other_storage", "the page is still here")
+            spec.assert_true(b.wait_for_console("sae: refused: a page may not navigate above the app's bundle; refused app:/../../escape/other_storage"), "logged")
+            spec.assert_eq(console_count("a page may not navigate above the app's bundle"), 1, "once")
+            spec.assert_eq(console_count("other_storage: "), 0, "nothing outside the bundle ran")
+        }
+    }
+    return spec.run_summary(fw)
+}
