@@ -75,7 +75,8 @@ SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$PWD/target/globals-appdata test
 ../aether/build/ae run tests/spec_origin_rules.ae  # origins, mixed content, Sae-Allow-Origin: no window
 tests/run_spec.sh spec_webrules                # no ambient credentials, no Referer, the CORS-alike, coarse clocks
 SAE_TEST_APP=tests/apps/clocks tests/run_spec.sh spec_webrules   # app mode: full-resolution clocks
-tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 17 attempts, each refused and logged once
+tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 18 attempts, each refused and logged once
+SAE_TEST_APP=tests/apps/climb tests/run_spec.sh spec_app_climb   # app mode: navigation cannot climb out of the bundle
 ../aether/build/ae run tests/spec_sqlite_service.ae   # services/sqlite: parameters, rows, migrations, escape routes, no window
 SAE_TEST_APP=tests/apps/sqlite_demo tests/run_spec.sh spec_app_sqlite   # sqlite.<name> through pages (resets its own rows)
 tests/check_sqlite_relaunch.sh                 # migrations once across a relaunch; a failing migration refuses the app

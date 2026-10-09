@@ -53,6 +53,7 @@ they *cannot* be reintroduced as the browser grows.
 | **Coarse clocks in browser mode.** `performance.now()` and frame timestamps rounded (100 µs), as browsers did after Spectre; app mode keeps full resolution. | implemented behind one switch (`SAE_COARSE_CLOCKS`, on in the browser, off in an app; `spec_webrules` in both modes) | decision 1: confirm the default, then drop the switch or keep it |
 | **No fingerprinting surface.** No `navigator`, no device details; `browserContext` exposes the URL and navigation only. | done (`spec_globals` pins the surface) | keep |
 | **No code from anywhere else.** No module loader, no `data:`/`http:` imports. | done; same-origin and `sae:` static `import`, hashed (3.1), **built** | keep as a red-team case (`tests/spec_imports.ae`, `tests/check_module_rules.sh`: cross-origin, `data:`, cycle, hash, climb-out, `import()` refused) |
+| **Navigation cannot climb out.** `changePage` collapses `.` and `..` and refuses a path above the bundle (app), the site root (browser) or the page's folder (a file page), the same rule imports use. | **done** (found by the imports work: app-mode `changePage("../../x")` read outside the bundle) | keep as a red-team case (`tests/escape/climb.ts`, `tests/spec_app_climb.ae`) |
 
 ### 1.2 The one cross-origin case: a CORS-alike
 
