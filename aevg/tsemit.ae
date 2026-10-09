@@ -40,6 +40,7 @@ struct Emit {
     grad_colors: ptr // map id -> the gradient's middle stop colour
     grad_stops: ptr  // map id -> the gradient node (for href chains)
     skipped: int     // how many elements were skipped (reported in a comment)
+    cur_id: string   // the id of the shape being emitted ("" for none)
 }
 
 // The page for an SVG document.
@@ -53,6 +54,7 @@ emit_ts(svg: string, name: string, size: int, solid: int) -> string {
     e.grad_colors = map.new()
     e.grad_stops = map.new()
     e.skipped = 0
+    e.cur_id = ""
     sb = e.sb
     vb = root_view_box(root)
     w = px_of(root, "width", vb, 2)
@@ -123,10 +125,12 @@ emit_node(e: *Emit, node: ptr, indent: int, in_stroke: string, in_sw: string) {
     if tag == "g" || tag == "svg" || tag == "a" || tag == "switch" {
         mods = modifiers_of(e, node, 1, in_stroke, in_sw)
         pad(e, indent)
+        gid = attr_or(node, "id", "")
+        if string.length(gid) > 0 { gid = " // ${esc(gid)}" }
         if string.length(mods) > 0 {
-            _1 = strbuilder.append(e.sb, "g(() => { ${mods}\n")
+            _1 = strbuilder.append(e.sb, "g(() => { ${mods}${gid}\n")
         } else {
-            _2 = strbuilder.append(e.sb, "g(() => {\n")
+            _2 = strbuilder.append(e.sb, "g(() => {${gid}\n")
         }
         note_unsupported(e, node, indent + 1)
         emit_children(e, node, indent + 1, inherit(node, "stroke", in_stroke), inherit(node, "stroke-width", in_sw))
@@ -150,6 +154,7 @@ emit_node(e: *Emit, node: ptr, indent: int, in_stroke: string, in_sw: string) {
         return
     }
     note_unsupported(e, node, indent)
+    e.cur_id = attr_or(node, "id", "")
     mods = modifiers_of(e, node, 0, in_stroke, in_sw)
     if tag == "rect" { emit_rect(e, node, indent, mods); return }
     if tag == "circle" { emit_call(e, indent, mods, "circle(${num(node, "cx")}, ${num(node, "cy")}, ${num(node, "r")}"); return }
@@ -190,15 +195,18 @@ emit_rect(e: *Emit, node: ptr, indent: int, mods: string) {
     emit_call(e, indent, mods, "rect(${num(node, "x")}, ${num(node, "y")}, ${num(node, "width")}, ${num(node, "height")}")
 }
 
-// `verb(args` + either `);` or `, () => { mods });`.
+// `verb(args` + either `);` or `, () => { mods });`, with the SVG's id as a
+// trailing comment so the hand that edits the page can find a shape.
 emit_call(e: *Emit, indent: int, mods: string, head: string) {
     pad(e, indent)
     _1 = strbuilder.append(e.sb, head)
     if string.length(mods) > 0 {
-        _2 = strbuilder.append(e.sb, ", () => { ${mods} });\n")
+        _2 = strbuilder.append(e.sb, ", () => { ${mods} });")
     } else {
-        _3 = strbuilder.append(e.sb, ");\n")
+        _3 = strbuilder.append(e.sb, ");")
     }
+    if string.length(e.cur_id) > 0 { _4 = strbuilder.append(e.sb, " // ${esc(e.cur_id)}") }
+    _5 = strbuilder.append(e.sb, "\n")
 }
 
 emit_text(e: *Emit, node: ptr, indent: int, mods: string) {

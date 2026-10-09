@@ -1,0 +1,74 @@
+// spec_camera.ae -- demo 1b (site/camera.ts: the mode dial turns as a group
+// bound to state, the shutter tweens and the LCD flashes, the lens zooms,
+// the LCD text follows state) and the clock components (site/clock.ts: one
+// face placed four times by transforms, hands bound to a time state).
+//
+//   tests/run_spec.sh spec_camera
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// Camera viewBox points (406.25 x 206.25) and clock ones (400 x 400).
+cx(v: float) -> int { return b.vg_px_x(v, 406.25, 206.25) }
+cy(v: float) -> int { return b.vg_px_y(v, 406.25, 206.25) }
+kx(v: float) -> int { return b.vg_px_x(v, 400.0, 400.0) }
+ky(v: float) -> int { return b.vg_px_y(v, 400.0, 400.0) }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "the camera") {
+        spec.it("loads the transpiled drawing and its LCD state") callback {
+            b.navigate(b.test_url("/camera"))
+            b.assert_page("The camera you can operate", "200 ", "camera page")
+            spec.assert_true(b.wait_for_text("Mode: P   Shots: 0   Zoom: 1x"), "the bound label")
+            spec.assert_true(b.wait_for_vg_pixel(cx(350.0), cy(90.0), 0x202020), "the dial's pointer points up")
+        }
+        spec.it("the mode dial turns as one group when its state changes") callback {
+            b.click("Turn dial")
+            spec.assert_true(b.wait_for_text("Mode: A   Shots: 0   Zoom: 1x"), "the mode follows the angle")
+            spec.assert_true(b.wait_for_vg_pixel(cx(364.0), cy(91.0), 0x202020), "the pointer at 45 degrees")
+            spec.assert_true(b.vg_pixel_near(cx(350.0), cy(88.0), 0xd8d8d8, 30), "and no longer up")
+            b.vg_click(cx(340.0), cy(110.0))
+            spec.assert_true(b.wait_for_text("Mode: S   Shots: 0   Zoom: 1x"), "clicking the dial turns it too")
+        }
+        spec.it("the shutter tweens, the LCD flashes, the count follows") callback {
+            b.click("Shutter")
+            spec.assert_true(b.wait_for_console("shot 1 in mode S"), "the shot is taken")
+            spec.assert_true(b.wait_for_console("flash done"), "the flash tween finished")
+            spec.assert_true(b.wait_for_text("Mode: S   Shots: 1   Zoom: 1x"), "the LCD count")
+            b.vg_click(cx(218.0), cy(27.0))
+            spec.assert_true(b.wait_for_console("shot 2 in mode S"), "pressing the drawn button too")
+        }
+        spec.it("the lens zooms by a tween on the frame clock") callback {
+            spec.assert_true(b.vg_pixel_near(cx(288.0), cy(115.6), 0x191919, 30), "the lens's dark ring at 288")
+            spec.assert_true(b.vg_pixel_near(cx(300.0), cy(115.6), 0xffffff, 30), "and the white rim at 300")
+            b.click("Zoom in")
+            spec.assert_true(b.wait_for_console("zoom 1.3"), "the tween finished")
+            spec.assert_true(b.wait_for_vg_pixel(cx(300.0), cy(115.6), 0x191919), "zoomed: the ring reaches 300")
+            spec.assert_true(b.vg_pixel_near(cx(288.0), cy(115.6), 0x4d4d4d, 30), "and the disc inside it is at 288")
+            b.click("Zoom out")
+            spec.assert_true(b.wait_for_console("zoom 1"), "and back")
+            spec.assert_true(b.wait_for_vg_pixel(cx(288.0), cy(115.6), 0x191919), "the ring at 288 again")
+            b.click("Home")
+        }
+    }
+    spec.describe(fw, "the clock components") {
+        spec.it("one face placed four times; hands bound to the time state") callback {
+            b.click("Clock")
+            b.assert_page("Four faces of one clock", "200 ", "clock page")
+            b.click("Set 3:00")
+            spec.assert_true(b.wait_for_text("Minutes past midnight: 180"), "the state is pinned")
+            spec.assert_true(b.wait_for_vg_pixel(kx(100.0), ky(100.0 - 50.0), 0x222222), "face 1: the minute hand points up")
+            spec.assert_true(b.wait_for_vg_pixel(kx(100.0 + 30.0), ky(100.0), 0x222222), "face 1: the hour hand points right")
+            spec.assert_true(b.wait_for_vg_pixel(kx(300.0), ky(300.0 - 50.0), 0x222222), "face 4 (placed by a transform): the minute hand")
+            spec.assert_true(b.vg_pixel_near(kx(300.0), ky(300.0 + 50.0), 0xfdfdf5, 24), "face 4: nothing below the centre")
+            b.click("Set 6:30")
+            spec.assert_true(b.wait_for_vg_pixel(kx(300.0), ky(300.0 + 50.0), 0x222222), "6:30: the minute hand points down")
+            spec.assert_true(b.vg_pixel_near(kx(100.0), ky(100.0 - 50.0), 0xfdfdf5, 24), "and face 1's no longer up")
+            b.click("Home")
+        }
+    }
+    return spec.run_summary(fw)
+}
