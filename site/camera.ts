@@ -314,7 +314,7 @@ const pressShutter = () => {
   vg.animate(shutter, { to: { translate: [0, 3] }, ms: 80, easing: "ease_in" }, () =>
     vg.animate(shutter, { from_transform: { tx: 0, ty: 3 }, to: { translate: [0, 0] }, ms: 120 }));
   vg.set(flash, { opacity: 0.9 });
-  vg.animate(flash, { to: { opacity: 0 }, ms: 250, easing: "ease_out" }, () => print("flash done"));
+  vg.animate(flash, { to: { opacity: 0 }, ms: 250, easing: "ease_out" }, () => print(`flash done ${shots.value}`));
 };
 const zoomTo = (z: number) => {
   zoom.set(z);

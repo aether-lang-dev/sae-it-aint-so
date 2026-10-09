@@ -36,10 +36,11 @@ main() {
         spec.it("the shutter tweens, the LCD flashes, the count follows") callback {
             b.click("Shutter")
             spec.assert_true(b.wait_for_console("shot 1 in mode S"), "the shot is taken")
-            spec.assert_true(b.wait_for_console("flash done"), "the flash tween finished")
+            spec.assert_true(b.wait_for_console("flash done 1"), "the flash tween finished")
             spec.assert_true(b.wait_for_text("Mode: S   Shots: 1   Zoom: 1x"), "the LCD count")
             b.vg_click(cx(218.0), cy(27.0))
             spec.assert_true(b.wait_for_console("shot 2 in mode S"), "pressing the drawn button too")
+            spec.assert_true(b.wait_for_console("flash done 2"), "and its flash fades out")
         }
         spec.it("the lens zooms by a tween on the frame clock") callback {
             spec.assert_true(b.vg_pixel_near(cx(288.0), cy(115.6), 0x191919, 30), "the lens's dark ring at 288")
