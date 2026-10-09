@@ -116,6 +116,15 @@ services, so they need no capability grant. Pixels from a page (roadmap
 page-scoped like the rest (a page's rasters go with the page), and they
 take the engine's own `Uint8Array`.
 
+The reactive surface (roadmap 3.4, wave1/aevg) added seven globals, on
+purpose and on `tests/spec_globals.ae`'s list: `state computed bind
+bind_enabled bind_hidden each batch` (also on `ui`). They are page-scoped
+for the same reason the timers are: a state's cell, its observers and its
+bindings belong to the page's widgets and go with them, so they need no
+grant. The AeVG surface (roadmap 4) added no global: its verbs
+(`vg.ellipse`, `vg.defs`, `vg.bind_fill`, `vg.items`, `vg.animate`, ...) are
+members of `vg`, and its scene record goes with the page.
+
 **From sae, only when sought and granted:** `http` (browser: own origin, and
 other origins with their consent, the CORS-alike; app: `capabilities.http`),
 and in an app `fs` and `shell`.
@@ -249,6 +258,12 @@ What each guarantees:
   in every page (and on `tests/spec_globals.ae`'s list).
 - **Time scale.** `SAE_TIME_SCALE` speeds up the clocks a page reads, not
   its timers.
+
+**Tweens ride the frame clock.** `vg.animate` (wave1/aevg) is the page's
+own `requestAnimationFrame` loop in `src/sae_prelude.js`: one frame request
+while any tween runs, none when idle, every tween in a frame stepped with
+the same timestamp, and cancelled with the page like any frame callback.
+No new native timer.
 
 ## 5. Files: declared bases and a powerbox (agreed design, app mode)
 

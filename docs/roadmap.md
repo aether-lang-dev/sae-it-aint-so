@@ -195,7 +195,8 @@ either erasable or one small, documented desugar. In order of leverage:
    second output.
 3. **One tagged template, no syntax change:** ``bind`Count: ${n} of
    ${total}` `` is a multi-state `text_bound`. (Not an ``svg`…` `` loader:
-   section 4 says why a scene is source, not a string.)
+   section 4 says why a scene is source, not a string.) **Built** (README "Reactive state": a computed state bound to a
+   label; `tests/spec_reactive.ae`).
 4. **Reactive sugar that already exists one layer down.** aether-ui has
    `computed`, `bind_text`, `bind_value` (two-way), `bind_enabled`,
    `bind_hidden`, `each` with keyed reconciliation and `ui_batch`. Pages see
@@ -203,6 +204,11 @@ either erasable or one small, documented desugar. In order of leverage:
    `state(v)`, `computed(fn, ...states)`, `bind(widget, state)`,
    `each(list, key, render)` and `batch(fn)`. This is the Vue-alike half of
    "SVG + Vue": declare once, never call `set_text` again.
+   **Built** (wave1/aevg): `state`, `computed`, `bind` (two-way on a text
+   field), `bind_enabled`, `bind_hidden`, `each` with keys and `batch`, as
+   page-scoped globals over aether-ui's typed cells, `computed_s`, property
+   bindings and `ui_batch` (`src/sae_prelude.js`; `tests/spec_reactive.ae`).
+
 5. **Async-first services.** `sqlite`, the files powerbox and `http.fetch`
    are promises; `await` works in handlers already. Top-level `await` is
    **built**: the lowerer wraps a page in an async function when it sees
@@ -215,6 +221,20 @@ either erasable or one small, documented desugar. In order of leverage:
    them too, and the dialect stays "what tsc erases".
 
 ## 4. AeVG, alive: the SVG model as TypeScript
+
+**Built** (wave1/aevg; README "Vector graphics" and "AeVG alive"): the
+grammar (polygon, polyline, ellipse, sized and anchored text, caps and
+joins, groups whose transform, opacity and paint cascade, gradients and
+clip paths as defs), components as functions, bindings (`bind_fill`,
+`bind_transform`, `bind_pos`, `visible_when`, ...), data joins
+(`vg.items`), tweens (`vg.animate` on the frame clock), events (hover,
+drag, scroll, double click), tooltips, zoom and pan as viewBox state, and
+`saelower --from-svg`. Parity through the driver against librsvg: heart
+1.04, beacon 1.87, compass 2.68, atom 4.49, AJ_Digital_Camera 33.70
+(`tests/spec_aevg_parity.ae`). Open: gradient fills paint nothing on
+aether-ui's live path on macOS (the camera's number, and a skipped `it` in
+`spec_aevg`); a shape cannot carry `clip-path=` or a CSS class yet; right
+click waits for a canvas hook; export is not started.
 
 AeVG is not an SVG loader. It is the SVG model (shapes, paths, groups,
 transforms, gradients, filters, clip paths, text, CSS) as a language:
@@ -273,7 +293,7 @@ installable packages that exercise the trust strategy.
 | # | Demo | Shows | Needs | Ancestor |
 |---|---|---|---|---|
 | 1 | **Big Ben, live.** The Elizabeth Tower as AeVG-TS: one clock-face component placed by transforms, hands bound to the clock, click a tower to fly the viewBox to it, hover for the history of each part. | components, `bind_pos`, tweens, zoom-pan, tooltips | 4 | Cosyne `svg-clock` / `svg-big-ben` (idea: compose one clock component by transforms) |
-| 1b | **The camera you can operate.** `AJ_Digital_Camera` from the corpus (public domain; parity "good"), transpiled once to AeVG-TS, then made real: turn the mode dial (a group rotation bound to state), press the shutter (a tween and an LCD flash), zoom the lens, the LCD text bound to state. The "take one of those and make it interactive" demo. | the full grammar in TS guise, the transpiler's TS output, bindings, tweens | 4 | the W3C/CVG corpus |
+| 1b | **(built: `site/camera.ts`, `tests/spec_camera.ae`; gradients painted as solid colours until aether-ui paints them live)** **The camera you can operate.** `AJ_Digital_Camera` from the corpus (public domain; parity "good"), transpiled once to AeVG-TS, then made real: turn the mode dial (a group rotation bound to state), press the shutter (a tween and an LCD flash), zoom the lens, the LCD text bound to state. The "take one of those and make it interactive" demo. | the full grammar in TS guise, the transpiler's TS output, bindings, tweens | 4 | the W3C/CVG corpus |
 | 2 | **Paris, hour by hour.** A server in any language computes crowd density per hex per hour; the page fetches its own origin's JSON and renders a hex heatmap with data joins; a slider scrubs the week, play runs on the frame clock. | same-origin `http`, `items`, colour scales, `bind`, `frame` | 3.4, 4 | Tsyne `larger-apps/realtime-paris-density-simulation` (idea: H3 hexes, temporal profiles) |
 | 3 | **Live dashboard.** Line and bar charts updating in place from a streaming response; `batch` coalesces a burst into one repaint. | `http.stream` (new), `items`, `batch` | 3.4, 4, streaming | Cosyne `line-chart`, Tsyne `STREAMING_CONTENT` |
 | 4 | **The fat-web shop.** Catalogue pages, a cart in per-origin storage, checkout by POST-redirect-GET, login by a page-held token (no cookies), and a reviews service on a second origin reached through the CORS-alike. Every rule in 1.1 is exercised by a shop that works. | 1.1, 1.2, modules | 1, 3.1 | Tsyne `BROWSER_MODE` sample server (idea: pages from any backend) |
@@ -318,7 +338,8 @@ Each wave is what a few agent-days can finish and verify on every lane
 4. Same-origin and in-bundle `import` (3.1). **Done.**
 5. The reactive surface for pages (3.4) and the AeVG surface (4): the full
    grammar in TS guise, components, bindings, data joins, tweens, events, and
-   the transpiler's TypeScript output.
+   the transpiler's TypeScript output. **Done**, with demo 1b (`site/camera.ts`) and the
+   clock components (`site/clock.ts`); gradients wait on aether-ui (section 4).
 6. SQLite v1 (`page-services.md` section 6), which is independent and can
    run alongside.
 7. Pixels from a page (8.2) and the first `sae:` library modules (8.1):

@@ -14,6 +14,8 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | Path | What |
 |---|---|
 | `src/sae_host.ae` | The browser: window and chrome, history, fetch, one `Page` (JSContext, a `ui` handle stack and a `vg` node stack) per load, and every page-API host function (`sae_ui_*`, `sae_vg_*`, `sae_bc_*`) |
+| `aevg/` | The page's AeVG scene record (`module.ae`: groups that cascade, defs, the viewBox, the handlers the host dispatches) and the SVG-to-AeVG-TS emitter (`tsemit.ae`, behind `saelower --from-svg`) |
+| `src/sae_prelude.js` | The reactive surface and the vg helpers that are JavaScript (`state`, `computed`, `bind`, `each`, `batch`, `vg.animate`, `vg.items`), evaluated into every page; embedded as `src/sae_prelude.c` by `tools/embed-prelude.sh` |
 | `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
 | `src/sae_raster.c` | A page's `Uint8Array` bytes for `vg.raster` and friends: a labelled workaround over contrib.quickjs's handle table until it can read a typed array (`asks/quickjs-typed-array-bytes.md`) |
 | `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
@@ -22,7 +24,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae` |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`) |
-| `tools/saelower.ae` | CLI for the lowerer |
+| `tools/saelower.ae` | CLI for the lowerer, and `--from-svg` (an SVG as an AeVG-TS page) |
 | `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
 | `tests/escape/` | The escape corpus: one page per attempt to get out (README "Browser security rules"); `tests/spec_escape.ae` holds each to "refused, logged once". A new browser rule is not done until its attempt is here |
 | `tests/lib/saedriver.ae` | The browser-test driver: Tsyne's TsyneBrowserTest verbs (navigate, back, forward, reload, current_url, assert_url, screenshot) plus page, vg and console queries, on aether-ui's uidriver |
@@ -86,6 +88,11 @@ tests/check_module_rules.sh                    # the loader's rules, headless (f
 tests/run_spec.sh spec_raster                  # pixels from a page: vg.raster/image, ui.image, budgets
 tests/run_spec.sh spec_terrain                 # demo 13
 tests/run_spec.sh spec_life                    # demo 14
+tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
+tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
+tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom
+tests/run_spec.sh spec_aevg_parity             # corpus pages (tools/gen-corpus.sh) against librsvg's PNGs: mean error
+tests/run_spec.sh spec_camera                  # demo 1b (site/camera.ts) and the clock components
 ```
 
 Toolchain: Aether 0.791.0 or later (`pins`), installed, or a dev tree

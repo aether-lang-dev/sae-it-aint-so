@@ -70,7 +70,8 @@ The `ui` object (each builder returns its widget handle):
 | styles | `styles(sheet)`, `add_class(h, name)`, `style_id(h, name)`: see below |
 | timers | `timer(ms, fn)` repeats, `after(ms, fn)` runs once, both return an id for `timer_cancel(id)`; `sleep(ms)` is a promise; `frame(fn)` runs `fn(timestamp)` on the next display frame, `frame_cancel(id)`; see Timers below |
 | showing | `set_visible(h, on)`: hide a view and keep it (and its timers, vg scenes) alive |
-| reactive state | `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` |
+| reactive state | `state(v)`, `computed(fn, ...states)`, `bind(widget, state)`, `` bind`...${s}...` ``, `bind_enabled`, `bind_hidden`, `each(list, key, render)`, `batch(fn)` (globals too: see Reactive state below); the cell-level `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` still work |
+| enabling | `set_enabled(h, on)`: grey a widget out, or back |
 
 An app's databases (`"seeks database <name>"`; App mode below), every call a promise, run on an actor off the UI thread:
 
@@ -89,6 +90,41 @@ A modifier at a page's top level has nothing to modify (the top of the stack
 is the browser's own content area), so it throws, where Aether would refuse
 to compile it. `site/calculator.ts` is the design doc's calculator example.
 Pages are not given `window()`: the browser owns the window.
+
+### Reactive state: declare once, never call `set_text` again
+
+```ts
+const count = state(0);
+const name = state("");
+const greeting = computed(() => (name.value ? `Hello, ${name.value}` : "Hello, stranger"), name);
+bind(text(""), count);                          // a label follows a state
+bind(textfield("Your name", () => {}), name);   // a field and a string state, both ways
+bind`Count: ${count} of ${total}`;              // the tagged template: a multi-state label
+bind_enabled(goButton, busy, true);             // greyed while busy (true inverts)
+bind_hidden(spinner, busy, true);               // shown while busy
+each(todos, "id", (t, i) => text(`${i + 1}. ${t.title}`));   // keyed rows
+batch(() => { first.set("Ada"); last.set("Lovelace"); });    // observers run once, at the end
+count.set(count.value + 1);                     // or count.update(n => n + 1)
+```
+
+`state`, `computed`, `bind`, `bind_enabled`, `bind_hidden`, `each` and
+`batch` are globals in every page (and on `ui`). They are **page-scoped**:
+the cells, observers and bindings belong to the page's widgets and go with
+them, so they need no capability. They map onto aether-ui's reactive
+layer: a number, string or boolean state is one of its typed cells
+(`ui_state`, `ui_state_s`, `ui_state_b`), so `bind` is its `bind_text` (and
+`bind_value`, two-way, for a text field and a string state), and
+`state.h` is the raw cell that `ui_set` and `text_bound` take; any other
+value (an array, an object) is kept by the page and the cell counts its
+versions, so observers still fire. `computed` is `computed_s` (one observer
+per pair of inputs), `batch` is `ui_batch`. `each` keys its rows: a row
+whose key stays is kept, and re-rendered only when its item is another
+object or its index moved; a gone key's row is removed; new keys append;
+a reorder rebuilds the column. A state set also re-evaluates the page's vg
+bindings (below), once per batch. The JavaScript is `src/sae_prelude.js`,
+embedded by `tools/embed-prelude.sh` (`tests/check_prelude.sh` keeps the
+two in step). `site/reactive.ts` is the demo, `tests/spec_reactive.ae`
+the spec.
 
 ### Timers and animation frames
 
@@ -453,12 +489,60 @@ vg.scene("0 0 100 100", 300, 300, () => {
 
 | | |
 |---|---|
-| scene | `scene(viewBox, w, h, fn)`: a `w` x `h` px canvas under the current `ui` container, drawing the `"x y w h"` viewBox |
-| shapes (each returns a handle) | `circle(cx, cy, r, fn?)`, `rect(x, y, w, h, fn?)`, `rrect(x, y, w, h, r, fn?)`, `line(x1, y1, x2, y2, fn?)`, `path(d, fn?)`, `text(x, y, s, fn?)`, `g(fn)` |
-| modifiers (inside a shape's block) | `fill(color)`, `stroke(color, width)`, `opacity(v)`, `transform(t)`, `on_click(fn(x, y))` (viewBox coordinates) |
-| later, from anywhere | `set_fill(h, color)`, `set_stroke(h, color, width)`, `set_opacity(h, v)`: change a shape and repaint |
+| scene | `scene(viewBox, w, h, fn)`: a `w` x `h` px canvas under the current `ui` container, drawing the `"x y w h"` viewBox; returns the scene's handle |
+| shapes (each returns a handle) | `circle(cx, cy, r, fn?)`, `rect(x, y, w, h, fn?)`, `rrect(x, y, w, h, r, fn?)`, `ellipse(cx, cy, rx, ry, fn?)`, `line(x1, y1, x2, y2, fn?)`, `path(d, fn?)`, `polygon(points, fn?)`, `polyline(points, fn?)` (points as SVG writes them, `"x,y x,y"`, or a flat array), `text(x, y, s, fn?)`, `text_sized(x, y, size, s, fn?)`, `text_anchored(x, y, size, "start"/"middle"/"end", s, fn?)` |
+| groups | `g(fn)`: its block's `fill`, `stroke`, `opacity` and `transform` reach the shapes inside it (transforms compose outer first, opacities multiply, a shape's own paint wins); `into(h, fn)` builds into a group again |
+| modifiers (inside a shape's or group's block) | `fill(color)` (or `"url(#id)"`), `stroke(color, width)`, `opacity(v)`, `transform(t)`, `linecap(c)`, `linejoin(j)`, `tooltip(s)`, `cursor(c)` |
+| events (inside a shape's block; viewBox units) | `on_click(fn(x, y))`, `on_double_click(fn(x, y))`, `on_hover(fn(inside))`, `on_drag(fn(x, y, dx, dy))`, `on_drag_end(fn(x, y))`, `on_scroll(fn(dx, dy))` (dy < 0 is away from the user), `on_right_click(fn(x, y))` (kept; no canvas reports one yet) |
+| defs (inside a scene's block) | `defs(fn)` holding `linear_gradient(id, x1, y1, x2, y2, stops, opts?)`, `radial_gradient(id, cx, cy, r, stops, opts?)` (stops `[[offset, color, opacity?], ...]`; opts `{ units, transform, href, spread, fx, fy }`), `clip_path(id, shapes, opts?)`; `css(text)` |
+| bindings (in a block, or `(h, fn)` from anywhere) | `bind_fill(fn)`, `bind_stroke(fn)` (a colour or `[colour, width]`), `bind_opacity(fn)`, `bind_text(fn)`, `bind_transform(fn)`, `bind_pos(fn)` (an object of geometry: `cx`, `cy`, `r`, `x`, `y`, `w`, `h`, `x1`...), `visible_when(fn)`; re-evaluated on every state set (`refresh()` does it by hand) |
+| data joins | `items(list_state, key, render(item, i) → h, update?(item, h, i))` in a group: enter, update and exit by key |
+| tweens, on the frame clock | `animate(h, { to: { fill, opacity, cx, ..., rotate, scale, translate }, ms, easing, center, from }, done?)` or `animate(numberState, { to, ms })`; easings `linear`, `ease_in`, `ease_out`, `ease_in_out` or a function; returns `{ cancel(), done }` |
+| zoom and pan | `view_box(state or fn)` in a scene's block: the viewBox follows it; `set_view_box(scene, vb)` |
+| later, from anywhere | `set_fill(h, color)`, `set_stroke(h, color, width)`, `set_opacity(h, v)`, `set_text(h, s)`, `set_transform(h, t)`, `set_visible(h, on)`, `set(h, { ...props })` (several at once, one repaint), `get(h)`, `remove(h)`: change a shape or group and repaint |
 | pixels | `raster(w, h, rgba, fn?)`: a w x h image element from a `Uint8Array` of RGBA8 (w*h*4 bytes), at (0, 0), one viewBox unit a pixel; `raster_update(h, rgba)` new pixels in place; `image(bytes, fn?)`: a PNG/JPEG/GIF/BMP decoded by the toolkit, at its own size; `raster_size(h)` → `[w, h]` |
 | in a raster's or image's block | `box(x, y, w, h)` where it draws, `fit(mode)`: `"stretch"` (default), `"contain"`, `"cover"`, `"original"`; and `on_click`, `opacity`, `transform` as for any shape |
+
+### AeVG alive: the SVG model as TypeScript
+
+A scene is source, not a loaded file: the picture and its behaviour are one
+page. sae keeps a record of each scene (`aevg/module.ae`): every group and
+shape with its parent, so a group's transform, opacity and paint reach its
+children when they are made and when they change (`set_transform` on a
+group turns everything in it: the camera's mode dial); the defs and CSS
+registered on the scene, put back when the viewBox changes (zoom and pan
+rebuild the viewBox-to-canvas mapping); and the page's handlers, which the
+host dispatches itself, hit-testing the topmost shape with one.
+`site/aevg.ts` shows the grammar, `site/aevg_live.ts` the bindings, the data
+join, tweens, events and zoom; `tests/spec_aevg.ae` reads every one back
+as rendered pixels.
+
+**Gradients, today**: `defs` registers them on the scene and a shape takes
+one with `fill("url(#id)")`, but aether-ui's live (deferred) path paints
+nothing for a gradient fill on macOS yet, so `spec_aevg` skips that `it`
+and names the gap. `clip_path` and CSS class selectors are registered and
+wait for shapes to carry a clip or class attribute.
+
+`saelower --from-svg drawing.svg [--size N] [--solid]` turns an SVG into
+such a page, once (`aevg/tsemit.ae`, the same walk as aether-ui's Aether
+transpiler, a TypeScript output): shapes read like the SVG, modifiers in
+their blocks, groups nest (not flattened: the host cascades), `<use>` is a
+group with its transform, path data normalised to absolute M/L/C/Z, each
+shape's SVG id as a comment. `--solid` paints a gradient fill as its middle
+stop's colour. It skips, saying so in a comment: filters, `clip-path=` on a
+shape, `<image>`, `<style>`, markers and patterns.
+
+The proof is the corpus: `tools/gen-corpus.sh` emits five W3C/CVG files as
+`site/corpus_<name>.ts`, and `tests/spec_aevg_parity.ae` renders each
+through the driver and measures the mean per-pixel error against librsvg's
+reference PNG (`tests/lib/png_mae.py`, the measure of aether-ui's
+`vg/test/svg-compare-aevg.py`): heart 1.04, beacon 1.87, compass 2.68, atom
+4.49 (0 to 255; under 5 is antialiasing), and AJ_Digital_Camera 33.70, whose
+body is 175 gradients that do not paint yet. `site/camera.ts` is that
+camera, emitted with `--solid` and made operable (demo 1b: turn the mode
+dial, press the shutter, zoom the lens, the LCD bound to state), and
+`site/clock.ts` places one clock-face component four times by transforms,
+its hands bound to the time; `tests/spec_camera.ae` drives both.
 
 ### Pixels from a page
 
