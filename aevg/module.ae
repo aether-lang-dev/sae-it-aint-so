@@ -32,7 +32,8 @@
 exports (
     AeModel, AeScene, AeRec,
     model_new, model_free,
-    scene_add, scene_of_node, rec_of, rec_add,
+    scene_add, scene_of_node, rec_of, rec_add, hit_at,
+    EV_CLICK, EV_DBL, EV_RIGHT, EV_HOVER, EV_DRAG, EV_SCROLL,
     rec_set_transform, rec_set_opacity, rec_set_fill, rec_set_stroke,
     rec_inherit, rec_set_visible,
     scene_mark_dirty, repaint_dirty, repaint_scene,
@@ -58,6 +59,13 @@ const K_GROUP = 1
 const K_SHAPE = 2
 const K_TEXT = 3
 
+const EV_CLICK = 1
+const EV_DBL = 2
+const EV_RIGHT = 3
+const EV_HOVER = 4
+const EV_DRAG = 5
+const EV_SCROLL = 6
+
 struct AeScene {
     scene: ptr       // aether-ui's VgScene
     root: ptr        // its root VgNode
@@ -73,6 +81,8 @@ struct AeScene {
     last_cx: float
     last_cy: float
     tooltip: string  // the native tooltip currently shown ("" for none)
+    hovered: ptr     // the *AeRec under the pointer with a hover handler, or null
+    dragged: ptr     // the *AeRec a press landed on with a drag handler, or null
 }
 
 struct AeRec {
@@ -90,8 +100,19 @@ struct AeRec {
     sw: float        // and its width
     has_own_fill: int   // a shape that set its own fill keeps it over the group's
     has_own_stroke: int
-    interactive: int // has a handler/tooltip/cursor: re-tracked on a context rebuild
+    interactive: int // has a tooltip/cursor: re-tracked on a context rebuild
     visible: int
+    // The page's event handlers (held JS function handles, 0 for none). The
+    // host dispatches them itself, hit-testing in hit_at below: storing a
+    // capturing closure on an aether-ui element is not safe on Aether 0.796
+    // (see the wave1/aevg report), and sae owns the canvas hooks anyway.
+    h_click: int
+    h_dbl: int
+    h_right: int
+    h_hover: int
+    h_drag: int
+    h_drag_end: int
+    h_scroll: int
     children: ptr    // std.list of *AeRec
 }
 
@@ -131,6 +152,32 @@ model_free(m: *AeModel) {
 
 own_(s: string) -> string { return string.concat(s, "") }
 
+// The topmost visible shape of scene `sc` at canvas pixel (x, y) with a
+// handler for event `ev`, or null. Topmost is the last made: a scene draws
+// in the order its shapes were made (a vg.into block's shapes are recorded,
+// and drawn, after everything before it). A hidden element hit-tests 0.
+hit_at(m: *AeModel, sc: *AeScene, ev: int, x: float, y: float) -> *AeRec {
+    i = list.size(m.recs) - 1
+    while i >= 0 {
+        v, _ = list.get(m.recs, i)
+        r = v as *AeRec
+        if r.scene == sc as ptr && r.el != null && r.visible == 1 {
+            h = 0
+            if ev == EV_CLICK { h = r.h_click }
+            if ev == EV_DBL { h = r.h_dbl }
+            if ev == EV_RIGHT { h = r.h_right }
+            if ev == EV_HOVER { h = r.h_hover }
+            if ev == EV_DRAG { h = r.h_drag + r.h_drag_end }
+            if ev == EV_SCROLL { h = r.h_scroll }
+            if h != 0 {
+                if element.element_is_visible(r.el) == 1 && element.element_hit_test(r.el, x, y) == 1 { return r }
+            }
+        }
+        i = i - 1
+    }
+    return null
+}
+
 // Register a live scene the host made with live.vg(): its record, and the
 // root node's record (kind K_SCENE) so shapes at the top level have a parent.
 scene_add(m: *AeModel, scene: ptr, root: ptr, cid: int, vb: string, w: int, h: int) -> *AeScene {
@@ -149,6 +196,8 @@ scene_add(m: *AeModel, scene: ptr, root: ptr, cid: int, vb: string, w: int, h: i
     sc.last_cx = 0.0
     sc.last_cy = 0.0
     sc.tooltip = ""
+    sc.hovered = null
+    sc.dragged = null
     list.add(m.scenes, sc as ptr)
     _r = rec_add(m, root, null, K_SCENE, null, sc)
     return sc
@@ -194,6 +243,13 @@ rec_add(m: *AeModel, node: ptr, el: ptr, kind: int, parent: *AeRec, sc: *AeScene
     r.has_own_stroke = 0
     r.interactive = 0
     r.visible = 1
+    r.h_click = 0
+    r.h_dbl = 0
+    r.h_right = 0
+    r.h_hover = 0
+    r.h_drag = 0
+    r.h_drag_end = 0
+    r.h_scroll = 0
     r.children = list.new()
     list.add(m.recs, r as ptr)
     if parent != null {

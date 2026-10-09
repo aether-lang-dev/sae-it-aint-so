@@ -3358,7 +3358,17 @@ ae_model_(ctx: ptr) -> *AeModel {
 ae_top_rec_(ctx: ptr) -> *AeRec {
     p = page_of_(ctx)
     if p.vg_depth < 1 { return null }
-    return aevg.rec_of(ae_model_(ctx), vg_top_(p))
+    m = ae_model_(ctx)
+    node = vg_top_(p)
+    r = aevg.rec_of(m, node)
+    if r != null { return r }
+    // A node another section made (wave1/raster's vg.raster and vg.image
+    // push theirs through vg_shape_done_): record it now, under the node
+    // below it, so the modifiers in its block work as on any shape.
+    if p.vg_depth < 2 { return null }
+    parent = aevg.rec_of(m, mem.get_ptr(p.vg_stack, (p.vg_depth - 2) * 8))
+    if parent == null { return null }
+    return aevg.rec_add(m, node, vg.node_element(node), K_SHAPE, parent, parent.scene as *AeScene)
 }
 
 // The record of a handle a page holds, or null.
@@ -3621,13 +3631,16 @@ sae_ae_scene(ctx: ptr, this_val: int, argv: int) -> int {
     return vg_shape_done_(ctx, argv, argc, 3, root)
 }
 
-// The canvas hooks for a scene. Click replaces live.vg's own hook (one per
-// canvas) and keeps its work: dispatch, then a full repaint. A second click
-// within 400 ms and 6 px is also a double click.
+// The canvas hooks for a scene. They replace live.vg's own (one per canvas
+// per kind) and keep its work: a full repaint after a click. The page's
+// handlers are dispatched here, not through aether-ui's element handlers:
+// the record (aevg.hit_at) finds the topmost shape with a handler for the
+// event, and the handler runs with viewBox coordinates. A second click
+// within 400 ms and 6 px is also a double click. A press on a shape with a
+// drag handler captures it until the release.
 ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
     scene = sc.scene
     cid = sc.cid
-    es = vg.scene_event_state(scene)
     seq = page_of_(ctx).seq
     ui.canvas_on_click(cid, |x: float, y: float| {
         if ae_live_(ctx, seq) == 0 { return }
@@ -3642,23 +3655,43 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
         sc.last_cx = x
         sc.last_cy = y
         sc.pressed = 1
-        events.dispatch_click(es, vg.scene_ctx(scene), x, y)
-        // A drag's target is whatever is under the press: capture it now
-        // (the handler sees one zero-delta call at the press).
-        events.dispatch_drag(es, vg.scene_ctx(scene), x, y, 0.0, 0.0)
+        m = ae_model_(ctx)
+        r = aevg.hit_at(m, sc, aevg.EV_CLICK, x, y)
+        if r != null { ae_fire_xy_(ctx, scene, r.h_click, x, y, "a vg click handler") }
         if dbl == 1 {
             sc.last_click_ms = 0
-            events.dispatch_double_click(es, vg.scene_ctx(scene), x, y)
+            rd = aevg.hit_at(m, sc, aevg.EV_DBL, x, y)
+            if rd != null { ae_fire_xy_(ctx, scene, rd.h_dbl, x, y, "a vg double-click handler") }
         }
+        sc.dragged = aevg.hit_at(m, sc, aevg.EV_DRAG, x, y) as ptr
+        if sc.dragged != null {
+            dr = sc.dragged as *AeRec
+            if dr.h_drag != 0 { ae_fire_drag_(ctx, scene, dr.h_drag, x, y, 0.0, 0.0) }
+        }
+        if ae_live_(ctx, seq) == 0 { return }
         aevg.repaint_scene(sc)
     })
     ui.canvas_on_move(cid, |x: float, y: float| {
         if ae_live_(ctx, seq) == 0 { return }
-        c = vg.scene_ctx(scene)
-        events.dispatch_hover(es, c, x, y)
-        if sc.pressed == 1 { events.dispatch_drag(es, c, x, y, x - sc.last_cx, y - sc.last_cy) }
+        m = ae_model_(ctx)
+        hv = aevg.hit_at(m, sc, aevg.EV_HOVER, x, y)
+        if hv as ptr != sc.hovered {
+            old = sc.hovered
+            sc.hovered = hv as ptr
+            if old != null {
+                ro = old as *AeRec
+                ae_fire_bool_(ctx, ro.h_hover, 0)
+            }
+            if hv != null { ae_fire_bool_(ctx, hv.h_hover, 1) }
+        }
+        if sc.pressed == 1 && sc.dragged != null {
+            dr = sc.dragged as *AeRec
+            if dr.h_drag != 0 { ae_fire_drag_(ctx, scene, dr.h_drag, x, y, x - sc.last_cx, y - sc.last_cy) }
+        }
         sc.last_cx = x
         sc.last_cy = y
+        if ae_live_(ctx, seq) == 0 { return }
+        c = vg.scene_ctx(scene)
         tip = events.tooltip_at(c, x, y)
         if ui.vg_tooltip_drawn() == 1 {
             if string.length(tip) > 0 { _t = ui.vg_tooltip_show(cid, tip, x, y) } else { ui.vg_tooltip_hide() }
@@ -3666,20 +3699,28 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
             sc.tooltip = own_(tip)
             _tt = ui.style_tooltip(ui.canvas_widget(cid), tip)
         }
-        if sc.dirty == 1 { aevg.repaint_scene(sc) }
+        aevg.repaint_dirty(ae_model_(ctx))
     })
     ui.canvas_on_release(cid, |x: float, y: float| {
         if ae_live_(ctx, seq) == 0 { return }
-        if sc.pressed == 1 {
-            sc.pressed = 0
-            events.dispatch_drag_end(es, vg.scene_ctx(scene))
-            if sc.dirty == 1 { aevg.repaint_scene(sc) }
+        sc.pressed = 0
+        if sc.dragged != null {
+            dr = sc.dragged as *AeRec
+            sc.dragged = null
+            if dr.h_drag_end != 0 { ae_fire_xy_(ctx, scene, dr.h_drag_end, x, y, "a vg drag-end handler") }
+            if ae_live_(ctx, seq) == 0 { return }
+            aevg.repaint_dirty(ae_model_(ctx))
         }
     })
     ui.canvas_on_scroll(cid, |dx: float, dy: float| {
         if ae_live_(ctx, seq) == 0 { return }
-        events.dispatch_scroll(es, vg.scene_ctx(scene), dx, dy, sc.last_cx, sc.last_cy)
-        if sc.dirty == 1 { aevg.repaint_scene(sc) }
+        r = aevg.hit_at(ae_model_(ctx), sc, aevg.EV_SCROLL, sc.last_cx, sc.last_cy)
+        if r != null {
+            if ae_call_nums4_(ctx, r.h_scroll, dx, dy, 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg scroll handler") }
+            settle_(ctx)
+        }
+        if ae_live_(ctx, seq) == 0 { return }
+        aevg.repaint_dirty(ae_model_(ctx))
     })
     ui.canvas_on_resize(cid, |rw: float, rh: float| {
         if ae_live_(ctx, seq) == 0 { return }
@@ -3688,6 +3729,26 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
         live.vg_flush_live(scene, cid, 0.0)
         sc.dirty = 0
     })
+}
+
+// Run a page handler with a point, in the scene's viewBox units.
+ae_fire_xy_(ctx: ptr, scene: ptr, ref: int, x: float, y: float, what: string) {
+    if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, what) }
+    settle_(ctx)
+}
+
+// A drag handler: the point and the step, both in viewBox units (a step
+// scales as a position does; the origin cancels out).
+ae_fire_drag_(ctx: ptr, scene: ptr, ref: int, x: float, y: float, dx: float, dy: float) {
+    sx = vg.scene_px_to_vb_x(scene, dx) - vg.scene_px_to_vb_x(scene, 0.0)
+    sy = vg.scene_px_to_vb_y(scene, dy) - vg.scene_px_to_vb_y(scene, 0.0)
+    if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), sx, sy, 4) < 0 { report_exception_(ctx, "a vg drag handler") }
+    settle_(ctx)
+}
+
+ae_fire_bool_(ctx: ptr, ref: int, b: int) {
+    if ae_call_bool_(ctx, ref, b) < 0 { report_exception_(ctx, "a vg hover handler") }
+    settle_(ctx)
 }
 
 // 1 while the page that made a scene is still the page the runtime pointer
@@ -3976,12 +4037,7 @@ sae_ae_on_click(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_click")
     if r == null { return sae_throw_type_error(ctx, "vg.on_click(fn) must be called inside a shape's block, with a function") }
-    ref = hold_arg_(ctx, argv, 0)
-    scene = vg.node_scene(r.node)
-    vg.on_click(r.node, |x: float, y: float| {
-        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg click handler") }
-        settle_(ctx)
-    })
+    r.h_click = hold_arg_(ctx, argv, 0)
     return 0
 }
 
@@ -3990,28 +4046,18 @@ sae_ae_on_double_click(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_double_click")
     if r == null { return sae_throw_type_error(ctx, "vg.on_double_click(fn) must be called inside a shape's block, with a function") }
-    ref = hold_arg_(ctx, argv, 0)
-    scene = vg.node_scene(r.node)
-    vg.on_double_click(r.node, |x: float, y: float| {
-        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg double-click handler") }
-        settle_(ctx)
-    })
+    r.h_dbl = hold_arg_(ctx, argv, 0)
     return 0
 }
 
-// on_right_click(fn): kept on the element; no aether-ui canvas reports a
+// on_right_click(fn): kept on the record; no aether-ui canvas reports a
 // right click yet, so it waits for that hook.
 sae_ae_on_right_click(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_right_click")
     if r == null { return sae_throw_type_error(ctx, "vg.on_right_click(fn) must be called inside a shape's block, with a function") }
-    ref = hold_arg_(ctx, argv, 0)
-    scene = vg.node_scene(r.node)
-    vg.on_right_click(r.node, |x: float, y: float| {
-        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg right-click handler") }
-        settle_(ctx)
-    })
+    r.h_right = hold_arg_(ctx, argv, 0)
     return 0
 }
 
@@ -4022,11 +4068,7 @@ sae_ae_on_hover(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_hover")
     if r == null { return sae_throw_type_error(ctx, "vg.on_hover(fn) must be called inside a shape's block, with a function") }
-    ref = hold_arg_(ctx, argv, 0)
-    vg.on_hover(r.node, |inside: int| {
-        if ae_call_bool_(ctx, ref, inside) < 0 { report_exception_(ctx, "a vg hover handler") }
-        settle_(ctx)
-    })
+    r.h_hover = hold_arg_(ctx, argv, 0)
     return 0
 }
 
@@ -4038,16 +4080,7 @@ sae_ae_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_drag")
     if r == null { return sae_throw_type_error(ctx, "vg.on_drag(fn) must be called inside a shape's block, with a function") }
-    ref = hold_arg_(ctx, argv, 0)
-    scene = vg.node_scene(r.node)
-    el = r.el
-    element.element_on_drag(el, |x: float, y: float, dx: float, dy: float| {
-        // Deltas scale as positions do; the origin cancels out.
-        sx = vg.scene_px_to_vb_x(scene, dx) - vg.scene_px_to_vb_x(scene, 0.0)
-        sy = vg.scene_px_to_vb_y(scene, dy) - vg.scene_px_to_vb_y(scene, 0.0)
-        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), sx, sy, 4) < 0 { report_exception_(ctx, "a vg drag handler") }
-        settle_(ctx)
-    })
+    r.h_drag = hold_arg_(ctx, argv, 0)
     return 0
 }
 
@@ -4056,12 +4089,7 @@ sae_ae_on_drag_end(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_drag_end")
     if r == null { return sae_throw_type_error(ctx, "vg.on_drag_end(fn) must be called inside a shape's block, with a function") }
-    ref = hold_arg_(ctx, argv, 0)
-    scene = vg.node_scene(r.node)
-    element.element_on_drag_end(r.el, |x: float, y: float| {
-        if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg drag-end handler") }
-        settle_(ctx)
-    })
+    r.h_drag_end = hold_arg_(ctx, argv, 0)
     return 0
 }
 
@@ -4072,11 +4100,7 @@ sae_ae_on_scroll(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_scroll")
     if r == null { return sae_throw_type_error(ctx, "vg.on_scroll(fn) must be called inside a shape's block, with a function") }
-    ref = hold_arg_(ctx, argv, 0)
-    element.element_on_scroll(r.el, |dx: float, dy: float, x: float, y: float| {
-        if ae_call_nums4_(ctx, ref, dx, dy, 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg scroll handler") }
-        settle_(ctx)
-    })
+    r.h_scroll = hold_arg_(ctx, argv, 0)
     return 0
 }
 
@@ -6380,6 +6404,9 @@ go_(b: *Browser, url: string) {
     load_(b, url)
 }
 
+// 1 while the pending navigation is one typed into the address bar.
+var nav_typed_ = 0
+
 run_nav_(b: *Browser) {
     kind = b.pending_kind
     url = b.pending_url
@@ -6392,10 +6419,19 @@ run_nav_(b: *Browser) {
             return
         }
         // wave1/escape: a web page stays on http(s); no path climbs out.
-        nurl, nwhy = esc_nav_check_(b, url)
-        if nwhy != "" {
-            esc_log_(nwhy)
-            return
+        // The rule holds a page's own navigations; an address typed into
+        // the browser's bar is the person's, and goes where they say (a file
+        // page's folder does not bound them), as esc_nav_check_ intends.
+        typed = nav_typed_
+        nav_typed_ = 0
+        nurl = url
+        if typed == 0 || app_dir_ != "" {
+            n2, nwhy = esc_nav_check_(b, url)
+            if nwhy != "" {
+                esc_log_(nwhy)
+                return
+            }
+            nurl = n2
         }
         go_(b, nurl)
     }
@@ -6421,6 +6457,7 @@ run_nav_(b: *Browser) {
 request_nav_(b: *Browser, kind: int, url: string) {
     b.pending_kind = kind
     b.pending_url = own_(url)
+    nav_typed_ = 0   // the Go button sets it again after this; a page never does
     if b.nav_timer == 0 {
         b.nav_timer = ui.timer(1, || {
             ui.timer_cancel(b.nav_timer)
@@ -6445,6 +6482,7 @@ build_chrome_(b: *Browser, root: int) {
         base = ""
         if b.page != null { base = (b.page as *Page).url }
         request_nav_(b, NAV_GO, resolve_(base, typed))
+        nav_typed_ = 1   // the person asked, not the page: see run_nav_
     })
     b.status = ui.text(rctx, "")
     ui.divider(rctx)
