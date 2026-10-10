@@ -142,6 +142,7 @@ struct Page {
     mod_fail: int    // reports a rejection after a top-level await
     mod_factory: int // the JS factory making each unit's $sae object, or 0
     wrapped: int     // 1: the lowered page is a function to call with $sae
+    key_ref: int     // ui.on_key's held function, or 0
 }
 
 // The pages whose runtimes are live (one in the browser, as a rule).
@@ -584,6 +585,145 @@ sae_ui_textfield(ctx: ptr, this_val: int, argv: int) -> int {
     h = ui.textfield(mem.long_to_ptr(top_(p)), placeholder, on_change)
     ui_done_(p, t)
     return quickjs.new_int(ctx, h)
+}
+
+// ===== keys, Return, focus, wrapping and size (the cloud wishlist, 2026-10-10) =====
+
+// ui.on_key(fn(key, mods)): every key the window gets while the page has the
+// focus: a widget the page made, or nothing at all. Names are aether-ui's
+// ("Left", "Return", "BackSpace", "a"); mods is 1 shift, 2 ctrl, 4 alt,
+// 8 super. A key while the address bar (or any of the browser's own
+// widgets) has the focus never reaches a page: what a person types into the
+// chrome is not the page's to read. One function per page; a second call
+// replaces the first.
+sae_ui_on_key(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "ui.on_key(fn): fn must be a function") }
+    if p.key_ref != 0 { quickjs.release(ctx, p.key_ref) }
+    p.key_ref = hold_arg_(ctx, argv, 0)
+    keys_hook_()
+    return 0
+}
+
+// One window hook for every page, made the first time any page asks.
+var keys_hooked_: int = 0
+keys_hook_() {
+    if keys_hooked_ == 1 { return }
+    keys_hooked_ = 1
+    ui.window_on_key(|k: string, m: int| { keys_deliver_(k, m) })
+}
+
+// To the page with the focus, if it asked: the first live page with a key
+// function whose widget has the focus (or with nothing focused). One page,
+// then return: a handler may navigate, which frees pages.
+keys_deliver_(k: string, m: int) {
+    if pages_ == null { return }
+    fw = ui.focused_widget()
+    i = 0
+    while i < list.size(pages_) {
+        pv, _e = list.get(pages_, i)
+        p = pv as *Page
+        if p.key_ref != 0 {
+            if fw == 0 || owned_(p, fw) == 1 {
+                ctx = p.ctx
+                args = quickjs.new_array(ctx)
+                ks = quickjs.new_string(ctx, k)
+                _a = quickjs.set_index(ctx, args, 0, ks)
+                quickjs.release(ctx, ks)
+                ms = quickjs.new_int(ctx, m)
+                _b = quickjs.set_index(ctx, args, 1, ms)
+                quickjs.release(ctx, ms)
+                r = calln_(ctx, p.key_ref, args)
+                quickjs.release(ctx, args)
+                if r < 0 { report_exception_(ctx, "a ui.on_key handler") }
+                settle_(ctx)
+                return
+            }
+        }
+        i = i + 1
+    }
+}
+
+// ui.on_submit(field, fn(text)): Return in one of the page's text fields.
+sae_ui_on_submit(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.on_submit(h, fn): h is not a widget this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.on_submit(h, fn): fn must be a function") }
+    ref = hold_arg_(ctx, argv, 1)
+    ui.on_submit(h) callback |t: string| {
+        r = call1_str_(ctx, ref, t)
+        if r < 0 { report_exception_(ctx, "a ui.on_submit handler") }
+        settle_(ctx)
+    }
+    return 0
+}
+
+// ui.focus(h): give one of the page's widgets the keyboard focus.
+sae_ui_focus(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.focus(h): h is not a widget this page made") }
+    ui.focus(h)
+    return 0
+}
+
+// ui.text_wrapped(label, px): a label that wraps its words at px wide.
+sae_ui_text_wrapped(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    label = arg_str_(ctx, argv, argc, 0)
+    px = arg_int_(ctx, argv, argc, 1, 0)
+    if px <= 0 { return sae_throw_type_error(ctx, "ui.text_wrapped(label, px): px must be a positive width") }
+    long t = now_ns_()
+    h = ui.text_wrapped(mem.long_to_ptr(top_(p)), label, px)
+    ui_done_(p, t)
+    return quickjs.new_int(ctx, h)
+}
+
+// ui.width(h) / ui.height(h): a widget's laid-out size, in pixels.
+sae_ui_width(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.width(h): h is not a widget this page made") }
+    return quickjs.new_int(ctx, ui.get_width(h))
+}
+sae_ui_height(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.height(h): h is not a widget this page made") }
+    return quickjs.new_int(ctx, ui.get_height(h))
+}
+
+// vg.measure(text, size): { width, height, ascent, descent } in pixels, as
+// vg.text draws it (the toolkit's own font metrics on every platform).
+sae_vg_measure(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    t = arg_str_(ctx, argv, argc, 0)
+    size = arg_num_(ctx, argv, argc, 1, 12.0)
+    if size <= 0.0 { return sae_throw_type_error(ctx, "vg.measure(text, size): size must be positive") }
+    w = vg.text_width(size, t)
+    return json_value_(ctx, "{\"width\": ${w}, \"height\": ${vg.font_height(size)}, \"ascent\": ${vg.font_ascent(size)}, \"descent\": ${vg.font_descent(size)}}")
+}
+
+// vg.ellipsize(text, size, maxWidth): text cut to fit maxWidth, ending in
+// "…" when it had to be cut.
+sae_vg_ellipsize(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    t = arg_str_(ctx, argv, argc, 0)
+    size = arg_num_(ctx, argv, argc, 1, 12.0)
+    max_w = arg_num_(ctx, argv, argc, 2, 0.0)
+    if size <= 0.0 { return sae_throw_type_error(ctx, "vg.ellipsize(text, size, maxWidth): size must be positive") }
+    return quickjs.new_string(ctx, vg.ellipsize(size, t, max_w))
 }
 
 // get_text(handle): synchronous, in-process (Tsyne needed an await here).
@@ -3185,6 +3325,18 @@ sae_vg_fit(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
+// vg.rendering(mode): inside a raster's or image's block, how its pixels
+// are sampled when scaled: "auto" (the default, smoothed) or "pixelated"
+// (each pixel a crisp square: a Life board, pixel art), CSS's
+// image-rendering. aether-ui's image_rendering, on every backend.
+sae_vg_rendering(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rendering() must be called inside a raster's or image's block") }
+    vg.image_rendering(vg_top_(page_of_(ctx)), arg_str_(ctx, argv, argc, 0))
+    return 0
+}
+
 // vg.raster_size(h): [w, h] of a raster or image, in pixels.
 sae_vg_raster_size(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
@@ -4161,6 +4313,20 @@ ae_apply_prop_(ctx: ptr, r: *AeRec, key: string, obj: int) -> int {
         return 1
     }
     if r.el == null { return 0 }
+    // A text moves by x and y too (aether-ui's text_set_pos); it was the one
+    // node vg.set could not move.
+    if r.kind == K_TEXT {
+        if key == "x" || key == "y" {
+            nx = element.element_geo0(r.el)
+            ny = element.element_geo1(r.el)
+            if key == "x" { nx = ae_prop_num_(ctx, obj, key, nx) }
+            if key == "y" { ny = ae_prop_num_(ctx, obj, key, ny) }
+            vg.element_text_set_pos(r.el, nx, ny)
+            aevg.scene_mark_dirty(r.scene as *AeScene)
+            return 1
+        }
+        return 0
+    }
     slot = 0 - 1
     st = element.element_shape_type(r.el)
     if st == SHAPE_CIRCLE {
@@ -4243,6 +4409,10 @@ sae_ae_get(ctx: ptr, this_val: int, argv: int) -> int {
         }
         lt = element.element_last_text(r.el)
         if lt != null { ae_put_str_(ctx, o, "text", lt) }
+        if r.kind == K_TEXT {
+            ae_put_num_(ctx, o, "x", element.element_geo0(r.el))
+            ae_put_num_(ctx, o, "y", element.element_geo1(r.el))
+        }
         st = element.element_shape_type(r.el)
         if st == SHAPE_CIRCLE {
             ae_put_num_(ctx, o, "cx", element.element_geo0(r.el))
@@ -5647,6 +5817,12 @@ api_register_(p: *Page) {
     reg_(q, u, "ui_state", 1, sae_ui_state)
     reg_(q, u, "ui_set", 2, sae_ui_set)
     reg_(q, u, "text_bound", 3, sae_ui_text_bound)
+    reg_(q, u, "on_key", 1, sae_ui_on_key)
+    reg_(q, u, "on_submit", 2, sae_ui_on_submit)
+    reg_(q, u, "focus", 1, sae_ui_focus)
+    reg_(q, u, "text_wrapped", 2, sae_ui_text_wrapped)
+    reg_(q, u, "width", 1, sae_ui_width)
+    reg_(q, u, "height", 1, sae_ui_height)
     quickjs.set_global(q, "ui", u)
     quickjs.release(q, u)
 
@@ -5675,6 +5851,9 @@ api_register_(p: *Page) {
     reg_(q, v, "image", 2, sae_vg_image)
     reg_(q, v, "box", 4, sae_vg_box)
     reg_(q, v, "fit", 1, sae_vg_fit)
+    reg_(q, v, "rendering", 1, sae_vg_rendering)
+    reg_(q, v, "measure", 2, sae_vg_measure)
+    reg_(q, v, "ellipsize", 3, sae_vg_ellipsize)
     uimg, _ue = quickjs.get_global(q, "ui")
     reg_(q, uimg, "image", 2, sae_ui_image)
     quickjs.release(q, uimg)
@@ -5824,6 +6003,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.raf_batch = null
     p.raf_ids = 0
     p.frame_sub = 0
+    p.key_ref = 0
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
     p.http_res = 0

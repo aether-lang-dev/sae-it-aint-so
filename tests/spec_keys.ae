@@ -1,0 +1,97 @@
+// spec_keys.ae — site/keys.ts: ui.on_key (and that keys typed into the
+// browser's own chrome never reach a page), ui.on_submit, ui.focus,
+// ui.text_wrapped with ui.width/height, vg.measure and vg.ellipsize.
+//
+//   tests/run_spec.sh spec_keys
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// Dark viewBox points along y = 35 between x0 and x1, every 2 units (200x60).
+dark_between(x0: float, x1: float) -> int {
+    n = 0
+    x = x0
+    while x <= x1 {
+        p = b.vg_pixel(b.vg_px_x(x, 200.0, 60.0), b.vg_px_y(35.0, 200.0, 60.0))
+        if ((p >> 16) & 255) < 100 && ((p >> 8) & 255) < 100 && (p & 255) < 100 { n = n + 1 }
+        x = x + 2.0
+    }
+    return n
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "text metrics") {
+        spec.it("vg.measure: a wider string is wider; ascent, descent, height") callback {
+            b.navigate(b.test_url("/keys"))
+            spec.assert_true(b.wait_for_text("Keys"), "the page loads")
+            spec.assert_true(b.wait_for_console("measure: true true true true"), "the metrics are sane")
+        }
+        spec.it("vg.ellipsize cuts to fit with an ellipsis, and leaves a short text alone") callback {
+            spec.assert_true(b.wait_for_console("ellipsize: true true"), "cut, with …, within the width")
+            spec.assert_true(b.wait_for_console("ellipsize keeps a short one: true"), "unchanged when it fits")
+        }
+    }
+
+    spec.describe(fw, "wrapping") {
+        spec.it("ui.text_wrapped wraps at its width: no wider, more than one line tall") callback {
+            b.click("Sizes")
+            spec.assert_true(b.wait_for_console("wrapped: "), "sizes printed")
+            n = uidriver.widget_id_by_text("one two three four five six seven eight nine ten eleven twelve")
+            spec.assert_gt(n, 0, "the label")
+            w = uidriver.widget_int_field_by_id(n, "w")
+            h = uidriver.widget_int_field_by_id(n, "h")
+            spec.assert_true(w <= 130, "no wider than its 120 px (got ${w})")
+            spec.assert_true(h > 30, "several lines tall (got ${h})")
+        }
+    }
+
+    spec.describe(fw, "Return in a field") {
+        spec.it("ui.on_submit gets the field's text") callback {
+            f = uidriver.widget_id_last_of("textfield", "")
+            uidriver.post_ok("/widget/${f}/set_text?v=%3DA1%2BB1", "type =A1+B1")
+            uidriver.post_ok("/widget/${f}/submit", "press Return")
+            spec.assert_true(b.wait_for_console("submitted: =A1+B1"), "the handler got the text")
+        }
+    }
+
+    spec.describe(fw, "moving a text") {
+        spec.it("vg.set moves a text by x; vg.get reads it back; the ink follows") callback {
+            spec.assert_true(b.wait_for_vg_canvas(), "the scene")
+            spec.assert_true(dark_between(5.0, 45.0) > 0, "ink where it was made")
+            b.click("Move")
+            spec.assert_true(b.wait_for_console("moved: 150"), "vg.get says x 150")
+            sleep(300)
+            spec.assert_eq(dark_between(5.0, 45.0), 0, "none left where it was made")
+            spec.assert_true(dark_between(148.0, 195.0) > 0, "ink where it went")
+        }
+    }
+
+    spec.describe(fw, "keys") {
+        spec.it("ui.on_key gets keys while the page has the focus") callback {
+            b.click("Focus the field")
+            sleep(200)
+            _r = uidriver.window_key("Left")
+            spec.assert_true(b.wait_for_console("keys: Left"), "the page got Left")
+        }
+        spec.it("but never a key typed while the address bar has the focus") callback {
+            n0 = b.console_count("keys: ")
+            addr = uidriver.widget_id_of("textfield", "")
+            spec.assert_gt(addr, 0, "the address bar")
+            uidriver.focus_widget(addr)
+            sleep(200)
+            _r1 = uidriver.window_key("h")
+            _r2 = uidriver.window_key("t")
+            sleep(500)
+            spec.assert_eq(b.console_count("keys: "), n0, "no key reached the page")
+            b.click("Focus the field")
+            sleep(200)
+            _r3 = uidriver.window_key("Down")
+            spec.assert_true(b.wait_for_console("keys: Down"), "and keys reach it again once it has the focus")
+        }
+    }
+    return spec.run_summary(fw)
+}
