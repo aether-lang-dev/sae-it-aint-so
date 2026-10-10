@@ -85,6 +85,10 @@ make -C ../aether contrib
   `xvfb` (`apt-get install` works in the container). The headless half
   needs neither: `lower/run-tests.sh`, `saelower`, `saejs` and the
   `tests/check_*` scripts.
+- **Everything at once.** `tests/run_all.sh` runs every spec and check with
+  the environment each needs (app specs their `SAE_TEST_APP`, gitify and
+  pomatez their storage and shell logs, three specs with no window), under
+  `xvfb-run` when there is no display. A label filter runs a subset.
 - **Driver specs.** Build the browser with its driver
   (`AETHER_UI_WITH_DRIVER=1 ./build.sh`) and the page server
   (`(cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)`),

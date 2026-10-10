@@ -63,6 +63,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 ../aether/build/ae build tools/saejs.ae -o target/saejs
 lower/run-tests.sh                           # 66 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless)
+tests/run_all.sh                             # every spec and check below, each with its environment (a label filter: tests/run_all.sh spec_app_)
 tests/run_spec.sh                            # spec_nav: 45 specs
 tests/check_page_veto.sh                     # page veto present and enforced
 tests/check_layers.sh                        # services held to their imports
