@@ -55,5 +55,6 @@ AEB_REF=v0.326
 # (ui.text_wrapped), and visible_when that hides a text.
 # c009ce45 (2026-10-10): the driver's GET /canvas/{id}/nodes, which
 # saedriver's vg_nodes reads (spec_keys).
+# ca82facc (2026-10-10): datagrid and datagrid_on_click (ui.datagrid).
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=c009ce4562b82968d168be20ffe89abefa329be2
+AETHER_UI_REF=ca82facc2751d5cde156fb0a8e5b26ff4aabaeee

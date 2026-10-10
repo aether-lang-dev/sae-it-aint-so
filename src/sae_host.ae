@@ -143,6 +143,7 @@ struct Page {
     mod_factory: int // the JS factory making each unit's $sae object, or 0
     wrapped: int     // 1: the lowered page is a function to call with $sae
     key_ref: int     // ui.on_key's held function, or 0
+    dgrids: ptr      // std.list of aether-ui datagrids this page made (ui.datagrid)
 }
 
 // The pages whose runtimes are live (one in the browser, as a rule).
@@ -724,6 +725,130 @@ sae_vg_ellipsize(ctx: ptr, this_val: int, argv: int) -> int {
     max_w = arg_num_(ctx, argv, argc, 2, 0.0)
     if size <= 0.0 { return sae_throw_type_error(ctx, "vg.ellipsize(text, size, maxWidth): size must be positive") }
     return quickjs.new_string(ctx, vg.ellipsize(size, t, max_w))
+}
+
+// ===== ui.datagrid: aether-ui's virtualised grid for pages =====
+
+// The most cell widgets one grid may show (vis_rows x (frozen + vis_cols)):
+// a page asks for a window, and every shown cell is a real widget.
+const DATAGRID_MAX_SHOWN = 4000
+
+// Call a held JS function with two numbers; its result as a string ("" for
+// undefined or null, or when it throws, which is reported).
+call_ii_str_(ctx: ptr, ref: int, a: int, b: int, what: string) -> string {
+    args = quickjs.new_array(ctx)
+    va = quickjs.new_int(ctx, a)
+    _a = quickjs.set_index(ctx, args, 0, va)
+    quickjs.release(ctx, va)
+    vb = quickjs.new_int(ctx, b)
+    _b = quickjs.set_index(ctx, args, 1, vb)
+    quickjs.release(ctx, vb)
+    r, err = quickjs.call(ctx, ref, 0, args)
+    quickjs.release(ctx, args)
+    if err != "" {
+        report_exception_(ctx, what)
+        return ""
+    }
+    out = ""
+    if js_nothing_(ctx, r) == 0 { out = quickjs.to_string(ctx, r) }
+    quickjs.release(ctx, r)
+    return out
+}
+
+// The page's grid with handle h (1-based), or null.
+dgrid_of_(p: *Page, h: int) -> ptr {
+    if h < 1 || h > list.size(p.dgrids) { return null }
+    g, _e = list.get(p.dgrids, h - 1)
+    return g
+}
+
+// ui.datagrid(rows, cols, visRows, visCols, frozen, cell(r, c) -> string):
+// a grid of rows x cols cells whose text comes from cell() as each is shown,
+// so a model of millions of rows costs nothing until scrolled to. Only the
+// shown window exists as widgets; a header row (ui.datagrid_header) and the
+// `frozen` leading columns stay put; native sliders scroll it. Returns its
+// handle for the other ui.datagrid_* calls.
+sae_ui_datagrid(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    rows = arg_int_(ctx, argv, argc, 0, 0)
+    cols = arg_int_(ctx, argv, argc, 1, 0)
+    vr = arg_int_(ctx, argv, argc, 2, 20)
+    vc = arg_int_(ctx, argv, argc, 3, 6)
+    fz = arg_int_(ctx, argv, argc, 4, 0)
+    if rows < 0 || cols < 0 || vr < 1 || vc < 0 || fz < 0 { return sae_throw_type_error(ctx, "ui.datagrid(rows, cols, visRows, visCols, frozen, cell): counts must be positive") }
+    if vr * (fz + vc) > DATAGRID_MAX_SHOWN { return sae_throw_type_error(ctx, "ui.datagrid: at most ${DATAGRID_MAX_SHOWN} cells may be shown at once") }
+    if argc < 6 || is_fn_arg_(ctx, argv, 5) == 0 { return sae_throw_type_error(ctx, "ui.datagrid(..., cell): cell must be a function (row, col) => string") }
+    ref = hold_arg_(ctx, argv, 5)
+    long t = now_ns_()
+    g = ui.datagrid(mem.long_to_ptr(top_(p)), rows, cols, vr, vc, fz) callback |r: int, c: int| {
+        return call_ii_str_(ctx, ref, r, c, "a ui.datagrid cell function")
+    }
+    ui_done_(p, t)
+    list.add(p.dgrids, g)
+    return quickjs.new_int(ctx, list.size(p.dgrids))
+}
+
+// ui.datagrid_header(g, header(c) -> string): the header row's text.
+sae_ui_datagrid_header(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_header(g, fn): g is not a grid this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_header(g, fn): fn must be a function (col) => string") }
+    ref = hold_arg_(ctx, argv, 1)
+    ui.datagrid_header(g) callback |c: int| {
+        return call_ii_str_(ctx, ref, c, 0, "a ui.datagrid header function")
+    }
+    return 0
+}
+
+// ui.datagrid_on_click(g, fn(row, col)): a click on a cell, with the row and
+// column it shows at the moment.
+sae_ui_datagrid_on_click(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_click(g, fn): g is not a grid this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_click(g, fn): fn must be a function (row, col) => void") }
+    ref = hold_arg_(ctx, argv, 1)
+    ui.datagrid_on_click(g) callback |r: int, c: int| {
+        _s = call_ii_str_(ctx, ref, r, c, "a ui.datagrid click handler")
+        settle_(ctx)
+    }
+    return 0
+}
+
+// ui.datagrid_scroll_to(g, row, col): show row at the top and col as the
+// first scrolling column (clamped); the scrollbars follow.
+sae_ui_datagrid_scroll_to(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_scroll_to(g, row, col): g is not a grid this page made") }
+    ui.datagrid_scroll_to(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
+    return 0
+}
+
+// ui.datagrid_refresh(g): the model changed; show the cells again.
+sae_ui_datagrid_refresh(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_refresh(g): g is not a grid this page made") }
+    ui.datagrid_refresh(g)
+    return 0
+}
+
+// ui.datagrid_first(g) -> [row, col]: the first row and first scrolling
+// column shown.
+sae_ui_datagrid_first(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_first(g): g is not a grid this page made") }
+    return json_value_(ctx, "[${ui.datagrid_first_row(g)}, ${ui.datagrid_first_col(g)}]")
 }
 
 // get_text(handle): synchronous, in-process (Tsyne needed an await here).
@@ -5841,6 +5966,12 @@ api_register_(p: *Page) {
     reg_(q, u, "ui_set", 2, sae_ui_set)
     reg_(q, u, "text_bound", 3, sae_ui_text_bound)
     reg_(q, u, "on_key", 1, sae_ui_on_key)
+    reg_(q, u, "datagrid", 6, sae_ui_datagrid)
+    reg_(q, u, "datagrid_header", 2, sae_ui_datagrid_header)
+    reg_(q, u, "datagrid_on_click", 2, sae_ui_datagrid_on_click)
+    reg_(q, u, "datagrid_scroll_to", 3, sae_ui_datagrid_scroll_to)
+    reg_(q, u, "datagrid_refresh", 1, sae_ui_datagrid_refresh)
+    reg_(q, u, "datagrid_first", 1, sae_ui_datagrid_first)
     reg_(q, u, "on_submit", 2, sae_ui_on_submit)
     reg_(q, u, "focus", 1, sae_ui_focus)
     reg_(q, u, "text_wrapped", 2, sae_ui_text_wrapped)
@@ -6027,6 +6158,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.raf_ids = 0
     p.frame_sub = 0
     p.key_ref = 0
+    p.dgrids = list.new()
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
     p.http_res = 0
@@ -6052,6 +6184,7 @@ page_free_(p: *Page) {
     list.free(p.vg_nodes)
     list.free(p.stacks)
     list.free(p.grids)
+    list.free(p.dgrids)
     // The page's sheet styles only its own widgets: un-set it before the
     // next page builds, then free it (free_styles refuses the current one).
     if p.sheet != null {

@@ -60,6 +60,7 @@ spec_life||spec spec_life
 spec_algos||spec spec_algos
 spec_sheet||spec spec_sheet
 spec_keys||spec spec_keys
+spec_grid||spec spec_grid
 spec_aevg||spec spec_aevg
 spec_aevg_parity||spec spec_aevg_parity
 spec_camera||spec spec_camera

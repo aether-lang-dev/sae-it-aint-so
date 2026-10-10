@@ -1,0 +1,44 @@
+// spec_grid.ae — site/grid.ts: ui.datagrid on a page. Cells from the page's
+// function, a sticky header, a click naming the cell, scrolling from code
+// and from the scrollbar, and the window's size bounded.
+//
+//   tests/run_spec.sh spec_grid
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "ui.datagrid") {
+        spec.it("shows the first window from the page's function") callback {
+            b.navigate(b.test_url("/grid"))
+            spec.assert_true(b.wait_for_text("Grid"), "the page loads")
+            spec.assert_true(b.wait_for_text("A1"), "cell A1")
+            spec.assert_true(b.wait_for_text("E15"), "cell E15, the last shown")
+            b.assert_text("#", "the header's corner")
+        }
+        spec.it("a click names the cell") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("C4")}/click", "click C4")
+            spec.assert_true(b.wait_for_console("grid picked 3,3"), "row 3 (0-based), column 3")
+            b.assert_text("picked: 3,3", "and the page showed it")
+        }
+        spec.it("scrolls from code") callback {
+            b.click("To row 500000")
+            spec.assert_true(b.wait_for_console("grid first 499999,10"), "the first row and column shown")
+            spec.assert_true(b.wait_for_text("J500000"), "cell J500000 at the top left")
+            b.assert_text("#", "the header is still there")
+        }
+        spec.it("and from its scrollbar") callback {
+            v = uidriver.widget_id_last_of("slider", "")
+            h = uidriver.widget_id_of("slider", "")
+            vs = h
+            if uidriver.widget_int_field_by_id(v, "h") > uidriver.widget_int_field_by_id(v, "w") { vs = v }
+            uidriver.post_ok("/widget/${vs}/set_value?v=999985", "drag to the end")
+            spec.assert_true(b.wait_for_text("J1000000"), "the last row")
+        }
+    }
+    return spec.run_summary(fw)
+}
