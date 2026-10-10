@@ -3774,7 +3774,8 @@ sae_ae_scene(ctx: ptr, this_val: int, argv: int) -> int {
 // the record (aevg.hit_at) finds the topmost shape with a handler for the
 // event, and the handler runs with viewBox coordinates. A second click
 // within 400 ms and 6 px is also a double click. A press on a shape with a
-// drag handler captures it until the release.
+// drag handler captures it until the release. Repaints are held while the
+// handlers run (aevg.hold_repaints): each hook repaints once, after them.
 ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
     scene = sc.scene
     cid = sc.cid
@@ -3793,6 +3794,7 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
         sc.last_cy = y
         sc.pressed = 1
         m = ae_model_(ctx)
+        aevg.hold_repaints(m)
         r = aevg.hit_at(m, sc, aevg.EV_CLICK, x, y)
         if r != null { ae_fire_xy_(ctx, scene, r.h_click, x, y, "a vg click handler") }
         if dbl == 1 {
@@ -3806,11 +3808,13 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
             if dr.h_drag != 0 { ae_fire_drag_(ctx, scene, dr.h_drag, x, y, 0.0, 0.0) }
         }
         if ae_live_(ctx, seq) == 0 { return }
-        aevg.repaint_scene(sc)
+        aevg.scene_mark_dirty(sc)
+        aevg.release_repaints(m)
     })
     ui.canvas_on_move(cid, |x: float, y: float| {
         if ae_live_(ctx, seq) == 0 { return }
         m = ae_model_(ctx)
+        aevg.hold_repaints(m)
         hv = aevg.hit_at(m, sc, aevg.EV_HOVER, x, y)
         if hv as ptr != sc.hovered {
             old = sc.hovered
@@ -3836,7 +3840,7 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
             sc.tooltip = own_(tip)
             _tt = ui.style_tooltip(ui.canvas_widget(cid), tip)
         }
-        aevg.repaint_dirty(ae_model_(ctx))
+        aevg.release_repaints(m)
     })
     ui.canvas_on_release(cid, |x: float, y: float| {
         if ae_live_(ctx, seq) == 0 { return }
@@ -3844,20 +3848,24 @@ ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
         if sc.dragged != null {
             dr = sc.dragged as *AeRec
             sc.dragged = null
+            m = ae_model_(ctx)
+            aevg.hold_repaints(m)
             if dr.h_drag_end != 0 { ae_fire_xy_(ctx, scene, dr.h_drag_end, x, y, "a vg drag-end handler") }
             if ae_live_(ctx, seq) == 0 { return }
-            aevg.repaint_dirty(ae_model_(ctx))
+            aevg.release_repaints(m)
         }
     })
     ui.canvas_on_scroll(cid, |dx: float, dy: float| {
         if ae_live_(ctx, seq) == 0 { return }
-        r = aevg.hit_at(ae_model_(ctx), sc, aevg.EV_SCROLL, sc.last_cx, sc.last_cy)
+        m = ae_model_(ctx)
+        aevg.hold_repaints(m)
+        r = aevg.hit_at(m, sc, aevg.EV_SCROLL, sc.last_cx, sc.last_cy)
         if r != null {
             if ae_call_nums4_(ctx, r.h_scroll, dx, dy, 0.0, 0.0, 2) < 0 { report_exception_(ctx, "a vg scroll handler") }
             settle_(ctx)
         }
         if ae_live_(ctx, seq) == 0 { return }
-        aevg.repaint_dirty(ae_model_(ctx))
+        aevg.release_repaints(m)
     })
     ui.canvas_on_resize(cid, |rw: float, rh: float| {
         if ae_live_(ctx, seq) == 0 { return }

@@ -521,7 +521,11 @@ children when they are made and when they change (`set_transform` on a
 group turns everything in it: the camera's mode dial); the defs and CSS
 registered on the scene, put back when the viewBox changes (zoom and pan
 rebuild the viewBox-to-canvas mapping); and the page's handlers, which the
-host dispatches itself, hit-testing the topmost shape with one.
+host dispatches itself, hit-testing the topmost shape with one. While they
+run, repaints are held: every `vg.set` in a click, drag, move or scroll
+handler marks its scene, and the scene repaints once when the handler
+returns (a column resize in `site/sheet.ts` sets some sixty nodes: a drag
+step went from 1.4 s to 36 ms on GTK4).
 `site/aevg.ts` shows the grammar, `site/aevg_live.ts` the bindings, the data
 join, tweens, events and zoom; `tests/spec_aevg.ae` reads every one back
 as rendered pixels.

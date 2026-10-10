@@ -1,7 +1,8 @@
 // Where the sheet's cells are drawn: the row-number column, the header row,
 // and ten columns whose widths a drag changes. Pure geometry, in the
 // scene's units (one a pixel): what is at a point, where a column starts,
-// how much of a value fits in a cell.
+// how wide a column must be for its text. Measuring and cutting text is the
+// toolkit's (vg.measure, vg.ellipsize); this only adds the padding.
 import { COLS, ROWS } from "./address.ts";
 import type { Addr } from "./address.ts";
 
@@ -11,8 +12,8 @@ export const ROW = 22;           // each row
 export const MIN_WIDTH = 24;
 export const MAX_WIDTH = 240;
 export const START_WIDTH = 70;
-export const CHAR = 6.6;         // a character's width at the cells' font size, near enough
-export const PAD = 4;            // text inset from a cell's left edge
+export const FONT = 11;          // the cells' text size
+export const PAD = 4;            // text inset from each side of a cell
 
 export class Columns {
   readonly #widths: number[];
@@ -56,9 +57,10 @@ export function cellAt(cols: Columns, x: number, y: number): Addr | null {
   return { col, row: Math.floor((y - HEAD) / ROW) };
 }
 
-// As much of `s` as fits in a cell `width` wide, an ellipsis marking a cut.
-export function fit(s: string, width: number): string {
-  const room = Math.floor((width - 2 * PAD) / CHAR);
-  if (s.length <= room) return s;
-  return room <= 1 ? "" : `${s.slice(0, room - 1)}…`;
-}
+// The room for text in a cell `width` wide.
+export const room = (width: number): number => Math.max(0, width - 2 * PAD);
+
+// The width a column needs for texts this wide (measured), padding and all;
+// Columns.resize holds it to the limits.
+export const fitted = (textWidths: readonly number[]): number =>
+  Math.ceil(Math.max(0, ...textWidths)) + 2 * PAD;

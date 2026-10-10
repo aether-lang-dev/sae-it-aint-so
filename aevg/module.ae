@@ -36,7 +36,7 @@ exports (
     EV_CLICK, EV_DBL, EV_RIGHT, EV_HOVER, EV_DRAG, EV_SCROLL,
     rec_set_transform, rec_set_opacity, rec_set_fill, rec_set_stroke,
     rec_inherit, rec_set_visible,
-    scene_mark_dirty, repaint_dirty, repaint_scene,
+    scene_mark_dirty, repaint_dirty, repaint_scene, hold_repaints, release_repaints,
     defs_register, css_register, scene_set_view_box, scene_resize,
     join_transform, attr_str, esc_attr,
     K_SCENE, K_GROUP, K_SHAPE, K_TEXT
@@ -119,12 +119,14 @@ struct AeRec {
 struct AeModel {
     scenes: ptr      // std.list of *AeScene
     recs: ptr        // std.list of *AeRec
+    hold: int        // > 0 while repaints wait (hold_repaints)
 }
 
 model_new() -> *AeModel {
     m = heap.new(AeModel)
     m.scenes = list.new()
     m.recs = list.new()
+    m.hold = 0
     return m
 }
 
@@ -414,8 +416,10 @@ repaint_scene(sc: *AeScene) {
     ui.canvas_redraw(sc.cid)
 }
 
-// Repaint every scene a change touched since the last call.
+// Repaint every scene a change touched since the last call; while repaints
+// are held, they wait, the scenes staying dirty.
 repaint_dirty(m: *AeModel) {
+    if m.hold > 0 { return }
     n = list.size(m.scenes)
     i = 0
     while i < n {
@@ -424,6 +428,17 @@ repaint_dirty(m: *AeModel) {
         if sc.dirty == 1 { repaint_scene(sc) }
         i = i + 1
     }
+}
+
+// Hold repaints while a page handler runs: every vg.set inside it marks its
+// scene dirty instead of repainting it, and the release repaints each dirty
+// scene once. A column resize sets some sixty nodes; repainting the scene
+// for each took over a second a drag step on GTK4.
+hold_repaints(m: *AeModel) { m.hold = m.hold + 1 }
+
+release_repaints(m: *AeModel) {
+    if m.hold > 0 { m.hold = m.hold - 1 }
+    repaint_dirty(m)
 }
 
 // Register SVG defs (gradients, clip paths, filters) on the scene's context,

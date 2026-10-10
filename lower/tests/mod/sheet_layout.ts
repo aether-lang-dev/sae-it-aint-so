@@ -1,6 +1,6 @@
 // site/sheet/layout.ts: column edges as widths change, widths held to their
-// limits, what cell is under a point, and how much text fits.
-import { Columns, HEAD, MAX_WIDTH, MIN_WIDTH, ROW, ROW_HEAD, START_WIDTH, cellAt, fit, height, rowTop } from "./sheet/layout.ts";
+// limits, what cell is under a point, and the room text gets.
+import { Columns, HEAD, MAX_WIDTH, MIN_WIDTH, PAD, ROW, ROW_HEAD, START_WIDTH, cellAt, fitted, height, room, rowTop } from "./sheet/layout.ts";
 import { eq } from "./lib/check.ts";
 
 const cols = new Columns();
@@ -21,11 +21,11 @@ eq("headers and outside are no cell", [cellAt(c, 40, HEAD - 1), cellAt(c, 10, 40
 c.resize(0, 170);
 eq("after a resize, a point further right is still in the widened column", cellAt(c, ROW_HEAD + 150, HEAD + 1), { col: 0, row: 0 });
 
-eq("short text fits", fit("Apples", 70), "Apples");
-eq("long text is cut with an ellipsis", fit("1.266666667", 70), "1.266666…");
-eq("wider shows more", fit("1.266666667", 90), "1.266666667");
-eq("the narrowest column shows a letter", fit("Apples", MIN_WIDTH), "A…");
-eq("narrower than that shows nothing", fit("Apples", 12), "");
+eq("text's room is the width less padding each side", [room(70), room(MIN_WIDTH), room(PAD)], [70 - 2 * PAD, MIN_WIDTH - 2 * PAD, 0]);
+eq("a fitted column takes its widest text, rounded up, plus padding", fitted([31.2, 64.4, 0]), 65 + 2 * PAD);
+eq("an empty column fits at its padding", [fitted([]), fitted([0])], [2 * PAD, 2 * PAD]);
+const f = new Columns();
+eq("and resize holds a fitted width to the limits", [f.resize(0, fitted([])), f.resize(1, fitted([900]))], [MIN_WIDTH, MAX_WIDTH]);
 // expect: ok ten columns, all the starting width
 // expect: ok edges add up from the row numbers
 // expect: ok the grid's height
@@ -36,8 +36,7 @@ eq("narrower than that shows nothing", fit("Apples", 12), "");
 // expect: ok the cell under a point
 // expect: ok headers and outside are no cell
 // expect: ok after a resize, a point further right is still in the widened column
-// expect: ok short text fits
-// expect: ok long text is cut with an ellipsis
-// expect: ok wider shows more
-// expect: ok the narrowest column shows a letter
-// expect: ok narrower than that shows nothing
+// expect: ok text's room is the width less padding each side
+// expect: ok a fitted column takes its widest text, rounded up, plus padding
+// expect: ok an empty column fits at its padding
+// expect: ok and resize holds a fitted width to the limits

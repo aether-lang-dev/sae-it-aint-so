@@ -32,4 +32,17 @@ export function* range(a: Addr, b: Addr): Generator<Key, void, undefined> {
   }
 }
 
+// Where an arrow key moves a selection, stopping at the sheet's edges; null
+// for any other key.
+export function step({ col, row }: Addr, key: string): Addr | null {
+  const clamp = (n: number, max: number) => Math.min(max - 1, Math.max(0, n));
+  switch (key) {
+    case "Left": return { col: clamp(col - 1, COLS), row };
+    case "Right": return { col: clamp(col + 1, COLS), row };
+    case "Up": return { col, row: clamp(row - 1, ROWS) };
+    case "Down": return { col, row: clamp(row + 1, ROWS) };
+    default: return null;
+  }
+}
+
 export const allKeys = (): Generator<Key, void, undefined> => range({ col: 0, row: 0 }, { col: COLS - 1, row: ROWS - 1 });

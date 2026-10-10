@@ -1,7 +1,8 @@
 // spec_sheet.ae — demo 18, Spreadsheet: formulas typed through the formula
 // bar, an edit rippling downstream, a parse error that says where, a cycle
-// found and mended, a paste in one batch, the function library, columns
-// resized by dragging their header borders, and clearing. The page is
+// found and mended, a paste in one batch, the function library, the arrow
+// keys, columns resized by dragging their header borders or fitted to their
+// text by a double click, and clearing. The page is
 // site/sheet.ts; lower/tests/mod/sheet_*.ts test its model headless.
 //
 // The grid is a vg scene, so a cell is read as a person reads it: click it,
@@ -52,10 +53,26 @@ ink_in(x0: float, x1: float, y0: float, y1: float) -> int {
     return 0
 }
 
+// The formula field is the page's last text field; Return in it enters.
+formula_field() -> int { return uidriver.widget_id_last_of("textfield", "") }
+
 enter(cell: string, formula: string) {
     b.set_field_by("cell", cell)
     b.set_field_by("formula", formula)
-    b.click("Enter")
+    uidriver.post_ok("/widget/${formula_field()}/submit", "Return in the formula field")
+}
+
+// Two clicks on a header border, as a double click: the host counts a
+// second press within 400 ms, so the canvas and the point are worked out
+// first (each saedriver vg verb looks the canvas up again) and the four
+// events go back to back.
+double_click_border(x: float) {
+    h = b.vg_handle()
+    q = "x=${px(x)}&y=${py(10.0)}"
+    uidriver.post_ok("/canvas/${h}/click?${q}", "press")
+    uidriver.post_ok("/canvas/${h}/release?${q}", "release")
+    uidriver.post_ok("/canvas/${h}/click?${q}", "press again")
+    uidriver.post_ok("/canvas/${h}/release?${q}", "release again")
 }
 
 // Drag the header border at x to x2, in scene units.
@@ -142,7 +159,25 @@ main() {
             spec.assert_true(shows(4, 2, "E3: =COUNTIF(B2:B4, \">1\") → 3"), "COUNTIF follows an edit")
             spec.assert_true(shows(4, 1, "E2: =VLOOKUP(\"Bread\", A2:D4, 4, FALSE) → 8.8"), "and so does VLOOKUP, through D3")
             spec.assert_true(b.wait_for_text("No problems"), "no problems")
-            spec.assert_true(string.contains(b.page_texts(), "Functions:\nABS, AND, AVERAGE,") == 1, "the page lists its functions")
+            spec.assert_true(string.contains(b.page_texts(), "Functions: ABS, AND, AVERAGE,") == 1, "the page lists its functions")
+        }
+        spec.it("the arrow keys move the selection, until the formula is being edited") callback {
+            spec.assert_true(shows(0, 0, "A1: Item → Item"), "start at A1")
+            _r1 = uidriver.window_key("Right")
+            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "Right: B1")
+            _r2 = uidriver.window_key("Down")
+            spec.assert_true(b.wait_for_text("B2: 6 → 6"), "Down: B2")
+            spec.assert_eq(string.equals(b.field_text(), "6"), 1, "the formula bar follows")
+            uidriver.post_ok("/widget/${formula_field()}/set_text?v=7", "type 7")
+            _r3 = uidriver.window_key("Left")
+            sleep(300)
+            spec.assert_eq(b.has_text("B2: 6 → 6"), 1, "editing: Left is the field's, B2 stays selected")
+            uidriver.post_ok("/widget/${formula_field()}/submit", "Return")
+            spec.assert_true(b.wait_for_text("B2: 7 → 7"), "Return enters it")
+            _r4 = uidriver.window_key("Up")
+            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "and the keys move the selection again")
+            enter("B2", "6")
+            spec.assert_true(b.wait_for_text("B2: 6 → 6"), "put back")
         }
         spec.it("dragging a header border resizes the column and slides the rest") callback {
             // B's right border starts at 30 + 2 * 70 = 170.
@@ -159,6 +194,17 @@ main() {
             spec.assert_true(b.wait_for_console("sheet: column A is 24 wide"), "A narrows no further than 24")
             b.vg_click(px(60.0), py(cell_y(0)))
             spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "B starts at 54 now")
+        }
+        spec.it("a double click on a header border fits the column to its text") callback {
+            // After the drag: A is 24 wide (30..54), so x = 70 is in B.
+            b.vg_click(px(70.0), py(cell_y(0)))
+            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "x = 70 is B's")
+            double_click_border(54.0)
+            spec.assert_true(b.wait_for_console("sheet: column A fits its text at "), "A fitted")
+            b.vg_click(px(70.0), py(cell_y(0)))
+            spec.assert_true(b.wait_for_text("A1: Item → Item"), "A widened to its widest text, Average: x = 70 is A's now")
+            b.vg_click(px(100.0), py(cell_y(0)))
+            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "and narrower than it started: x = 100 is B's")
         }
         spec.it("Clear all empties the sheet") callback {
             b.click("Clear all")

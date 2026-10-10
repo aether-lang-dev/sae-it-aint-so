@@ -1,7 +1,7 @@
 // site/sheet/address.ts, lexer.ts and parser.ts: addresses, tokens with
 // their positions, the AST for each form, precedence, and parse errors that
 // say where.
-import { addrOf, allKeys, keyOf, range } from "./sheet/address.ts";
+import { addrOf, allKeys, keyOf, range, step } from "./sheet/address.ts";
 import { FormulaError, tokens } from "./sheet/lexer.ts";
 import { parse } from "./sheet/parser.ts";
 import { eq, throws } from "./lib/check.ts";
@@ -11,6 +11,10 @@ eq("off the sheet is null", [addrOf("K1"), addrOf("A21"), addrOf("A0"), addrOf("
 eq("keyOf writes them back", keyOf({ col: 2, row: 4 }), "C5");
 eq("a range is a rectangle, row by row, either corner first", [...range(addrOf("B2")!, addrOf("A1")!)], ["A1", "B1", "A2", "B2"]);
 eq("the sheet is 10 x 20", [...allKeys()].length, 200);
+const cell = (k: string) => addrOf(k)!;
+eq("arrow keys step a selection", ["Left", "Right", "Up", "Down"].map((k) => keyOf(step(cell("C3"), k)!)), ["B3", "D3", "C2", "C4"]);
+eq("and stop at the edges", [keyOf(step(cell("A1"), "Left")!), keyOf(step(cell("A1"), "Up")!), keyOf(step(cell("J20"), "Right")!), keyOf(step(cell("J20"), "Down")!)], ["A1", "A1", "J20", "J20"]);
+eq("any other key is no step", [step(cell("C3"), "Return"), step(cell("C3"), "a")], [null, null]);
 
 const toks = (src: string) => [...tokens(src)].map((t) => `${t.kind}@${t.at}:${t.text}`);
 eq("tokens and where they start (after the '=')", toks(`SUM(a1:B2) >= 1.5e2 & "x""y"`), [
@@ -64,6 +68,9 @@ eq("each error's position, counting the '='", [at("SUM(A1"), at("1+"), at("1 2")
 // expect: ok keyOf writes them back
 // expect: ok a range is a rectangle, row by row, either corner first
 // expect: ok the sheet is 10 x 20
+// expect: ok arrow keys step a selection
+// expect: ok and stop at the edges
+// expect: ok any other key is no step
 // expect: ok tokens and where they start (after the '=')
 // expect: ok a string's doubled quote is one quote
 // expect: ok refs and names are upper-cased
