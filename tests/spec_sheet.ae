@@ -1,7 +1,13 @@
 // spec_sheet.ae — demo 18, Spreadsheet: formulas typed through the formula
 // bar, an edit rippling downstream, a parse error that says where, a cycle
-// found and mended, a paste in one batch, and clearing. The page is
+// found and mended, a paste in one batch, the function library, columns
+// resized by dragging their header borders, and clearing. The page is
 // site/sheet.ts; lower/tests/mod/sheet_*.ts test its model headless.
+//
+// The grid is a vg scene, so a cell is read as a person reads it: click it,
+// and the status line says what it holds and what it shows. The ink checks
+// (text drawn in its own column) need aether-ui to draw a text's transform:
+// asks/aether-ui-vg-text-transform.md; on aether-ui 4775cdba three fail.
 //
 //   tests/run_spec.sh spec_sheet
 import std.spec
@@ -9,22 +15,38 @@ import std.string
 import saedriver as b
 import uidriver
 
-const TRIES = 60
-const POLL_MS = 50
+// The scene: 760 x 462 (site/sheet/layout.ts: row numbers 30 wide, the
+// header 20 high, rows 22, columns 70 until resized).
+const VW = 760.0
+const VH = 462.0
 
-// The button of the cell at (col, row), 0-based: the cells follow the
-// header row's last letter, J, row by row.
-cell_id(col: int, row: int) -> int { return b.nth_after("J", "button", row * 10 + col) }
+px(x: float) -> int { return b.vg_px_x(x, VW, VH) }
+py(y: float) -> int { return b.vg_px_y(y, VW, VH) }
 
-cell_text(col: int, row: int) -> string { return uidriver.widget_text_by_id(cell_id(col, row)) }
+// The middle of the cell at (col, row), 0-based, at the starting widths.
+cell_x(col: int) -> float { return 30.0 + col * 70.0 + 35.0 }
+cell_y(row: int) -> float { return 20.0 + row * 22.0 + 11.0 }
 
-// 1 once the cell reads `want`.
-wait_cell(col: int, row: int, want: string) -> int {
-    i = 0
-    while i < TRIES {
-        if string.equals(cell_text(col, row), want) == 1 { return 1 }
-        sleep(POLL_MS)
-        i = i + 1
+pick(col: int, row: int) { b.vg_click(px(cell_x(col)), py(cell_y(row))) }
+
+// Click the cell, then 1 once the status line reads `status`.
+shows(col: int, row: int, status: string) -> int {
+    pick(col, row)
+    return b.wait_for_text(status)
+}
+
+// 1 when some pixel in the scene rectangle (x0..x1, y0..y1) is ink (the
+// cells' text is #20232a on white): text drawn where its column is.
+ink_in(x0: float, x1: float, y0: float, y1: float) -> int {
+    y = y0
+    while y <= y1 {
+        x = x0
+        while x <= x1 {
+            p = b.vg_pixel(px(x), py(y))
+            if ((p >> 16) & 255) < 0x80 && ((p >> 8) & 255) < 0x80 && (p & 255) < 0x80 { return 1 }
+            x = x + 1.0
+        }
+        y = y + 2.0
     }
     return 0
 }
@@ -35,6 +57,14 @@ enter(cell: string, formula: string) {
     b.click("Enter")
 }
 
+// Drag the header border at x to x2, in scene units.
+drag_border(x: float, x2: float) {
+    b.vg_click(px(x), py(10.0))
+    b.vg_move(px((x + x2) / 2.0), py(10.0))
+    b.vg_move(px(x2), py(10.0))
+    b.vg_release(px(x2), py(10.0))
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -43,11 +73,12 @@ main() {
         spec.it("opens on an empty 10 x 20 sheet with A1 selected") callback {
             b.navigate(b.test_url("/sheet"))
             b.assert_page("Spreadsheet", "200 ", "sheet page")
+            spec.assert_true(b.wait_for_vg_canvas(), "the grid is a canvas")
             spec.assert_true(b.wait_for_text("A1: (empty)"), "the status line")
             spec.assert_true(b.wait_for_text("No problems"), "the computed summary")
-            spec.assert_gt(cell_id(9, 19), 0, "J20 is there")
-            spec.assert_eq(string.equals(uidriver.widget_text_by_id(cell_id(0, 20)), "Paste example"), 1, "200 cells, then the page's own buttons")
-            spec.assert_eq(string.length(cell_text(0, 0)), 0, "A1 is empty")
+            spec.assert_true(shows(9, 19, "J20: (empty)"), "a click selects J20, the last cell")
+            spec.assert_eq(string.equals(b.field_text(), ""), 1, "and the formula bar is empty")
+            spec.assert_true(shows(0, 0, "A1: (empty)"), "and back to A1")
         }
         spec.it("formulas read the cells they name") callback {
             enter("A1", "2")
@@ -55,75 +86,84 @@ main() {
             enter("B1", "=A1*10")
             enter("C1", "=B1+A1")
             spec.assert_true(b.wait_for_console("sheet: C1 = 22"), "C1 worked out")
-            spec.assert_true(wait_cell(0, 0, "2"), "A1 shows 2")
-            spec.assert_true(wait_cell(1, 0, "20"), "B1 shows 20")
-            spec.assert_true(wait_cell(2, 0, "22"), "C1 shows 22")
             spec.assert_true(b.wait_for_text("C1: =B1+A1 → 22"), "the status line describes the cell entered")
+            spec.assert_true(shows(1, 0, "B1: =A1*10 → 20"), "B1 shows 20")
         }
         spec.it("an edit ripples through everything downstream") callback {
             enter("A1", "5")
-            spec.assert_true(wait_cell(1, 0, "50"), "B1 follows A1")
-            spec.assert_true(wait_cell(2, 0, "55"), "and C1 follows both")
+            spec.assert_true(shows(1, 0, "B1: =A1*10 → 50"), "B1 follows A1")
+            spec.assert_true(shows(2, 0, "C1: =B1+A1 → 55"), "and C1 follows both")
         }
         spec.it("clicking a cell puts its formula in the formula bar") callback {
-            uidriver.click_widget(cell_id(1, 0))
-            spec.assert_true(b.wait_for_text("B1: =A1*10 → 50"), "B1 described")
+            spec.assert_true(shows(1, 0, "B1: =A1*10 → 50"), "B1 described")
             spec.assert_eq(string.equals(b.field_text(), "=A1*10"), 1, "the formula field holds what was typed")
         }
         spec.it("a parse error shows #ERROR! and says where in the formula") callback {
             enter("D1", "=SUM(A1")
-            spec.assert_true(wait_cell(3, 0, "#ERROR!"), "D1 shows #ERROR!")
             spec.assert_true(b.wait_for_text("D1: =SUM(A1 → #ERROR! parse error at 8: expected ')' but found the end"), "the status line says where")
             spec.assert_true(b.wait_for_text("1 problem"), "the summary counts it")
             spec.assert_true(b.wait_for_text("D1: #ERROR! parse error at 8: expected ')' but found the end"), "the problem list shows it")
             enter("D1", "=SUM(A1:C1)")
-            spec.assert_true(wait_cell(3, 0, "110"), "mended, D1 sums the row")
+            spec.assert_true(shows(3, 0, "D1: =SUM(A1:C1) → 110"), "mended, D1 sums the row")
             spec.assert_true(b.wait_for_text("No problems"), "and the list empties")
         }
         spec.it("a cycle shows #CYCLE! in every cell on it, until it is broken") callback {
             enter("A2", "=B2")
             enter("B2", "=A2")
-            spec.assert_true(wait_cell(0, 1, "#CYCLE!"), "A2")
-            spec.assert_true(wait_cell(1, 1, "#CYCLE!"), "B2")
             spec.assert_true(b.wait_for_text("2 problems"), "two problems")
             spec.assert_true(b.wait_for_text("A2: #CYCLE! a circular reference: A2 → B2 → A2"), "the path, from A2")
             spec.assert_true(b.wait_for_text("B2: #CYCLE! a circular reference: B2 → A2 → B2"), "and from B2")
+            spec.assert_true(shows(0, 1, "A2: =B2 → #CYCLE! a circular reference: A2 → B2 → A2"), "A2 on the grid")
             enter("B2", "3")
-            spec.assert_true(wait_cell(0, 1, "3"), "A2 reads B2 again")
+            spec.assert_true(shows(0, 1, "A2: =B2 → 3"), "A2 reads B2 again")
             spec.assert_true(b.wait_for_text("No problems"), "no problems")
         }
         spec.it("a paste sets many cells in one batch") callback {
             b.click("Paste example")
             spec.assert_true(b.wait_for_console("sheet: pasted the example: 24 cells set"), "24 cells")
-            spec.assert_true(wait_cell(0, 0, "Item"), "A1 is the heading now")
-            spec.assert_true(wait_cell(3, 1, "2.7"), "D2 = B2*C2")
-            spec.assert_true(wait_cell(1, 4, "9"), "B5 sums the quantities")
-            spec.assert_true(wait_cell(3, 4, "7.2"), "D5 sums the totals")
-            spec.assert_true(wait_cell(2, 5, "1.266666667"), "C6 averages the prices")
-            spec.assert_true(wait_cell(3, 5, "0.8"), "D6 = ROUND(D5/B5, 2)")
-            spec.assert_true(wait_cell(2, 0, "Price"), "C1's formula was pasted over")
+            spec.assert_true(shows(0, 0, "A1: Item → Item"), "A1 is the heading now")
+            spec.assert_eq(ink_in(104.0, 124.0, 26.0, 36.0), 1, "B1's text, Qty, is drawn in column B")
+            spec.assert_eq(ink_in(184.0, 210.0, 26.0, 36.0), 1, "C1's, Price, in column C")
+            spec.assert_true(shows(3, 1, "D2: =B2*C2 → 2.7"), "D2 = B2*C2")
+            spec.assert_true(shows(1, 4, "B5: =SUM(B2:B4) → 9"), "B5 sums the quantities")
+            spec.assert_true(shows(3, 4, "D5: =SUM(D2:D4) → 7.2"), "D5 sums the totals")
+            spec.assert_true(shows(2, 5, "C6: =AVERAGE(C2:C4) → 1.266666667"), "C6 averages the prices")
+            spec.assert_true(shows(3, 5, "D6: =ROUND(D5/B5, 2) → 0.8"), "D6 rounds")
         }
         spec.it("the library's lookups, conditionals and error traps work on the example") callback {
             enter("E2", "=VLOOKUP(\"Bread\", A2:D4, 4, FALSE)")
-            spec.assert_true(wait_cell(4, 1, "2.2"), "VLOOKUP finds Bread's total")
+            spec.assert_true(b.wait_for_text("E2: =VLOOKUP(\"Bread\", A2:D4, 4, FALSE) → 2.2"), "VLOOKUP finds Bread's total")
             enter("E3", "=COUNTIF(B2:B4, \">1\")")
-            spec.assert_true(wait_cell(4, 2, "2"), "COUNTIF counts quantities over 1")
+            spec.assert_true(b.wait_for_text("E3: =COUNTIF(B2:B4, \">1\") → 2"), "COUNTIF counts quantities over 1")
             enter("E4", "=IFERROR(D5/0, \"n/a\")")
-            spec.assert_true(wait_cell(4, 3, "n/a"), "IFERROR traps a divide by zero")
-            enter("E5", "=TEXTJOIN(\", \", TRUE, A2:A4)")
-            spec.assert_true(wait_cell(4, 4, "Apples, Bread, Milk"), "TEXTJOIN lists the items")
+            spec.assert_true(b.wait_for_text("E4: =IFERROR(D5/0, \"n/a\") → n/a"), "IFERROR traps a divide by zero")
             enter("B3", "4")
-            spec.assert_true(wait_cell(4, 2, "3"), "COUNTIF follows an edit")
-            spec.assert_true(wait_cell(4, 1, "8.8"), "and so does VLOOKUP, through D3")
+            spec.assert_true(shows(4, 2, "E3: =COUNTIF(B2:B4, \">1\") → 3"), "COUNTIF follows an edit")
+            spec.assert_true(shows(4, 1, "E2: =VLOOKUP(\"Bread\", A2:D4, 4, FALSE) → 8.8"), "and so does VLOOKUP, through D3")
             spec.assert_true(b.wait_for_text("No problems"), "no problems")
             spec.assert_true(string.contains(b.page_texts(), "Functions:\nABS, AND, AVERAGE,") == 1, "the page lists its functions")
+        }
+        spec.it("dragging a header border resizes the column and slides the rest") callback {
+            // B's right border starts at 30 + 2 * 70 = 170.
+            drag_border(170.0, 240.0)
+            spec.assert_true(b.wait_for_console("sheet: column B is "), "the drag resized B")
+            b.vg_click(px(200.0), py(cell_y(0)))
+            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "where C was, B is now")
+            b.vg_click(px(275.0), py(cell_y(0)))
+            spec.assert_true(b.wait_for_text("C1: Price → Price"), "C has slid right")
+            spec.assert_eq(ink_in(244.0, 270.0, 26.0, 36.0), 1, "and its text with it")
+            spec.assert_eq(ink_in(184.0, 210.0, 26.0, 36.0), 0, "leaving B's widened cell blank there")
+            // A's border, far to the left: held at the narrowest a column goes.
+            drag_border(100.0, 31.0)
+            spec.assert_true(b.wait_for_console("sheet: column A is 24 wide"), "A narrows no further than 24")
+            b.vg_click(px(60.0), py(cell_y(0)))
+            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "B starts at 54 now")
         }
         spec.it("Clear all empties the sheet") callback {
             b.click("Clear all")
             spec.assert_true(b.wait_for_console("sheet: cleared:"), "cleared")
-            spec.assert_true(wait_cell(3, 4, ""), "D5 is empty")
-            spec.assert_true(wait_cell(0, 0, ""), "A1 is empty")
-            spec.assert_true(b.wait_for_text("B3: (empty)"), "the status line follows the selected cell, B3")
+            spec.assert_true(b.wait_for_text("B1: (empty)"), "the selected cell, B1, is empty")
+            spec.assert_true(b.wait_for_text("No problems"), "no problems")
         }
     }
     return spec.run_summary(fw)

@@ -31,7 +31,7 @@
 exports(
     test_url, navigate, back, forward, reload,
     current_url, status_line, status_code, status_url,
-    click, click_nth, nth_after, button_exists, set_field, set_field_by, field_text, check, slide_to, slide_nth, pick,
+    click, click_nth, button_exists, set_field, set_field_by, field_text, check, slide_to, slide_nth, pick,
     has_text, page_texts, widget_count, style_of,
     wait_for_url, wait_for_page, wait_for_text, wait_for_text_gone, wait_for_widget_count,
     assert_url, assert_page, assert_text, assert_no_text,
@@ -274,30 +274,6 @@ nth_of_(wtype: string, n: int) -> int {
             if seen == n { found = uidriver.field_int(w, "id") }
             seen = seen + 1
         }
-        i = i + 1
-    }
-    json.json_free(v)
-    return found
-}
-
-// The id of the n-th widget of `wtype` after the first widget reading
-// `anchor` (0 = the first after it), or 0: a grid's cells, counted from the
-// end of its header row (spec_sheet's cell buttons follow the header "J").
-nth_after(anchor: string, wtype: string, n: int) -> int {
-    v, _jerr = json.parse(uidriver.get_body("/widgets"))
-    if v == null { return 0 }
-    found = 0
-    seen = 0
-    past = 0
-    cnt = json.json_array_size(v)
-    i = 0
-    while i < cnt {
-        w = json.json_array_get_raw(v, i)
-        if past == 1 && string.equals(uidriver.field_str(w, "type"), wtype) == 1 {
-            if seen == n { found = uidriver.field_int(w, "id") }
-            seen = seen + 1
-        }
-        if past == 0 && string.equals(uidriver.field_str(w, "text"), anchor) == 1 { past = 1 }
         i = i + 1
     }
     json.json_free(v)
