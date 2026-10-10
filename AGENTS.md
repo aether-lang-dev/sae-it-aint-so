@@ -102,11 +102,38 @@ and column API, contrib.quickjs's `arg_bytes`), installed, or a dev tree
 stdlib contrib`; `SAE_AETHER_HOME=none` builds against the installed one even when
 `../aether` exists; the bare 0.801.0 release does not link yet, as it ships
 contrib/sqlite's source without its archive), and aeb v0.326 or
-later (it compiles the C contrib.quickjs ships), installed privately under `target/toolchain`:
+later (it compiles the C contrib.quickjs ships), installed privately under `target/toolchain`.
+aeb's install runs `ae`, so put one on `PATH` first (here the dev tree's):
 
 ```sh
-make -C ../aeb install PREFIX=$PWD/target/toolchain
+PATH=$PWD/../aether/build:$PATH AETHER_HOME=$PWD/../aether \
+    make -C ../aeb install PREFIX=$PWD/target/toolchain
 ```
+
+`saelower`, `saejs` and the page server (built with `ae build`, not
+`./build.sh`) need the QuickJS amalgamation in the dev tree too: run
+`./build.sh` first, or `sh ../aether/scripts/fetch-quickjs-amalgamation.sh`.
+
+### A machine with only sae (a Claude Code cloud session)
+
+`tools/setup-siblings.sh` clones whichever of `../aether`, `../aether-ui`
+and `../aeb` is missing, shallow, at the refs in `pins` (aether at tag
+`v$AE_PIN`, aether-ui at `AETHER_UI_REF`, aeb at `AEB_REF`), builds aether
+(`make compiler ae stdlib contrib` and the QuickJS amalgamation) and installs
+aeb into `target/toolchain`. A sibling that already exists is never touched,
+and with all three present the script is an instant no-op (no git, no
+network). It installs no system packages: on Linux the browser also needs
+`libgtk-4-dev libepoxy-dev` (and `xvfb` for the specs); the headless half
+(`lower/run-tests.sh`, `saelower`, `saejs`, the `check_*` scripts) does not.
+SQLite's amalgamation comes from `www.sqlite.org` (aether's `make contrib`),
+which a cloud environment's network policy blocks; there the script takes
+npm's `better-sqlite3` copy instead (CLAUDECODE-CLOUD.md).
+
+`.claude/settings.json` runs it as a SessionStart hook
+(`tools/setup-siblings.sh --hook`), which returns at once unless
+`CLAUDE_CODE_REMOTE=true` (set only in Claude Code cloud sessions), so a
+local session never runs it at all; in the cloud it reports a failure
+rather than failing the session.
 
 That aeb version matters: earlier ones keep a stale binary when only an
 imported module (such as `lower/module.ae`) changes, skip relinking

@@ -34,10 +34,29 @@ for dep in aether-ui; do
     }
 done
 # The page engine is contrib.quickjs, whose QuickJS amalgamation is fetched
-# into the Aether tree (pinned and checksummed there); a no-op once fetched.
-if [ -n "${SAE_AETHER_HOME:-}" ] && [ -f "$SAE_AETHER_HOME/scripts/fetch-quickjs-amalgamation.sh" ]; then
-    sh "$SAE_AETHER_HOME/scripts/fetch-quickjs-amalgamation.sh" >/dev/null || {
-        echo "build.sh: could not fetch the QuickJS amalgamation into $SAE_AETHER_HOME" >&2
+# into an Aether dev tree (pinned and checksummed there; `make contrib` does
+# not fetch it, and a release install ships it). Whenever the build uses a
+# dev tree -- SAE_AETHER_HOME, or the tree the `ae` on PATH was built in --
+# run the fetch: it downloads when the amalgamation is missing (or its lock
+# moved) and is a no-op with no network access otherwise.
+AE_TREE=${SAE_AETHER_HOME:-}
+if [ -z "$AE_TREE" ]; then
+    ae_dir=$(dirname "$(command -v ae)")
+    if [ -f "$ae_dir/../scripts/fetch-quickjs-amalgamation.sh" ]; then
+        AE_TREE=$(cd "$ae_dir/.." && pwd)
+    fi
+fi
+if [ -n "$AE_TREE" ] && [ -d "$AE_TREE/contrib/quickjs" ]; then
+    [ -f "$AE_TREE/scripts/fetch-quickjs-amalgamation.sh" ] || {
+        echo "build.sh: $AE_TREE has contrib/quickjs but no scripts/fetch-quickjs-amalgamation.sh; see pins for the Aether sae needs" >&2
+        exit 1
+    }
+    sh "$AE_TREE/scripts/fetch-quickjs-amalgamation.sh" >/dev/null || {
+        echo "build.sh: could not fetch the QuickJS amalgamation into $AE_TREE" >&2
+        exit 1
+    }
+    [ -f "$AE_TREE/contrib/quickjs/amalgamation/quickjs-amalgam.c" ] || {
+        echo "build.sh: no QuickJS amalgamation in $AE_TREE/contrib/quickjs/amalgamation after the fetch" >&2
         exit 1
     }
 fi
