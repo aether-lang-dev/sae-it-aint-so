@@ -89,7 +89,7 @@ tests/run_spec.sh spec_raster                  # pixels from a page: vg.raster/i
 tests/run_spec.sh spec_terrain                 # demo 13
 tests/run_spec.sh spec_life                    # demo 14
 tests/run_spec.sh spec_algos                   # demo 17: sorting generators race on the frame clock
-tests/run_spec.sh spec_sheet                   # demo 18: formulas, ripples, parse errors, cycles, a batched paste, drag-resized columns (text needs asks/aether-ui-vg-text-transform.md)
+tests/run_spec.sh spec_sheet                   # demo 18: formulas, ripples, parse errors, cycles, a batched paste, drag-resized columns
 tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom

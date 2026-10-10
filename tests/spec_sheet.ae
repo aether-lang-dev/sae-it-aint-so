@@ -6,8 +6,9 @@
 //
 // The grid is a vg scene, so a cell is read as a person reads it: click it,
 // and the status line says what it holds and what it shows. The ink checks
-// (text drawn in its own column) need aether-ui to draw a text's transform:
-// asks/aether-ui-vg-text-transform.md; on aether-ui 4775cdba three fail.
+// (text drawn in its own column) need aether-ui b3d697c9 or later, which
+// draws a text's transform on the live path and, on macOS, lets a pixel
+// probe see text (asks/aether-ui-vg-text-transform.md).
 //
 //   tests/run_spec.sh spec_sheet
 import std.spec

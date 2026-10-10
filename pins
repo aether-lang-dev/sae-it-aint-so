@@ -46,5 +46,9 @@ AEB_REF=v0.326
 # 4775cdba (2026-10-10): aether-ui on the 0.801.0 floor, its vg setters storing
 # closures directly (the alias workaround gone), and gradients, clip paths and
 # CSS surviving the live scene's context swap (c42a8914).
+# b3d697c9 (2026-10-10): a text's transform survives the live path (sae's
+# asks/aether-ui-vg-text-transform.md), so the spreadsheet's text follows its
+# column; and macOS /canvas/{id}/pixel sees text, so spec_sheet's ink checks
+# pass on a Mac too. Verified: spec_sheet 10/10, spec_algos 5/5 (GTK4, Xvfb).
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=4775cdba6b2814cca0c97e08b44cbd1a1a9e1092
+AETHER_UI_REF=b3d697c94886284107f5463b4b422776734aceb9

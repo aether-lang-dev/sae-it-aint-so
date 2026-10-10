@@ -1,7 +1,16 @@
 # Text ignores its transform on vg's live (deferred) path
 
 **From:** sae (demo 18, the spreadsheet's resizable columns, 2026-10-10).
-**To:** aether-ui. **Status:** OPEN, with a patch below, verified in sae.
+**To:** aether-ui. **Status:** RESOLVED 2026-10-10 in aether-ui b3d697c9.
+
+**RESOLVED.** The patch below went in as written, with a test in
+`vg/test/test_vg.ae` and a scene in `examples/vgpaint_demo`
+(aether-ui `asks/REPLY-aether-ui-vg-text-transform.md`). It turned up a
+second bug, on macOS: `/canvas/{id}/pixel` never saw text (AppKit draws
+strings into the current NSGraphicsContext, which the probe did not push),
+so `spec_sheet`'s ink checks could only have passed on Linux until then.
+sae's `pins` names b3d697c9; `spec_sheet` passes 10/10 against it. The
+history below is kept as it was.
 
 ## What happens
 
