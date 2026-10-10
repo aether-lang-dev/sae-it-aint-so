@@ -98,7 +98,13 @@ load_module() {   # load_module BUNDLE IMPORTER-KEY SPEC
     # now: $1 bundle, $2 key, $3 file
     case " $loaded " in *" $2 "*) return 0 ;; esac
     loaded="$loaded $2"
-    for s in $("$LOWER" --module-imports "$3" | cut -f1); do
+    # A module the lowerer cannot read has no import list: say so, rather
+    # than taking the words of its error for module names.
+    if ! imports=$("$LOWER" --module-imports "$3" 2>&1); then
+        echo "  cannot lower $2: $imports"
+        return 1
+    fi
+    for s in $(printf '%s\n' "$imports" | cut -f1); do
         load_module "$1" "$2" "$s" || return 1
     done
     if ! "$LOWER" --module "$3" > "$OUT/mod.js" 2>&1; then

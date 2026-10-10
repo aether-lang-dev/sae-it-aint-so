@@ -116,6 +116,10 @@ struct Lx {
     // parser
     pos: int
     last_end: int    // end offset of the last consumed token
+    // a `>>` or `>>>` closing nested type arguments one `>` at a time
+    gt_tok: int      // the token partly used, or -1
+    gt_used: int     // how many of its `>` are used
+    ta_depth: int    // type argument and parameter lists open
     es: ptr          // edits: start, end, seq, replacement
     ee: ptr
     eq: ptr
@@ -704,18 +708,68 @@ skip_type_(x: *Lx, i: int) -> int {
     return i
 }
 
+// The tokenizer reads `>>` and `>>>` as one token (a shift), but in
+// `Map<string, Set<number>>` each `>` closes a list of its own. These let
+// the type skippers use such a token one `>` at a time: the token at i is a
+// '>' with one still unused, and closing uses it. An index stays on a
+// partly used token until its last '>' is used.
+gt_left_(x: *Lx, i: int) -> int {
+    n = 0
+    if tk_is_(x, i, ">") == 1 { n = 1 }
+    if tk_is_(x, i, ">>") == 1 { n = 2 }
+    if tk_is_(x, i, ">>>") == 1 { n = 3 }
+    if n > 0 && x.gt_tok == i { n = n - x.gt_used }
+    return n
+}
+
+close_gt_(x: *Lx, i: int) -> int {
+    left = gt_left_(x, i)
+    if left <= 1 {
+        if x.gt_tok == i { x.gt_tok = -1 }
+        return i + 1
+    }
+    if x.gt_tok != i {
+        x.gt_tok = i
+        x.gt_used = 0
+    }
+    x.gt_used = x.gt_used + 1
+    return i
+}
+
+// Open a list (a fresh outermost one forgets any half-used token from a
+// failed attempt), and close it: the outermost list must use its token up,
+// or it was not a type argument list (`a < b >> c`).
+ta_open_(x: *Lx) {
+    if x.ta_depth == 0 { x.gt_tok = -1 }
+    x.ta_depth = x.ta_depth + 1
+}
+
+ta_close_(x: *Lx, i: int) -> int {
+    x.ta_depth = x.ta_depth - 1
+    if i < 0 { return -1 }
+    if x.ta_depth == 0 && x.gt_tok == i {
+        x.gt_tok = -1
+        return -1
+    }
+    return i
+}
+
 skip_type_args_(x: *Lx, i: int) -> int {
     // i at '<'. Returns the index after the matching '>' or -1.
     if tk_is_(x, i, "<") == 0 { return -1 }
-    i = i + 1
-    if tk_is_(x, i, ">") == 1 { return i + 1 }
+    ta_open_(x)
+    return ta_close_(x, skip_type_args_in_(x, i + 1))
+}
+
+skip_type_args_in_(x: *Lx, i: int) -> int {
+    if gt_left_(x, i) > 0 { return close_gt_(x, i) }
     while true {
         i = skip_type_(x, i)
         if i < 0 { return -1 }
         if tk_is_(x, i, ",") == 1 {
             i = i + 1
-        } else if tk_is_(x, i, ">") == 1 {
-            return i + 1
+        } else if gt_left_(x, i) > 0 {
+            return close_gt_(x, i)
         } else {
             return -1
         }
@@ -726,7 +780,11 @@ skip_type_args_(x: *Lx, i: int) -> int {
 // Skip a type parameter list <T, U extends X = Y>.
 skip_type_params_(x: *Lx, i: int) -> int {
     if tk_is_(x, i, "<") == 0 { return -1 }
-    i = i + 1
+    ta_open_(x)
+    return ta_close_(x, skip_type_params_in_(x, i + 1))
+}
+
+skip_type_params_in_(x: *Lx, i: int) -> int {
     while true {
         if tk_is_(x, i, "const") == 1 || tk_is_(x, i, "in") == 1 || tk_is_(x, i, "out") == 1 { i = i + 1 }
         if is_ident_tok_(x, i) == 0 { return -1 }
@@ -741,9 +799,9 @@ skip_type_params_(x: *Lx, i: int) -> int {
         }
         if tk_is_(x, i, ",") == 1 {
             i = i + 1
-            if tk_is_(x, i, ">") == 1 { return i + 1 }
-        } else if tk_is_(x, i, ">") == 1 {
-            return i + 1
+            if gt_left_(x, i) > 0 { return close_gt_(x, i) }
+        } else if gt_left_(x, i) > 0 {
+            return close_gt_(x, i)
         } else {
             return -1
         }
@@ -1188,12 +1246,15 @@ skip_stmt_(x: *Lx, i: int) -> int {
 }
 
 // Skip a declaration to its end without parsing it: through a top-level
-// '{...}' body, or to ';' / a line break at bracket depth 0.
+// '{...}' body, or to ';' / a line break at bracket depth 0. A line that
+// starts with '|', '&', '?' or ':' goes on with the type (no statement
+// starts with one): a union written one member a line, a conditional type
+// one branch a line.
 skip_decl_(x: *Lx, i: int) -> int {
     first = i
     while tk_kind_(x, i) != T_EOF {
         if tk_is_(x, i, ";") == 1 { return i + 1 }
-        if i > first + 1 && tk_nlb_(x, i) == 1 && tk_is_(x, i - 1, "{") == 0 && tk_is_(x, i - 1, ",") == 0 && tk_is_(x, i - 1, "=") == 0 && tk_is_(x, i - 1, "|") == 0 && tk_is_(x, i - 1, "&") == 0 && tk_is_(x, i - 1, ":") == 0 {
+        if i > first + 1 && tk_nlb_(x, i) == 1 && tk_is_(x, i, "|") == 0 && tk_is_(x, i, "&") == 0 && tk_is_(x, i, "?") == 0 && tk_is_(x, i, ":") == 0 && tk_is_(x, i - 1, "{") == 0 && tk_is_(x, i - 1, ",") == 0 && tk_is_(x, i - 1, "=") == 0 && tk_is_(x, i - 1, "|") == 0 && tk_is_(x, i - 1, "&") == 0 && tk_is_(x, i - 1, ":") == 0 {
             return i
         }
         if tk_is_(x, i, "{") == 1 {
@@ -2622,6 +2683,9 @@ lx_new_(src: string) -> *Lx {
     x.err = ""
     x.pos = 0
     x.last_end = 0
+    x.gt_tok = -1
+    x.gt_used = 0
+    x.ta_depth = 0
     x.es = iv_new_()
     x.ee = iv_new_()
     x.eq = iv_new_()
