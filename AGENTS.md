@@ -62,7 +62,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 (cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 ../aether/build/ae build tools/saejs.ae -o target/saejs
-lower/run-tests.sh                           # 66 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless)
+lower/run-tests.sh                           # 69 lowerer tests (run, err, mod, golden; mod/algos_* and mod/sheet_* test site/algos/ and site/sheet/ headless)
 tests/run_spec.sh                            # spec_nav: 45 specs
 tests/check_page_veto.sh                     # page veto present and enforced
 tests/check_layers.sh                        # services held to their imports
@@ -89,6 +89,7 @@ tests/run_spec.sh spec_raster                  # pixels from a page: vg.raster/i
 tests/run_spec.sh spec_terrain                 # demo 13
 tests/run_spec.sh spec_life                    # demo 14
 tests/run_spec.sh spec_algos                   # demo 17: sorting generators race on the frame clock
+tests/run_spec.sh spec_sheet                   # demo 18: formulas, ripples, parse errors, cycles, a batched paste
 tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom

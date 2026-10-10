@@ -1,0 +1,115 @@
+// spec_sheet.ae — demo 18, Spreadsheet: formulas typed through the formula
+// bar, an edit rippling downstream, a parse error that says where, a cycle
+// found and mended, a paste in one batch, and clearing. The page is
+// site/sheet.ts; lower/tests/mod/sheet_*.ts test its model headless.
+//
+//   tests/run_spec.sh spec_sheet
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+const TRIES = 60
+const POLL_MS = 50
+
+// The button of the cell at (col, row), 0-based: the cells follow the
+// header row's last letter, J, row by row.
+cell_id(col: int, row: int) -> int { return b.nth_after("J", "button", row * 10 + col) }
+
+cell_text(col: int, row: int) -> string { return uidriver.widget_text_by_id(cell_id(col, row)) }
+
+// 1 once the cell reads `want`.
+wait_cell(col: int, row: int, want: string) -> int {
+    i = 0
+    while i < TRIES {
+        if string.equals(cell_text(col, row), want) == 1 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+enter(cell: string, formula: string) {
+    b.set_field_by("cell", cell)
+    b.set_field_by("formula", formula)
+    b.click("Enter")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "spreadsheet (demo 18)") {
+        spec.it("opens on an empty 10 x 20 sheet with A1 selected") callback {
+            b.navigate(b.test_url("/sheet"))
+            b.assert_page("Spreadsheet", "200 ", "sheet page")
+            spec.assert_true(b.wait_for_text("A1: (empty)"), "the status line")
+            spec.assert_true(b.wait_for_text("No problems"), "the computed summary")
+            spec.assert_gt(cell_id(9, 19), 0, "J20 is there")
+            spec.assert_eq(string.equals(uidriver.widget_text_by_id(cell_id(0, 20)), "Paste example"), 1, "200 cells, then the page's own buttons")
+            spec.assert_eq(string.length(cell_text(0, 0)), 0, "A1 is empty")
+        }
+        spec.it("formulas read the cells they name") callback {
+            enter("A1", "2")
+            spec.assert_true(b.wait_for_console("sheet: A1 = 2"), "A1 set")
+            enter("B1", "=A1*10")
+            enter("C1", "=B1+A1")
+            spec.assert_true(b.wait_for_console("sheet: C1 = 22"), "C1 worked out")
+            spec.assert_true(wait_cell(0, 0, "2"), "A1 shows 2")
+            spec.assert_true(wait_cell(1, 0, "20"), "B1 shows 20")
+            spec.assert_true(wait_cell(2, 0, "22"), "C1 shows 22")
+            spec.assert_true(b.wait_for_text("C1: =B1+A1 → 22"), "the status line describes the cell entered")
+        }
+        spec.it("an edit ripples through everything downstream") callback {
+            enter("A1", "5")
+            spec.assert_true(wait_cell(1, 0, "50"), "B1 follows A1")
+            spec.assert_true(wait_cell(2, 0, "55"), "and C1 follows both")
+        }
+        spec.it("clicking a cell puts its formula in the formula bar") callback {
+            uidriver.click_widget(cell_id(1, 0))
+            spec.assert_true(b.wait_for_text("B1: =A1*10 → 50"), "B1 described")
+            spec.assert_eq(string.equals(b.field_text(), "=A1*10"), 1, "the formula field holds what was typed")
+        }
+        spec.it("a parse error shows #ERROR! and says where in the formula") callback {
+            enter("D1", "=SUM(A1")
+            spec.assert_true(wait_cell(3, 0, "#ERROR!"), "D1 shows #ERROR!")
+            spec.assert_true(b.wait_for_text("D1: =SUM(A1 → #ERROR! parse error at 8: expected ')' but found the end"), "the status line says where")
+            spec.assert_true(b.wait_for_text("1 problem"), "the summary counts it")
+            spec.assert_true(b.wait_for_text("D1: #ERROR! parse error at 8: expected ')' but found the end"), "the problem list shows it")
+            enter("D1", "=SUM(A1:C1)")
+            spec.assert_true(wait_cell(3, 0, "110"), "mended, D1 sums the row")
+            spec.assert_true(b.wait_for_text("No problems"), "and the list empties")
+        }
+        spec.it("a cycle shows #CYCLE! in every cell on it, until it is broken") callback {
+            enter("A2", "=B2")
+            enter("B2", "=A2")
+            spec.assert_true(wait_cell(0, 1, "#CYCLE!"), "A2")
+            spec.assert_true(wait_cell(1, 1, "#CYCLE!"), "B2")
+            spec.assert_true(b.wait_for_text("2 problems"), "two problems")
+            spec.assert_true(b.wait_for_text("A2: #CYCLE! a circular reference: A2 → B2 → A2"), "the path, from A2")
+            spec.assert_true(b.wait_for_text("B2: #CYCLE! a circular reference: B2 → A2 → B2"), "and from B2")
+            enter("B2", "3")
+            spec.assert_true(wait_cell(0, 1, "3"), "A2 reads B2 again")
+            spec.assert_true(b.wait_for_text("No problems"), "no problems")
+        }
+        spec.it("a paste sets many cells in one batch") callback {
+            b.click("Paste example")
+            spec.assert_true(b.wait_for_console("sheet: pasted the example: 24 cells set"), "24 cells")
+            spec.assert_true(wait_cell(0, 0, "Item"), "A1 is the heading now")
+            spec.assert_true(wait_cell(3, 1, "2.7"), "D2 = B2*C2")
+            spec.assert_true(wait_cell(1, 4, "9"), "B5 sums the quantities")
+            spec.assert_true(wait_cell(3, 4, "7.2"), "D5 sums the totals")
+            spec.assert_true(wait_cell(2, 5, "1.266666667"), "C6 averages the prices")
+            spec.assert_true(wait_cell(3, 5, "0.8"), "D6 = ROUND(D5/B5, 2)")
+            spec.assert_true(wait_cell(2, 0, "Price"), "C1's formula was pasted over")
+        }
+        spec.it("Clear all empties the sheet") callback {
+            b.click("Clear all")
+            spec.assert_true(b.wait_for_console("sheet: cleared:"), "cleared")
+            spec.assert_true(wait_cell(3, 4, ""), "D5 is empty")
+            spec.assert_true(wait_cell(0, 0, ""), "A1 is empty")
+            spec.assert_true(b.wait_for_text("B2: (empty)"), "the status line follows the selected cell, B2")
+        }
+    }
+    return spec.run_summary(fw)
+}

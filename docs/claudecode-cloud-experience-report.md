@@ -114,3 +114,36 @@ Every output was identical, so the fix changes only inputs that used to fail.
 - Using the dialect in earnest found real bugs fast. Nested generics are
   everyday TypeScript, and no existing page used them. A showcase demo
   doubles as a conformance test.
+
+## Second session: the spreadsheet (demo 18), same day
+
+By then `main` had a GTK4 arm in `.build.ae` (`7a27d02`) and the
+SessionStart hook (`8af8c74`, `CLAUDECODE-CLOUD.md`). This session's
+container was the first one's, so the hook found its siblings already
+there. The only setup left was `apt-get install libepoxy-dev`, the one
+package the first session had not installed; then
+`AETHER_UI_WITH_DRIVER=1 ./build.sh` built `sae-driver` in about 40 s.
+
+- **The browser specs run in the cloud.** `xvfb-run -a tests/run_spec.sh
+  spec_algos` passed 5/5, so demo 17's spec, written blind in the first
+  session, is now verified. Its pixel coordinates were right.
+- **Demo 18 was written and verified end to end in the container.** The
+  model (`site/sheet/`) is tested headless first: 3 new module tests, 69 in
+  `lower/run-tests.sh`. Then `spec_sheet` ran in the real browser under
+  Xvfb: 8 specs, 6 passing on the first run. The two failures were
+  assertions I got wrong (what follows the grid, and which cell was still
+  selected), not the page.
+- **Screenshots close the loop.** The driver's `screenshot` verb, run from
+  a throwaway spec, showed that the first layout overflowed the 800 px
+  window (columns G to J and everything below the grid were off-screen),
+  which no assertion would have caught. A stylesheet class for the cells
+  (smaller font, square corners, no `equal_cells`) fixed it, and the next
+  screenshot showed all ten columns.
+- **One spec_nav test fails on `main` too.** "a page with scoped seeks
+  makes the requests it names and no others" (`site/scoped.ts`): the page
+  shows its label but none of its buttons. It fails identically with this
+  work stashed, so it predates it; it was not looked into here.
+- **Nothing in the dialect broke this time.** Six modules exercised
+  `#private` fields with definite assignment (`#tok!: Token`), template
+  literal types, `Uppercase<>`, intersections of unions, type predicates,
+  `satisfies never` and `as const` tuples, and all of them lowered.
