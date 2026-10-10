@@ -85,6 +85,11 @@ make -C ../aether contrib
   `xvfb` (`apt-get install` works in the container). The headless half
   needs neither: `lower/run-tests.sh`, `saelower`, `saejs` and the
   `tests/check_*` scripts.
+- **`api.localhost`.** `spec_app_httplist` fetches from `api.localhost:8091`.
+  A desktop Ubuntu resolves every `*.localhost` name to 127.0.0.1
+  (systemd-resolved); the container's `/etc/hosts` has only `localhost`, so
+  that spec fails there until
+  `echo "127.0.0.1 api.localhost" >> /etc/hosts` (then 6/6).
 - **Everything at once.** `tests/run_all.sh` runs every spec and check with
   the environment each needs (app specs their `SAE_TEST_APP`, gitify and
   pomatez their storage and shell logs, three specs with no window), under
