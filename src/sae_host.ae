@@ -851,6 +851,68 @@ sae_ui_datagrid_first(ctx: ptr, this_val: int, argv: int) -> int {
     return json_value_(ctx, "[${ui.datagrid_first_row(g)}, ${ui.datagrid_first_col(g)}]")
 }
 
+// ui.datagrid_select(g, row, col): the cursor on one cell, scrolled into view.
+sae_ui_datagrid_select(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_select(g, row, col): g is not a grid this page made") }
+    ui.datagrid_select(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
+    return 0
+}
+
+// ui.datagrid_select_range(g, anchorRow, anchorCol, row, col): the rectangle
+// from the anchor to the cursor at (row, col).
+sae_ui_datagrid_select_range(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_select_range(g, ar, ac, row, col): g is not a grid this page made") }
+    ui.datagrid_select_range(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0), arg_int_(ctx, argv, argc, 3, 0), arg_int_(ctx, argv, argc, 4, 0))
+    return 0
+}
+
+// ui.datagrid_selection(g) -> [anchorRow, anchorCol, row, col], the cursor
+// last; all -1 before anything is selected.
+sae_ui_datagrid_selection(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_selection(g): g is not a grid this page made") }
+    return json_value_(ctx, "[${ui.datagrid_anchor_row(g)}, ${ui.datagrid_anchor_col(g)}, ${ui.datagrid_cursor_row(g)}, ${ui.datagrid_cursor_col(g)}]")
+}
+
+// ui.datagrid_on_select(g, fn(row, col)): the selection changed (a click, a
+// key or a select call); the cursor is at (row, col).
+sae_ui_datagrid_on_select(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_select(g, fn): g is not a grid this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_select(g, fn): fn must be a function (row, col) => void") }
+    ref = hold_arg_(ctx, argv, 1)
+    ui.datagrid_on_select(g) callback |r: int, c: int| {
+        _s = call_ii_str_(ctx, ref, r, c, "a ui.datagrid select handler")
+        settle_(ctx)
+    }
+    return 0
+}
+
+// ui.datagrid_on_activate(g, fn(row, col)): Return on the cursor cell.
+sae_ui_datagrid_on_activate(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_activate(g, fn): g is not a grid this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_activate(g, fn): fn must be a function (row, col) => void") }
+    ref = hold_arg_(ctx, argv, 1)
+    ui.datagrid_on_activate(g) callback |r: int, c: int| {
+        _s = call_ii_str_(ctx, ref, r, c, "a ui.datagrid activate handler")
+        settle_(ctx)
+    }
+    return 0
+}
+
 // get_text(handle): synchronous, in-process (Tsyne needed an await here).
 sae_ui_get_text(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
@@ -5972,6 +6034,11 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_scroll_to", 3, sae_ui_datagrid_scroll_to)
     reg_(q, u, "datagrid_refresh", 1, sae_ui_datagrid_refresh)
     reg_(q, u, "datagrid_first", 1, sae_ui_datagrid_first)
+    reg_(q, u, "datagrid_select", 3, sae_ui_datagrid_select)
+    reg_(q, u, "datagrid_select_range", 5, sae_ui_datagrid_select_range)
+    reg_(q, u, "datagrid_selection", 1, sae_ui_datagrid_selection)
+    reg_(q, u, "datagrid_on_select", 2, sae_ui_datagrid_on_select)
+    reg_(q, u, "datagrid_on_activate", 2, sae_ui_datagrid_on_activate)
     reg_(q, u, "on_submit", 2, sae_ui_on_submit)
     reg_(q, u, "focus", 1, sae_ui_focus)
     reg_(q, u, "text_wrapped", 2, sae_ui_text_wrapped)

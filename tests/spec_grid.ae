@@ -25,6 +25,18 @@ main() {
             spec.assert_true(b.wait_for_console("grid picked 3,3"), "row 3 (0-based), column 3")
             b.assert_text("picked: 3,3", "and the page showed it")
         }
+        spec.it("keys move the selection; Return activates") callback {
+            uidriver.post_ok("/window/key?combo=Down", "Down")
+            spec.assert_true(b.wait_for_console("grid selected 4,3 to 4,3"), "Down from the clicked cell")
+            uidriver.post_ok("/window/key?combo=Shift%2BRight", "Shift+Right")
+            spec.assert_true(b.wait_for_console("grid selected 4,3 to 4,4"), "Shift extends from the anchor")
+            uidriver.post_ok("/window/key?combo=Return", "Return")
+            spec.assert_true(b.wait_for_console("grid activated 4,4"), "Return on the cursor")
+        }
+        spec.it("selects from code") callback {
+            b.click("Select B2:D5")
+            spec.assert_true(b.wait_for_console("grid selected 1,2 to 4,4"), "the range, cursor last")
+        }
         spec.it("scrolls from code") callback {
             b.click("To row 500000")
             spec.assert_true(b.wait_for_console("grid first 499999,10"), "the first row and column shown")

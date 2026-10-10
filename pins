@@ -56,5 +56,6 @@ AEB_REF=v0.326
 # c009ce45 (2026-10-10): the driver's GET /canvas/{id}/nodes, which
 # saedriver's vg_nodes reads (spec_keys).
 # ca82facc (2026-10-10): datagrid and datagrid_on_click (ui.datagrid).
+# f81d334c (2026-10-10): datagrid selection and keys (ui.datagrid_select etc).
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=ca82facc2751d5cde156fb0a8e5b26ff4aabaeee
+AETHER_UI_REF=f81d334c257be474b4954f9b2befa179cd944314

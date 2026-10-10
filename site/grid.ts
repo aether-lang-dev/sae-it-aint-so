@@ -1,7 +1,8 @@
 // site/grid.ts -- ui.datagrid: aether-ui's virtualised grid for pages. A
 // million rows by 40 columns from a function, 15 rows by 5 columns shown,
 // one frozen column of row numbers, a header of column letters; a click
-// names the cell. tests/spec_grid.ae drives it.
+// names the cell, keys move a selection, Return activates it.
+// tests/spec_grid.ae drives it.
 const { text, btn } = ui;
 
 const letters = (c: number): string => {
@@ -19,6 +20,12 @@ ui.datagrid_on_click(g, (r: number, c: number) => {
   ui.set_text(picked, `picked: ${r},${c}`);
   print(`grid picked ${r},${c}`);
 });
+ui.datagrid_on_select(g, (r: number, c: number) => {
+  const [ar, ac] = ui.datagrid_selection(g);
+  print(`grid selected ${ar},${ac} to ${r},${c}`);
+});
+ui.datagrid_on_activate(g, (r: number, c: number) => print(`grid activated ${r},${c}`));
+btn("Select B2:D5", () => ui.datagrid_select_range(g, 1, 2, 4, 4));
 btn("To row 500000", () => {
   ui.datagrid_scroll_to(g, 499999, 10);
   const [r, c] = ui.datagrid_first(g);
