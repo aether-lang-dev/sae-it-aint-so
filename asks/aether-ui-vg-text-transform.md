@@ -82,10 +82,15 @@ and sae-driver rebuilt:
   in column C after the paste, and "Price" at its new place after column B
   is dragged wider. Without the patch those three checks fail (8 passing, 3
   failing), and with it they pass.
-- `spec_algos` passes either way. `spec_aevg` (4/37), `spec_camera` (3/14) and
-  `spec_aevg_parity` (0/10) fail on this Linux build with and without the
-  patch, test for test the same, so the patch changes none of their results;
-  those failures are this environment's, not the patch's.
+- `spec_algos` passes either way. `spec_aevg` (4/37 passing), `spec_camera`
+  (3/14) and `spec_aevg_parity` (0/10) fail on this Linux build with and
+  without the patch, test for test the same, so the patch changes none of
+  their results. Those failures are not the patch's, nor the cloud
+  container's: the same counts on a real arm64 Ubuntu 22.04 box. Their cause
+  is a separate aether-ui GTK4 bug: a vg canvas asked to be 400 wide comes
+  out 533 (stretched to fill, where AppKit keeps the requested size), so the
+  specs' pixel probes miss. (`spec_sheet` and `spec_algos` pass because
+  their probes map through the canvas's actual size.)
 
 A test on aether-ui's side would fit `vg/test/test_vg.ae` (which already
 checks `element_last_transform` on a text in a translated group): render a

@@ -147,3 +147,10 @@ package the first session had not installed; then
   `#private` fields with definite assignment (`#tok!: Token`), template
   literal types, `Uppercase<>`, intersections of unions, type predicates,
   `satisfies never` and `as const` tuples, and all of them lowered.
+- **Postscript: why spec_aevg, spec_camera and spec_aevg_parity fail on
+  Linux.** They fail the same on a real arm64 Ubuntu 22.04 box (GTK4 under
+  Xvfb, sae 8af8c74, aether-ui 4775cdba), so it is neither sae nor the
+  cloud: aether-ui's GTK4 backend stretches a vg canvas to fill (asked for
+  400 wide, it is 533), where AppKit keeps the requested size, and every
+  pixel probe in those specs misses. `spec_nav`'s scoped-seeks failure has
+  no canvas, so it is something else, still unexplained.
