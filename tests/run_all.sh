@@ -13,8 +13,8 @@
 # (2026-10-10); this table is where those requirements live, so add a line
 # here with every new spec.
 #
-# Needs AETHER_UI_WITH_DRIVER=1 ./build.sh, ./build.sh and target/pageserver
-# (AGENTS.md "Build and test"). On Linux with no display it reruns itself
+# Needs AETHER_UI_WITH_DRIVER=1 ./build.sh, ./build.sh, target/pageserver,
+# target/saelower and target/saejs (AGENTS.md "Build and test"). On Linux with no display it reruns itself
 # under xvfb-run.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 1
@@ -23,7 +23,7 @@ if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
    && [ -z "${SAE_RUN_ALL_XVFB:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
     SAE_RUN_ALL_XVFB=1 exec xvfb-run -a sh "$0" "$@"
 fi
-for f in target/build/bin/sae target/build/bin/sae-driver target/pageserver; do
+for f in target/build/bin/sae target/build/bin/sae-driver target/pageserver target/saelower target/saejs; do
     [ -x "$f" ] || { echo "run_all.sh: no $f (AGENTS.md \"Build and test\")" >&2; exit 2; }
 done
 # The window-less specs and the in-tree toolchain, as run_spec.sh chooses it.

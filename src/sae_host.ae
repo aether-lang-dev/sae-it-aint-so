@@ -3185,6 +3185,18 @@ sae_vg_fit(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
+// vg.rendering(mode): inside a raster's or image's block, how its pixels
+// are sampled when scaled: "auto" (the default, smoothed) or "pixelated"
+// (each pixel a crisp square: a Life board, pixel art), CSS's
+// image-rendering. aether-ui's image_rendering, on every backend.
+sae_vg_rendering(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rendering() must be called inside a raster's or image's block") }
+    vg.image_rendering(vg_top_(page_of_(ctx)), arg_str_(ctx, argv, argc, 0))
+    return 0
+}
+
 // vg.raster_size(h): [w, h] of a raster or image, in pixels.
 sae_vg_raster_size(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
@@ -5675,6 +5687,7 @@ api_register_(p: *Page) {
     reg_(q, v, "image", 2, sae_vg_image)
     reg_(q, v, "box", 4, sae_vg_box)
     reg_(q, v, "fit", 1, sae_vg_fit)
+    reg_(q, v, "rendering", 1, sae_vg_rendering)
     uimg, _ue = quickjs.get_global(q, "ui")
     reg_(q, uimg, "image", 2, sae_ui_image)
     quickjs.release(q, uimg)

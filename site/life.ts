@@ -61,6 +61,7 @@ text("Life");
 load(0);
 vg.scene(`0 0 ${N} ${N}`, 384, 384, () => {
   raster = vg.raster(N, N, px, () => {
+    vg.rendering("pixelated");   // each cell a crisp square, not a blur
     vg.on_click((x: number, y: number) => {
       const cx = Math.floor(x), cy = Math.floor(y);
       if (cx < 0 || cy < 0 || cx >= N || cy >= N) return;

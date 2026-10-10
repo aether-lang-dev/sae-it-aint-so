@@ -112,7 +112,7 @@ and the timer names `setTimeout setInterval clearTimeout clearInterval
 requestAnimationFrame cancelAnimationFrame` (section 4). They are page-scoped
 services, so they need no capability grant. Pixels from a page (roadmap
 8.2) added no global: `vg.raster`, `vg.raster_update`, `vg.raster_size`,
-`vg.image`, `vg.box`, `vg.fit` and `ui.image` are members of `vg` and `ui`,
+`vg.image`, `vg.box`, `vg.fit`, `vg.rendering` and `ui.image` are members of `vg` and `ui`,
 page-scoped like the rest (a page's rasters go with the page), and they
 take the engine's own `Uint8Array`.
 

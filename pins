@@ -46,5 +46,9 @@ AEB_REF=v0.326
 # 4775cdba (2026-10-10): aether-ui on the 0.801.0 floor, its vg setters storing
 # closures directly (the alias workaround gone), and gradients, clip paths and
 # CSS surviving the live scene's context swap (c42a8914).
+# a2d7038d (2026-10-10): vg image_rendering("pixelated"), which vg.rendering
+# calls (site/life.ts); it also carries a text's transform on the live path
+# (b3d697c9), spacers before a canvas (20c04d57, spec_aevg_parity's 400-wide
+# corpus canvases on GTK4) and GTK4 pictures at their own size (a13a39ec).
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=4775cdba6b2814cca0c97e08b44cbd1a1a9e1092
+AETHER_UI_REF=a2d7038d2e7a492376fd0dd22017e18d3bcd97fc
