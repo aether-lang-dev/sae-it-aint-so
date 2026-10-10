@@ -150,7 +150,9 @@ pages with imports: each is lowered, its import closure (`./lib/*.ts`
 beside it, `sae:*` from `lib/sae`) lowered as modules, and all of it run
 behind `tests/mod/harness.js`, a JavaScript stand-in for the host's loader
 object, against `// expect:` lines (`imports.ts` is every import and export
-form, `tla*.ts` top-level await, `sae_*.ts` the library modules).
+form, `tla*.ts` top-level await, `sae_*.ts` the library modules,
+`algos_*.ts` the modules under demo 17's page, `site/algos/`, reached through
+the `tests/mod/algos` link and checked with `lib/check.ts`'s `eq` and `mock`).
 `lower/tests/mod/golden/*.ts` are compared with their `.js`: the exact
 rewrite.
 

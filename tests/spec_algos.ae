@@ -1,0 +1,78 @@
+// spec_algos.ae — demo 17, Algorithm theatre: two sorting generators race
+// on the same 24 shuffled bars (seed 7). One Step lights the bars each
+// algorithm compares; Run drains both on the frame clock until quicksort
+// wins and every bar is sorted and green; the picker and Shuffle start new
+// races. The page is site/algos.ts. The step counts are the ones
+// lower/tests/mod/algos_sorts.ts pins headless.
+//
+//   tests/run_spec.sh spec_algos
+import std.spec
+import saedriver as b
+import uidriver
+
+const IDLE = 0x5b8def
+const COMPARE = 0xf5a623
+const SORTED = 0x4cc38a
+const BG = 0x14161c
+const VW = 240.0
+const VH = 130.0
+
+// The canvas pixel at viewBox (x, y).
+px(x: float) -> int { return b.vg_px_x(x, VW, VH) }
+py(y: float) -> int { return b.vg_px_y(y, VW, VH) }
+
+// Bar i's centre column; lane A stands on y = 62, lane B on y = 128.
+bar_x(i: int) -> float { return i * 10.0 + 5.0 }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "algorithm theatre (demo 17)") {
+        spec.it("opens on Bubble vs Quick over seed 7's bars") callback {
+            b.navigate(b.test_url("/algos"))
+            b.assert_page("Algorithm theatre", "200 ", "algos page")
+            spec.assert_true(b.wait_for_console("algos: Bubble vs Quick on seed 7"), "the race loaded")
+            spec.assert_true(b.wait_for_text("Bubble: step 0, 0 compares, 0 swaps, 0 writes"), "lane A's bound label")
+            spec.assert_true(b.wait_for_text("Quick: step 0, 0 compares, 0 swaps, 0 writes"), "lane B's bound label")
+            spec.assert_true(b.wait_for_vg_pixel(px(bar_x(0)), py(61.0), IDLE), "bar 0 drawn idle")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(1)), py(55.0), IDLE, 30), 1, "bar 1 (value 7) reaches y 48")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(1)), py(40.0), BG, 30), 1, "and no higher")
+        }
+        spec.it("Step takes one step in each lane and lights what it compares") callback {
+            b.click("Step")
+            spec.assert_true(b.wait_for_text("Bubble: step 1, 1 compares, 0 swaps, 0 writes"), "bubble compared once")
+            spec.assert_true(b.wait_for_text("Quick: step 1, 1 compares, 0 swaps, 0 writes"), "quick compared once")
+            spec.assert_true(b.wait_for_vg_pixel(px(bar_x(0)), py(61.0), COMPARE), "bubble lights bar 0")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(1)), py(61.0), COMPARE, 30), 1, "and bar 1")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(2)), py(61.0), IDLE, 30), 1, "not bar 2")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(23)), py(127.0), COMPARE, 30), 1, "quick lights its pivot, bar 23")
+        }
+        spec.it("Run drains both on the frame clock: Quick wins, every bar sorted") callback {
+            b.slide_to(32)
+            b.check("Run")
+            spec.assert_true(b.wait_for_console("algos: Quick done: 188 steps, 122 compares, 42 swaps, 0 writes"), "quick finished")
+            spec.assert_true(b.wait_for_console("algos: Quick wins"), "and won")
+            spec.assert_true(b.wait_for_console("algos: Bubble done: 480 steps, 276 compares, 180 swaps, 0 writes"), "bubble finished")
+            spec.assert_true(b.wait_for_text("Quick wins in 188 steps"), "the verdict label")
+            spec.assert_true(b.wait_for_vg_pixel(px(bar_x(0)), py(61.0), SORTED), "bar 0 sorted")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(0)), py(55.0), BG, 30), 1, "and the shortest")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(23)), py(16.0), SORTED, 30), 1, "the tallest is last")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(23)), py(82.0), SORTED, 30), 1, "in lane B too")
+            b.check("Run")
+        }
+        spec.it("the picker starts another race on the same bars") callback {
+            b.pick(3)
+            spec.assert_true(b.wait_for_console("algos: Quick vs Merge on seed 7"), "quick vs merge")
+            spec.assert_true(b.wait_for_text("Merge: step 0, 0 compares, 0 swaps, 0 writes"), "lane B is merge")
+            spec.assert_true(b.wait_for_vg_pixel(px(bar_x(0)), py(61.0), IDLE), "bar 0 idle again")
+            spec.assert_eq(b.vg_pixel_near(px(bar_x(1)), py(40.0), BG, 30), 1, "the bars are seed 7's again")
+        }
+        spec.it("Shuffle deals new bars") callback {
+            b.click("Shuffle")
+            spec.assert_true(b.wait_for_console("algos: Quick vs Merge on seed 8"), "seed 8")
+            spec.assert_true(b.wait_for_text("Quick vs Merge, seed 8"), "the verdict label says so")
+        }
+    }
+    return spec.run_summary(fw)
+}
