@@ -1,7 +1,8 @@
 // site/sheet/evaluate.ts and format.ts against a fixed set of cells: the
 // operators, coercions, functions, errors as values, and how values read.
-import { CellError, evaluate, toNumber, toText } from "./sheet/evaluate.ts";
-import type { Value } from "./sheet/evaluate.ts";
+import { evaluate } from "./sheet/evaluate.ts";
+import { CellError, toNumber, toText } from "./sheet/values.ts";
+import type { Value } from "./sheet/values.ts";
 import { parse } from "./sheet/parser.ts";
 import { describe, fmt, show } from "./sheet/format.ts";
 import { eq } from "./lib/check.ts";
@@ -39,9 +40,11 @@ eq("an error flows through what reads it", [why("B1+1"), why("SUM(A1:B1)"), why(
 eq("off the sheet", [why("K1"), why("SUM(A1:K2)")], ["#REF! K1 is not on the sheet", "#REF! K2 is not on the sheet"]);
 eq("no such function", why("NOPE(1)"), "#NAME? no function NOPE");
 eq("a range where one value goes", why("A1:A2+1"), "#VALUE! A1:A2 is a range where one value goes");
-eq("wrong argument counts", [why("ABS(1, 2)"), why("ROUND(A1:A2, 1)"), why("IF(1)")], [
-  "#VALUE! ABS takes 1 value", "#VALUE! ROUND takes 2 values", "#VALUE! IF takes 2 or 3 values",
+eq("wrong argument counts", [why("ABS(1, 2)"), why("ROUND(1, 2, 3)"), why("IF(1)"), why("SUM()"), why("PI(1)")], [
+  "#VALUE! ABS takes 1 value", "#VALUE! ROUND takes 1 or 2 values", "#VALUE! IF takes 2 or 3 values",
+  "#VALUE! SUM takes at least 1 value", "#VALUE! PI takes 0 values",
 ]);
+eq("a range where one value goes, by argument", why("ROUND(A1:A2, 1)"), "#VALUE! argument 1 is a range where one value goes");
 eq("an overflow is not a number", why("10^400"), "#VALUE! the result is not a finite number");
 eq("AVERAGE of nothing", why("AVERAGE(C1:C2)"), "#DIV/0! AVERAGE of no numbers");
 
@@ -71,6 +74,7 @@ eq("describe an error says why", describe("C1", "=1/0", new CellError("#DIV/0!",
 // expect: ok no such function
 // expect: ok a range where one value goes
 // expect: ok wrong argument counts
+// expect: ok a range where one value goes, by argument
 // expect: ok an overflow is not a number
 // expect: ok AVERAGE of nothing
 // expect: ok coercions

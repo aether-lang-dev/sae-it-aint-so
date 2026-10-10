@@ -1,101 +1,15 @@
-// What a cell holds once worked out, and how a formula's Expr is worked out.
-// An error is a value too (a CellError): it flows through whatever reads it,
-// so a cell that sums a #DIV/0! shows #DIV/0!.
+// How a formula's Expr is worked out against the sheet's cells. Values,
+// errors and coercions are values.ts; the functions are functions.ts.
 import { addrOf, range } from "./address.ts";
 import type { Expr } from "./parser.ts";
-
-export type ErrorCode = "#DIV/0!" | "#VALUE!" | "#REF!" | "#NAME?" | "#CYCLE!" | "#ERROR!";
-
-export class CellError {
-  readonly code: ErrorCode;
-  readonly why: string;
-
-  constructor(code: ErrorCode, why: string) {
-    this.code = code;
-    this.why = why;
-  }
-
-  toString(): string { return this.code; }
-}
-
-// null is an empty cell.
-export type Value = number | string | boolean | null | CellError;
+import { call, single } from "./functions.ts";
+import type { Arg } from "./functions.ts";
+import { CellError, compare, fail, finite, toNumber, toText } from "./values.ts";
+import type { Value } from "./values.ts";
 
 export interface Env {
   get(key: string): Value;
 }
-
-const fail = (code: ErrorCode, why: string): never => { throw new CellError(code, why); };
-
-// The checks a formula's operands go through; an error operand is rethrown.
-function scalar(v: Value): Exclude<Value, CellError> {
-  if (v instanceof CellError) throw v;
-  return v;
-}
-
-export function toNumber(v: Value): number {
-  const s = scalar(v);
-  if (s === null) return 0;
-  if (typeof s === "number") return s;
-  if (typeof s === "boolean") return s ? 1 : 0;
-  const n = s.trim() === "" ? NaN : Number(s);
-  return Number.isNaN(n) ? fail("#VALUE!", `'${s}' is not a number`) : n;
-}
-
-export function toText(v: Value): string {
-  const s = scalar(v);
-  if (s === null) return "";
-  if (typeof s === "boolean") return s ? "TRUE" : "FALSE";
-  return typeof s === "number" ? String(Number(s.toPrecision(12))) : s;
-}
-
-const finite = (n: number): number => (Number.isFinite(n) ? n : fail("#VALUE!", "the result is not a finite number"));
-
-function compare(op: string, a: Value, b: Value): boolean {
-  const x = scalar(a), y = scalar(b);
-  const numeric = (v: typeof x) => v === null || typeof v === "number" || typeof v === "boolean";
-  const d = numeric(x) && numeric(y)
-    ? toNumber(x) - toNumber(y)
-    : toText(x).toUpperCase().localeCompare(toText(y).toUpperCase());
-  switch (op) {
-    case "=": return d === 0;
-    case "<>": return d !== 0;
-    case "<": return d < 0;
-    case ">": return d > 0;
-    case "<=": return d <= 0;
-    default: return d >= 0;
-  }
-}
-
-// A function's arguments, each a list: a range gives its cells, anything
-// else one value.
-type Fn = (args: readonly Value[][]) => Value;
-
-const numbers = (args: readonly Value[][]): number[] =>
-  args.flat().map(scalar).filter((v): v is number => typeof v === "number");
-const one = (name: string, args: readonly Value[][], count: number): Value[] =>
-  args.length === count && args.every((a) => a.length === 1)
-    ? args.map((a) => a[0])
-    : fail("#VALUE!", `${name} takes ${count} value${count === 1 ? "" : "s"}`);
-
-export const functions: ReadonlyMap<string, Fn> = new Map<string, Fn>([
-  ["SUM", (args) => numbers(args).reduce((s, n) => s + n, 0)],
-  ["AVERAGE", (args) => {
-    const ns = numbers(args);
-    return ns.length ? ns.reduce((s, n) => s + n, 0) / ns.length : fail("#DIV/0!", "AVERAGE of no numbers");
-  }],
-  ["MIN", (args) => { const ns = numbers(args); return ns.length ? Math.min(...ns) : 0; }],
-  ["MAX", (args) => { const ns = numbers(args); return ns.length ? Math.max(...ns) : 0; }],
-  ["COUNT", (args) => numbers(args).length],
-  ["ABS", (args) => Math.abs(toNumber(one("ABS", args, 1)[0]))],
-  ["ROUND", (args) => {
-    const [x, digits] = one("ROUND", args, 2).map(toNumber);
-    const f = 10 ** Math.trunc(digits);
-    return Math.round(x * f) / f;
-  }],
-  ["CONCAT", (args) => args.flat().map(toText).join("")],
-  ["LEN", (args) => toText(one("LEN", args, 1)[0]).length],
-]);
 
 class Evaluator {
   readonly #env: Env;
@@ -104,15 +18,20 @@ class Evaluator {
     this.#env = env;
   }
 
-  // Every cell a range names, or #REF! when a corner is off the sheet.
-  #cells(from: string, to: string): Value[] {
-    const a = addrOf(from), b = addrOf(to);
-    if (!a || !b) return fail("#REF!", `${a ? to : from} is not on the sheet`);
-    return [...range(a, b)].map((k) => this.#env.get(k));
-  }
-
-  #args(e: Expr): Value[] {
-    return e.kind === "range" ? this.#cells(e.from, e.to) : [this.value(e)];
+  // A function's argument: a range's cells and width, or one value. An
+  // error is passed on as a value, for IFERROR and ISERROR to see.
+  #arg(e: Expr): Arg {
+    if (e.kind === "range") {
+      const a = addrOf(e.from), b = addrOf(e.to);
+      if (!a || !b) return fail("#REF!", `${a ? e.to : e.from} is not on the sheet`);
+      return { values: [...range(a, b)].map((k) => this.#env.get(k)), cols: Math.abs(a.col - b.col) + 1 };
+    }
+    try {
+      return single(this.value(e));
+    } catch (err) {
+      if (err instanceof CellError) return single(err);
+      throw err;
+    }
   }
 
   value(e: Expr): Value {
@@ -146,8 +65,7 @@ class Evaluator {
           const pick = toNumber(this.value(e.args[0])) !== 0 ? e.args[1] : e.args[2];
           return pick ? this.value(pick) : false;
         }
-        const fn = functions.get(e.name);
-        return fn ? fn(e.args.map((a) => this.#args(a))) : fail("#NAME?", `no function ${e.name}`);
+        return call(e.name, e.args.map((a) => this.#arg(a)));
       }
       default:
         throw new TypeError(`unknown expression: ${JSON.stringify(e satisfies never)}`);

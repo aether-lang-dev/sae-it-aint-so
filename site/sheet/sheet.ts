@@ -5,8 +5,9 @@
 // sheet tells a listener which cells now show something else; it never draws.
 import { addrOf, keyOf, order, range } from "./address.ts";
 import type { Addr } from "./address.ts";
-import { CellError, evaluate } from "./evaluate.ts";
-import type { Value } from "./evaluate.ts";
+import { evaluate } from "./evaluate.ts";
+import { CellError } from "./values.ts";
+import type { Value } from "./values.ts";
 import { FormulaError } from "./lexer.ts";
 import { parse } from "./parser.ts";
 import type { Expr } from "./parser.ts";

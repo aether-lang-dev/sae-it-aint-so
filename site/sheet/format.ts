@@ -1,7 +1,7 @@
 // How values read on the sheet, and `fmt`, a tagged template that shows each
 // value it is given the way a cell would: fmt`${key} is ${value}`.
-import { CellError } from "./evaluate.ts";
-import type { Value } from "./evaluate.ts";
+import { CellError } from "./values.ts";
+import type { Value } from "./values.ts";
 
 export function show(v: Value): string {
   if (v === null) return "";

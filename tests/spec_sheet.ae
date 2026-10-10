@@ -103,12 +103,27 @@ main() {
             spec.assert_true(wait_cell(3, 5, "0.8"), "D6 = ROUND(D5/B5, 2)")
             spec.assert_true(wait_cell(2, 0, "Price"), "C1's formula was pasted over")
         }
+        spec.it("the library's lookups, conditionals and error traps work on the example") callback {
+            enter("E2", "=VLOOKUP(\"Bread\", A2:D4, 4, FALSE)")
+            spec.assert_true(wait_cell(4, 1, "2.2"), "VLOOKUP finds Bread's total")
+            enter("E3", "=COUNTIF(B2:B4, \">1\")")
+            spec.assert_true(wait_cell(4, 2, "2"), "COUNTIF counts quantities over 1")
+            enter("E4", "=IFERROR(D5/0, \"n/a\")")
+            spec.assert_true(wait_cell(4, 3, "n/a"), "IFERROR traps a divide by zero")
+            enter("E5", "=TEXTJOIN(\", \", TRUE, A2:A4)")
+            spec.assert_true(wait_cell(4, 4, "Apples, Bread, Milk"), "TEXTJOIN lists the items")
+            enter("B3", "4")
+            spec.assert_true(wait_cell(4, 2, "3"), "COUNTIF follows an edit")
+            spec.assert_true(wait_cell(4, 1, "8.8"), "and so does VLOOKUP, through D3")
+            spec.assert_true(b.wait_for_text("No problems"), "no problems")
+            spec.assert_true(string.contains(b.page_texts(), "Functions:\nABS, AND, AVERAGE,") == 1, "the page lists its functions")
+        }
         spec.it("Clear all empties the sheet") callback {
             b.click("Clear all")
             spec.assert_true(b.wait_for_console("sheet: cleared:"), "cleared")
             spec.assert_true(wait_cell(3, 4, ""), "D5 is empty")
             spec.assert_true(wait_cell(0, 0, ""), "A1 is empty")
-            spec.assert_true(b.wait_for_text("B2: (empty)"), "the status line follows the selected cell, B2")
+            spec.assert_true(b.wait_for_text("B3: (empty)"), "the status line follows the selected cell, B3")
         }
     }
     return spec.run_summary(fw)

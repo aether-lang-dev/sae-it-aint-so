@@ -10,6 +10,7 @@ import { COLS, ROWS, addrOf, colName, keyOf } from "./sheet/address.ts";
 import { Sheet, pasted } from "./sheet/sheet.ts";
 import type { Problem } from "./sheet/sheet.ts";
 import { describe, show } from "./sheet/format.ts";
+import { names } from "./sheet/functions.ts";
 
 const { text, btn, textfield, grid, hstack, styles, add_class } = ui;
 
@@ -101,6 +102,9 @@ grid(COLS + 1, 0, () => {
     }
   }
 });
+// The library, ten names a line.
+const lines = Array.from({ length: Math.ceil(names().length / 10) }, (_, i) => names().slice(i * 10, i * 10 + 10).join(", "));
+text(`Functions:\n${lines.join(",\n")}`);
 bind(text(""), summary);
 each(problems, "key", (p: Problem) => text(`${p.key}: ${p.message}`));
 hstack(() => {
