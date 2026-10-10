@@ -68,6 +68,12 @@ main() {
             spec.assert_eq(dark_between(5.0, 45.0), 0, "none left where it was made")
             spec.assert_true(dark_between(148.0, 195.0) > 0, "ink where it went")
         }
+        spec.it("and the driver's node list says so: a text, M, at its new place") callback {
+            nodes = b.vg_nodes()
+            spec.assert_true(string.contains(nodes, "\"kind\":\"text\"") == 1, "a text node: ${nodes}")
+            spec.assert_true(string.contains(nodes, "\"text\":\"M\"") == 1, "reading M")
+            spec.assert_true(string.contains(nodes, "\"fill\":\"#000000\"") == 1, "filled black")
+        }
     }
 
     spec.describe(fw, "keys") {
@@ -91,6 +97,15 @@ main() {
             sleep(200)
             _r3 = uidriver.window_key("Down")
             spec.assert_true(b.wait_for_console("keys: Down"), "and keys reach it again once it has the focus")
+        }
+    }
+    spec.describe(fw, "clipping a live scene") {
+        spec.it("vg.clip(id) keeps a shape inside its clip path") callback {
+            b.navigate(b.test_url("/clip"))
+            spec.assert_true(b.wait_for_text("Clip"), "the page loads")
+            spec.assert_true(b.wait_for_vg_canvas(), "its scene")
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(50.0, 100.0, 100.0), b.vg_px_y(50.0, 100.0, 100.0), 0xff0000), "red inside the circle")
+            spec.assert_true(b.vg_pixel_near(b.vg_px_x(14.0, 100.0, 100.0), b.vg_px_y(14.0, 100.0, 100.0), 0xffffff, 24) == 1, "white at the square's corner, outside the circle")
         }
     }
     return spec.run_summary(fw)

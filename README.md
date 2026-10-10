@@ -510,6 +510,7 @@ vg.scene("0 0 100 100", 300, 300, () => {
 | later, from anywhere | `set_fill(h, color)`, `set_stroke(h, color, width)`, `set_opacity(h, v)`, `set_text(h, s)`, `set_transform(h, t)`, `set_visible(h, on)`, `set(h, { ...props })` (several at once, one repaint), `get(h)`, `remove(h)`: change a shape or group and repaint |
 | pixels | `raster(w, h, rgba, fn?)`: a w x h image element from a `Uint8Array` of RGBA8 (w*h*4 bytes), at (0, 0), one viewBox unit a pixel; `raster_update(h, rgba)` new pixels in place; `image(bytes, fn?)`: a PNG/JPEG/GIF/BMP decoded by the toolkit, at its own size; `raster_size(h)` → `[w, h]` |
 | text metrics | `measure(text, size)` → `{ width, height, ascent, descent }` in px, the toolkit's own metrics for what `text` draws; `ellipsize(text, size, maxWidth)`: cut to fit, ending in `…` |
+| clipping | `clip_path(id, shapes)` inside `defs(...)` (shapes as `[["circle", cx, cy, r]]`, `["rect", ...]`, `["path", d]`, ...), then `clip(id)` in a shape's or group's block: only what lies inside the outline draws |
 | in a raster's or image's block | `box(x, y, w, h)` where it draws, `fit(mode)`: `"stretch"` (default), `"contain"`, `"cover"`, `"original"`; `rendering(mode)`: `"auto"` (default, smoothed) or `"pixelated"` (each pixel a crisp square when scaled); and `on_click`, `opacity`, `transform` as for any shape |
 
 ### AeVG alive: the SVG model as TypeScript

@@ -53,5 +53,7 @@ AEB_REF=v0.326
 # 947a5b06 (2026-10-10): on_submit (ui.on_submit), vg text_set_pos (vg.set's
 # x and y on a text), text_wrapped that really wraps on GTK4
 # (ui.text_wrapped), and visible_when that hides a text.
+# c009ce45 (2026-10-10): the driver's GET /canvas/{id}/nodes, which
+# saedriver's vg_nodes reads (spec_keys).
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=947a5b06fdc55c2a179541c74024863d60ed09d9
+AETHER_UI_REF=c009ce4562b82968d168be20ffe89abefa329be2

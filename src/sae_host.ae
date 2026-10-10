@@ -4114,6 +4114,20 @@ sae_ae_opacity(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
+// vg.clip(id): in a shape's or a group's block, clip it to the clip path
+// `id` from vg.defs (vg.clip_path). Only what lies inside the outline draws.
+sae_ae_clip(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    r = ae_modifier_rec_(ctx, "clip")
+    if r == null { return sae_throw_type_error(ctx, "vg.clip() must be called inside a shape's or group's block") }
+    id = arg_str_(ctx, argv, argc, 0)
+    if string.length(id) == 0 { return sae_throw_type_error(ctx, "vg.clip(id): id names a vg.clip_path") }
+    if r.node != null { vg.clip_path(r.node, own_("url(#${id})")) }
+    aevg.scene_mark_dirty(r.scene as *AeScene)
+    return 0
+}
+
 sae_ae_transform(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -4721,9 +4735,9 @@ sae_ae_radial_gradient(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.clip_path(id, shapes, opts?): shapes as [["rect", x, y, w, h],
 // ["circle", cx, cy, r], ["ellipse", cx, cy, rx, ry], ["path", d],
-// ["polygon", points]]; a shape is clipped with { clip: id } ... which the
-// deferred shape verbs cannot carry yet (see the report), so a clip path
-// today is registered and waits for that attribute.
+// ["polygon", points]]. A shape or a group is clipped to it with vg.clip(id)
+// in its block (aether-ui's live scenes have carried clip paths since
+// c42a8914).
 sae_ae_clip_path(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -4846,6 +4860,7 @@ ae_register_(p: *Page) {
     reg_(q, v, "linear_gradient", 7, sae_ae_linear_gradient)
     reg_(q, v, "radial_gradient", 6, sae_ae_radial_gradient)
     reg_(q, v, "clip_path", 3, sae_ae_clip_path)
+    reg_(q, v, "clip", 1, sae_ae_clip)
     reg_(q, v, "css", 1, sae_ae_css)
     quickjs.release(q, v)
     // The JS surface over these: state, computed, bind, each, batch, the

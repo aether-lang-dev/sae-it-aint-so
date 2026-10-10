@@ -38,7 +38,7 @@ exports(
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
     console_count, wait_for_console_n,
     vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool, vg_px_x_in, vg_px_y_in, wait_for_vg_canvas,
-    screenshot, console_contains, wait_for_console, url_encode
+    screenshot, console_contains, wait_for_console, url_encode, vg_nodes
 )
 
 import std.string
@@ -587,6 +587,13 @@ wait_for_vg_pixel(x: int, y: int, rgb: int) -> int {
         i = i + 1
     }
     return 0
+}
+
+// The page's (newest) vg canvas's nodes as JSON, as aether-ui's driver has
+// them: [{"i","kind","visible","x","y","w","h","fill","stroke","text"}...]
+// in canvas px. A spec reads a scene back instead of sampling pixels.
+vg_nodes() -> string {
+    return uidriver.get_body("/canvas/${vg_handle()}/nodes")
 }
 
 // ─── Screenshot and console ──────────────────────────────────────

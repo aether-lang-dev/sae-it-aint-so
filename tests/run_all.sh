@@ -36,6 +36,11 @@ fi
 LOGS=target/run_all
 rm -rf "$LOGS"; mkdir -p "$LOGS"
 T=$ROOT/target
+# Fresh app storage and shell logs every run: the specs that use them expect
+# a first launch (pomatez's tasks were left from the run before, so its
+# "2 to do" read 3 and failed on every run after the first).
+rm -rf "$T/spec-storage" "$T/caps-appdata" "$T/globals-appdata" \
+       "$T/spec-shell.log" "$T/caps-shell.log"
 # label | environment (space-separated NAME=value) | command
 TABLE="
 spec_nav||spec spec_nav
