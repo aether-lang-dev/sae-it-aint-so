@@ -25,8 +25,7 @@
 #     lower, services     -> sae's own         (symlinks: the host's imports)
 #     index.ts, app.json  a copy of <app-dir>  (packed as assets)
 #
-# and passes sae's C files (every src/*.c) as ANDROID_EXTRA_SOURCES, with
-# QuickJS's header on CPATH for src/sae_raster.c.
+# and passes sae's C files (every src/*.c) as ANDROID_EXTRA_SOURCES.
 #
 # Environment: as android-apk.sh (AETHER_SYSROOT, ANDROID_HOME, JAVA_HOME,
 # AE, AETHER_UI_WITH_DRIVER, ...). ANDROID_PACKAGE defaults to
@@ -86,19 +85,6 @@ export ANDROID_LABEL="${ANDROID_LABEL:-$name}"
 SRC_C=""
 for f in "$ROOT"/src/*.c; do SRC_C="$SRC_C $f"; done
 export ANDROID_EXTRA_SOURCES="${SRC_C# }"
-# src/sae_raster.c (the typed-array bytes workaround) includes QuickJS's own
-# header, as .build.ae arranges for the desktop build: the dev tree's
-# contrib/quickjs/amalgamation, else the installed toolchain's. ae build has no
-# -I flag for --extra sources; the cross compiler (zig cc, clang) honours CPATH.
-QJS_INC=""
-for d in "${SAE_AETHER_HOME:-}" "${AETHER_HOME:-}" "$ROOT/../aether"; do
-    [ -n "$d" ] || continue
-    for c in "$d/contrib/quickjs/amalgamation" "$d/current/share/aether/contrib/quickjs/amalgamation" "$d/share/aether/contrib/quickjs/amalgamation"; do
-        if [ -f "$c/quickjs.h" ]; then QJS_INC="$c"; break 2; fi
-    done
-done
-[ -n "$QJS_INC" ] || { echo "saepack-android: cannot find QuickJS's quickjs.h (set AETHER_HOME or SAE_AETHER_HOME)" >&2; exit 1; }
-export CPATH="$QJS_INC${CPATH:+:$CPATH}"
 "$AUI/tools/android-apk.sh" "$stage/sae.ae"
 apk="$AUI/target/android/sae/sae.apk"
 [ -f "$apk" ] || { echo "saepack-android: no APK at $apk" >&2; exit 1; }

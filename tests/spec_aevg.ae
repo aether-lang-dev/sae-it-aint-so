@@ -26,12 +26,11 @@ main() {
             spec.assert_true(b.vg_pixel_near(px(70.0), py(30.0), 0xffffff, 24), "the ellipse's centre is the radial gradient's white")
         }
         // Named gradients are registered on the scene (vg.defs) and a shape
-        // takes one with fill("url(#id)"); aether-ui's live deferred path
-        // paints nothing for it on macOS today (a raw canvas gradient paints,
-        // so the loss is between the shape and the canvas: see the wave1/aevg
-        // report), hence a skip, not a pass.
-        spec.skip_it("a linear gradient shades across a rect; a radial one rims the ellipse",
-                     "aether-ui: gradient fills paint nothing on the live deferred path (macOS)") callback {
+        // takes one with fill("url(#id)"). This was a skip until 2026-10-10:
+        // the host checked a stops list for type "object", but contrib.quickjs
+        // calls an array "array", so every gradient was registered with no
+        // stops and painted nothing.
+        spec.it("a linear gradient shades across a rect; a radial one rims the ellipse") callback {
             spec.assert_true(b.vg_pixel_near(px(6.0), py(11.0), 0xff0000, 60), "the linear gradient starts red")
             spec.assert_true(b.vg_pixel_near(px(44.0), py(11.0), 0x0000ff, 60), "and ends blue")
             spec.assert_true(b.vg_pixel_near(px(88.0), py(30.0), 0x008800, 60), "the ellipse's rim is green")

@@ -17,7 +17,6 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `aevg/` | The page's AeVG scene record (`module.ae`: groups that cascade, defs, the viewBox, the handlers the host dispatches) and the SVG-to-AeVG-TS emitter (`tsemit.ae`, behind `saelower --from-svg`) |
 | `src/sae_prelude.js` | The reactive surface and the vg helpers that are JavaScript (`state`, `computed`, `bind`, `each`, `batch`, `vg.animate`, `vg.items`), evaluated into every page; embedded as `src/sae_prelude.c` by `tools/embed-prelude.sh` |
 | `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
-| `src/sae_raster.c` | A page's `Uint8Array` bytes for `vg.raster` and friends: a labelled workaround over contrib.quickjs's handle table until it can read a typed array (`asks/quickjs-typed-array-bytes.md`) |
 | `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
 | `services/` | One module per effect a page can ask for (`files`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `stdlib`: the `sae:` library and import hashes), each confined by its imports; `docs/architecture.md` |
 | `lib/sae/` | The `sae:` page standard library (`noise`, `scales`, `easing`), written in the dialect; `MANIFEST` holds their build-time hashes (`tools/hash-lib.sh`) |
@@ -96,10 +95,12 @@ tests/run_spec.sh spec_aevg_parity             # corpus pages (tools/gen-corpus.
 tests/run_spec.sh spec_camera                  # demo 1b (site/camera.ts) and the clock components
 ```
 
-Toolchain: Aether 0.791.0 or later (`pins`), installed, or a dev tree
+Toolchain: Aether 0.801.0 or later (`pins`: contrib.sqlite's authorizer
+and column API, contrib.quickjs's `arg_bytes`), installed, or a dev tree
 (`$SAE_AETHER_HOME`, default `../aether`, built with `make compiler ae
-stdlib`; `SAE_AETHER_HOME=none` builds against the installed one even when
-`../aether` exists), and aeb at `350dfc4` or
+stdlib contrib`; `SAE_AETHER_HOME=none` builds against the installed one even when
+`../aether` exists; the bare 0.801.0 release does not link yet, as it ships
+contrib/sqlite's source without its archive), and aeb v0.326 or
 later (it compiles the C contrib.quickjs ships), installed privately under `target/toolchain`:
 
 ```sh

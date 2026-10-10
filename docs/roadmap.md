@@ -231,9 +231,9 @@ clip paths as defs), components as functions, bindings (`bind_fill`,
 drag, scroll, double click), tooltips, zoom and pan as viewBox state, and
 `saelower --from-svg`. Parity through the driver against librsvg: heart
 1.04, beacon 1.87, compass 2.68, atom 4.49, AJ_Digital_Camera 33.70
-(`tests/spec_aevg_parity.ae`). Open: gradient fills paint nothing on
-aether-ui's live path on macOS (the camera's number, and a skipped `it` in
-`spec_aevg`); a shape cannot carry `clip-path=` or a CSS class yet; right
+(`tests/spec_aevg_parity.ae`; the camera was 33.70 until 2026-10-10, when
+its gradients started painting: the host had been dropping every gradient's
+stops). Open: a shape cannot carry `clip-path=` or a CSS class yet; right
 click waits for a canvas hook; export is not started.
 
 AeVG is not an SVG loader. It is the SVG model (shapes, paths, groups,
@@ -399,9 +399,10 @@ rgba)`, `vg.image(bytes, fn?)`, `ui.image(bytes, fn?)`, with `vg.box` and
 `vg.fit` in the block and `vg.raster_size(h)`; budgets 32 MB of pixels and
 4096 a side per page, refused with a TypeError; rasters freed with the
 page. On aether-ui's new AeVG image element (`vg.image`, all five
-backends). The engine side is a labelled workaround until contrib.quickjs
-can read a typed array (`src/sae_raster.c`,
-`asks/quickjs-typed-array-bytes.md`). README "Pixels from a page".
+backends). The engine side was a labelled workaround (`src/sae_raster.c`)
+until contrib.quickjs could read a typed array; since Aether 0.801.0 it is
+`quickjs.arg_bytes` (`asks/quickjs-typed-array-bytes.md`, resolved). README
+"Pixels from a page".
 
 Terrain, Life, pixel art, waveforms, a Mandelbrot: half of Tsyne's canvas
 demos are "a grid of pixels the page computes", and a sae page cannot make

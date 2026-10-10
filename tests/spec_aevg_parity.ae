@@ -64,10 +64,11 @@ main() {
             spec.assert_true(parity("atom") <= 12.0, "atom within 12")
         }
         spec.it("AJ_Digital_Camera: 175 gradients, 80 shapes, inline styles") callback {
-            // Gradient fills paint nothing on aether-ui's live path on macOS
-            // (spec_aevg says why), so the camera's body is missing here;
-            // the number is recorded, and the bound is where that leaves it.
-            spec.assert_true(parity("AJ_Digital_Camera") <= 60.0, "camera within 60 (gradients missing)")
+            // 33.7 while every gradient painted nothing (the host dropped
+            // their stops; spec_aevg says why), 18.4 since they paint
+            // (2026-10-10). The rest is gradient detail the live path draws
+            // differently from librsvg; the bound keeps headroom over 18.4.
+            spec.assert_true(parity("AJ_Digital_Camera") <= 25.0, "camera within 25")
         }
     }
     return spec.run_summary(fw)

@@ -2986,16 +2986,13 @@ sae_sqlite_end(ctx: ptr, this_val: int, argv: int) -> int {
 // dimension and RASTER_BUDGET bytes of pixels per page in total, decoded
 // images included, refused with a TypeError that says which.
 //
-// The bytes come out of the engine through src/sae_raster.c, a labelled
-// workaround for contrib.quickjs having no typed-array access
-// (asks/quickjs-typed-array-bytes.md); its layout mirror is self-checked once
-// per process before any page's bytes are read through it.
+// The bytes come out of the engine through contrib.quickjs's arg_bytes
+// (aether 0.801.0; asks/quickjs-typed-array-bytes.md, resolved): a pointer
+// into the array's own window of its buffer, no copy.
 
 const RASTER_BUDGET = 33554432
 const RASTER_MAX_DIM = 4096
 
-extern sae_qjs_u8_bytes(q: ptr, h: int, out_len: ptr) -> ptr
-extern sae_qjs_u8_self_check(q: ptr) -> int
 extern aether_ui_image_decode_rgba_impl(data: ptr, length: int, out_w: ptr, out_h: ptr) -> ptr
 
 // One raster a page made: its vg node (handle = its index in p.vg_nodes),
@@ -3012,7 +3009,6 @@ struct PageRaster {
 }
 
 var rasters_: ptr = null     // std.list of *PageRaster, every page's
-var raster_checked_ = 0      // 0 not yet, 1 the bytes path works, -1 it does not
 
 raster_list_() -> ptr {
     if rasters_ == null { rasters_ = list.new() }
@@ -3090,27 +3086,16 @@ raster_refusal_(ctx: ptr, what: string, w: int, h: int, bytes: int) -> string {
 
 // The bytes of argument i, a Uint8Array (or Uint8ClampedArray): a pointer
 // into the engine's buffer, valid until JS runs, and their count; null and
-// -1 when it is not one. The first call proves the engine mirror.
+// -1 when it is not one (or is missing).
 arg_bytes_(ctx: ptr, argv: int, argc: int, i: int) -> (ptr, int) {
     if i >= argc { return null, -1 }
-    if raster_checked_ == 0 {
-        if sae_qjs_u8_self_check(ctx) == 1 { raster_checked_ = 1 } else { raster_checked_ = -1 }
-    }
-    if raster_checked_ != 1 { return null, -2 }
-    hv = quickjs.arg(ctx, argv, i)
-    lenp = malloc(4)
-    mem.set_int(lenp, 0, 0)
-    b = sae_qjs_u8_bytes(ctx, hv, lenp)
-    n = mem.get_int(lenp, 0)
-    free(lenp)
-    quickjs.release(ctx, hv)
+    b, n = quickjs.arg_bytes(ctx, argv, i)
     if b == null { return null, -1 }
     return b, n
 }
 
-// The refusal for a bytes argument that is not one, by what arg_bytes_ said.
+// The refusal for a bytes argument that is not one.
 bytes_refusal_(what: string, n: int) -> string {
-    if n == -2 { return "${what}: this build cannot read a page's bytes (the engine's typed-array layout did not check out)" }
     return "${what}: expected a Uint8Array"
 }
 
@@ -4468,6 +4453,10 @@ ae_defs_sb_(ctx: ptr, name: string) -> ptr {
 }
 
 // stops: [[offset, color], [offset, color, opacity], ...] as <stop>s.
+// A gradient's stops, [[offset, color, opacity?], ...]. The caller checks
+// for "array": contrib.quickjs's type_of names an array "array", not
+// "object" (checking "object" dropped every stop, so a gradient painted
+// nothing).
 ae_stops_(ctx: ptr, sb: ptr, stops: int) {
     n = quickjs.length(ctx, stops)
     i = 0
@@ -4515,7 +4504,7 @@ sae_ae_linear_gradient(ctx: ptr, this_val: int, argv: int) -> int {
     _g = strbuilder.append(sb, ">")
     if argc > 5 {
         stops = quickjs.arg(ctx, argv, 5)
-        if quickjs.type_of(ctx, stops) == "object" { ae_stops_(ctx, sb, stops) }
+        if quickjs.type_of(ctx, stops) == "array" { ae_stops_(ctx, sb, stops) }
         quickjs.release(ctx, stops)
     }
     _h = strbuilder.append(sb, "</linearGradient>")
@@ -4545,7 +4534,7 @@ sae_ae_radial_gradient(ctx: ptr, this_val: int, argv: int) -> int {
     _g = strbuilder.append(sb, ">")
     if argc > 4 {
         stops = quickjs.arg(ctx, argv, 4)
-        if quickjs.type_of(ctx, stops) == "object" { ae_stops_(ctx, sb, stops) }
+        if quickjs.type_of(ctx, stops) == "array" { ae_stops_(ctx, sb, stops) }
         quickjs.release(ctx, stops)
     }
     _h = strbuilder.append(sb, "</radialGradient>")

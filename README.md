@@ -517,11 +517,10 @@ host dispatches itself, hit-testing the topmost shape with one.
 join, tweens, events and zoom; `tests/spec_aevg.ae` reads every one back
 as rendered pixels.
 
-**Gradients, today**: `defs` registers them on the scene and a shape takes
-one with `fill("url(#id)")`, but aether-ui's live (deferred) path paints
-nothing for a gradient fill on macOS yet, so `spec_aevg` skips that `it`
-and names the gap. `clip_path` and CSS class selectors are registered and
-wait for shapes to carry a clip or class attribute.
+**Gradients**: `defs` registers them on the scene and a shape takes one
+with `fill("url(#id)")`; `spec_aevg` reads a linear and a radial one back
+as pixels. `clip_path` and CSS class selectors are registered and wait for
+shapes to carry a clip or class attribute.
 
 `saelower --from-svg drawing.svg [--size N] [--solid]` turns an SVG into
 such a page, once (`aevg/tsemit.ae`, the same walk as aether-ui's Aether
@@ -568,9 +567,8 @@ decoded images included, refused with a `TypeError` that says which; a
 page's rasters are freed with the page. Page-scoped, no capability.
 `site/raster.ts`, `site/terrain.ts` (demo 13) and `site/life.ts` (demo 14)
 use it; `tests/spec_raster.ae`, `spec_terrain.ae` and `spec_life.ae` read
-the pixels back. The engine side is a labelled workaround:
-`contrib.quickjs` cannot read a typed array yet (`src/sae_raster.c`,
-`asks/quickjs-typed-array-bytes.md`).
+the pixels back. The bytes come from `contrib.quickjs`'s `arg_bytes`
+(Aether 0.801.0; `asks/quickjs-typed-array-bytes.md`, resolved).
 
 Where a Cosyne app writes `c.circle(30, 40, 18).fill("#c44").onClick(f)`, a
 sae page writes `vg.circle(30, 40, 18, () => { vg.fill("#c44"); vg.on_click(f) })`.

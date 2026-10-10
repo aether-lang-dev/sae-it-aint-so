@@ -17,7 +17,18 @@
 # 0.791.0); the same release carries the pure-Aether TLS client that
 # std.http.client uses where there is no OpenSSL (sae on Android), the
 # Android trust-store directories, and the rerun actor-leak fix.
-AE_PIN=0.791.0
+# 0.801.0 (2026-10-10): a real floor move. contrib.sqlite's authorizer,
+# limit, extension and column API (asks/sqlite-authorizer.md) replace the
+# thirteen sqlite3_* externs and SQLite constants services/sqlite declared for
+# itself, and contrib.quickjs's arg_bytes (asks/quickjs-typed-array-bytes.md)
+# replaces src/sae_raster.c's AeQjs mirror, which is deleted; both arrived in
+# 0.801.0. It also carries #2703 (a closure stored into a ptr field keeps its
+# environment), which aether-ui's vg click handlers need from 0.796 on, and
+# #2709's structured grants (.build.ae's `extern` cap). Verified against the
+# dev tree at 0.801.0 (./build.sh). A bare get.sh install of 0.801.0
+# (SAE_AETHER_HOME=none) does not link yet: the release ships contrib/sqlite's
+# source but not its libaether_sqlite archive, which aether is fixing.
+AE_PIN=0.801.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
@@ -26,9 +37,14 @@ AE_PIN=0.791.0
 # 350dfc4 (c.program compiles the C contrib.quickjs ships with @source), in
 # no tag yet (v0.325 is still the newest): bump this to the first tag that
 # has it.
-AEB_REF=v0.325
+# v0.326 (2026-10-10): the first tag with 350dfc4, released alongside Aether
+# 0.801.0 and moved with it.
+AEB_REF=v0.326
 
 # Sibling checkouts, reached through the aether-ui symlink. c4858fbe adds
 # ui.timer_once and the frame clock (ui.on_frame), which sae's timers use.
+# 4775cdba (2026-10-10): aether-ui on the 0.801.0 floor, its vg setters storing
+# closures directly (the alias workaround gone), and gradients, clip paths and
+# CSS surviving the live scene's context swap (c42a8914).
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=c4858fbe88c8d49941986bf62f3880499cd218bc
+AETHER_UI_REF=4775cdba6b2814cca0c97e08b44cbd1a1a9e1092

@@ -1,7 +1,16 @@
 # Gradient fills do not paint on vg's live (deferred) path
 
-**From:** sae (wave1/aevg, 2026-10-09). **To:** aether-ui. **Status:** open;
-sae skips one spec and paints the camera demo in solid colours meanwhile.
+**From:** sae (wave1/aevg, 2026-10-09). **To:** aether-ui. **Status:**
+RESOLVED 2026-10-10, mostly on sae's side.
+
+**RESOLVED.** Two losses, one each side. aether-ui c42a8914 carries a live
+scene's defs across its context swap on resize (AppKit resizes as the canvas
+is first laid out). And sae's host checked a stops list for
+`type_of == "object"`, which contrib.quickjs answers "array" for, so every
+gradient sae registered had no stops and painted nothing: sae's
+`linear_gradient`/`radial_gradient` now check "array". `spec_aevg`'s
+gradient `it` runs (11/11) and the camera's parity went from 33.70 to 18.41.
+The history below is kept as it was.
 
 ## What happens
 

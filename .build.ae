@@ -5,7 +5,7 @@
 import bldr
 import bldr (dep)
 import c
-import c (sources, aether_source, cflag, link_flag, output_file, aether_home, aether_caps, include)
+import c (sources, aether_source, cflag, link_flag, output_file, aether_home, aether_caps)
 import std.os
 import std.string
 
@@ -41,15 +41,6 @@ aether_root_() -> string {
     return ""
 }
 
-// wave1/raster: where contrib.quickjs's QuickJS header is, for
-// src/sae_raster.c (the typed-array bytes workaround): the dev tree's
-// contrib/, or the installed toolchain's share/aether/contrib/.
-quickjs_include_() -> string {
-    root = aether_root_()
-    if string.length(root) > 0 { return "${root}/contrib/quickjs/amalgamation" }
-    return "${os.getenv("AETHER_HOME")}/current/share/aether/contrib/quickjs/amalgamation"
-}
-
 // The `ae` that reports libaether's own link dependencies.
 ae_bin_() -> string {
     root = aether_root_()
@@ -69,7 +60,7 @@ aeb(cap) {
             // the host reads and fetches pages (std.fs, std.http). Pages
             // themselves get none of these. `extern`: the host is the
             // trusted kernel and names C directly (malloc, the stdout handle,
-            // aether-ui's _impl entry points, sae_raster.c, the prelude);
+            // aether-ui's _impl entry points, the prelude);
             // from aether 0.801 (#2709) a library build must say so.
             aether_caps("fs,os,net,extern")
 
@@ -78,9 +69,6 @@ aeb(cap) {
             // that C includes (fetched into the Aether tree by build.sh).
             aether_source("src/sae_host.ae")
             sources("src/sae_rom.c")
-            // wave1/raster: a page's Uint8Array bytes (see the file's header).
-            sources("src/sae_raster.c")
-            include(quickjs_include_())
             sources("src/sae_prelude.c")
 
             // aether-ui's macOS backend (the darwin arm of aether-ui's

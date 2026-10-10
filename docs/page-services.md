@@ -361,11 +361,11 @@ database (`src/sae_host.ae`, the `wave1/sqlite` section); the engine in
 `contrib.sqlite` alone); migrations applied once and recorded in
 `_sae_migrations`, a failing one refusing the app; the escape routes off in
 the engine (an authorizer written in Aether and handed to
-`sqlite3_set_authorizer` as a typed function pointer, `SQLITE_LIMIT_ATTACHED`
+`sqlite.set_authorizer` as a typed function pointer, `SQLITE_LIMIT_ATTACHED`
 0, extension loading off), which also costs a plain `VACUUM` in this
-version. `contrib.sqlite` exposes none of those calls, nor column names
-and types, so the service declares its own externs against libsqlite3
-(`asks/sqlite-authorizer.md`). Specs: `tests/spec_sqlite_service.ae` (the
+version. Those calls, and the column names and types, are contrib.sqlite's
+own since Aether 0.801.0; until then the service declared its own externs
+against libsqlite3 (`asks/sqlite-authorizer.md`, resolved). Specs: `tests/spec_sqlite_service.ae` (the
 service, no window), `tests/spec_app_sqlite.ae` on `tests/apps/sqlite_demo`
 (pages, the escapes, two pages on one actor), `tests/check_sqlite_relaunch.sh`
 (migrations once across a relaunch; the refused app). Versions 2 and 3

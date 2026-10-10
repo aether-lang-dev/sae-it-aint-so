@@ -2,6 +2,16 @@
 
 **From:** sae (`services/sqlite/module.ae`, branch wave1/sqlite, 2026-10-08)
 
+**Status:** RESOLVED in Aether 0.801.0 (aether `asks/REPLY-sqlite-authorizer.md`).
+
+**RESOLVED, 2026-10-10.** sae pins 0.801.0, and `services/sqlite/module.ae`
+no longer declares any `sqlite3_*` extern or SQLite constant of its own: the
+authorizer (`sqlite.set_authorizer`), `SQLITE_LIMIT_ATTACHED` at 0
+(`sqlite.limit`), extension loading off (`sqlite.enable_load_extension`),
+the column metadata and types, 64-bit and double binds, named parameters and
+`last_insert_rowid` all go through contrib.sqlite. The history below is kept
+as it was.
+
 ## Motivation
 
 sae gives an installed app SQLite databases by name (`sqlite.notes.all(sql,

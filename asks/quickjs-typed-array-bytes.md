@@ -1,8 +1,15 @@
 # contrib.quickjs: read a typed array's bytes
 
 **From:** sae (wave1/raster, 2026-10-08). **Aether:** 0.790.0 / 0.791.0.
-**Status:** worked around in sae (`src/sae_raster.c`); needs a contrib
-addition.
+**Status:** RESOLVED in Aether 0.801.0 (aether
+`asks/REPLY-quickjs-typed-array-bytes.md`): `quickjs.bytes_of`,
+`arg_bytes` and `new_uint8array`.
+
+**RESOLVED, 2026-10-10.** sae pins 0.801.0 and reads a page's bytes with
+`quickjs.arg_bytes` (`arg_bytes_` in `src/sae_host.ae`). `src/sae_raster.c`
+(the `AeQjs` mirror and its self-check) is deleted, with its `.build.ae`
+lines and the QuickJS-header CPATH logic in `tools/saepack-android.sh`. The
+history below is kept as it was.
 
 ## Motivation
 

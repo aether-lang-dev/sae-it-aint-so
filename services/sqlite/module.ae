@@ -22,21 +22,22 @@
 // PRAGMAs that name a directory. Every connection this module opens is held
 // to one file three ways, all in the engine, not by reading the SQL:
 //
-//   - sqlite3_set_authorizer: a callback the engine asks before compiling
+//   - the authorizer (sqlite.set_authorizer): a callback the engine asks before compiling
 //     each operation; it denies SQLITE_ATTACH, SQLITE_DETACH (so VACUUM
 //     too: VACUUM INTO attaches its target, and a plain VACUUM a temporary
 //     file, so neither runs in version 1), the load_extension function, and
 //     the directory PRAGMAs (temp_store_directory, data_store_directory).
-//   - SQLITE_LIMIT_ATTACHED set to 0, so an ATTACH could not succeed even
-//     if the authorizer were not consulted.
-//   - sqlite3_enable_load_extension(0), so no code is loaded from a file.
+//   - SQLITE_LIMIT_ATTACHED set to 0 (sqlite.limit), so an ATTACH could
+//     not succeed even if the authorizer were not consulted.
+//   - extension loading off (sqlite.enable_load_extension(db, 0)), so no
+//     code is loaded from a file.
 //
-// contrib.sqlite does not expose these three calls (nor column names,
-// types, doubles, 64-bit binds, last_insert_rowid or named parameters),
-// so this module declares them itself against the libsqlite3 contrib.sqlite
-// links (asks/sqlite-authorizer.md asks for them upstream; when they land,
-// the externs below go). An Aether function cast `as fn(...)` is the C
-// function pointer the authorizer takes, so no C is needed here.
+// All three, and the column names, types, doubles, 64-bit binds,
+// last_insert_rowid and named parameters, are contrib.sqlite's own since
+// Aether 0.801.0 (asks/sqlite-authorizer.md, resolved); this module declares
+// no extern and no SQLite number of its own. An Aether function cast
+// `as fn(...)` is the C function pointer the authorizer takes, so no C is
+// needed here.
 
 import contrib.sqlite as engine
 import std.json
@@ -44,35 +45,6 @@ import std.string
 import std.strarr
 
 exports (open, close, migrate, execute, applied, KIND_ALL, KIND_GET, KIND_RUN, KIND_EXEC, MIGRATIONS_TABLE)
-
-// What contrib.sqlite does not expose yet (asks/sqlite-authorizer.md).
-extern sqlite3_set_authorizer(db: ptr, cb: fn(ptr, int, string, string, string, string) -> int, ud: ptr) -> int
-extern sqlite3_limit(db: ptr, id: int, val: int) -> int
-extern sqlite3_enable_load_extension(db: ptr, on: int) -> int
-extern sqlite3_column_count(stmt: ptr) -> int
-extern sqlite3_column_name(stmt: ptr, i: int) -> string
-extern sqlite3_column_type(stmt: ptr, i: int) -> int
-extern sqlite3_column_double(stmt: ptr, i: int) -> float
-extern sqlite3_column_int64(stmt: ptr, i: int) -> long long
-extern sqlite3_bind_double(stmt: ptr, i: int, v: float) -> int
-extern sqlite3_bind_int64(stmt: ptr, i: int, v: long long) -> int
-extern sqlite3_bind_parameter_count(stmt: ptr) -> int
-extern sqlite3_bind_parameter_index(stmt: ptr, name: string) -> int
-extern sqlite3_last_insert_rowid(db: ptr) -> long long
-
-// SQLite's own numbers (sqlite3.h), stable since 3.0.
-const SQLITE_LIMIT_ATTACHED = 7
-const AUTH_PRAGMA = 19
-const AUTH_ATTACH = 24
-const AUTH_DETACH = 25
-const AUTH_FUNCTION = 31
-const AUTH_OK = 0
-const AUTH_DENY = 1
-const COL_INTEGER = 1
-const COL_FLOAT = 2
-const COL_TEXT = 3
-const COL_BLOB = 4
-const COL_NULL = 5
 
 // What a job asks for.
 const KIND_ALL = 1    // every row, as an array of objects
@@ -87,12 +59,16 @@ const MIGRATIONS_TABLE = "_sae_migrations"
 open(path: string) -> (ptr, string) {
     db, err = engine.open(path)
     if err != "" { return null, "${err}: ${path}" }
-    _l = sqlite3_limit(db, SQLITE_LIMIT_ATTACHED, 0)
-    _x = sqlite3_enable_load_extension(db, 0)
-    rc = sqlite3_set_authorizer(db, authorize_ as fn(ptr, int, string, string, string, string) -> int, null)
-    if rc != 0 {
+    _l = engine.limit(db, engine.SQLITE_LIMIT_ATTACHED, 0)
+    xerr = engine.enable_load_extension(db, 0)
+    if xerr != "" {
+        _c0 = engine.close(db)
+        return null, "could not switch extension loading off (${xerr}): ${path}"
+    }
+    aerr = engine.set_authorizer(db, authorize_ as fn(ptr, int, string, string, string, string) -> int, null)
+    if aerr != "" {
         _c = engine.close(db)
-        return null, "could not install the authorizer (${rc}): ${path}"
+        return null, "could not install the authorizer (${aerr}): ${path}"
     }
     ferr = engine.exec(db, "PRAGMA foreign_keys = ON")
     if ferr != "" {
@@ -111,15 +87,15 @@ close(db: ptr) -> string {
 // thread runs the statement; it touches nothing shared). Deny what reaches
 // past the database's own file; everything else is the app's business.
 authorize_(ud: ptr, action: int, a1: string, a2: string, a3: string, a4: string) -> int {
-    if action == AUTH_ATTACH || action == AUTH_DETACH { return AUTH_DENY }
-    if action == AUTH_FUNCTION && string.string_length(a2) > 0 {
-        if string.to_lower(a2) == "load_extension" { return AUTH_DENY }
+    if action == engine.SQLITE_ATTACH || action == engine.SQLITE_DETACH { return engine.SQLITE_DENY }
+    if action == engine.SQLITE_FUNCTION && string.string_length(a2) > 0 {
+        if string.to_lower(a2) == "load_extension" { return engine.SQLITE_DENY }
     }
-    if action == AUTH_PRAGMA && string.string_length(a1) > 0 {
+    if action == engine.SQLITE_PRAGMA && string.string_length(a1) > 0 {
         nm = string.to_lower(a1)
-        if nm == "temp_store_directory" || nm == "data_store_directory" { return AUTH_DENY }
+        if nm == "temp_store_directory" || nm == "data_store_directory" { return engine.SQLITE_DENY }
     }
-    return AUTH_OK
+    return engine.SQLITE_OK
 }
 
 // SQLite's "not authorized" is the authorizer's; say what sae switched off.
@@ -205,16 +181,16 @@ execute(db: ptr, kind: int, sql: string, params_json: string) -> (string, string
         err = serr
         if err == "" && rc != engine.SQLITE_DONE && rc != engine.SQLITE_ROW { err = "step failed (${rc})" }
         if err == "" {
-            long last = sqlite3_last_insert_rowid(db)
+            long last = engine.last_insert_rowid(db)
             out = "{\"changes\":${engine.changes(db)},\"lastId\":${last}}"
         }
     } else {
         rows = json.arr()
-        ncol = sqlite3_column_count(st)
+        ncol = engine.column_count(st)
         names = strarr.new()
         c = 0
         while c < ncol {
-            strarr.push_copy(names, sqlite3_column_name(st, c))
+            strarr.push_copy(names, engine.column_name(st, c))
             c = c + 1
         }
         n = 0
@@ -258,14 +234,14 @@ row_(st: ptr, ncol: int, names: ptr) -> ptr {
     o = json.obj()
     c = 0
     while c < ncol {
-        t = sqlite3_column_type(st, c)
+        t = engine.column_type(st, c)
         v = json.null_value()
-        if t == COL_INTEGER {
-            long iv = sqlite3_column_int64(st, c)
+        if t == engine.SQLITE_INTEGER {
+            long iv = engine.column_int64(st, c)
             v = json.from_int(iv)
         }
-        if t == COL_FLOAT { v = json.num(sqlite3_column_double(st, c)) }
-        if t == COL_TEXT || t == COL_BLOB { v = json.str(engine.column_text(st, c)) }
+        if t == engine.SQLITE_FLOAT { v = json.num(engine.column_double(st, c)) }
+        if t == engine.SQLITE_TEXT || t == engine.SQLITE_BLOB { v = json.str(engine.column_text(st, c)) }
         _s = json.set(o, strarr.get(names, c), v)
         c = c + 1
     }
@@ -276,7 +252,7 @@ row_(st: ptr, ncol: int, names: ptr) -> ptr {
 // as the statement has), an object to `$name` (or :name, @name) slots by
 // name. A value is a number, string, boolean or null; nothing else.
 bind_all_(st: ptr, params_json: string) -> string {
-    want = sqlite3_bind_parameter_count(st)
+    want = engine.bind_parameter_count(st)
     if params_json == "" || params_json == "null" || params_json == "undefined" {
         if want > 0 { return "the statement has ${want} parameter(s) and none were given" }
         return ""
@@ -301,9 +277,9 @@ bind_all_(st: ptr, params_json: string) -> string {
         i = 0
         while i < n && err == "" {
             key = json.json_object_key_at(pv, i)
-            idx = sqlite3_bind_parameter_index(st, "$${key}")
-            if idx == 0 { idx = sqlite3_bind_parameter_index(st, ":${key}") }
-            if idx == 0 { idx = sqlite3_bind_parameter_index(st, "@${key}") }
+            idx = engine.bind_parameter_index(st, "$${key}")
+            if idx == 0 { idx = engine.bind_parameter_index(st, ":${key}") }
+            if idx == 0 { idx = engine.bind_parameter_index(st, "@${key}") }
             if idx == 0 {
                 err = "the statement has no parameter named $${key}"
             } else {
@@ -321,22 +297,22 @@ bind_all_(st: ptr, params_json: string) -> string {
 
 bind_one_(st: ptr, idx: int, v: ptr, shown: string) -> string {
     t = json.json_type(v)
-    rc = 0
-    if t == 0 { rc = engine.sqlite_bind_null_raw(st, idx) }
-    if t == 1 { rc = engine.sqlite_bind_int_raw(st, idx, json.json_get_bool(v)) }
+    if t == 4 || t == 5 { return "parameter ${shown}: a value is a number, string, boolean or null, not an array or object" }
+    err = ""
+    if t == 0 { err = engine.bind_null(st, idx) }
+    if t == 1 { err = engine.bind_int(st, idx, json.json_get_bool(v)) }
     if t == 2 {
         if json.json_is_integer(v) == 1 {
             long lv = json.json_get_long(v)
-            rc = sqlite3_bind_int64(st, idx, lv)
+            err = engine.bind_int64(st, idx, lv)
         } else {
-            rc = sqlite3_bind_double(st, idx, json.json_get_number(v))
+            err = engine.bind_double(st, idx, json.json_get_number(v))
         }
     }
     if t == 3 {
         s, _serr = json.get_string(v)
-        rc = engine.sqlite_bind_text_raw(st, idx, s)
+        err = engine.bind_text(st, idx, s)
     }
-    if t == 4 || t == 5 { return "parameter ${shown}: a value is a number, string, boolean or null, not an array or object" }
-    if rc != 0 { return "parameter ${shown}: bind failed (${rc})" }
+    if err != "" { return "parameter ${shown}: ${err}" }
     return ""
 }
