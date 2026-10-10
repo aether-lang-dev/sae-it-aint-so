@@ -50,5 +50,8 @@ AEB_REF=v0.326
 # calls (site/life.ts); it also carries a text's transform on the live path
 # (b3d697c9), spacers before a canvas (20c04d57, spec_aevg_parity's 400-wide
 # corpus canvases on GTK4) and GTK4 pictures at their own size (a13a39ec).
+# 947a5b06 (2026-10-10): on_submit (ui.on_submit), vg text_set_pos (vg.set's
+# x and y on a text), text_wrapped that really wraps on GTK4
+# (ui.text_wrapped), and visible_when that hides a text.
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=a2d7038d2e7a492376fd0dd22017e18d3bcd97fc
+AETHER_UI_REF=947a5b06fdc55c2a179541c74024863d60ed09d9

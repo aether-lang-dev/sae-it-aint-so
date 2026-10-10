@@ -72,6 +72,8 @@ The `ui` object (each builder returns its widget handle):
 | showing | `set_visible(h, on)`: hide a view and keep it (and its timers, vg scenes) alive |
 | reactive state | `state(v)`, `computed(fn, ...states)`, `bind(widget, state)`, `` bind`...${s}...` ``, `bind_enabled`, `bind_hidden`, `each(list, key, render)`, `batch(fn)` (globals too: see Reactive state below); the cell-level `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` still work |
 | enabling | `set_enabled(h, on)`: grey a widget out, or back |
+| keyboard | `on_key(fn(key, mods))`: every key while the page has the focus (names as `"Left"`, `"Return"`, `"BackSpace"`, `"a"`; mods 1 shift, 2 ctrl, 4 alt, 8 super), never a key typed into the browser's chrome; `on_submit(field, fn(text))`: Return in a text field; `focus(h)` |
+| text and size | `text_wrapped(s, px)`: a label that wraps its words at `px`; `width(h)`, `height(h)`: a widget's laid-out size in px |
 
 An app's databases (`"seeks database <name>"`; App mode below), every call a promise, run on an actor off the UI thread:
 
@@ -226,6 +228,12 @@ in the kernel, each with its attempt in the escape corpus
 Tsyne's `examples/sandbox-breakout`) and its happy path in
 `tests/spec_webrules.ae`.
 
+- **Keys typed into the chrome are not a page's.** `ui.on_key` hears a key
+  only while the page has the focus (one of its own widgets, or none): what
+  a person types into the address bar never reaches a page, which would
+  otherwise be a keylogger for every URL typed while it is open
+  (`tests/spec_keys.ae` types into the address bar and finds the page heard
+  nothing).
 - **Same-origin by construction.** A page's `http` reaches its own origin
   without asking. Another origin it may *request*, under the CORS-alike
   below; nothing else.
@@ -501,6 +509,7 @@ vg.scene("0 0 100 100", 300, 300, () => {
 | zoom and pan | `view_box(state or fn)` in a scene's block: the viewBox follows it; `set_view_box(scene, vb)` |
 | later, from anywhere | `set_fill(h, color)`, `set_stroke(h, color, width)`, `set_opacity(h, v)`, `set_text(h, s)`, `set_transform(h, t)`, `set_visible(h, on)`, `set(h, { ...props })` (several at once, one repaint), `get(h)`, `remove(h)`: change a shape or group and repaint |
 | pixels | `raster(w, h, rgba, fn?)`: a w x h image element from a `Uint8Array` of RGBA8 (w*h*4 bytes), at (0, 0), one viewBox unit a pixel; `raster_update(h, rgba)` new pixels in place; `image(bytes, fn?)`: a PNG/JPEG/GIF/BMP decoded by the toolkit, at its own size; `raster_size(h)` → `[w, h]` |
+| text metrics | `measure(text, size)` → `{ width, height, ascent, descent }` in px, the toolkit's own metrics for what `text` draws; `ellipsize(text, size, maxWidth)`: cut to fit, ending in `…` |
 | in a raster's or image's block | `box(x, y, w, h)` where it draws, `fit(mode)`: `"stretch"` (default), `"contain"`, `"cover"`, `"original"`; `rendering(mode)`: `"auto"` (default, smoothed) or `"pixelated"` (each pixel a crisp square when scaled); and `on_click`, `opacity`, `transform` as for any shape |
 
 ### AeVG alive: the SVG model as TypeScript
