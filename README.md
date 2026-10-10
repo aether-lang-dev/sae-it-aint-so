@@ -621,6 +621,10 @@ status line under the toolbar shows the status and final URL.
 
 ## Build and run
 
+The desktop build selects AppKit on macOS and GTK4 on Linux/FreeBSD.
+On Debian/Ubuntu, install the GTK4 build dependencies with
+`sudo apt install build-essential pkg-config libgtk-4-dev libepoxy-dev`.
+
 The sibling checkouts are reached through symlinks at the repo root:
 
 | link | points to | why |
@@ -632,8 +636,13 @@ The sibling checkouts are reached through symlinks at the repo root:
 ```sh
 ./build.sh                     # target/build/bin/sae
 target/build/bin/sae pages/hello.js
+target/build/bin/sae site/algos.ts    # algorithm theatre, including its local imports
 SAE_NO_WINDOW=1 target/build/bin/sae pages/hello.js   # build the page, print timings, exit
 ```
+
+In the address bar, local paths are relative to the working directory, as
+on the command line. Pressing Go on `site/algos.ts` loads that same file.
+Links within a page still resolve relative to that page's directory.
 
 A development page server maps `/about` to `site/about.js`, serves
 `site/404.js` with status 404 for unknown paths, and answers `/old-home` with
@@ -805,6 +814,7 @@ for up to 3 s; nothing sleeps blind.
 
 ```sh
 tests/run_spec.sh                 # tests/spec_nav.ae against site/
+SAE_TEST_START=site/algos.ts tests/run_spec.sh spec_local_nav  # local address bar and history
 tests/run_spec.sh my_spec ../my-site
 ```
 
@@ -817,5 +827,5 @@ The launcher starts `target/pageserver` on the site and `sae-driver` on port
 Done: the spike (five builders through the context stack, click handlers held
 as GC roots, per-phase timings; numbers in `docs/spike-results.md`), HTTP
 fetch, history and navigation, browser chrome, the page-dialect lowerer. Not
-yet: more of the `ui` surface, the bytecode cache, GTK4/Win32 build arms,
+yet: more of the `ui` surface, the bytecode cache, a Win32 build arm,
 `class` in the dialect.

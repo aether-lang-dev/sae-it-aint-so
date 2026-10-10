@@ -6470,7 +6470,15 @@ build_chrome_(b: *Browser, root: int) {
         typed = ui.get_text(b.addr)
         base = ""
         if b.page != null { base = (b.page as *Page).url }
-        request_nav_(b, NAV_GO, resolve_(base, typed))
+        // Local addresses are paths from the working directory, just like
+        // the command-line argument and the path shown in this field.
+        // Only web/app addresses resolve against the current page. Page
+        // links still use resolve_ for directory-relative navigation.
+        target = own_(typed)
+        if is_http_(base) == 1 || is_app_(base) == 1 {
+            target = resolve_(base, typed)
+        }
+        request_nav_(b, NAV_GO, target)
         nav_typed_ = 1   // the person asked, not the page: see run_nav_
     })
     b.status = ui.text(rctx, "")

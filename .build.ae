@@ -71,19 +71,29 @@ aeb(cap) {
             sources("src/sae_rom.c")
             sources("src/sae_prelude.c")
 
-            // aether-ui's macOS backend (the darwin arm of aether-ui's
-            // build_support/aetherui ui_backend, which targets the aether
-            // SDK rather than c.program).
-            sources("aether-ui/backend/aether_ui_macos.m")
+            // Mirror aether-ui's ui_backend platform sources and flags;
+            // that builder targets aether.program rather than c.program.
             sources(control_source_())
             sources("aether-ui/backend/aether_ui_system_extras.c")
-            cflag("-fobjc-arc")
-            link_flag("-framework AppKit")
-            link_flag("-framework Foundation")
-            link_flag("-framework QuartzCore")
-            link_flag("-framework CoreText")
-            link_flag("-framework ImageIO")
-            link_flag("-framework OpenGL")
+            platform = os.platform()
+            if platform == "darwin" {
+                sources("aether-ui/backend/aether_ui_macos.m")
+                cflag("-fobjc-arc")
+                link_flag("-framework AppKit")
+                link_flag("-framework Foundation")
+                link_flag("-framework QuartzCore")
+                link_flag("-framework CoreText")
+                link_flag("-framework ImageIO")
+                link_flag("-framework OpenGL")
+            } else if platform == "linux" || platform == "freebsd" {
+                sources("aether-ui/backend/aether_ui_gtk4.c")
+                sources("aether-ui/backend/aether_ui_sni.c")
+                cflag("$(pkg-config --cflags gtk4 epoxy)")
+                link_flag("$(pkg-config --libs gtk4 epoxy)")
+            } else {
+                print("sae: unsupported build platform ${platform}")
+                return 1
+            }
 
             // libaether's own dependencies (OpenSSL for std.http, ...),
             // as aether-ui's ui_backend gets them.

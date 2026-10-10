@@ -1,0 +1,37 @@
+// Run with SAE_TEST_START=site/algos.ts tests/run_spec.sh spec_local_nav.
+import std.spec
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "local addresses in the browser chrome") {
+        spec.it("Go reloads the displayed local path without adding its directory") callback {
+            b.assert_page("Algorithm theatre", "200 site/algos.ts", "local startup")
+            before = b.console_count("algos: Bubble vs Quick on seed 7")
+            b.click("Go")
+            spec.assert_true(b.wait_for_console_n("algos: Bubble vs Quick on seed 7", before + 1), "Go actually loaded the page again")
+            b.assert_url("site/algos.ts", "Go preserves the path")
+            b.assert_page("Algorithm theatre", "200 site/algos.ts", "local Go")
+        }
+        spec.it("another local address is relative to the working directory") callback {
+            b.navigate("pages/hello.js")
+            b.assert_page("Hello from a page.", "200 pages/hello.js", "typed local path")
+            b.back()
+            b.assert_page("Algorithm theatre", "200 site/algos.ts", "back to algos")
+            b.forward()
+            b.assert_page("Hello from a page.", "200 pages/hello.js", "forward to hello")
+            b.reload()
+            b.assert_page("Hello from a page.", "200 pages/hello.js", "reload local file")
+        }
+        spec.it("HTTP addresses still support page-relative navigation") callback {
+            b.navigate(b.test_url("/"))
+            b.assert_url(b.test_url("/"), "web home")
+            b.navigate("about")
+            b.assert_page("About", "200 ", "relative HTTP address")
+            b.assert_url(b.test_url("/about"), "web about")
+        }
+    }
+    return spec.run_summary(fw)
+}
