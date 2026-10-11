@@ -59,6 +59,7 @@ spec_terrain||spec spec_terrain
 spec_life||spec spec_life
 spec_algos||spec spec_algos
 spec_sheet||spec spec_sheet
+spec_rexxsheet||spec spec_rexxsheet
 spec_keys||spec spec_keys
 spec_grid||spec spec_grid
 spec_aevg||spec spec_aevg

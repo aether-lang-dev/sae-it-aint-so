@@ -29,6 +29,7 @@ const links: Link[] = [
   { label: "Life", href: "/life" },
   { label: "Algorithm theatre", href: "/algos" },
   { label: "Spreadsheet", href: "/sheet" },
+  { label: "RexxSheet", href: "/rexxsheet" },
   { label: "Modifier misuse", href: "/misuse" },
   { label: "A page that is not there", href: "/nowhere" },
   { label: "Old home (302 to /)", href: "/old-home" },
