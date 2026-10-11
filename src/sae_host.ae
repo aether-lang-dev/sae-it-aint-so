@@ -469,7 +469,8 @@ sae_ui_text(ctx: ptr, this_val: int, argv: int) -> int {
     long t = now_ns_()
     h = ui.text(mem.long_to_ptr(top_(p)), label)
     ui_done_(p, t)
-    return quickjs.new_int(ctx, h)
+    // text(label, () => { ondrag(...) }): a block is the label's own.
+    return container_(ctx, argv, argc, h)
 }
 
 sae_ui_divider(ctx: ptr, this_val: int, argv: int) -> int {
@@ -585,6 +586,14 @@ sae_ui_textfield(ctx: ptr, this_val: int, argv: int) -> int {
     long t = now_ns_()
     h = ui.textfield(mem.long_to_ptr(top_(p)), placeholder, on_change)
     ui_done_(p, t)
+    // textfield(placeholder, onChange, () => { onsubmit(...) }): a third
+    // argument is the field's own block.
+    if argc >= 3 && is_fn_arg_(ctx, argv, 2) != 0 {
+        if push_(p, h) == 0 { return sae_throw_type_error(ctx, "containers nested too deeply") }
+        r = call_arg_(ctx, argv, 2)
+        pop_(p)
+        if r < 0 { return rethrow_(ctx) }
+    }
     return quickjs.new_int(ctx, h)
 }
 
@@ -655,11 +664,73 @@ sae_ui_on_submit(ctx: ptr, this_val: int, argv: int) -> int {
     if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.on_submit(h, fn): h is not a widget this page made") }
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.on_submit(h, fn): fn must be a function") }
     ref = hold_arg_(ctx, argv, 1)
-    ui.on_submit(h) callback |t: string| {
+    submit_to_(ctx, h, ref)
+    return quickjs.new_int(ctx, h)
+}
+
+submit_to_(ctx: ptr, h: int, ref: int) {
+    _h = ui.on_submit(h) callback |t: string| {
         r = call1_str_(ctx, ref, t)
-        if r < 0 { report_exception_(ctx, "a ui.on_submit handler") }
+        if r < 0 { report_exception_(ctx, "a submit handler") }
         settle_(ctx)
     }
+}
+
+// onsubmit(fn(text)): on_submit for the field whose block this is.
+sae_ui_onsubmit(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    target = modifier_target_(ctx, "onsubmit")
+    if target == 0 { return sae_throw_type_error(ctx, "onsubmit() must be called inside a field's block") }
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "onsubmit(fn): fn must be a function") }
+    submit_to_(ctx, target, hold_arg_(ctx, argv, 0))
+    return 0
+}
+
+// Call a held JS function with (number, number, number).
+call_iff_(ctx: ptr, ref: int, a: int, x: float, y: float, what: string) {
+    args = quickjs.new_array(ctx)
+    va = quickjs.new_int(ctx, a)
+    _a = quickjs.set_index(ctx, args, 0, va)
+    quickjs.release(ctx, va)
+    vx = quickjs.new_float(ctx, x)
+    _x = quickjs.set_index(ctx, args, 1, vx)
+    quickjs.release(ctx, vx)
+    vy = quickjs.new_float(ctx, y)
+    _y = quickjs.set_index(ctx, args, 2, vy)
+    quickjs.release(ctx, vy)
+    if calln_(ctx, ref, args) < 0 { report_exception_(ctx, what) }
+    quickjs.release(ctx, args)
+}
+
+drag_to_(ctx: ptr, h: int, ref: int) {
+    _h = ui.on_drag(h) callback |phase: int, x: float, y: float| {
+        call_iff_(ctx, ref, phase, x, y, "a drag handler")
+        settle_(ctx)
+    }
+}
+
+// ui.on_drag(h, fn(phase, x, y)) -> h: a press (phase 0, at (x, y) in the
+// widget), moves (1) and the release (2), those two as offsets from the
+// press.
+sae_ui_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.on_drag(h, fn): h is not a widget this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.on_drag(h, fn): fn must be a function") }
+    drag_to_(ctx, h, hold_arg_(ctx, argv, 1))
+    return quickjs.new_int(ctx, h)
+}
+
+// ondrag(fn(phase, x, y)): on_drag for the widget whose block this is.
+sae_ui_ondrag(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    target = modifier_target_(ctx, "ondrag")
+    if target == 0 { return sae_throw_type_error(ctx, "ondrag() must be called inside a widget's block") }
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "ondrag(fn): fn must be a function") }
+    drag_to_(ctx, target, hold_arg_(ctx, argv, 0))
     return 0
 }
 
@@ -728,6 +799,21 @@ sae_vg_ellipsize(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ===== ui.datagrid: aether-ui's virtualised grid for pages =====
+//
+// Declaratively, the grid is the receiver of its block, as a button is of
+// its own (aether-ui's datagrid(...) { ... } in Aether):
+//
+//   ui.datagrid(1000000, 40, 15, 5, 1, () => {
+//     column_width(80);
+//     cells((r, c) => `${r},${c}`);
+//     headers((c) => letters(c));
+//     on_cell_select((r, c) => ...);
+//     on_cell_edit((r, c, text) => ...);
+//   });
+//
+// or by handle, each ui.datagrid_* setter returning the grid. A function of
+// one or more parameters in the block's place is taken as the cell function
+// (the first form this binding had).
 
 // The most cell widgets one grid may show (vis_rows x (frozen + vis_cols)):
 // a page asks for a window, and every shown cell is a real widget.
@@ -755,6 +841,23 @@ call_ii_str_(ctx: ptr, ref: int, a: int, b: int, what: string) -> string {
     return out
 }
 
+// Call a held JS function with (number, number, string) and nothing back;
+// what it throws is reported.
+call_iis_(ctx: ptr, ref: int, a: int, b: int, t: string, what: string) {
+    args = quickjs.new_array(ctx)
+    va = quickjs.new_int(ctx, a)
+    _a = quickjs.set_index(ctx, args, 0, va)
+    quickjs.release(ctx, va)
+    vb = quickjs.new_int(ctx, b)
+    _b = quickjs.set_index(ctx, args, 1, vb)
+    quickjs.release(ctx, vb)
+    vt = quickjs.new_string(ctx, t)
+    _t = quickjs.set_index(ctx, args, 2, vt)
+    quickjs.release(ctx, vt)
+    if calln_(ctx, ref, args) < 0 { report_exception_(ctx, what) }
+    quickjs.release(ctx, args)
+}
+
 // The page's grid with handle h (1-based), or null.
 dgrid_of_(p: *Page, h: int) -> ptr {
     if h < 1 || h > list.size(p.dgrids) { return null }
@@ -762,12 +865,78 @@ dgrid_of_(p: *Page, h: int) -> ptr {
     return g
 }
 
-// ui.datagrid(rows, cols, visRows, visCols, frozen, cell(r, c) -> string):
-// a grid of rows x cols cells whose text comes from cell() as each is shown,
-// so a model of millions of rows costs nothing until scrolled to. Only the
-// shown window exists as widgets; a header row (ui.datagrid_header) and the
-// `frozen` leading columns stay put; native sliders scroll it. Returns its
-// handle for the other ui.datagrid_* calls.
+// The grid whose block is running (its widget is the receiver), or null.
+dgrid_at_top_(p: *Page) -> ptr {
+    if p.depth < 2 { return null }
+    top = top_(p)
+    n = list.size(p.dgrids)
+    i = 0
+    while i < n {
+        g, _e = list.get(p.dgrids, i)
+        if g != null && ui.datagrid_widget(g) == top { return g }
+        i = i + 1
+    }
+    return null
+}
+
+// The grid named by argument 0 of a ui.datagrid_* call, or null.
+dgrid_arg_(ctx: ptr, argv: int, argc: int) -> ptr {
+    return dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ---- What a grid hears, shared by the ui.datagrid_* forms and the block's
+// verbs: each takes its function from argument i and returns "" or what is
+// wrong with it.
+
+dg_cells_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
+    if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (row, col) => string" }
+    ref = hold_arg_(ctx, argv, i)
+    _g = ui.datagrid_cells(g) callback |r: int, c: int| {
+        return call_ii_str_(ctx, ref, r, c, "a ui.datagrid cell function")
+    }
+    return ""
+}
+
+dg_headers_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
+    if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (col) => string" }
+    ref = hold_arg_(ctx, argv, i)
+    _g = ui.datagrid_header(g) callback |c: int| {
+        return call_ii_str_(ctx, ref, c, 0, "a ui.datagrid header function")
+    }
+    return ""
+}
+
+// kind: 0 click, 1 select, 2 activate, 3 column resize, 4 column move.
+dg_on_ii_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string {
+    if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function of two numbers" }
+    ref = hold_arg_(ctx, argv, i)
+    fire = |a: int, b: int| {
+        _s = call_ii_str_(ctx, ref, a, b, "a ui.datagrid handler")
+        settle_(ctx)
+    }
+    if kind == 0 { _g = ui.datagrid_on_click(g, fire) }
+    if kind == 1 { _g = ui.datagrid_on_select(g, fire) }
+    if kind == 2 { _g = ui.datagrid_on_activate(g, fire) }
+    if kind == 3 { _g = ui.datagrid_on_col_resize(g, fire) }
+    if kind == 4 { _g = ui.datagrid_on_col_move(g, fire) }
+    return ""
+}
+
+dg_on_edit_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
+    if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (row, col, text) => void" }
+    ref = hold_arg_(ctx, argv, i)
+    _g = ui.datagrid_on_edit(g) callback |r: int, c: int, t: string| {
+        call_iis_(ctx, ref, r, c, t, "a ui.datagrid edit handler")
+        settle_(ctx)
+    }
+    return ""
+}
+
+// ui.datagrid(rows, cols, visRows, visCols, frozen, block?) -> a handle: a
+// grid of rows x cols cells whose text comes from its cell function as each
+// is shown, so a model of millions of rows costs nothing until scrolled to.
+// The block configures it (cells, headers, on_cell_*, column_width, ...);
+// a function of one or more parameters there is the cell function itself.
 sae_ui_datagrid(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -777,47 +946,118 @@ sae_ui_datagrid(ctx: ptr, this_val: int, argv: int) -> int {
     vr = arg_int_(ctx, argv, argc, 2, 20)
     vc = arg_int_(ctx, argv, argc, 3, 6)
     fz = arg_int_(ctx, argv, argc, 4, 0)
-    if rows < 0 || cols < 0 || vr < 1 || vc < 0 || fz < 0 { return sae_throw_type_error(ctx, "ui.datagrid(rows, cols, visRows, visCols, frozen, cell): counts must be positive") }
+    if rows < 0 || cols < 0 || vr < 1 || vc < 0 || fz < 0 { return sae_throw_type_error(ctx, "ui.datagrid(rows, cols, visRows, visCols, frozen, block): counts must be positive") }
     if vr * (fz + vc) > DATAGRID_MAX_SHOWN { return sae_throw_type_error(ctx, "ui.datagrid: at most ${DATAGRID_MAX_SHOWN} cells may be shown at once") }
-    if argc < 6 || is_fn_arg_(ctx, argv, 5) == 0 { return sae_throw_type_error(ctx, "ui.datagrid(..., cell): cell must be a function (row, col) => string") }
-    ref = hold_arg_(ctx, argv, 5)
+    if argc >= 6 && is_fn_arg_(ctx, argv, 5) == 0 { return sae_throw_type_error(ctx, "ui.datagrid(..., block): block must be a function") }
     long t = now_ns_()
-    g = ui.datagrid(mem.long_to_ptr(top_(p)), rows, cols, vr, vc, fz) callback |r: int, c: int| {
-        return call_ii_str_(ctx, ref, r, c, "a ui.datagrid cell function")
-    }
+    g = ui.datagrid(mem.long_to_ptr(top_(p)), rows, cols, vr, vc, fz)
     ui_done_(p, t)
     list.add(p.dgrids, g)
-    return quickjs.new_int(ctx, list.size(p.dgrids))
+    hnd = list.size(p.dgrids)
+    if argc >= 6 {
+        fh = quickjs.arg(ctx, argv, 5)
+        nparams = quickjs.length(ctx, fh)
+        quickjs.release(ctx, fh)
+        if nparams >= 1 {
+            _e = dg_cells_(ctx, g, argv, argc, 5)
+        } else {
+            if push_(p, ui.datagrid_widget(g)) == 0 { return sae_throw_type_error(ctx, "containers nested too deeply") }
+            r = call_arg_(ctx, argv, 5)
+            pop_(p)
+            if r < 0 { return rethrow_(ctx) }
+        }
+    }
+    return quickjs.new_int(ctx, hnd)
 }
 
-// ui.datagrid_header(g, header(c) -> string): the header row's text.
+// ui.datagrid_cells(g, fn(r, c) -> string): the cells' text (c a model column).
+sae_ui_datagrid_cells(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_cells: g is not a grid this page made") }
+    e = dg_cells_(ctx, g, argv, argc, 1)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_cells(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_header(g, fn(c) -> string): the header row's text.
 sae_ui_datagrid_header(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_header(g, fn): g is not a grid this page made") }
-    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_header(g, fn): fn must be a function (col) => string") }
-    ref = hold_arg_(ctx, argv, 1)
-    ui.datagrid_header(g) callback |c: int| {
-        return call_ii_str_(ctx, ref, c, 0, "a ui.datagrid header function")
-    }
-    return 0
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_header: g is not a grid this page made") }
+    e = dg_headers_(ctx, g, argv, argc, 1)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_header(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
-// ui.datagrid_on_click(g, fn(row, col)): a click on a cell, with the row and
-// column it shows at the moment.
+// ui.datagrid_on_click(g, fn(a, b)): a click on a cell, with its row and column.
 sae_ui_datagrid_on_click(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_click(g, fn): g is not a grid this page made") }
-    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_click(g, fn): fn must be a function (row, col) => void") }
-    ref = hold_arg_(ctx, argv, 1)
-    ui.datagrid_on_click(g) callback |r: int, c: int| {
-        _s = call_ii_str_(ctx, ref, r, c, "a ui.datagrid click handler")
-        settle_(ctx)
-    }
-    return 0
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_click: g is not a grid this page made") }
+    e = dg_on_ii_(ctx, g, argv, argc, 1, 0)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_click(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_on_select(g, fn(a, b)): the selection changed; the cursor is at (r, c).
+sae_ui_datagrid_on_select(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_select: g is not a grid this page made") }
+    e = dg_on_ii_(ctx, g, argv, argc, 1, 1)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_select(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_on_activate(g, fn(a, b)): Return on the cursor cell (a grid without editing).
+sae_ui_datagrid_on_activate(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_activate: g is not a grid this page made") }
+    e = dg_on_ii_(ctx, g, argv, argc, 1, 2)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_activate(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_on_col_resize(g, fn(a, b)): a header drag gave view column c width w.
+sae_ui_datagrid_on_col_resize(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_col_resize: g is not a grid this page made") }
+    e = dg_on_ii_(ctx, g, argv, argc, 1, 3)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_col_resize(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_on_col_move(g, fn(a, b)): a column moved.
+sae_ui_datagrid_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_col_move: g is not a grid this page made") }
+    e = dg_on_ii_(ctx, g, argv, argc, 1, 4)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_col_move(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_on_edit(g, fn(r, c, text)): makes the grid editable; an edit
+// of row r, MODEL column c committed with this text (store it; the cell
+// function is asked again).
+sae_ui_datagrid_on_edit(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_edit: g is not a grid this page made") }
+    e = dg_on_edit_(ctx, g, argv, argc, 1)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_edit(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
 // ui.datagrid_scroll_to(g, row, col): show row at the top and col as the
@@ -825,20 +1065,20 @@ sae_ui_datagrid_on_click(ctx: ptr, this_val: int, argv: int) -> int {
 sae_ui_datagrid_scroll_to(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_scroll_to(g, row, col): g is not a grid this page made") }
-    ui.datagrid_scroll_to(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
-    return 0
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_scroll_to: g is not a grid this page made") }
+    _g = ui.datagrid_scroll_to(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
 // ui.datagrid_refresh(g): the model changed; show the cells again.
 sae_ui_datagrid_refresh(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_refresh(g): g is not a grid this page made") }
-    ui.datagrid_refresh(g)
-    return 0
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_refresh: g is not a grid this page made") }
+    _g = ui.datagrid_refresh(g)
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
 // ui.datagrid_first(g) -> [row, col]: the first row and first scrolling
@@ -846,8 +1086,8 @@ sae_ui_datagrid_refresh(ctx: ptr, this_val: int, argv: int) -> int {
 sae_ui_datagrid_first(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_first(g): g is not a grid this page made") }
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_first: g is not a grid this page made") }
     return json_value_(ctx, "[${ui.datagrid_first_row(g)}, ${ui.datagrid_first_col(g)}]")
 }
 
@@ -855,10 +1095,10 @@ sae_ui_datagrid_first(ctx: ptr, this_val: int, argv: int) -> int {
 sae_ui_datagrid_select(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_select(g, row, col): g is not a grid this page made") }
-    ui.datagrid_select(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
-    return 0
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_select: g is not a grid this page made") }
+    _g = ui.datagrid_select(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
 // ui.datagrid_select_range(g, anchorRow, anchorCol, row, col): the rectangle
@@ -866,10 +1106,10 @@ sae_ui_datagrid_select(ctx: ptr, this_val: int, argv: int) -> int {
 sae_ui_datagrid_select_range(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_select_range(g, ar, ac, row, col): g is not a grid this page made") }
-    ui.datagrid_select_range(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0), arg_int_(ctx, argv, argc, 3, 0), arg_int_(ctx, argv, argc, 4, 0))
-    return 0
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_select_range: g is not a grid this page made") }
+    _g = ui.datagrid_select_range(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0), arg_int_(ctx, argv, argc, 3, 0), arg_int_(ctx, argv, argc, 4, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
 // ui.datagrid_selection(g) -> [anchorRow, anchorCol, row, col], the cursor
@@ -877,60 +1117,38 @@ sae_ui_datagrid_select_range(ctx: ptr, this_val: int, argv: int) -> int {
 sae_ui_datagrid_selection(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_selection(g): g is not a grid this page made") }
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_selection: g is not a grid this page made") }
     return json_value_(ctx, "[${ui.datagrid_anchor_row(g)}, ${ui.datagrid_anchor_col(g)}, ${ui.datagrid_cursor_row(g)}, ${ui.datagrid_cursor_col(g)}]")
-}
-
-// ui.datagrid_on_select(g, fn(row, col)): the selection changed (a click, a
-// key or a select call); the cursor is at (row, col).
-sae_ui_datagrid_on_select(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_select(g, fn): g is not a grid this page made") }
-    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_select(g, fn): fn must be a function (row, col) => void") }
-    ref = hold_arg_(ctx, argv, 1)
-    ui.datagrid_on_select(g) callback |r: int, c: int| {
-        _s = call_ii_str_(ctx, ref, r, c, "a ui.datagrid select handler")
-        settle_(ctx)
-    }
-    return 0
-}
-
-// ui.datagrid_on_activate(g, fn(row, col)): Return on the cursor cell.
-sae_ui_datagrid_on_activate(ctx: ptr, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_activate(g, fn): g is not a grid this page made") }
-    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_activate(g, fn): fn must be a function (row, col) => void") }
-    ref = hold_arg_(ctx, argv, 1)
-    ui.datagrid_on_activate(g) callback |r: int, c: int| {
-        _s = call_ii_str_(ctx, ref, r, c, "a ui.datagrid activate handler")
-        settle_(ctx)
-    }
-    return 0
 }
 
 // ui.datagrid_col_width(g, c) -> number: view column c's width.
 sae_ui_datagrid_col_width(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    g = dgrid_arg_(ctx, argv, argc)
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_col_width: g is not a grid this page made") }
     return quickjs.new_int(ctx, ui.datagrid_col_width(g, arg_int_(ctx, argv, argc, 1, 0)))
 }
 
-// ui.datagrid_set_col_width(g, c, w): view column c's width (clamped to the
-// limits).
+// ui.datagrid_set_col_width(g, c, w): view column c's width (clamped).
 sae_ui_datagrid_set_col_width(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    g = dgrid_arg_(ctx, argv, argc)
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_set_col_width: g is not a grid this page made") }
-    ui.datagrid_set_col_width(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 96))
-    return 0
+    _g = ui.datagrid_set_col_width(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 96))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_set_col_widths(g, w): every column w wide (clamped).
+sae_ui_datagrid_set_col_widths(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_set_col_widths: g is not a grid this page made") }
+    _g = ui.datagrid_set_col_widths(g, arg_int_(ctx, argv, argc, 1, 96))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
 // ui.datagrid_col_limits(g, min, max): how narrow and wide a column may be
@@ -938,20 +1156,20 @@ sae_ui_datagrid_set_col_width(ctx: ptr, this_val: int, argv: int) -> int {
 sae_ui_datagrid_col_limits(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    g = dgrid_arg_(ctx, argv, argc)
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_col_limits: g is not a grid this page made") }
-    ui.datagrid_col_limits(g, arg_int_(ctx, argv, argc, 1, 24), arg_int_(ctx, argv, argc, 2, 1000))
-    return 0
+    _g = ui.datagrid_col_limits(g, arg_int_(ctx, argv, argc, 1, 24), arg_int_(ctx, argv, argc, 2, 1000))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
 // ui.datagrid_move_col(g, from, to): move a scrolling view column to `to`.
 sae_ui_datagrid_move_col(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    g = dgrid_arg_(ctx, argv, argc)
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_move_col: g is not a grid this page made") }
-    ui.datagrid_move_col(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
-    return 0
+    _g = ui.datagrid_move_col(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
 // ui.datagrid_col_model(g, c) -> number: the model column view column c
@@ -959,39 +1177,158 @@ sae_ui_datagrid_move_col(ctx: ptr, this_val: int, argv: int) -> int {
 sae_ui_datagrid_col_model(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
+    g = dgrid_arg_(ctx, argv, argc)
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_col_model: g is not a grid this page made") }
     return quickjs.new_int(ctx, ui.datagrid_col_model(g, arg_int_(ctx, argv, argc, 1, 0)))
 }
 
-// ui.datagrid_on_col_resize(g, fn(c, w)): a header drag gave view column c
-// width w.
-sae_ui_datagrid_on_col_resize(ctx: ptr, this_val: int, argv: int) -> int {
+// ui.datagrid_edit(g, row, col): open the editor on a cell from code.
+sae_ui_datagrid_edit(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_col_resize: g is not a grid this page made") }
-    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_col_resize(g, fn): fn must be a function (col, width) => void") }
-    ref = hold_arg_(ctx, argv, 1)
-    ui.datagrid_on_col_resize(g) callback |c: int, w: int| {
-        _s = call_ii_str_(ctx, ref, c, w, "a ui.datagrid column-resize handler")
-        settle_(ctx)
-    }
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_edit: g is not a grid this page made") }
+    _g = ui.datagrid_edit(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_edit_commit(g) / ui.datagrid_edit_cancel(g): close the open
+// editor, storing its text or not.
+sae_ui_datagrid_edit_commit(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_edit_commit: g is not a grid this page made") }
+    _g = ui.datagrid_edit_commit(g)
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+sae_ui_datagrid_edit_cancel(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_edit_cancel: g is not a grid this page made") }
+    _g = ui.datagrid_edit_cancel(g)
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_editor(g) -> the open editor's text field, or 0.
+sae_ui_datagrid_editor(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_editor: g is not a grid this page made") }
+    return quickjs.new_int(ctx, ui.datagrid_editor(g))
+}
+
+// ---- The block's verbs: inside ui.datagrid(..., () => { ... }) the grid is
+// the receiver, as a button is inside button("OK", () => { ... }).
+
+// cells(fn(r, c) -> string): the grid's cell function (c a model column).
+sae_ui_amb_cells(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "cells() must be called inside a datagrid's block") }
+    e = dg_cells_(ctx, g, argv, argc, 0)
+    if e != "" { return sae_throw_type_error(ctx, "cells(fn): ${e}") }
     return 0
 }
 
-// ui.datagrid_on_col_move(g, fn(from, to)): a column moved.
-sae_ui_datagrid_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
+// headers(fn(c) -> string): the header row's text.
+sae_ui_amb_headers(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    g = dgrid_of_(page_of_(ctx), arg_int_(ctx, argv, argc, 0, 0))
-    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_col_move: g is not a grid this page made") }
-    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_col_move(g, fn): fn must be a function (from, to) => void") }
-    ref = hold_arg_(ctx, argv, 1)
-    ui.datagrid_on_col_move(g) callback |from: int, to: int| {
-        _s = call_ii_str_(ctx, ref, from, to, "a ui.datagrid column-move handler")
-        settle_(ctx)
-    }
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "headers() must be called inside a datagrid's block") }
+    e = dg_headers_(ctx, g, argv, argc, 0)
+    if e != "" { return sae_throw_type_error(ctx, "headers(fn): ${e}") }
+    return 0
+}
+
+// on_cell_click(fn(a, b)): ui.datagrid_on_click for the block's grid.
+sae_ui_amb_on_cell_click(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "on_cell_click() must be called inside a datagrid's block") }
+    e = dg_on_ii_(ctx, g, argv, argc, 0, 0)
+    if e != "" { return sae_throw_type_error(ctx, "on_cell_click(fn): ${e}") }
+    return 0
+}
+
+// on_cell_select(fn(a, b)): ui.datagrid_on_select for the block's grid.
+sae_ui_amb_on_cell_select(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "on_cell_select() must be called inside a datagrid's block") }
+    e = dg_on_ii_(ctx, g, argv, argc, 0, 1)
+    if e != "" { return sae_throw_type_error(ctx, "on_cell_select(fn): ${e}") }
+    return 0
+}
+
+// on_cell_activate(fn(a, b)): ui.datagrid_on_activate for the block's grid.
+sae_ui_amb_on_cell_activate(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "on_cell_activate() must be called inside a datagrid's block") }
+    e = dg_on_ii_(ctx, g, argv, argc, 0, 2)
+    if e != "" { return sae_throw_type_error(ctx, "on_cell_activate(fn): ${e}") }
+    return 0
+}
+
+// on_col_resize(fn(a, b)): ui.datagrid_on_col_resize for the block's grid.
+sae_ui_amb_on_col_resize(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "on_col_resize() must be called inside a datagrid's block") }
+    e = dg_on_ii_(ctx, g, argv, argc, 0, 3)
+    if e != "" { return sae_throw_type_error(ctx, "on_col_resize(fn): ${e}") }
+    return 0
+}
+
+// on_col_move(fn(a, b)): ui.datagrid_on_col_move for the block's grid.
+sae_ui_amb_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "on_col_move() must be called inside a datagrid's block") }
+    e = dg_on_ii_(ctx, g, argv, argc, 0, 4)
+    if e != "" { return sae_throw_type_error(ctx, "on_col_move(fn): ${e}") }
+    return 0
+}
+
+// on_cell_edit(fn(r, c, text)): makes the block's grid editable.
+sae_ui_amb_on_cell_edit(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "on_cell_edit() must be called inside a datagrid's block") }
+    e = dg_on_edit_(ctx, g, argv, argc, 0)
+    if e != "" { return sae_throw_type_error(ctx, "on_cell_edit(fn): ${e}") }
+    return 0
+}
+
+// column_width(w): every column of the block's grid w wide.
+sae_ui_amb_column_width(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "column_width() must be called inside a datagrid's block") }
+    _g = ui.datagrid_set_col_widths(g, arg_int_(ctx, argv, argc, 0, 96))
+    return 0
+}
+
+// column_limits(min, max): how narrow and wide its columns may be made.
+sae_ui_amb_column_limits(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "column_limits() must be called inside a datagrid's block") }
+    _g = ui.datagrid_col_limits(g, arg_int_(ctx, argv, argc, 0, 24), arg_int_(ctx, argv, argc, 1, 1000))
     return 0
 }
 
@@ -6111,24 +6448,44 @@ api_register_(p: *Page) {
     reg_(q, u, "text_bound", 3, sae_ui_text_bound)
     reg_(q, u, "on_key", 1, sae_ui_on_key)
     reg_(q, u, "datagrid", 6, sae_ui_datagrid)
+    reg_(q, u, "datagrid_cells", 2, sae_ui_datagrid_cells)
     reg_(q, u, "datagrid_header", 2, sae_ui_datagrid_header)
     reg_(q, u, "datagrid_on_click", 2, sae_ui_datagrid_on_click)
+    reg_(q, u, "datagrid_on_select", 2, sae_ui_datagrid_on_select)
+    reg_(q, u, "datagrid_on_activate", 2, sae_ui_datagrid_on_activate)
+    reg_(q, u, "datagrid_on_col_resize", 2, sae_ui_datagrid_on_col_resize)
+    reg_(q, u, "datagrid_on_col_move", 2, sae_ui_datagrid_on_col_move)
+    reg_(q, u, "datagrid_on_edit", 2, sae_ui_datagrid_on_edit)
     reg_(q, u, "datagrid_scroll_to", 3, sae_ui_datagrid_scroll_to)
     reg_(q, u, "datagrid_refresh", 1, sae_ui_datagrid_refresh)
     reg_(q, u, "datagrid_first", 1, sae_ui_datagrid_first)
     reg_(q, u, "datagrid_select", 3, sae_ui_datagrid_select)
     reg_(q, u, "datagrid_select_range", 5, sae_ui_datagrid_select_range)
     reg_(q, u, "datagrid_selection", 1, sae_ui_datagrid_selection)
-    reg_(q, u, "datagrid_on_select", 2, sae_ui_datagrid_on_select)
-    reg_(q, u, "datagrid_on_activate", 2, sae_ui_datagrid_on_activate)
     reg_(q, u, "datagrid_col_width", 2, sae_ui_datagrid_col_width)
     reg_(q, u, "datagrid_set_col_width", 3, sae_ui_datagrid_set_col_width)
+    reg_(q, u, "datagrid_set_col_widths", 2, sae_ui_datagrid_set_col_widths)
     reg_(q, u, "datagrid_col_limits", 3, sae_ui_datagrid_col_limits)
     reg_(q, u, "datagrid_move_col", 3, sae_ui_datagrid_move_col)
     reg_(q, u, "datagrid_col_model", 2, sae_ui_datagrid_col_model)
-    reg_(q, u, "datagrid_on_col_resize", 2, sae_ui_datagrid_on_col_resize)
-    reg_(q, u, "datagrid_on_col_move", 2, sae_ui_datagrid_on_col_move)
+    reg_(q, u, "datagrid_edit", 3, sae_ui_datagrid_edit)
+    reg_(q, u, "datagrid_edit_commit", 1, sae_ui_datagrid_edit_commit)
+    reg_(q, u, "datagrid_edit_cancel", 1, sae_ui_datagrid_edit_cancel)
+    reg_(q, u, "datagrid_editor", 1, sae_ui_datagrid_editor)
+    reg_(q, u, "cells", 1, sae_ui_amb_cells)
+    reg_(q, u, "headers", 1, sae_ui_amb_headers)
+    reg_(q, u, "on_cell_click", 1, sae_ui_amb_on_cell_click)
+    reg_(q, u, "on_cell_select", 1, sae_ui_amb_on_cell_select)
+    reg_(q, u, "on_cell_activate", 1, sae_ui_amb_on_cell_activate)
+    reg_(q, u, "on_cell_edit", 1, sae_ui_amb_on_cell_edit)
+    reg_(q, u, "on_col_resize", 1, sae_ui_amb_on_col_resize)
+    reg_(q, u, "on_col_move", 1, sae_ui_amb_on_col_move)
+    reg_(q, u, "column_width", 1, sae_ui_amb_column_width)
+    reg_(q, u, "column_limits", 2, sae_ui_amb_column_limits)
     reg_(q, u, "on_submit", 2, sae_ui_on_submit)
+    reg_(q, u, "onsubmit", 1, sae_ui_onsubmit)
+    reg_(q, u, "on_drag", 2, sae_ui_on_drag)
+    reg_(q, u, "ondrag", 1, sae_ui_ondrag)
     reg_(q, u, "focus", 1, sae_ui_focus)
     reg_(q, u, "text_wrapped", 2, sae_ui_text_wrapped)
     reg_(q, u, "width", 1, sae_ui_width)

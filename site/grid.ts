@@ -2,9 +2,14 @@
 // million rows by 40 columns from a function, 15 rows by 5 columns shown,
 // one frozen column of row numbers, a header of column letters; a click
 // names the cell, keys move a selection, Return activates it; header drags
-// resize and move columns (and so do two buttons).
+// resize and move columns (and so do two buttons); a double click or F2
+// edits a cell. Written declaratively: the grid is the receiver of its
+// block, as a button is of its own. A second, small grid below keeps the
+// first form (a cell function in the block's place). A field and a label
+// below take blocks of their own: onsubmit() and ondrag() act on them.
 // tests/spec_grid.ae drives it.
-const { text, btn } = ui;
+const { text, btn, textfield, onsubmit, ondrag, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
+        on_cell_edit, on_col_resize, on_col_move } = ui;
 
 const letters = (c: number): string => {
   let s = "";
@@ -12,23 +17,31 @@ const letters = (c: number): string => {
   return s;
 };
 
+const edits: { [k: string]: string } = {};
+
 text("Grid");
 const picked = text("picked: none");
-const g = ui.datagrid(1000000, 40, 15, 5, 1, (r: number, c: number) =>
-  c === 0 ? String(r + 1) : `${letters(c - 1)}${r + 1}`);
-ui.datagrid_header(g, (c: number) => (c === 0 ? "#" : letters(c - 1)));
-ui.datagrid_on_click(g, (r: number, c: number) => {
-  ui.set_text(picked, `picked: ${r},${c}`);
-  print(`grid picked ${r},${c}`);
+const g = ui.datagrid(1000000, 40, 15, 5, 1, () => {
+  cells((r: number, c: number) =>
+    c === 0 ? String(r + 1) : (edits[`${r},${c}`] ?? `${letters(c - 1)}${r + 1}`));
+  headers((c: number) => (c === 0 ? "#" : letters(c - 1)));
+  on_cell_click((r: number, c: number) => {
+    ui.set_text(picked, `picked: ${r},${c}`);
+    print(`grid picked ${r},${c}`);
+  });
+  on_cell_select((r: number, c: number) => {
+    const [ar, ac] = ui.datagrid_selection(g);
+    print(`grid selected ${ar},${ac} to ${r},${c}`);
+  });
+  on_cell_activate((r: number, c: number) => print(`grid activated ${r},${c}`));
+  on_cell_edit((r: number, c: number, t: string) => {
+    edits[`${r},${c}`] = t;
+    print(`grid edited ${r},${c} = ${t}`);
+  });
+  on_col_resize((c: number, w: number) => print(`grid resized ${c} to ${w}`));
+  on_col_move((from: number, to: number) =>
+    print(`grid moved ${from} to ${to}; view ${to} shows model ${ui.datagrid_col_model(g, to)}`));
 });
-ui.datagrid_on_select(g, (r: number, c: number) => {
-  const [ar, ac] = ui.datagrid_selection(g);
-  print(`grid selected ${ar},${ac} to ${r},${c}`);
-});
-ui.datagrid_on_activate(g, (r: number, c: number) => print(`grid activated ${r},${c}`));
-ui.datagrid_on_col_resize(g, (c: number, w: number) => print(`grid resized ${c} to ${w}`));
-ui.datagrid_on_col_move(g, (from: number, to: number) =>
-  print(`grid moved ${from} to ${to}; view ${to} shows model ${ui.datagrid_col_model(g, to)}`));
 btn("Widen B", () => {
   ui.datagrid_set_col_width(g, 2, 150);
   print(`grid B is ${ui.datagrid_col_width(g, 2)} wide`);
@@ -39,5 +52,17 @@ btn("To row 500000", () => {
   ui.datagrid_scroll_to(g, 499999, 10);
   const [r, c] = ui.datagrid_first(g);
   print(`grid first ${r},${c}`);
+});
+// The first form: a cell function where the block goes, and the
+// ui.datagrid_* setters by handle (each returns the grid).
+const small = ui.datagrid(3, 2, 3, 2, 0, (r: number, c: number) => `s${r}${c}`);
+ui.datagrid_header(ui.datagrid_set_col_widths(small, 60), (c: number) => `S${c}`);
+textfield("note", (s: string) => {}, () => {
+  onsubmit((t: string) => print(`note submitted ${t}`));
+});
+text("drag me", () => {
+  ondrag((phase: number, x: number, y: number) => {
+    if (phase === 2) print(`dragged by ${x},${y}`);
+  });
 });
 btn("Home", () => browserContext.changePage("/"));

@@ -5,8 +5,25 @@
 //   tests/run_spec.sh spec_grid
 import std.spec
 import std.string
+import std.json
 import saedriver as b
 import uidriver
+
+// The widget with this placeholder (a text field), or 0.
+by_placeholder(ph: string) -> int {
+    body = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "placeholder"), ph) == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
 
 main() {
     fw = spec.init()
@@ -46,6 +63,38 @@ main() {
         spec.it("and by dragging a header") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("C")}/drag?x=93&y=8&dx=-40&dy=0", "drag C's edge")
             spec.assert_true(b.wait_for_console("grid resized 2 to 56"), "C (now view 2) narrowed by 40")
+        }
+        spec.it("a double click edits a cell; on_cell_edit stores it") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("B7")}/double_click", "double-click B7")
+            // The editor is the newest text field (the chrome's address bar
+            // is the first).
+            bar = uidriver.widget_id_of("textfield", "")
+            ed = 0
+            i = 0
+            while i < 30 && ed == 0 {
+                last = uidriver.widget_id_last_of("textfield", "")
+                if last != bar { ed = last }
+                if ed == 0 { sleep(100) }
+                i = i + 1
+            }
+            spec.assert_true(ed > 0, "an editor opened")
+            uidriver.post_ok("/widget/${ed}/set_text?v=hello", "type hello")
+            uidriver.post_ok("/widget/${ed}/submit", "Return")
+            spec.assert_true(b.wait_for_console("grid edited 6,2 = hello"), "row 6, model column 2")
+            spec.assert_true(b.wait_for_text("hello"), "the cell shows it")
+        }
+        spec.it("the first form still works: a cell function in the block's place") callback {
+            spec.assert_true(b.wait_for_text("s21"), "the small grid's last cell")
+            b.assert_text("S1", "and its header, set by handle through a chain")
+        }
+        spec.it("onsubmit() in a field's block, ondrag() in a label's") callback {
+            f = by_placeholder("note")
+            spec.assert_true(f > 0, "the note field")
+            uidriver.post_ok("/widget/${f}/set_text?v=hi", "type hi")
+            uidriver.post_ok("/widget/${f}/submit", "Return")
+            spec.assert_true(b.wait_for_console("note submitted hi"), "onsubmit ran")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("drag me")}/drag?x=3&y=3&dx=12&dy=5", "drag the label")
+            spec.assert_true(b.wait_for_console("dragged by 12,5"), "ondrag heard the release")
         }
         spec.it("scrolls from code") callback {
             b.click("To row 500000")

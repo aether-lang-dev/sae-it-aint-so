@@ -58,5 +58,6 @@ AEB_REF=v0.326
 # ca82facc (2026-10-10): datagrid and datagrid_on_click (ui.datagrid).
 # f81d334c (2026-10-10): datagrid selection and keys (ui.datagrid_select etc).
 # 03695c32 (2026-10-11): datagrid column resize and reorder, on_drag.
+# f128b35f (2026-10-11): datagrid(...) without a cell function, datagrid_cells, the grid's ambient verbs, editing, ondrag/onsubmit.
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=03695c32f88de4ccb00cb42c11a1a1738726aea5
+AETHER_UI_REF=f128b35f4967a185da66a393644ae8f393a2e140
