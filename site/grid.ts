@@ -8,7 +8,7 @@
 // first form (a cell function in the block's place). A field and a label
 // below take blocks of their own: onsubmit() and ondrag() act on them.
 // tests/spec_grid.ae drives it.
-const { text, btn, textfield, onsubmit, ondrag, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
+const { text, btn, textfield, onsubmit, ondrag, pointer_shape, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
         on_cell_edit, on_col_resize, on_col_move } = ui;
 
 const letters = (c: number): string => {
@@ -61,6 +61,7 @@ textfield("note", (s: string) => {}, () => {
   onsubmit((t: string) => print(`note submitted ${t}`));
 });
 text("drag me", () => {
+  pointer_shape("grab");
   ondrag((phase: number, x: number, y: number) => {
     if (phase === 2) print(`dragged by ${x},${y}`);
   });

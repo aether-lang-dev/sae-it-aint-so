@@ -723,6 +723,28 @@ sae_ui_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
+// ui.pointer_cursor(h, name) -> h: the mouse pointer's shape over a widget
+// ("col-resize", "row-resize", "move", "grab", "pointer", "text",
+// "crosshair", "not-allowed", "wait", "default").
+sae_ui_pointer_cursor(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.pointer_cursor(h, name): h is not a widget this page made") }
+    _h = ui.pointer_cursor(h, arg_str_(ctx, argv, argc, 1))
+    return quickjs.new_int(ctx, h)
+}
+
+// pointer_shape(name): ui.pointer_cursor for the widget whose block this is.
+sae_ui_pointer_shape(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    target = modifier_target_(ctx, "pointer_shape")
+    if target == 0 { return sae_throw_type_error(ctx, "pointer_shape() must be called inside a widget's block") }
+    _h = ui.pointer_cursor(target, arg_str_(ctx, argv, argc, 0))
+    return 0
+}
+
 // ondrag(fn(phase, x, y)): on_drag for the widget whose block this is.
 sae_ui_ondrag(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
@@ -6486,6 +6508,8 @@ api_register_(p: *Page) {
     reg_(q, u, "onsubmit", 1, sae_ui_onsubmit)
     reg_(q, u, "on_drag", 2, sae_ui_on_drag)
     reg_(q, u, "ondrag", 1, sae_ui_ondrag)
+    reg_(q, u, "pointer_cursor", 2, sae_ui_pointer_cursor)
+    reg_(q, u, "pointer_shape", 1, sae_ui_pointer_shape)
     reg_(q, u, "focus", 1, sae_ui_focus)
     reg_(q, u, "text_wrapped", 2, sae_ui_text_wrapped)
     reg_(q, u, "width", 1, sae_ui_width)
