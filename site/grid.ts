@@ -8,7 +8,7 @@
 // first form (a cell function in the block's place). A field and a label
 // below take blocks of their own: onsubmit() and ondrag() act on them.
 // tests/spec_grid.ae drives it.
-const { text, btn, textfield, onsubmit, ondrag, pointer_shape, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
+const { text, btn, textfield, onsubmit, ondrag, pointer_shape, onfocuschange, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
         on_cell_edit, on_col_resize, on_col_move } = ui;
 
 const letters = (c: number): string => {
@@ -59,7 +59,9 @@ const small = ui.datagrid(3, 2, 3, 2, 0, (r: number, c: number) => `s${r}${c}`);
 ui.datagrid_header(ui.datagrid_set_col_widths(small, 60), (c: number) => `S${c}`);
 textfield("note", (s: string) => {}, () => {
   onsubmit((t: string) => print(`note submitted ${t}`));
+  onfocuschange((inside: number) => print(`note focus ${inside}`));
 });
+print(`key_text comma is ${ui.key_text("comma")}`);
 text("drag me", () => {
   pointer_shape("grab");
   ondrag((phase: number, x: number, y: number) => {

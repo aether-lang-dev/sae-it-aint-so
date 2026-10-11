@@ -723,6 +723,56 @@ sae_ui_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
+// Call a held JS function with one number.
+call_i_(ctx: ptr, ref: int, n: int, what: string) {
+    args = quickjs.new_array(ctx)
+    v = quickjs.new_int(ctx, n)
+    _s = quickjs.set_index(ctx, args, 0, v)
+    quickjs.release(ctx, v)
+    if calln_(ctx, ref, args) < 0 { report_exception_(ctx, what) }
+    quickjs.release(ctx, args)
+}
+
+focus_to_(ctx: ptr, h: int, ref: int) {
+    _h = ui.on_focus_change(h) callback |inside: int| {
+        call_i_(ctx, ref, inside, "a focus handler")
+        settle_(ctx)
+    }
+}
+
+// ui.on_focus_change(h, fn(inside)) -> h: keyboard focus came into the
+// widget or anything inside it (1), or left (0). Focus leaving the browser
+// for another application is not a change.
+sae_ui_on_focus_change(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.on_focus_change(h, fn): h is not a widget this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.on_focus_change(h, fn): fn must be a function") }
+    focus_to_(ctx, h, hold_arg_(ctx, argv, 1))
+    return quickjs.new_int(ctx, h)
+}
+
+// onfocuschange(fn(inside)): ui.on_focus_change for the widget whose block
+// this is.
+sae_ui_onfocuschange(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    target = modifier_target_(ctx, "onfocuschange")
+    if target == 0 { return sae_throw_type_error(ctx, "onfocuschange() must be called inside a widget's block") }
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "onfocuschange(fn): fn must be a function") }
+    focus_to_(ctx, target, hold_arg_(ctx, argv, 0))
+    return 0
+}
+
+// ui.key_text(name) -> the text a key name types ("comma" is ",", "Left"
+// is ""): for an on_key handler that builds text.
+sae_ui_key_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return quickjs.new_string(ctx, ui.key_text(arg_str_(ctx, argv, argc, 0)))
+}
+
 // ui.pointer_cursor(h, name) -> h: the mouse pointer's shape over a widget
 // ("col-resize", "row-resize", "move", "grab", "pointer", "text",
 // "crosshair", "not-allowed", "wait", "default").
@@ -6510,6 +6560,9 @@ api_register_(p: *Page) {
     reg_(q, u, "ondrag", 1, sae_ui_ondrag)
     reg_(q, u, "pointer_cursor", 2, sae_ui_pointer_cursor)
     reg_(q, u, "pointer_shape", 1, sae_ui_pointer_shape)
+    reg_(q, u, "on_focus_change", 2, sae_ui_on_focus_change)
+    reg_(q, u, "onfocuschange", 1, sae_ui_onfocuschange)
+    reg_(q, u, "key_text", 1, sae_ui_key_text)
     reg_(q, u, "focus", 1, sae_ui_focus)
     reg_(q, u, "text_wrapped", 2, sae_ui_text_wrapped)
     reg_(q, u, "width", 1, sae_ui_width)
