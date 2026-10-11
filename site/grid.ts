@@ -1,7 +1,8 @@
 // site/grid.ts -- ui.datagrid: aether-ui's virtualised grid for pages. A
 // million rows by 40 columns from a function, 15 rows by 5 columns shown,
 // one frozen column of row numbers, a header of column letters; a click
-// names the cell, keys move a selection, Return activates it.
+// names the cell, keys move a selection, Return activates it; header drags
+// resize and move columns (and so do two buttons).
 // tests/spec_grid.ae drives it.
 const { text, btn } = ui;
 
@@ -25,6 +26,14 @@ ui.datagrid_on_select(g, (r: number, c: number) => {
   print(`grid selected ${ar},${ac} to ${r},${c}`);
 });
 ui.datagrid_on_activate(g, (r: number, c: number) => print(`grid activated ${r},${c}`));
+ui.datagrid_on_col_resize(g, (c: number, w: number) => print(`grid resized ${c} to ${w}`));
+ui.datagrid_on_col_move(g, (from: number, to: number) =>
+  print(`grid moved ${from} to ${to}; view ${to} shows model ${ui.datagrid_col_model(g, to)}`));
+btn("Widen B", () => {
+  ui.datagrid_set_col_width(g, 2, 150);
+  print(`grid B is ${ui.datagrid_col_width(g, 2)} wide`);
+});
+btn("Move B to E", () => ui.datagrid_move_col(g, 2, 5));
 btn("Select B2:D5", () => ui.datagrid_select_range(g, 1, 2, 4, 4));
 btn("To row 500000", () => {
   ui.datagrid_scroll_to(g, 499999, 10);

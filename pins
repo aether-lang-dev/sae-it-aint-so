@@ -57,5 +57,6 @@ AEB_REF=v0.326
 # saedriver's vg_nodes reads (spec_keys).
 # ca82facc (2026-10-10): datagrid and datagrid_on_click (ui.datagrid).
 # f81d334c (2026-10-10): datagrid selection and keys (ui.datagrid_select etc).
+# 03695c32 (2026-10-11): datagrid column resize and reorder, on_drag.
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=f81d334c257be474b4954f9b2befa179cd944314
+AETHER_UI_REF=03695c32f88de4ccb00cb42c11a1a1738726aea5

@@ -37,6 +37,16 @@ main() {
             b.click("Select B2:D5")
             spec.assert_true(b.wait_for_console("grid selected 1,2 to 4,4"), "the range, cursor last")
         }
+        spec.it("columns resize and move from code") callback {
+            b.click("Widen B")
+            spec.assert_true(b.wait_for_console("grid B is 150 wide"), "the width reads back")
+            b.click("Move B to E")
+            spec.assert_true(b.wait_for_console("grid moved 2 to 5; view 5 shows model 2"), "on_col_move, and the model column")
+        }
+        spec.it("and by dragging a header") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("C")}/drag?x=93&y=8&dx=-40&dy=0", "drag C's edge")
+            spec.assert_true(b.wait_for_console("grid resized 2 to 56"), "C (now view 2) narrowed by 40")
+        }
         spec.it("scrolls from code") callback {
             b.click("To row 500000")
             spec.assert_true(b.wait_for_console("grid first 499999,10"), "the first row and column shown")
