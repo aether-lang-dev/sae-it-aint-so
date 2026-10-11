@@ -1,60 +1,99 @@
 // spec_sheet.ae — demo 18, Spreadsheet: formulas typed through the formula
-// bar, an edit rippling downstream, a parse error that says where, a cycle
-// found and mended, a paste in one batch, the function library, the arrow
-// keys, columns resized by dragging their header borders or fitted to their
-// text by a double click, and clearing. The page is
-// site/sheet.ts; lower/tests/mod/sheet_*.ts test its model headless.
+// bar or into a cell, an edit rippling downstream, a parse error that says
+// where, a cycle found and mended, a paste in one batch, the function
+// library, per-cell styles (numbers to the right, errors in red), the
+// grid's keys and column resize, and clearing. The page is site/sheet.ts;
+// lower/tests/mod/sheet_*.ts test its model headless.
 //
-// The grid is a vg scene, so a cell is read as a person reads it: click it,
-// and the status line says what it holds and what it shows. The ink checks
-// (text drawn in its own column) need aether-ui b3d697c9 or later, which
-// draws a text's transform on the live path and, on macOS, lets a pixel
-// probe see text (asks/aether-ui-vg-text-transform.md).
+// The grid is ui.datagrid: a cell is the aui-grid-cell widget under its
+// column's header (aui-grid-header) and beside its row's number
+// (aui-grid-frozen), read and clicked through the driver's widget tree.
 //
 //   tests/run_spec.sh spec_sheet
 import std.spec
 import std.string
+import std.json
 import saedriver as b
 import uidriver
 
-// The scene: 760 x 462 (site/sheet/layout.ts: row numbers 30 wide, the
-// header 20 high, rows 22, columns 70 until resized).
-const VW = 760.0
-const VH = 462.0
+const TRIES = 60
+const POLL_MS = 50
 
-px(x: float) -> int { return b.vg_px_x(x, VW, VH) }
-py(y: float) -> int { return b.vg_px_y(y, VW, VH) }
+has_class_(w: ptr, c: string) -> int { return string.contains(uidriver.field_str(w, "classes"), c) }
 
-// The middle of the cell at (col, row), 0-based, at the starting widths.
-cell_x(col: int) -> float { return 30.0 + col * 70.0 + 35.0 }
-cell_y(row: int) -> float { return 20.0 + row * 22.0 + 11.0 }
-
-pick(col: int, row: int) { b.vg_click(px(cell_x(col)), py(cell_y(row))) }
-
-// Click the cell, then 1 once the status line reads `status`.
-shows(col: int, row: int, status: string) -> int {
-    pick(col, row)
-    return b.wait_for_text(status)
+// The widget id of the cell at column `col` ("A".."J") and row `row` (1..20),
+// or 0.
+cell_id(col: string, row: int) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    n = json.json_array_size(v)
+    cx = 0 - 1
+    cy = 0 - 1
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        t = uidriver.field_str(w, "text")
+        if has_class_(w, "aui-grid-header") == 1 && string.equals(t, col) == 1 {
+            cx = uidriver.field_int(w, "x") + uidriver.field_int(w, "w") / 2
+        }
+        if has_class_(w, "aui-grid-frozen") == 1 && string.equals(t, "${row}") == 1 {
+            cy = uidriver.field_int(w, "y") + uidriver.field_int(w, "h") / 2
+        }
+        i = i + 1
+    }
+    id = 0
+    if cx >= 0 && cy >= 0 {
+        i = 0
+        while i < n {
+            w = json.json_array_get_raw(v, i)
+            if has_class_(w, "aui-grid-cell") == 1 {
+                x = uidriver.field_int(w, "x")
+                y = uidriver.field_int(w, "y")
+                if cx >= x && cx < x + uidriver.field_int(w, "w") && cy >= y && cy < y + uidriver.field_int(w, "h") {
+                    id = uidriver.field_int(w, "id")
+                }
+            }
+            i = i + 1
+        }
+    }
+    json.json_free(v)
+    return id
 }
 
-// 1 when some pixel in the scene rectangle (x0..x1, y0..y1) is ink (the
-// cells' text is #20232a on white): text drawn where its column is.
-ink_in(x0: float, x1: float, y0: float, y1: float) -> int {
-    y = y0
-    while y <= y1 {
-        x = x0
-        while x <= x1 {
-            p = b.vg_pixel(px(x), py(y))
-            if ((p >> 16) & 255) < 0x80 && ((p >> 8) & 255) < 0x80 && (p & 255) < 0x80 { return 1 }
-            x = x + 1.0
-        }
-        y = y + 2.0
+cell_text(col: string, row: int) -> string { return uidriver.widget_text_by_id(cell_id(col, row)) }
+
+// 1 once the cell reads `want`.
+wait_cell(col: string, row: int, want: string) -> int {
+    i = 0
+    while i < TRIES {
+        if string.equals(cell_text(col, row), want) == 1 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
     }
     return 0
 }
 
-// The formula field is the page's last text field; Return in it enters.
-formula_field() -> int { return uidriver.widget_id_last_of("textfield", "") }
+// A field of the cell's widget as the driver reports it ("fg", "anchor").
+cell_has(col: string, row: int, what: string) -> int {
+    return string.contains(uidriver.get_body("/widget/${cell_id(col, row)}"), what)
+}
+
+pick(col: string, row: int) { uidriver.post_ok("/widget/${cell_id(col, row)}/click", "click ${col}${row}") }
+
+// The formula field is the last text field the page made; Return in it enters.
+formula_field() -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "placeholder"), "formula") == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
 
 enter(cell: string, formula: string) {
     b.set_field_by("cell", cell)
@@ -62,25 +101,41 @@ enter(cell: string, formula: string) {
     uidriver.post_ok("/widget/${formula_field()}/submit", "Return in the formula field")
 }
 
-// Two clicks on a header border, as a double click: the host counts a
-// second press within 400 ms, so the canvas and the point are worked out
-// first (each saedriver vg verb looks the canvas up again) and the four
-// events go back to back.
-double_click_border(x: float) {
-    h = b.vg_handle()
-    q = "x=${px(x)}&y=${py(10.0)}"
-    uidriver.post_ok("/canvas/${h}/click?${q}", "press")
-    uidriver.post_ok("/canvas/${h}/release?${q}", "release")
-    uidriver.post_ok("/canvas/${h}/click?${q}", "press again")
-    uidriver.post_ok("/canvas/${h}/release?${q}", "release again")
+// The editor a double click opens over a cell: the newest text field that is
+// neither the address bar nor one of the page's two.
+editor() -> int {
+    bar = uidriver.widget_id_of("textfield", "")
+    ff = formula_field()
+    i = 0
+    while i < 30 {
+        last = uidriver.widget_id_last_of("textfield", "")
+        if last != bar && last != ff && last > ff { return last }
+        sleep(100)
+        i = i + 1
+    }
+    return 0
 }
 
-// Drag the header border at x to x2, in scene units.
-drag_border(x: float, x2: float) {
-    b.vg_click(px(x), py(10.0))
-    b.vg_move(px((x + x2) / 2.0), py(10.0))
-    b.vg_move(px(x2), py(10.0))
-    b.vg_release(px(x2), py(10.0))
+// The resize grip of column `col`'s header.
+grip_of(col: string) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    parent = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if has_class_(w, "aui-grid-header") == 1 && string.equals(uidriver.field_str(w, "text"), col) == 1 { parent = uidriver.field_int(w, "parent") }
+        i = i + 1
+    }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if uidriver.field_int(w, "parent") == parent && has_class_(w, "aui-grid-grip") == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
 }
 
 main() {
@@ -88,15 +143,15 @@ main() {
     uidriver.wait_server()
 
     spec.describe(fw, "spreadsheet (demo 18)") {
-        spec.it("opens on an empty 10 x 20 sheet with A1 selected") callback {
+        spec.it("opens on an empty 10 x 20 grid with A1 selected") callback {
             b.navigate(b.test_url("/sheet"))
             b.assert_page("Spreadsheet", "200 ", "sheet page")
-            spec.assert_true(b.wait_for_vg_canvas(), "the grid is a canvas")
             spec.assert_true(b.wait_for_text("A1: (empty)"), "the status line")
             spec.assert_true(b.wait_for_text("No problems"), "the computed summary")
-            spec.assert_true(shows(9, 19, "J20: (empty)"), "a click selects J20, the last cell")
-            spec.assert_eq(string.equals(b.field_text(), ""), 1, "and the formula bar is empty")
-            spec.assert_true(shows(0, 0, "A1: (empty)"), "and back to A1")
+            spec.assert_gt(cell_id("A", 1), 0, "A1 is there")
+            spec.assert_gt(cell_id("J", 20), 0, "and J20, the last")
+            spec.assert_eq(cell_id("K", 1), 0, "and no column K")
+            spec.assert_eq(string.length(cell_text("A", 1)), 0, "A1 is empty")
         }
         spec.it("formulas read the cells they name") callback {
             enter("A1", "2")
@@ -104,112 +159,102 @@ main() {
             enter("B1", "=A1*10")
             enter("C1", "=B1+A1")
             spec.assert_true(b.wait_for_console("sheet: C1 = 22"), "C1 worked out")
+            spec.assert_true(wait_cell("A", 1, "2"), "A1 shows 2")
+            spec.assert_true(wait_cell("B", 1, "20"), "B1 shows 20")
+            spec.assert_true(wait_cell("C", 1, "22"), "C1 shows 22")
             spec.assert_true(b.wait_for_text("C1: =B1+A1 → 22"), "the status line describes the cell entered")
-            spec.assert_true(shows(1, 0, "B1: =A1*10 → 20"), "B1 shows 20")
         }
         spec.it("an edit ripples through everything downstream") callback {
             enter("A1", "5")
-            spec.assert_true(shows(1, 0, "B1: =A1*10 → 50"), "B1 follows A1")
-            spec.assert_true(shows(2, 0, "C1: =B1+A1 → 55"), "and C1 follows both")
+            spec.assert_true(wait_cell("B", 1, "50"), "B1 follows A1")
+            spec.assert_true(wait_cell("C", 1, "55"), "and C1 follows both")
         }
         spec.it("clicking a cell puts its formula in the formula bar") callback {
-            spec.assert_true(shows(1, 0, "B1: =A1*10 → 50"), "B1 described")
-            spec.assert_eq(string.equals(b.field_text(), "=A1*10"), 1, "the formula field holds what was typed")
+            pick("B", 1)
+            spec.assert_true(b.wait_for_text("B1: =A1*10 → 50"), "B1 described")
+            spec.assert_eq(string.equals(uidriver.widget_text_by_id(formula_field()), "=A1*10"), 1, "the formula field holds what was typed")
         }
-        spec.it("a parse error shows #ERROR! and says where in the formula") callback {
+        spec.it("a parse error shows #ERROR!, in red, and says where in the formula") callback {
             enter("D1", "=SUM(A1")
+            spec.assert_true(wait_cell("D", 1, "#ERROR!"), "D1 shows #ERROR!")
+            spec.assert_eq(cell_has("D", 1, "\"fg\":\"#c0392b\""), 1, "in red")
             spec.assert_true(b.wait_for_text("D1: =SUM(A1 → #ERROR! parse error at 8: expected ')' but found the end"), "the status line says where")
             spec.assert_true(b.wait_for_text("1 problem"), "the summary counts it")
             spec.assert_true(b.wait_for_text("D1: #ERROR! parse error at 8: expected ')' but found the end"), "the problem list shows it")
             enter("D1", "=SUM(A1:C1)")
-            spec.assert_true(shows(3, 0, "D1: =SUM(A1:C1) → 110"), "mended, D1 sums the row")
+            spec.assert_true(wait_cell("D", 1, "110"), "mended, D1 sums the row")
+            spec.assert_eq(cell_has("D", 1, "\"fg\":\"#c0392b\""), 0, "no longer red")
             spec.assert_true(b.wait_for_text("No problems"), "and the list empties")
         }
         spec.it("a cycle shows #CYCLE! in every cell on it, until it is broken") callback {
             enter("A2", "=B2")
             enter("B2", "=A2")
+            spec.assert_true(wait_cell("A", 2, "#CYCLE!"), "A2")
+            spec.assert_true(wait_cell("B", 2, "#CYCLE!"), "B2")
             spec.assert_true(b.wait_for_text("2 problems"), "two problems")
             spec.assert_true(b.wait_for_text("A2: #CYCLE! a circular reference: A2 → B2 → A2"), "the path, from A2")
             spec.assert_true(b.wait_for_text("B2: #CYCLE! a circular reference: B2 → A2 → B2"), "and from B2")
-            spec.assert_true(shows(0, 1, "A2: =B2 → #CYCLE! a circular reference: A2 → B2 → A2"), "A2 on the grid")
             enter("B2", "3")
-            spec.assert_true(shows(0, 1, "A2: =B2 → 3"), "A2 reads B2 again")
+            spec.assert_true(wait_cell("A", 2, "3"), "A2 reads B2 again")
             spec.assert_true(b.wait_for_text("No problems"), "no problems")
         }
-        spec.it("a paste sets many cells in one batch") callback {
+        spec.it("a paste sets many cells in one batch; numbers sit to the right") callback {
             b.click("Paste example")
             spec.assert_true(b.wait_for_console("sheet: pasted the example: 24 cells set"), "24 cells")
-            spec.assert_true(shows(0, 0, "A1: Item → Item"), "A1 is the heading now")
-            spec.assert_eq(ink_in(104.0, 124.0, 26.0, 36.0), 1, "B1's text, Qty, is drawn in column B")
-            spec.assert_eq(ink_in(184.0, 210.0, 26.0, 36.0), 1, "C1's, Price, in column C")
-            spec.assert_true(shows(3, 1, "D2: =B2*C2 → 2.7"), "D2 = B2*C2")
-            spec.assert_true(shows(1, 4, "B5: =SUM(B2:B4) → 9"), "B5 sums the quantities")
-            spec.assert_true(shows(3, 4, "D5: =SUM(D2:D4) → 7.2"), "D5 sums the totals")
-            spec.assert_true(shows(2, 5, "C6: =AVERAGE(C2:C4) → 1.266666667"), "C6 averages the prices")
-            spec.assert_true(shows(3, 5, "D6: =ROUND(D5/B5, 2) → 0.8"), "D6 rounds")
+            spec.assert_true(wait_cell("A", 1, "Item"), "A1 is the heading now")
+            spec.assert_true(wait_cell("D", 2, "2.7"), "D2 = B2*C2")
+            spec.assert_true(wait_cell("B", 5, "9"), "B5 sums the quantities")
+            spec.assert_true(wait_cell("D", 5, "7.2"), "D5 sums the totals")
+            spec.assert_true(wait_cell("D", 6, "0.8"), "D6 = ROUND(D5/B5, 2)")
+            spec.assert_true(wait_cell("C", 1, "Price"), "C1's formula was pasted over")
+            spec.assert_eq(cell_has("D", 5, "\"anchor\":\"end\""), 1, "a number at the right")
+            spec.assert_eq(cell_has("A", 5, "\"anchor\":\"end\""), 0, "text at the left")
         }
         spec.it("the library's lookups, conditionals and error traps work on the example") callback {
             enter("E2", "=VLOOKUP(\"Bread\", A2:D4, 4, FALSE)")
-            spec.assert_true(b.wait_for_text("E2: =VLOOKUP(\"Bread\", A2:D4, 4, FALSE) → 2.2"), "VLOOKUP finds Bread's total")
+            spec.assert_true(wait_cell("E", 2, "2.2"), "VLOOKUP finds Bread's total")
             enter("E3", "=COUNTIF(B2:B4, \">1\")")
-            spec.assert_true(b.wait_for_text("E3: =COUNTIF(B2:B4, \">1\") → 2"), "COUNTIF counts quantities over 1")
+            spec.assert_true(wait_cell("E", 3, "2"), "COUNTIF counts quantities over 1")
             enter("E4", "=IFERROR(D5/0, \"n/a\")")
-            spec.assert_true(b.wait_for_text("E4: =IFERROR(D5/0, \"n/a\") → n/a"), "IFERROR traps a divide by zero")
+            spec.assert_true(wait_cell("E", 4, "n/a"), "IFERROR traps a divide by zero")
             enter("B3", "4")
-            spec.assert_true(shows(4, 2, "E3: =COUNTIF(B2:B4, \">1\") → 3"), "COUNTIF follows an edit")
-            spec.assert_true(shows(4, 1, "E2: =VLOOKUP(\"Bread\", A2:D4, 4, FALSE) → 8.8"), "and so does VLOOKUP, through D3")
+            spec.assert_true(wait_cell("E", 3, "3"), "COUNTIF follows an edit")
+            spec.assert_true(wait_cell("E", 2, "8.8"), "and so does VLOOKUP, through D3")
             spec.assert_true(b.wait_for_text("No problems"), "no problems")
             spec.assert_true(string.contains(b.page_texts(), "Functions: ABS, AND, AVERAGE,") == 1, "the page lists its functions")
         }
-        spec.it("the arrow keys move the selection, until the formula is being edited") callback {
-            spec.assert_true(shows(0, 0, "A1: Item → Item"), "start at A1")
-            _r1 = uidriver.window_key("Right")
+        spec.it("a double click edits a cell in place, opening on its formula") callback {
+            uidriver.post_ok("/widget/${cell_id("D", 2)}/double_click", "double-click D2")
+            ed = editor()
+            spec.assert_gt(ed, 0, "an editor opened")
+            spec.assert_eq(string.equals(uidriver.widget_text_by_id(ed), "=B2*C2"), 1, "holding the formula, not 2.7")
+            uidriver.post_ok("/widget/${ed}/set_text?v=%3DB2*C2*2", "type =B2*C2*2")
+            uidriver.post_ok("/widget/${ed}/submit", "Return")
+            spec.assert_true(b.wait_for_console("sheet: D2 = 5.4"), "the edit went through the sheet")
+            spec.assert_true(wait_cell("D", 2, "5.4"), "D2 shows it")
+            spec.assert_true(wait_cell("D", 5, "16.5"), "and D5 below, which sums it: 5.4 + 8.8 + 2.3")
+        }
+        spec.it("the grid's keys move the selection, and the formula bar follows") callback {
+            pick("A", 1)
+            spec.assert_true(b.wait_for_text("A1: Item → Item"), "A1")
+            uidriver.post_ok("/window/key?combo=Right", "Right")
             spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "Right: B1")
-            _r2 = uidriver.window_key("Down")
+            uidriver.post_ok("/window/key?combo=Down", "Down")
             spec.assert_true(b.wait_for_text("B2: 6 → 6"), "Down: B2")
-            spec.assert_eq(string.equals(b.field_text(), "6"), 1, "the formula bar follows")
-            uidriver.post_ok("/widget/${formula_field()}/set_text?v=7", "type 7")
-            _r3 = uidriver.window_key("Left")
-            sleep(300)
-            spec.assert_eq(b.has_text("B2: 6 → 6"), 1, "editing: Left is the field's, B2 stays selected")
-            uidriver.post_ok("/widget/${formula_field()}/submit", "Return")
-            spec.assert_true(b.wait_for_text("B2: 7 → 7"), "Return enters it")
-            _r4 = uidriver.window_key("Up")
-            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "and the keys move the selection again")
-            enter("B2", "6")
-            spec.assert_true(b.wait_for_text("B2: 6 → 6"), "put back")
+            spec.assert_eq(string.equals(uidriver.widget_text_by_id(formula_field()), "6"), 1, "the formula bar holds it")
         }
-        spec.it("dragging a header border resizes the column and slides the rest") callback {
-            // B's right border starts at 30 + 2 * 70 = 170.
-            drag_border(170.0, 240.0)
-            spec.assert_true(b.wait_for_console("sheet: column B is "), "the drag resized B")
-            b.vg_click(px(200.0), py(cell_y(0)))
-            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "where C was, B is now")
-            b.vg_click(px(275.0), py(cell_y(0)))
-            spec.assert_true(b.wait_for_text("C1: Price → Price"), "C has slid right")
-            spec.assert_eq(ink_in(244.0, 270.0, 26.0, 36.0), 1, "and its text with it")
-            spec.assert_eq(ink_in(184.0, 210.0, 26.0, 36.0), 0, "leaving B's widened cell blank there")
-            // A's border, far to the left: held at the narrowest a column goes.
-            drag_border(100.0, 31.0)
-            spec.assert_true(b.wait_for_console("sheet: column A is 24 wide"), "A narrows no further than 24")
-            b.vg_click(px(60.0), py(cell_y(0)))
-            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "B starts at 54 now")
-        }
-        spec.it("a double click on a header border fits the column to its text") callback {
-            // After the drag: A is 24 wide (30..54), so x = 70 is in B.
-            b.vg_click(px(70.0), py(cell_y(0)))
-            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "x = 70 is B's")
-            double_click_border(54.0)
-            spec.assert_true(b.wait_for_console("sheet: column A fits its text at "), "A fitted")
-            b.vg_click(px(70.0), py(cell_y(0)))
-            spec.assert_true(b.wait_for_text("A1: Item → Item"), "A widened to its widest text, Average: x = 70 is A's now")
-            b.vg_click(px(100.0), py(cell_y(0)))
-            spec.assert_true(b.wait_for_text("B1: Qty → Qty"), "and narrower than it started: x = 100 is B's")
+        spec.it("dragging a header's grip resizes its column") callback {
+            g = grip_of("C")
+            spec.assert_gt(g, 0, "C's grip")
+            uidriver.post_ok("/widget/${g}/drag?x=3&y=8&dx=60&dy=0", "drag C's grip right")
+            spec.assert_true(b.wait_for_console("sheet: column C is 140 wide"), "80 + 60")
         }
         spec.it("Clear all empties the sheet") callback {
             b.click("Clear all")
             spec.assert_true(b.wait_for_console("sheet: cleared:"), "cleared")
-            spec.assert_true(b.wait_for_text("B1: (empty)"), "the selected cell, B1, is empty")
+            spec.assert_true(wait_cell("D", 5, ""), "D5 is empty")
+            spec.assert_true(wait_cell("A", 1, ""), "A1 is empty")
+            spec.assert_true(b.wait_for_text("B2: (empty)"), "the status line follows the selected cell, B2")
             spec.assert_true(b.wait_for_text("No problems"), "no problems")
         }
     }

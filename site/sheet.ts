@@ -2,23 +2,22 @@
 // site/sheet/ is the language and the model, with no ui: a tokenizer
 // generator, a recursive-descent parser into a union AST, an evaluator whose
 // errors are values, and a Sheet that keeps who-reads-whom and recomputes
-// downstream in order, finding cycles. This page is the view: the grid is a
-// vg scene (GridView) whose columns are groups, so dragging a column's
-// header border resizes it and slides the columns after it (a double click
-// fits it to its text, measured by the toolkit); the arrow keys move the
-// selection and Return commits a formula; the formula bar, status line,
+// downstream in order, finding cycles. This page is the view: the grid is
+// ui.datagrid (selection, the arrow keys, column resize and move, in-cell
+// editing that opens on the formula, all the toolkit's), styled per cell
+// (numbers to the right, errors in red); the formula bar, status line,
 // problem list and summary are state, bind (two-way for the fields),
-// computed and each; a paste is one batch.
-import { COLS, ROWS, addrOf, colName, keyOf, step } from "./sheet/address.ts";
+// computed and each; a paste is one batch, and one refresh of the grid.
+import { COLS, ROWS, addrOf, colName, keyOf } from "./sheet/address.ts";
+import type { Addr } from "./sheet/address.ts";
 import { Sheet, pasted } from "./sheet/sheet.ts";
-import type { Problem, SheetListener } from "./sheet/sheet.ts";
+import type { Problem } from "./sheet/sheet.ts";
 import { describe, show } from "./sheet/format.ts";
 import { names } from "./sheet/functions.ts";
-import { Columns, FONT, HEAD, PAD, ROW, ROW_HEAD, cellAt, fitted, height, room, rowTop } from "./sheet/layout.ts";
 import { CellError } from "./sheet/values.ts";
-import type { Value } from "./sheet/values.ts";
 
-const { text, btn, textfield, hstack, text_wrapped, on_key, on_submit, focus } = ui;
+const { text, btn, textfield, hstack, text_wrapped, on_submit, focus, cells, headers, edit_text, cell_style,
+        on_cell_select, on_cell_edit, on_col_resize, column_width } = ui;
 
 const EXAMPLE = [
   "Item\tQty\tPrice\tTotal",
@@ -29,119 +28,17 @@ const EXAMPLE = [
   "Average\t\t=AVERAGE(C2:C4)\t=ROUND(D5/B5, 2)",
 ].join("\n");
 
-const WIDTH = 760;                // the scene; columns widened past it are cut off
-const INK = "#20232a", ERROR = "#c0392b", LINE = "#d0d4dc", HEAD_FILL = "#eceef2";
+const sheet = new Sheet();
 
-// The grid, drawn in vg. Each column is a group translated to its left
-// edge: a resize changes that column's widths and slides the groups after
-// it. The Sheet tells it what each cell shows; it keeps the full text so a
-// narrower column can cut it (vg.ellipsize) and a wider one show it again.
-class GridView implements SheetListener {
-  readonly #cols = new Columns();
-  readonly #groups: number[] = [];
-  readonly #heads: number[] = [];
-  readonly #letters: number[] = [];
-  readonly #handles: number[] = [];
-  readonly #rects: number[][] = [];
-  readonly #texts: number[][] = [];
-  readonly #full = new Map<string, string>();
-  #outline = 0;
-  #selected = "A1";
-  #dragged = false;
-
-  build(pick: (key: string) => void): void {
-    const cols = this.#cols;
-    vg.scene(`0 0 ${WIDTH} ${height}`, WIDTH, height, () => {
-      vg.rect(0, 0, WIDTH, height, () => {
-        vg.fill("#ffffff");
-        vg.on_click((x: number, y: number) => {
-          const at = cellAt(cols, x, y);
-          if (at) pick(keyOf(at));
-        });
-      });
-      vg.rect(0, 0, ROW_HEAD, height, () => { vg.fill(HEAD_FILL); vg.stroke(LINE, 1); });
-      for (let row = 0; row < ROWS; row++) {
-        vg.text_anchored(ROW_HEAD - PAD, rowTop(row) + 15, FONT, "end", String(row + 1), () => vg.fill("#6a6f7a"));
-      }
-      for (let c = 0; c < COLS; c++) {
-        const w = cols.width(c);
-        this.#groups.push(vg.g(() => {
-          vg.transform(`translate(${cols.left(c)},0)`);
-          this.#heads.push(vg.rect(0, 0, w, HEAD, () => { vg.fill(HEAD_FILL); vg.stroke(LINE, 1); }));
-          this.#letters.push(vg.text_anchored(w / 2, 14, FONT, "middle", colName(c), () => vg.fill("#6a6f7a")));
-          this.#rects.push(Array.from({ length: ROWS }, (_, row) =>
-            vg.rect(0, rowTop(row), w, ROW, () => { vg.fill("#ffffff"); vg.stroke(LINE, 1); })));
-          this.#texts.push(Array.from({ length: ROWS }, (_, row) =>
-            vg.text_sized(PAD, rowTop(row) + 15, FONT, "", () => vg.fill(INK))));
-        }));
-      }
-      // Each column's right border has a handle, over every column: drag it
-      // to resize the column, double-click it to fit the column's text.
-      for (let c = 0; c < COLS; c++) {
-        this.#handles.push(vg.rect(cols.right(c) - 3, 2, 6, HEAD - 4, () => {
-          vg.fill("#b8bcc6");
-          vg.cursor("col-resize");
-          vg.tooltip(`Drag to resize column ${colName(c)}, double-click to fit it`);
-          // The press itself (a step of 0, 0) moves nothing: the second
-          // press of a double click must not undo its fit.
-          vg.on_drag((x: number, _y: number, dx: number, dy: number) => {
-            if (dx === 0 && dy === 0) return;
-            this.#dragged = true;
-            this.resize(c, x - cols.left(c));
-          });
-          vg.on_drag_end(() => {
-            if (!this.#dragged) return;
-            this.#dragged = false;
-            print(`sheet: column ${colName(c)} is ${cols.width(c)} wide`);
-          });
-          vg.on_double_click(() => this.fit(c));
-        }));
-      }
-      this.#outline = vg.rect(0, 0, 0, 0, () => { vg.fill("none"); vg.stroke("#3366cc", 2); });
-    });
-    this.select(this.#selected);
-  }
-
-  changed(key: string, value: Value): void {
-    const { col, row } = addrOf(key)!;
-    this.#full.set(key, show(value));
-    vg.set(this.#texts[col][row], {
-      text: vg.ellipsize(show(value), FONT, room(this.#cols.width(col))),
-      fill: value instanceof CellError ? ERROR : INK,
-    });
-  }
-
-  select(key: string): void {
-    this.#selected = key;
-    if (this.#outline === 0) return;      // not built yet: build() selects it
-    const { col, row } = addrOf(key)!;
-    vg.set(this.#outline, { x: this.#cols.left(col), y: rowTop(row), w: this.#cols.width(col), h: ROW });
-  }
-
-  resize(c: number, width: number): void {
-    const w = this.#cols.resize(c, width);
-    vg.set(this.#heads[c], { w });
-    vg.set(this.#letters[c], { x: w / 2 });
-    for (let row = 0; row < ROWS; row++) {
-      vg.set(this.#rects[c][row], { w });
-      vg.set(this.#texts[c][row], { text: vg.ellipsize(this.#full.get(keyOf({ col: c, row })) ?? "", FONT, room(w)) });
-    }
-    for (let k = c + 1; k < COLS; k++) vg.set_transform(this.#groups[k], `translate(${this.#cols.left(k)},0)`);
-    for (let k = c; k < COLS; k++) vg.set(this.#handles[k], { x: this.#cols.right(k) - 3 });
-    this.select(this.#selected);
-  }
-
-  // As wide as the column's widest text, measured with the toolkit's font.
-  fit(c: number): void {
-    const widths = Array.from({ length: ROWS }, (_, row) => this.#full.get(keyOf({ col: c, row })) ?? "")
-      .filter((s) => s !== "").map((s) => vg.measure(s, FONT).width);
-    this.resize(c, fitted(widths));
-    print(`sheet: column ${colName(c)} fits its text at ${this.#cols.width(c)} wide`);
-  }
-}
-
-const grid = new GridView();
-const sheet = new Sheet(grid);
+// The grid's column 0 is the frozen row numbers; column c + 1 is sheet
+// column c. The cell, edit_text and cell_style functions and on_cell_edit
+// get model columns; on_cell_select a column on screen (columns move).
+const addrAt = (row: number, modelCol: number): Addr | null =>
+  modelCol >= 1 && modelCol <= COLS && row >= 0 && row < ROWS ? { col: modelCol - 1, row } : null;
+const keyAt = (row: number, modelCol: number): string | null => {
+  const a = addrAt(row, modelCol);
+  return a ? keyOf(a) : null;
+};
 
 const address = state("A1");
 const input = state("");
@@ -152,21 +49,22 @@ const summary = computed(() => {
   return n === 0 ? "No problems" : `${n} problem${n === 1 ? "" : "s"}`;
 }, problems);
 
-// The address field drives the formula field: name a cell, see what it holds.
-address.subscribe((a: string) => {
-  const at = addrOf(a);
-  if (!at) return;
-  const key = keyOf(at);
-  grid.select(key);
-  batch(() => {
-    input.set(sheet.input(key));
-    status.set(describe(key, sheet.input(key), sheet.value(key)));
-  });
-});
+let grid = 0;
 
 const settled = (key: string) => {
   problems.set(sheet.problems());
   status.set(describe(key, sheet.input(key), sheet.value(key)));
+  ui.datagrid_refresh(grid);
+};
+
+const commit = (key: string, text: string) => {
+  batch(() => {
+    sheet.set(key, text.trim());
+    address.set(key);
+    input.set(sheet.input(key));
+    settled(key);
+  });
+  print(`sheet: ${key} = ${show(sheet.value(key))}`);
 };
 
 const enter = () => {
@@ -175,13 +73,7 @@ const enter = () => {
     status.set(`${address.value}: not a cell on this sheet`);
     return;
   }
-  const key = keyOf(at);
-  batch(() => {
-    sheet.set(key, input.value.trim());
-    address.set(key);
-    settled(key);
-  });
-  print(`sheet: ${key} = ${show(sheet.value(key))}`);
+  commit(keyOf(at), input.value);
 };
 
 // Many cells at once (a paste, a clear): one recompute, one batch.
@@ -194,9 +86,13 @@ const setAll = (entries: readonly (readonly [string, string])[], what: string) =
   print(`sheet: ${what}: ${entries.length} cells set, ${changed.length} changed`);
 };
 
+// Where a sheet column is on screen now (columns can be dragged).
+const viewCol = (modelCol: number): number => {
+  for (let v = 0; v <= COLS; v++) if (ui.datagrid_col_model(grid, v) === modelCol) return v;
+  return modelCol;
+};
+
 text("Spreadsheet");
-// Return in the cell field goes to the formula; Return in the formula
-// enters it.
 let formula = 0;
 hstack(() => {
   const cell = bind(textfield("cell", () => {}), address);
@@ -205,12 +101,56 @@ hstack(() => {
   on_submit(formula, enter);
 });
 bind(text(""), status);
-// A click selects a cell and puts the keyboard in the formula bar: type to
-// edit it, or use the arrow keys to move on.
-grid.build((key) => {
-  address.set(key);
-  focus(formula);
+
+grid = ui.datagrid(ROWS, COLS + 1, ROWS, COLS, 1, () => {
+  column_width(80);
+  cells((r: number, c: number) => {
+    const key = keyAt(r, c);
+    return key ? show(sheet.value(key)) : String(r + 1);
+  });
+  headers((c: number) => (c === 0 ? "" : colName(c - 1)));
+  // An editor opens on what was typed, not what it came to.
+  edit_text((r: number, c: number) => {
+    const key = keyAt(r, c);
+    return key ? sheet.input(key) : "";
+  });
+  cell_style((r: number, c: number) => {
+    const key = keyAt(r, c);
+    if (!key) return "color: #6a6f7a; text-align: end";
+    const v = sheet.value(key);
+    if (v instanceof CellError) return "color: #c0392b";
+    return typeof v === "number" ? "text-align: end" : "";
+  });
+  on_cell_select((r: number, c: number) => {
+    const key = keyAt(r, ui.datagrid_col_model(grid, c));
+    if (key && key !== address.value) address.set(key);
+  });
+  on_cell_edit((r: number, c: number, t: string) => {
+    const key = keyAt(r, c);
+    if (key) commit(key, t);
+  });
+  on_col_resize((c: number, w: number) => {
+    const m = ui.datagrid_col_model(grid, c);
+    if (m >= 1) print(`sheet: column ${colName(m - 1)} is ${w} wide`);
+  });
 });
+
+ui.datagrid_set_col_width(grid, 0, 34);     // the row numbers
+
+// The address field drives the formula field and the grid's selection: name
+// a cell, see what it holds.
+address.subscribe((a: string) => {
+  const at = addrOf(a);
+  if (!at) return;
+  const key = keyOf(at);
+  const [, , r, c] = ui.datagrid_selection(grid);
+  if (r !== at.row || ui.datagrid_col_model(grid, c) !== at.col + 1) ui.datagrid_select(grid, at.row, viewCol(at.col + 1));
+  batch(() => {
+    input.set(sheet.input(key));
+    status.set(describe(key, sheet.input(key), sheet.value(key)));
+  });
+});
+
 text_wrapped(`Functions: ${names().join(", ")}`, 720);
 bind(text(""), summary);
 each(problems, "key", (p: Problem) => text(`${p.key}: ${p.message}`));
@@ -218,15 +158,4 @@ hstack(() => {
   btn("Paste example", () => setAll(pasted(EXAMPLE, { col: 0, row: 0 }), "pasted the example"));
   btn("Clear all", () => setAll(sheet.keys().map((k) => [k, ""] as const), "cleared"));
   btn("Home", () => browserContext.changePage("/"));
-});
-
-// The arrow keys move the selection, and Return starts editing it, while
-// the formula bar holds the selected cell as it is; once it has been edited,
-// the keys are the field's (Left and Right move its caret).
-on_key((key: string) => {
-  const at = addrOf(address.value);
-  if (!at || input.value !== sheet.input(keyOf(at))) return;
-  const next = step(at, key);
-  if (next) address.set(keyOf(next));
-  else if (key === "Return") focus(formula);
 });

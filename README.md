@@ -526,8 +526,8 @@ rebuild the viewBox-to-canvas mapping); and the page's handlers, which the
 host dispatches itself, hit-testing the topmost shape with one. While they
 run, repaints are held: every `vg.set` in a click, drag, move or scroll
 handler marks its scene, and the scene repaints once when the handler
-returns (a column resize in `site/sheet.ts` sets some sixty nodes: a drag
-step went from 1.4 s to 36 ms on GTK4).
+returns (the spreadsheet's first grid, drawn in vg, set some sixty nodes a
+column resize: a drag step went from 1.4 s to 36 ms on GTK4).
 `site/aevg.ts` shows the grammar, `site/aevg_live.ts` the bindings, the data
 join, tweens, events and zoom; `tests/spec_aevg.ae` reads every one back
 as rendered pixels.
