@@ -105,6 +105,36 @@ main() {
             spec.assert_true(b.wait_for_console("grid edited 6,2 = hello"), "row 6, model column 2")
             spec.assert_true(b.wait_for_text("hello"), "the cell shows it")
         }
+        spec.it("cell_style colours a cell; edit_text holds a formula behind its value") callback {
+            spec.assert_contains(uidriver.get_body("/widget/${uidriver.widget_id_by_text("B3")}"), "\"bg\":\"#ffe0e0\"", "B3 the alarm background")
+            spec.assert_contains(uidriver.get_body("/widget/${uidriver.widget_id_by_text("B3")}"), "\"fontWeight\":\"bold\"", "bold")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("D9")}/double_click", "double-click D9")
+            bar = uidriver.widget_id_of("textfield", "")
+            ed = 0
+            i = 0
+            while i < 30 && ed == 0 {
+                last = uidriver.widget_id_last_of("textfield", "")
+                if last != bar && last != by_placeholder("note") { ed = last }
+                if ed == 0 { sleep(100) }
+                i = i + 1
+            }
+            spec.assert_true(ed > 0, "an editor opened")
+            uidriver.post_ok("/widget/${ed}/set_text?v=%3D200%2B34", "type =200+34")
+            uidriver.post_ok("/widget/${ed}/submit", "Return")
+            spec.assert_true(b.wait_for_text("234"), "the cell shows the value")
+            spec.assert_contains(uidriver.get_body("/widget/${uidriver.widget_id_by_text("234")}"), "\"anchor\":\"end\"", "at the right")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("234")}/double_click", "double-click it again")
+            ed2 = 0
+            j = 0
+            while j < 30 && ed2 == 0 {
+                last = uidriver.widget_id_last_of("textfield", "")
+                if last != bar && last != by_placeholder("note") { ed2 = last }
+                if ed2 == 0 { sleep(100) }
+                j = j + 1
+            }
+            spec.assert_str_eq(uidriver.widget_text_by_id(ed2), "=200+34", "the editor holds the formula")
+            uidriver.post_ok("/window/key?combo=Escape", "Escape")
+        }
         spec.it("the first form still works: a cell function in the block's place") callback {
             spec.assert_true(b.wait_for_text("s21"), "the small grid's last cell")
             b.assert_text("S1", "and its header, set by handle through a chain")

@@ -969,6 +969,18 @@ dg_cells_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
     return ""
 }
 
+// kind: 0 edit text, 1 cell style. Both (row, model col) -> string.
+dg_rc_str_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string {
+    if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (row, col) => string" }
+    ref = hold_arg_(ctx, argv, i)
+    f = |r: int, c: int| {
+        return call_ii_str_(ctx, ref, r, c, "a ui.datagrid edit-text or style function")
+    }
+    if kind == 0 { _g = ui.datagrid_edit_text(g, f) }
+    if kind == 1 { _g = ui.datagrid_cell_style(g, f) }
+    return ""
+}
+
 dg_headers_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (col) => string" }
     ref = hold_arg_(ctx, argv, i)
@@ -1293,6 +1305,32 @@ sae_ui_datagrid_editor(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, ui.datagrid_editor(g))
 }
 
+// ui.datagrid_edit_text(g, fn(r, c) -> string): what an editor opened by F2,
+// a double click or Return starts with (c a model column), when that is not
+// what the cell shows (a formula behind its value).
+sae_ui_datagrid_edit_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_edit_text: g is not a grid this page made") }
+    e = dg_rc_str_(ctx, g, argv, argc, 1, 0)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_edit_text(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_cell_style(g, fn(r, c) -> string): a cell's style from the
+// model, as AeCS properties ("background: #ffe0e0; color: #b00000;
+// font-weight: bold; text-align: end"; "" for the grid's own).
+sae_ui_datagrid_cell_style(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_cell_style: g is not a grid this page made") }
+    e = dg_rc_str_(ctx, g, argv, argc, 1, 1)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_cell_style(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
 // ---- The block's verbs: inside ui.datagrid(..., () => { ... }) the grid is
 // the receiver, as a button is inside button("OK", () => { ... }).
 
@@ -1381,6 +1419,28 @@ sae_ui_amb_on_cell_edit(ctx: ptr, this_val: int, argv: int) -> int {
     if g == null { return sae_throw_type_error(ctx, "on_cell_edit() must be called inside a datagrid's block") }
     e = dg_on_edit_(ctx, g, argv, argc, 0)
     if e != "" { return sae_throw_type_error(ctx, "on_cell_edit(fn): ${e}") }
+    return 0
+}
+
+// edit_text(fn(r, c) -> string) / cell_style(fn(r, c) -> string): the
+// block's grid's editor starting text and cell style.
+sae_ui_amb_edit_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "edit_text() must be called inside a datagrid's block") }
+    e = dg_rc_str_(ctx, g, argv, argc, 0, 0)
+    if e != "" { return sae_throw_type_error(ctx, "edit_text(fn): ${e}") }
+    return 0
+}
+
+sae_ui_amb_cell_style(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "cell_style() must be called inside a datagrid's block") }
+    e = dg_rc_str_(ctx, g, argv, argc, 0, 1)
+    if e != "" { return sae_throw_type_error(ctx, "cell_style(fn): ${e}") }
     return 0
 }
 
@@ -6544,6 +6604,8 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_edit_commit", 1, sae_ui_datagrid_edit_commit)
     reg_(q, u, "datagrid_edit_cancel", 1, sae_ui_datagrid_edit_cancel)
     reg_(q, u, "datagrid_editor", 1, sae_ui_datagrid_editor)
+    reg_(q, u, "datagrid_edit_text", 2, sae_ui_datagrid_edit_text)
+    reg_(q, u, "datagrid_cell_style", 2, sae_ui_datagrid_cell_style)
     reg_(q, u, "cells", 1, sae_ui_amb_cells)
     reg_(q, u, "headers", 1, sae_ui_amb_headers)
     reg_(q, u, "on_cell_click", 1, sae_ui_amb_on_cell_click)
@@ -6554,6 +6616,8 @@ api_register_(p: *Page) {
     reg_(q, u, "on_col_move", 1, sae_ui_amb_on_col_move)
     reg_(q, u, "column_width", 1, sae_ui_amb_column_width)
     reg_(q, u, "column_limits", 2, sae_ui_amb_column_limits)
+    reg_(q, u, "edit_text", 1, sae_ui_amb_edit_text)
+    reg_(q, u, "cell_style", 1, sae_ui_amb_cell_style)
     reg_(q, u, "on_submit", 2, sae_ui_on_submit)
     reg_(q, u, "onsubmit", 1, sae_ui_onsubmit)
     reg_(q, u, "on_drag", 2, sae_ui_on_drag)

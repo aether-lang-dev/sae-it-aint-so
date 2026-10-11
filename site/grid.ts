@@ -9,7 +9,7 @@
 // below take blocks of their own: onsubmit() and ondrag() act on them.
 // tests/spec_grid.ae drives it.
 const { text, btn, textfield, onsubmit, ondrag, pointer_shape, onfocuschange, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
-        on_cell_edit, on_col_resize, on_col_move } = ui;
+        on_cell_edit, on_col_resize, on_col_move, edit_text, cell_style } = ui;
 
 const letters = (c: number): string => {
   let s = "";
@@ -22,8 +22,16 @@ const edits: { [k: string]: string } = {};
 text("Grid");
 const picked = text("picked: none");
 const g = ui.datagrid(1000000, 40, 15, 5, 1, () => {
+  // "=a+b" is a formula: the cell shows its sum, an editor holds the formula.
+  const shown = (raw: string): string =>
+    raw.startsWith("=") ? String(raw.slice(1).split("+").reduce((t, n) => t + Number(n), 0)) : raw;
   cells((r: number, c: number) =>
-    c === 0 ? String(r + 1) : (edits[`${r},${c}`] ?? `${letters(c - 1)}${r + 1}`));
+    c === 0 ? String(r + 1) : (edits[`${r},${c}`] !== undefined ? shown(edits[`${r},${c}`]) : `${letters(c - 1)}${r + 1}`));
+  edit_text((r: number, c: number) => edits[`${r},${c}`] ?? `${letters(c - 1)}${r + 1}`);
+  // Row 3's column B is an alarm; a formula's value sits at the right.
+  cell_style((r: number, c: number) =>
+    r === 2 && c === 2 ? "background: #ffe0e0; color: #b00000; font-weight: bold"
+      : (edits[`${r},${c}`] ?? "").startsWith("=") ? "text-align: end" : "");
   headers((c: number) => (c === 0 ? "#" : letters(c - 1)));
   on_cell_click((r: number, c: number) => {
     ui.set_text(picked, `picked: ${r},${c}`);
