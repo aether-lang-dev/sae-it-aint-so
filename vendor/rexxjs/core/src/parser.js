@@ -2065,10 +2065,15 @@ function parseExpression(exprStr) {
   // Those should be handled as function calls, not arithmetic expressions
   const hasOperators = /[+\-*/%\|]|\*\*|\|\||\|>/.test(expr);
   const hasFunctionCallWithNamedParams = /^[a-zA-Z_]\w*\s*\([a-zA-Z_]\w*=/.test(expr);
+  // A comparison (B > 500, A1 = B1), but not a call's named parameters
+  // (ARRAY_FILTER array=mixed), where = follows a word after another word.
+  const unquoted = expr.replace(/"[^"]*"|'[^']*'/g, '""');
+  const hasNamedParams = /\S\s+[a-zA-Z_]\w*=(?!=)/.test(unquoted);
+  const hasComparison = !hasNamedParams && /[<>=¬]|!=/.test(unquoted);
 
-  if (hasOperators || (expr.match(/[()]/) && !hasFunctionCallWithNamedParams)) {
+  if (hasOperators || hasComparison || (expr.match(/[()]/) && !hasFunctionCallWithNamedParams)) {
     // Parse as mathematical expression (which can contain function calls, concatenation, and piping)
-    return parseArithmeticExpression(expr);
+    return parseArithmeticExpression(expr, !hasNamedParams);
   }
   
   // For expressions, only handle function calls without parameters or with parentheses syntax
@@ -2160,11 +2165,13 @@ function removeSpacesExceptInQuotes(expr) {
   return result;
 }
 
-function parseArithmeticExpression(expr) {
+// `comparisons` false leaves = unread, for parseExpression to try the
+// expression as a call with named parameters instead.
+function parseArithmeticExpression(expr, comparisons = true) {
   try {
     // Remove spaces while preserving spaces inside quoted strings
     const cleanedExpr = removeSpacesExceptInQuotes(expr);
-    const result = parsePipe(cleanedExpr);
+    const result = comparisons ? parseComparison(cleanedExpr) : parsePipe(cleanedExpr);
     
     if (result && result.remaining && result.remaining.length > 0) {
       // Unexpected remaining characters
@@ -2181,6 +2188,38 @@ function parseArithmeticExpression(expr) {
 
 // Recursive descent parser for mathematical expressions
 // Handles operator precedence: () > * / > + - > |>
+
+// The comparison operators, longest first so that \== is not read as \=
+// then =. Rexx's spellings of not-equal are all here.
+const COMPARISON_OPERATORS = ['\\==', '==', '\\=', '¬=', '!=', '<>', '><', '>=', '<=', '=', '>', '<'];
+
+// Comparisons are the loosest operators: A + 1 > 2 * B compares two sums.
+// Each comes to 1 or 0 (evaluateExpression's BINARY_OP).
+function parseComparison(expr) {
+  let result = parsePipe(expr);
+  let remaining = result.remaining;
+
+  for (let op = comparisonAt(remaining); op; op = comparisonAt(remaining)) {
+    const rightResult = parsePipe(remaining.substring(op.length));
+
+    result = {
+      expr: {
+        type: 'BINARY_OP',
+        operator: op,
+        left: result.expr,
+        right: rightResult.expr
+      },
+      remaining: rightResult.remaining
+    };
+    remaining = rightResult.remaining;
+  }
+
+  return result;
+}
+
+function comparisonAt(remaining) {
+  return COMPARISON_OPERATORS.find((op) => remaining.startsWith(op));
+}
 
 function parsePipe(expr) {
   let result = parseAddition(expr);
@@ -2279,7 +2318,9 @@ function parseFactor(expr) {
     }
     
     const innerExpr = expr.substring(1, endIndex - 1);
-    const innerResult = parseAddition(innerExpr);
+    // The whole expression grammar inside parentheses: parseAddition left
+    // a comparison or a pipe unread, so (B > 500) came to B.
+    const innerResult = parseComparison(innerExpr);
     
     // Now innerResult should always have an expr property
     const innerExpression = innerResult.expr;

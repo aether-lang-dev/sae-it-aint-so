@@ -30,6 +30,7 @@ const formula = async (ref: string, f: string) => {
 eq("Rexx's own: || and |>", [await formula("E2", "=UPPER(A2) || '!'"), await formula("E3", "=A2 |> LOWER")], ["LAPTOP!", "laptop"]);
 eq("Rexx's string functions", [await formula("E4", "=SUBSTR(A3, 1, 3)"), await formula("E5", "=WORD('the quick fox', 2)"), await formula("E6", "=COPIES('ab', 3)")], ["Mou", "quick", "ababab"]);
 eq("the app's range functions", [await formula("E7", '=MAX_RANGE("B2:B4")'), await formula("E8", '=COUNT_RANGE("A2:A4")')], ["1000", "3"]);
+eq("a comparison is 1 or 0 (vendor/rexxjs/patches/0001)", [await formula("E12", "=B2 > 500"), await formula("E13", "=B2 > 5000"), await formula("E14", "=(B2 > 500) + (A2 = 'Laptop')")], ["1", "0", "2"]);
 eq("constants alone are an expression too", await formula("E9", "=2*3"), "6");
 eq("an error says why", [await formula("E10", "=1/0"), error(s, "E10")], ["#ERROR!", "Division by zero"]);
 eq("an unknown function", [await formula("E11", "=NOSUCH(1)"), error(s, "E11").startsWith("Function NOSUCH is not available")], ["#ERROR!", true]);
@@ -48,6 +49,7 @@ eq("clearing a cell ripples too", [s.model.cells.has("B2"), value(s, "B6")], [fa
 // expect: ok Rexx's own: || and |>
 // expect: ok Rexx's string functions
 // expect: ok the app's range functions
+// expect: ok a comparison is 1 or 0 (vendor/rexxjs/patches/0001)
 // expect: ok constants alone are an expression too
 // expect: ok an error says why
 // expect: ok an unknown function

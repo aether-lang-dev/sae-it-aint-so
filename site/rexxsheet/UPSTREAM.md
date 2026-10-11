@@ -54,8 +54,12 @@ each of them.
    and its functions are exported as one object, which `boot.ts` puts in
    the interpreter's `externalFunctions`.
 
-RexxJS core needed no change. Found on the way (the same on Node, so
-RexxJS's, not sae's):
-
-- A comparison in an expression is not one: `LET X = B2 > 500` reads `B2` as
-  a function call, and `LET X = (B2 > 500)` comes to B2's value.
+RexxJS core needed one change, `vendor/rexxjs/patches/0001-comparisons-in-expressions.patch`
+(its jest spec beside it, for `core/tests/`): a comparison in an expression
+is now one. `LET X = B2 > 500` read `B2` as a function call, and
+`LET X = (B2 > 500)` came to B2's value, as parentheses dropped what
+followed their inner sum. Comparisons are the loosest operators, come to 1
+or 0, and take every Rexx spelling (`=`, `\=`, `<>`, `><`, `!=`, `¬=`, `==`,
+`\==`, `>`, `<`, `>=`, `<=`); `=` stays a named parameter in a call such as
+`ARRAY_FILTER array=mixed`. RexxJS's own suite is green with it (2,484
+jest tests, 8 of them the patch's; 41 dogfood sources).

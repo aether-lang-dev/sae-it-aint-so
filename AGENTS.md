@@ -26,7 +26,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `tools/saelower.ae` | CLI for the lowerer, and `--from-svg` (an SVG as an AeVG-TS page) |
 | `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
 | `site/rexxsheet/` | Demo 19: the Tauri spreadsheet's model, adapter and function library (RexxJS/example-app-spreadsheet), changes marked `// sae:` and listed in its `UPSTREAM.md` to go back upstream |
-| `vendor/rexxjs/` | RexxJS's interpreter and parser (the closure of their requires), unchanged, at the commit in `UPSTREAM`; `node tools/bundle-rexxjs.mjs [../RexxJS]` re-vendors it and writes `site/rexxsheet/rexxjs.js` (`--from-vendor` only bundles) |
+| `vendor/rexxjs/` | RexxJS's interpreter and parser (the closure of their requires) at the commit in `UPSTREAM`, plus `patches/*.patch` (sae's changes, each to go back upstream, with its jest spec); `node tools/bundle-rexxjs.mjs [../RexxJS]` re-vendors it, applies the patches and writes `site/rexxsheet/rexxjs.js` (`--from-vendor` only bundles) |
 | `tests/escape/` | The escape corpus: one page per attempt to get out (README "Browser security rules"); `tests/spec_escape.ae` holds each to "refused, logged once". A new browser rule is not done until its attempt is here |
 | `tests/lib/saedriver.ae` | The browser-test driver: Tsyne's TsyneBrowserTest verbs (navigate, back, forward, reload, current_url, assert_url, screenshot) plus page, vg and console queries, on aether-ui's uidriver |
 | `tests/lib/griddriver.ae` | Verbs for a `ui.datagrid` page with a formula bar (a cell by column and row, enter, the in-cell editor, header grips), for `spec_sheet` and `spec_rexxsheet` |

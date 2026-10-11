@@ -35,11 +35,13 @@ main() {
             spec.assert_true(g.wait_cell("A", 4, "120"), "A4 follows")
             spec.assert_true(g.wait_cell("A", 5, "150"), "and A5")
         }
-        spec.it("formulas are RexxJS: || joins, |> pipes") callback {
+        spec.it("formulas are RexxJS: || joins, |> pipes, > compares") callback {
             g.enter("D1", "=UPPER(B1) || '!'")
             spec.assert_true(g.wait_cell("D", 1, "HELLO!"), "D1")
             g.enter("D2", "=B1 |> LOWER")
             spec.assert_true(g.wait_cell("D", 2, "hello"), "D2")
+            g.enter("D4", "=A1 > 50")
+            spec.assert_true(g.wait_cell("D", 4, "1"), "a comparison: A1 (100) > 50 is 1")
             spec.assert_eq(g.cell_has("A", 4, "\"anchor\":\"end\""), 1, "numbers sit to the right")
             spec.assert_eq(g.cell_has("D", 1, "\"anchor\":\"end\""), 0, "text to the left")
         }
