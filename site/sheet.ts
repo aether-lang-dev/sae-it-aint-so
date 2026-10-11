@@ -24,7 +24,9 @@ import { EXCEL } from "./sheet/excel.ts";
 import { RexxLanguage } from "./sheet/rexx.ts";
 import { readSheetFile } from "./sheet/file.ts";
 import type { SheetFile } from "./sheet/file.ts";
-import { SAMPLE_BUDGET, TEST_SHEET } from "./sheet/samples.ts";
+import { FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./sheet/samples.ts";
+import { CellNotes } from "./sheet/notes.ts";
+import { formatted, toStyle } from "./sheet/formats.ts";
 import { CellError } from "./sheet/values.ts";
 
 const { text, btn, textfield, hstack, text_wrapped, on_submit, focus, cells, headers, edit_text, cell_style,
@@ -42,8 +44,10 @@ const EXAMPLE = [
 const sheet = new Sheet();
 const rexx = new RexxLanguage();
 const languages = { Excel: EXCEL, RexxJS: rexx } as const;
-// A comment per cell, from the sheet file that was opened.
-let comments: ReadonlyMap<string, string> = new Map();
+// What cells carry besides their inputs (comment, format, style, a
+// conditional style), and each conditional style as last worked out.
+const notes = new CellNotes();
+let conditional = new Map<string, string>();
 
 // The grid's column 0 is the frozen row numbers; column c + 1 is sheet
 // column c. The cell, edit_text and cell_style functions and on_cell_edit
@@ -60,6 +64,8 @@ const input = state("");
 const status = state("");
 const problems = state<Problem[]>([]);
 const formulas = state<"Excel" | "RexxJS">("Excel");
+const comment = state("");
+const format = state("");
 const setupScript = state("");
 const functionList = computed(() => {
   const own = formulas.value === "RexxJS" ? ", and RexxJS's own (UPPER, SUBSTR, WORD, LENGTH, ...)" : "";
@@ -72,7 +78,29 @@ const summary = computed(() => {
 
 let grid = 0;
 
-const described = (key: string) => describe(key, sheet.input(key), sheet.value(key), comments.get(key));
+const described = (key: string) => describe(key, sheet.input(key), sheet.value(key), notes.get(key).comment);
+
+// Every conditional style worked out again, in the sheet's language, after
+// a change (it may read any cell).
+const restyle = async () => {
+  const next = new Map<string, string>();
+  for (const [key, expr] of notes.conditional()) next.set(key, toStyle(await sheet.evaluate(expr)));
+  conditional = next;
+};
+
+// What a cell shows: its value in its number format.
+const textOf = (key: string) => {
+  const v = sheet.value(key);
+  return formatted(v, notes.get(key).format ?? "") ?? show(v);
+};
+
+// Its style, each layer over the last: numbers to the right, its own style,
+// its format's style parts, its conditional style, and an error in red.
+const styleOf = (key: string) => {
+  const v = sheet.value(key), n = notes.get(key);
+  return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), toStyle(n.format), conditional.get(key) ?? "",
+    v instanceof CellError ? "color: #c0392b" : ""].filter((p) => p).join("; ");
+};
 
 const settled = (key: string) => {
   problems.set(sheet.problems());
@@ -84,6 +112,7 @@ const settled = (key: string) => {
 // then shown in one batch.
 const commit = async (key: string, text: string) => {
   await sheet.set(key, text.trim());
+  await restyle();
   batch(() => {
     address.set(key);
     input.set(sheet.input(key));
@@ -106,6 +135,7 @@ const here = () => keyOf(addrOf(address.value) ?? { col: 0, row: 0 });
 // Many cells at once (a paste, a clear): one recompute, one batch.
 const setAll = async (entries: readonly (readonly [string, string])[], what: string) => {
   const changed = await sheet.setMany(entries);
+  await restyle();
   batch(() => settled(here()));
   print(`sheet: ${what}: ${entries.length} cells set, ${changed.length} changed`);
 };
@@ -113,6 +143,7 @@ const setAll = async (entries: readonly (readonly [string, string])[], what: str
 // Undo and redo: the last change taken back, or done again.
 const history = async (way: "undo" | "redo") => {
   const changed = await (way === "undo" ? sheet.undo() : sheet.redo());
+  await restyle();
   batch(() => {
     input.set(sheet.input(here()));
     settled(here());
@@ -123,6 +154,7 @@ const history = async (way: "undo" | "redo") => {
 // The major setting: every formula read again in the other language.
 const useFormulas = async (name: "Excel" | "RexxJS") => {
   await sheet.setLanguage(languages[name]);
+  await restyle();
   batch(() => {
     formulas.set(name);
     settled(here());
@@ -131,14 +163,16 @@ const useFormulas = async (name: "Excel" | "RexxJS") => {
 };
 
 // A sheet file (the Tauri app's format): the sheet emptied, its language,
-// its setup script run, its cells set, its comments kept.
+// its setup script run, its cells set, its notes kept.
 const open = async (file: SheetFile) => {
   await sheet.setMany(sheet.keys().map((k) => [k, ""] as const));
   const failed = file.language === "RexxJS" ? await rexx.setup(file.setupScript) : null;
   await sheet.setLanguage(languages[file.language]);
   await sheet.setMany(file.entries);
   sheet.forget();
-  comments = file.comments;
+  notes.clear();
+  for (const [key, note] of file.notes) notes.set(key, note);
+  await restyle();
   batch(() => {
     formulas.set(file.language);
     setupScript.set(file.setupScript ? `Setup script: ${file.setupScript}` : "");
@@ -220,12 +254,24 @@ hstack(() => {
   on_submit(formula, enter);
 });
 bind(text(""), status);
+// The selected cell's comment and number format (or style: "bold;
+// color:red", "$#,##0.00", "percent:0.0%"); Return sets them.
+const note = async (parts: { comment?: string; format?: string }) => {
+  notes.set(here(), parts);
+  await restyle();
+  batch(() => settled(here()));
+  print(`sheet: ${here()} ${Object.entries(parts).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+};
+hstack(() => {
+  on_submit(bind(textfield("comment", () => {}), comment), () => note({ comment: comment.value }));
+  on_submit(bind(textfield("format", () => {}), format), () => note({ format: format.value }));
+});
 
 grid = ui.datagrid(ROWS, COLS + 1, ROWS, COLS, 1, () => {
   column_width(80);
   cells((r: number, c: number) => {
     const key = keyAt(r, c);
-    return key ? show(sheet.value(key)) : String(r + 1);
+    return key ? textOf(key) : String(r + 1);
   });
   headers((c: number) => (c === 0 ? "" : colName(c - 1)));
   // An editor opens on what was typed, not what it came to.
@@ -235,10 +281,7 @@ grid = ui.datagrid(ROWS, COLS + 1, ROWS, COLS, 1, () => {
   });
   cell_style((r: number, c: number) => {
     const key = keyAt(r, c);
-    if (!key) return "color: #6a6f7a; text-align: end";
-    const v = sheet.value(key);
-    if (v instanceof CellError) return "color: #c0392b";
-    return typeof v === "number" ? "text-align: end" : "";
+    return key ? styleOf(key) : "color: #6a6f7a; text-align: end";
   });
   on_cell_select((r: number, c: number) => {
     const key = keyAt(r, ui.datagrid_col_model(grid, c));
@@ -267,6 +310,8 @@ address.subscribe((a: string) => {
   batch(() => {
     input.set(sheet.input(key));
     status.set(described(key));
+    comment.set(notes.get(key).comment ?? "");
+    format.set(notes.get(key).format ?? "");
   });
 });
 
@@ -281,10 +326,11 @@ hstack(() => {
   });
   btn("Budget (RexxJS)", () => open(readSheetFile(SAMPLE_BUDGET)));
   btn("Test sheet (RexxJS)", () => open(readSheetFile(TEST_SHEET)));
+  btn("Formatted (RexxJS)", () => open(readSheetFile(FORMATTED)));
   btn("Undo", () => history("undo"));
   btn("Redo", () => history("redo"));
   btn("Clear all", () => {
-    comments = new Map();
+    notes.clear();
     return setAll(sheet.keys().map((k) => [k, ""] as const), "cleared");
   });
   btn("Home", () => browserContext.changePage("/"));

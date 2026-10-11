@@ -1,0 +1,35 @@
+// What a cell carries besides its input, as the Tauri spreadsheet's cells
+// do: a comment, a number format, a fixed style, and a conditional style (an
+// expression in the sheet's language whose value is a style, worked out
+// with the sheet: STYLE_IF(C5 < 0, RED_TEXT(), GREEN_TEXT()) in RexxJS
+// formulas, IF(C5 < 0, "color: red", "") in Excel ones).
+export interface Note {
+  readonly comment?: string;
+  readonly format?: string;
+  readonly style?: unknown;
+  readonly styleExpression?: string;
+}
+
+export class CellNotes {
+  readonly #notes = new Map<string, Note>();
+
+  get(key: string): Note {
+    return this.#notes.get(key) ?? {};
+  }
+
+  // Some parts of a cell's note; an empty part is none.
+  set(key: string, parts: Note): void {
+    const note: Record<string, unknown> = { ...this.get(key), ...parts };
+    for (const [k, v] of Object.entries(note)) if (v === "" || v === null || v === undefined) delete note[k];
+    if (Object.keys(note).length) this.#notes.set(key, note as Note); else this.#notes.delete(key);
+  }
+
+  // The cells with a conditional style, and its expression.
+  conditional(): [string, string][] {
+    return [...this.#notes].filter(([, n]) => n.styleExpression).map(([k, n]) => [k, n.styleExpression!]);
+  }
+
+  clear(): void {
+    this.#notes.clear();
+  }
+}

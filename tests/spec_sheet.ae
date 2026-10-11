@@ -17,6 +17,21 @@ import saedriver as b
 import griddriver as g
 import uidriver
 
+// The page's text field with this placeholder.
+field_with(placeholder: string) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "placeholder"), placeholder) == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
 const TRIES = 60
 const POLL_MS = 50
 
@@ -255,6 +270,30 @@ main() {
             spec.assert_true(b.wait_for_console("sheet: RexxJS formulas"), "back")
             spec.assert_true(g.wait_cell("C", 2, "80"), "C2 again")
             spec.assert_true(g.wait_cell("D", 6, "1188"), "and D6")
+        }
+        spec.it("the app's formatted sheet: number formats, styles, and conditional styles in RexxJS") callback {
+            b.click("Formatted (RexxJS)")
+            spec.assert_true(b.wait_for_console("sheet: opened Formatted Spreadsheet Example: 50 cells"), "opened")
+            spec.assert_true(g.wait_cell("C", 4, "$1,000.00"), "C4 in $#,##0.00")
+            spec.assert_true(g.wait_cell("C", 5, "-$150.50"), "C5, negative")
+            spec.assert_true(g.wait_cell("D", 12, "$3,998.75"), "D12, the final balance")
+            spec.assert_true(g.wait_cell("G", 4, "85.00%"), "G4 in 0.00%")
+            spec.assert_eq(g.cell_has("C", 5, "\"fg\":\"#d32f2f\""), 1, "C5 < 0: STYLE_IF gives RED_TEXT()")
+            spec.assert_eq(g.cell_has("C", 6, "\"fg\":\"#388e3c\""), 1, "C6 >= 0: GREEN_TEXT()")
+            spec.assert_eq(g.cell_has("A", 3, "\"fg\":\"#000000\""), 1, "A3 bold, black")
+            spec.assert_eq(g.cell_has("G", 10, "\"fg\":\"#0d47a1\""), 1, "G10: STYLE(...)'s colour")
+        }
+        spec.it("a conditional style follows an edit; a format and a comment are set by hand") callback {
+            g.enter("C6", "-5")
+            spec.assert_true(g.wait_cell("C", 6, "-$5.00"), "C6 is negative now")
+            spec.assert_eq(g.cell_has("C", 6, "\"fg\":\"#d32f2f\""), 1, "and red, as STYLE_IF says")
+            g.pick("D", 12)
+            b.set_field_by("format", "number:0")
+            uidriver.post_ok("/widget/${field_with("format")}/submit", "Return in the format field")
+            spec.assert_true(g.wait_cell("D", 12, "1494"), "D12 in number:0 (3998.75 - 2505)")
+            b.set_field_by("comment", "what is left")
+            uidriver.post_ok("/widget/${field_with("comment")}/submit", "Return in the comment field")
+            spec.assert_true(b.wait_for_text("D12: =D9 → 1493.75 (what is left)"), "the comment on the status line")
         }
     }
     return spec.run_summary(fw)

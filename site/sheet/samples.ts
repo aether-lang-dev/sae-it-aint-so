@@ -1,5 +1,5 @@
-// The example app's sample sheets (RexxJS/example-app-spreadsheet, test-sheet.json and
-// sample-budget.json), as a module: the page server serves pages and modules,
+// The example app's sample sheets (RexxJS/example-app-spreadsheet, test-sheet.json,
+// sample-budget.json and example-formatted.json), as a module: the page server serves pages and modules,
 // not .json.
 export const TEST_SHEET = {
   "name": "Test Sheet",
@@ -205,5 +205,211 @@ export const SAMPLE_BUDGET = {
     "cols": 26,
     "created": "2025-11-05T18:00:00.000Z",
     "modified": "2025-11-05T18:00:00.000Z"
+  }
+};
+export const FORMATTED = {
+  "name": "Formatted Spreadsheet Example",
+  "setupScript": "",
+  "cells": {
+    "A1": {
+      "content": "Account Ledger",
+      "style": {
+        "fontWeight": "bold",
+        "fontSize": "16px",
+        "backgroundColor": "#2196F3",
+        "color": "white",
+        "textAlign": "center"
+      }
+    },
+    "A3": {
+      "content": "Date",
+      "style": {
+        "fontWeight": "bold",
+        "backgroundColor": "#f5f5f5"
+      }
+    },
+    "B3": {
+      "content": "Description",
+      "style": {
+        "fontWeight": "bold",
+        "backgroundColor": "#f5f5f5"
+      }
+    },
+    "C3": {
+      "content": "Amount",
+      "style": {
+        "fontWeight": "bold",
+        "backgroundColor": "#f5f5f5",
+        "textAlign": "right"
+      }
+    },
+    "D3": {
+      "content": "Balance",
+      "style": {
+        "fontWeight": "bold",
+        "backgroundColor": "#f5f5f5",
+        "textAlign": "right"
+      }
+    },
+    "A4": "2025-01-15",
+    "B4": "Opening Balance",
+    "C4": {
+      "content": "1000",
+      "format": "$#,##0.00"
+    },
+    "D4": {
+      "content": "=C4",
+      "format": "$#,##0.00"
+    },
+    "A5": "2025-01-16",
+    "B5": "Office Supplies",
+    "C5": {
+      "content": "-150.50",
+      "format": "$#,##0.00",
+      "styleExpression": "STYLE_IF(C5 < 0, RED_TEXT(), GREEN_TEXT())"
+    },
+    "D5": {
+      "content": "=D4 + C5",
+      "format": "$#,##0.00"
+    },
+    "A6": "2025-01-17",
+    "B6": "Client Payment",
+    "C6": {
+      "content": "2500",
+      "format": "$#,##0.00",
+      "styleExpression": "STYLE_IF(C6 < 0, RED_TEXT(), GREEN_TEXT())"
+    },
+    "D6": {
+      "content": "=D5 + C6",
+      "format": "$#,##0.00"
+    },
+    "A7": "2025-01-18",
+    "B7": "Rent Payment",
+    "C7": {
+      "content": "-800",
+      "format": "$#,##0.00",
+      "styleExpression": "STYLE_IF(C7 < 0, RED_TEXT(), GREEN_TEXT())"
+    },
+    "D7": {
+      "content": "=D6 + C7",
+      "format": "$#,##0.00"
+    },
+    "A8": "2025-01-19",
+    "B8": "Equipment Purchase",
+    "C8": {
+      "content": "-350.75",
+      "format": "$#,##0.00",
+      "styleExpression": "STYLE_IF(C8 < 0, RED_TEXT(), GREEN_TEXT())"
+    },
+    "D8": {
+      "content": "=D7 + C8",
+      "format": "$#,##0.00"
+    },
+    "A9": "2025-01-20",
+    "B9": "Consulting Revenue",
+    "C9": {
+      "content": "1800",
+      "format": "$#,##0.00",
+      "styleExpression": "STYLE_IF(C9 < 0, RED_TEXT(), GREEN_TEXT())"
+    },
+    "D9": {
+      "content": "=D8 + C9",
+      "format": "$#,##0.00"
+    },
+    "B11": {
+      "content": "Total Credits",
+      "style": {
+        "fontWeight": "bold"
+      }
+    },
+    "C11": {
+      "content": "=SUM_RANGE(\"C4:C9\")",
+      "format": "$#,##0.00",
+      "style": {
+        "fontWeight": "bold",
+        "backgroundColor": "#e8f5e9"
+      }
+    },
+    "B12": {
+      "content": "Final Balance",
+      "style": {
+        "fontWeight": "bold"
+      }
+    },
+    "D12": {
+      "content": "=D9",
+      "format": "$#,##0.00",
+      "style": {
+        "fontWeight": "bold",
+        "fontSize": "16px",
+        "backgroundColor": "#e3f2fd"
+      }
+    },
+    "F3": {
+      "content": "Sales Performance",
+      "style": {
+        "fontWeight": "bold",
+        "backgroundColor": "#f5f5f5"
+      }
+    },
+    "F4": "Product A",
+    "G4": {
+      "content": "0.85",
+      "format": "0.00%",
+      "styleExpression": "STYLE_IF(G4 >= 0.8, GREEN_BG(), STYLE_IF(G4 >= 0.5, YELLOW_BG(), RED_BG()))"
+    },
+    "F5": "Product B",
+    "G5": {
+      "content": "0.45",
+      "format": "0.00%",
+      "styleExpression": "STYLE_IF(G5 >= 0.8, GREEN_BG(), STYLE_IF(G5 >= 0.5, YELLOW_BG(), RED_BG()))"
+    },
+    "F6": "Product C",
+    "G6": {
+      "content": "0.92",
+      "format": "0.00%",
+      "styleExpression": "STYLE_IF(G6 >= 0.8, GREEN_BG(), STYLE_IF(G6 >= 0.5, YELLOW_BG(), RED_BG()))"
+    },
+    "F7": "Product D",
+    "G7": {
+      "content": "0.67",
+      "format": "0.00%",
+      "styleExpression": "STYLE_IF(G7 >= 0.8, GREEN_BG(), STYLE_IF(G7 >= 0.5, YELLOW_BG(), RED_BG()))"
+    },
+    "F9": {
+      "content": "Temperature (°F)",
+      "style": {
+        "fontWeight": "bold"
+      }
+    },
+    "G9": {
+      "content": "Status",
+      "style": {
+        "fontWeight": "bold"
+      }
+    },
+    "F10": "32",
+    "G10": {
+      "content": "Freezing",
+      "styleExpression": "STYLE(\"backgroundColor\", \"#bbdefb\", \"color\", \"#0d47a1\")"
+    },
+    "F11": "75",
+    "G11": {
+      "content": "Comfortable",
+      "styleExpression": "STYLE(\"backgroundColor\", \"#c8e6c9\", \"color\", \"#1b5e20\")"
+    },
+    "F12": "95",
+    "G12": {
+      "content": "Hot",
+      "styleExpression": "STYLE(\"backgroundColor\", \"#ffccbc\", \"color\", \"#bf360c\")"
+    }
+  },
+  "columnWidths": {
+    "1": 120,
+    "2": 180,
+    "3": 120,
+    "4": 120,
+    "6": 140,
+    "7": 140
   }
 };

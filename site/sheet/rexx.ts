@@ -124,6 +124,35 @@ export function rangeFunctions(read: (key: string) => unknown): Record<string, (
   };
 }
 
+// The app's style functions, for conditional styles: each gives a style
+// object, which formats.ts's toStyle turns into what the grid draws.
+const STYLE_FUNCTIONS: Record<string, (...args: any[]) => unknown> = {
+  STYLE: (...args: unknown[]) => {
+    const style: Record<string, unknown> = {};
+    for (let i = 0; i + 1 < args.length; i += 2) style[String(args[i])] = args[i + 1];
+    return style;
+  },
+  STYLE_IF: (condition: unknown, yes: unknown, no?: unknown) =>
+    condition && condition !== "0" && condition !== 0 ? yes : (no ?? {}),
+  BG_COLOR: (c: string) => ({ backgroundColor: c }),
+  TEXT_COLOR: (c: string) => ({ color: c }),
+  BOLD: () => ({ fontWeight: "bold" }),
+  ITALIC: () => ({ fontStyle: "italic" }),
+  ALIGN_LEFT: () => ({ textAlign: "left" }),
+  ALIGN_CENTER: () => ({ textAlign: "center" }),
+  ALIGN_RIGHT: () => ({ textAlign: "right" }),
+  MERGE_STYLES: (...styles: unknown[]) => Object.assign({}, ...styles.map((s) => (typeof s === "string" ? JSON.parse(s) : s))),
+  RED_TEXT: () => ({ color: "#d32f2f" }),
+  GREEN_TEXT: () => ({ color: "#388e3c" }),
+  BLUE_TEXT: () => ({ color: "#1976d2" }),
+  ORANGE_TEXT: () => ({ color: "#f57c00" }),
+  RED_BG: () => ({ backgroundColor: "#ffebee" }),
+  GREEN_BG: () => ({ backgroundColor: "#e8f5e9" }),
+  BLUE_BG: () => ({ backgroundColor: "#e3f2fd" }),
+  YELLOW_BG: () => ({ backgroundColor: "#fff9c4" }),
+  ORANGE_BG: () => ({ backgroundColor: "#ffe0b2" }),
+};
+
 export class RexxLanguage implements Language {
   readonly name = "RexxJS";
   readonly #it: any;
@@ -135,7 +164,7 @@ export class RexxLanguage implements Language {
     this.#it = new RexxInterpreter(null, { output: () => {} });
     // An unset variable that names a cell reads it.
     this.#it.variableResolver = (name: string) => (addrOf(name) ? this.#read(keyOf(addrOf(name)!)) : undefined);
-    this.#functions = rangeFunctions((k) => this.#read(k));
+    this.#functions = { ...rangeFunctions((k) => this.#read(k)), ...STYLE_FUNCTIONS };
     Object.assign(this.#it.externalFunctions, this.#functions);
   }
 

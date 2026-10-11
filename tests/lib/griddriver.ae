@@ -101,18 +101,40 @@ enter(cell: string, formula: string) {
     uidriver.post_ok("/widget/${formula_field()}/submit", "Return in the formula field")
 }
 
-// The editor a double click opens over a cell: the newest text field that is
-// neither the address bar nor one of the page's two.
+// The editor a double click opens over a cell: the newest text field with
+// no placeholder, made after every field the page has (each of which has
+// one: cell, formula, comment, format), or 0 once it does not appear.
 editor() -> int {
-    bar = uidriver.widget_id_of("textfield", "")
-    ff = formula_field()
     i = 0
     while i < 30 {
-        last = uidriver.widget_id_last_of("textfield", "")
-        if last != bar && last != ff && last > ff { return last }
+        id = newest_bare_field_()
+        if id > 0 { return id }
         sleep(100)
         i = i + 1
     }
+    return 0
+}
+
+newest_bare_field_() -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    page = 0
+    bare = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "textfield") == 1 {
+            id = uidriver.field_int(w, "id")
+            if string.length(uidriver.field_str(w, "placeholder")) > 0 {
+                if id > page { page = id }
+            } else if id > bare {
+                bare = id
+            }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    if page > 0 && bare > page { return bare }
     return 0
 }
 

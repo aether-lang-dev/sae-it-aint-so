@@ -24316,6 +24316,21 @@ function parseCondition(conditionStr) {
   };
 }
 
+// A positional argument that is an expression (B + 1, B < 0, S |> UPPER)
+// is parsed as one, to be worked out before the call; anything else stays
+// text, resolved as before (a literal, a number, a name, a call, an arrow
+// function's source).
+function argumentOf(arg) {
+  // An arrow function, a number, or a named argument (delimiter=",").
+  if (arg.includes('=>') || /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(arg) || /^\w+=(?!=)/.test(arg)) return arg;
+  const unquoted = arg.replace(/"[^"]*"|'[^']*'/g, '""');
+  if (!/[+\-*/%<>=¬|]/.test(unquoted)) return arg;
+  // || is concatenation, worked out as LET's is.
+  if (unquoted.includes('||')) return { type: 'CONCATENATION', value: arg };
+  const expr = parseExpression(arg);
+  return expr && ['BINARY_OP', 'PIPE_OP', 'CONCATENATION'].includes(expr.type) ? expr : arg;
+}
+
 function parseFunctionCall(line) {
   // Don't treat dotted identifiers (like ARG.1) as function calls - they should be variable references
   if (line.match(/^[a-zA-Z_]\w*\.\w+$/)) {
@@ -24398,7 +24413,7 @@ function parseFunctionCall(line) {
           
           if (argValue.trim()) {
             const paramName = Object.keys(params).length === 0 ? 'value' : `arg${Object.keys(params).length + 1}`;
-            params[paramName] = argValue.trim();
+            params[paramName] = argumentOf(argValue.trim());
           }
           
           remaining = remaining.substring(i).trim();

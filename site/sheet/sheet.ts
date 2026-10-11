@@ -145,6 +145,15 @@ export class Sheet {
     });
   }
 
+  // An expression in the sheet's language, worked out against the sheet
+  // (a conditional style): its value, or the error it came to.
+  evaluate(formula: string): Promise<Value> {
+    return this.#inTurn(async () => {
+      const f = this.#language.compile(formula);
+      return f.kind === "broken" ? f.error : (await f.run({ get: (k) => this.value(k) })) ?? null;
+    });
+  }
+
   // Everything worked out again, as after a language's setup script ran.
   recalculate(): Promise<string[]> {
     return this.#inTurn(() => this.#recomputeAll());
