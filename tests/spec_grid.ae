@@ -135,6 +135,12 @@ main() {
             spec.assert_str_eq(uidriver.widget_text_by_id(ed2), "=200+34", "the editor holds the formula")
             uidriver.post_ok("/window/key?combo=Escape", "Escape")
         }
+        spec.it("ui.datagrid_fit_col fits a column; ui.text_measure measures in a label's font") callback {
+            b.click("Fit A")
+            spec.assert_true(b.wait_for_console("grid A fitted to "), "fitted")
+            spec.assert_true(b.wait_for_console("grid resized 1 to "), "and on_col_resize heard it")
+            spec.assert_false(b.console_contains("\"A1\" measures 0"), "a label's measure is not 0")
+        }
         spec.it("the first form still works: a cell function in the block's place") callback {
             spec.assert_true(b.wait_for_text("s21"), "the small grid's last cell")
             b.assert_text("S1", "and its header, set by handle through a chain")

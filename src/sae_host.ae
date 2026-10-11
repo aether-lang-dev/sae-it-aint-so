@@ -1331,6 +1331,26 @@ sae_ui_datagrid_cell_style(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
+// ui.datagrid_fit_col(g, c) -> g: view column c as wide as its header and
+// the cells on screen (a double click on its grip does the same).
+sae_ui_datagrid_fit_col(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_fit_col(g, c): g is not a grid this page made") }
+    _g = ui.datagrid_fit_col(g, arg_int_(ctx, argv, argc, 1, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.text_measure(h, text) -> how wide text would be in label h's font.
+sae_ui_text_measure(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.text_measure(h, text): h is not a widget this page made") }
+    return quickjs.new_int(ctx, ui.text_measure(h, arg_str_(ctx, argv, argc, 1)))
+}
+
 // ---- The block's verbs: inside ui.datagrid(..., () => { ... }) the grid is
 // the receiver, as a button is inside button("OK", () => { ... }).
 
@@ -6606,6 +6626,8 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_editor", 1, sae_ui_datagrid_editor)
     reg_(q, u, "datagrid_edit_text", 2, sae_ui_datagrid_edit_text)
     reg_(q, u, "datagrid_cell_style", 2, sae_ui_datagrid_cell_style)
+    reg_(q, u, "datagrid_fit_col", 2, sae_ui_datagrid_fit_col)
+    reg_(q, u, "text_measure", 2, sae_ui_text_measure)
     reg_(q, u, "cells", 1, sae_ui_amb_cells)
     reg_(q, u, "headers", 1, sae_ui_amb_headers)
     reg_(q, u, "on_cell_click", 1, sae_ui_amb_on_cell_click)

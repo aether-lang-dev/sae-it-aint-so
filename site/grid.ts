@@ -55,6 +55,10 @@ btn("Widen B", () => {
   print(`grid B is ${ui.datagrid_col_width(g, 2)} wide`);
 });
 btn("Move B to E", () => ui.datagrid_move_col(g, 2, 5));
+btn("Fit A", () => {
+  ui.datagrid_fit_col(g, 1);
+  print(`grid A fitted to ${ui.datagrid_col_width(g, 1)}; "A1" measures ${ui.text_measure(picked, "A1")}`);
+});
 btn("Select B2:D5", () => ui.datagrid_select_range(g, 1, 2, 4, 4));
 btn("To row 500000", () => {
   ui.datagrid_scroll_to(g, 499999, 10);

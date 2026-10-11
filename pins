@@ -62,5 +62,6 @@ AEB_REF=v0.326
 # 93f501e9 (2026-10-11): pointer_cursor; the grid's resize grip (a header drag at the edge is now on the grip widget).
 # 7bf2113b (2026-10-11): on_focus_change, key_text; the grid commits on focus-out.
 # 32c5facf (2026-10-11): datagrid cell_style and edit_text.
+# e50baa53 (2026-10-11): datagrid_fit_col, text_measure; GTK sliders draw no value.
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=32c5facf152d4873023bd9645bd3cc2888827bca
+AETHER_UI_REF=e50baa53c1c8bfde60eed68783dd17c606b5e5ce
