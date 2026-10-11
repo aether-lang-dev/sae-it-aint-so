@@ -310,6 +310,34 @@ main() {
             spec.assert_true(g.wait_cell("D", 5, "$849.50"), "D5 again")
             spec.assert_true(g.wait_cell("D", 12, "1494"), "and the final balance where it was, in its number:0")
         }
+        spec.it("Sort Z→A orders the selection's rows by the cursor's column, formats and conditional styles with them") callback {
+            g.pick("F", 4)
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Right")
+            b.click("Sort Z→A")
+            spec.assert_true(b.wait_for_console("sheet: sorted F4:G7 by G, descending"), "sorted")
+            spec.assert_true(g.wait_cell("F", 4, "Product C"), "92% first")
+            spec.assert_true(g.wait_cell("G", 4, "92.00%"), "in its format")
+            spec.assert_true(g.wait_cell("F", 7, "Product B"), "45% last")
+            g.pick("A", 1)   // the selection blends into a cell's background
+            spec.assert_eq(g.cell_has("G", 7, "\"bg\":\"#ffebee\""), 1, "G7, under 50%, red: its STYLE_IF moved and reads its row")
+            spec.assert_eq(g.cell_has("G", 4, "\"bg\":\"#e8f5e9\""), 1, "G4 green")
+        }
+        spec.it("Find lists and selects the matches; Replace all changes them, as one undo") callback {
+            b.set_field_by("find", "product")
+            b.click("Find")
+            spec.assert_true(b.wait_for_console("sheet: find product: F4 F5 F6 F7"), "four, any case")
+            spec.assert_true(b.wait_for_text("4 found: F4, F5, F6, F7"), "said")
+            b.set_field_by("replace with", "Item")
+            b.click("Replace all")
+            spec.assert_true(g.wait_cell("F", 4, "Item C"), "replaced")
+            spec.assert_true(g.wait_cell("F", 7, "Item B"), "every one")
+            g.pick("F", 4)
+            g.key("Ctrl+Z")
+            spec.assert_true(g.wait_cell("F", 7, "Product B"), "one undo puts them all back")
+        }
     }
     return spec.run_summary(fw)
 }

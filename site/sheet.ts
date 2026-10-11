@@ -14,7 +14,7 @@
 // formulas" (=SUM(A1:A3)) or "RexxJS formulas" (=SUM_RANGE("A1:A3"),
 // =A2 |> UPPER), as the Tauri spreadsheet (RexxJS/example-app-spreadsheet)
 // has them, whose sheet files open here with their setup scripts.
-import { COLS, ROWS, addrOf, colName, keyOf, range } from "./sheet/address.ts";
+import { COLS, ROWS, addrOf, colName, keyOf, order, range } from "./sheet/address.ts";
 import type { Addr } from "./sheet/address.ts";
 import { Sheet } from "./sheet/sheet.ts";
 import { copied, filled, pasted } from "./sheet/copy.ts";
@@ -27,7 +27,8 @@ import type { SheetFile } from "./sheet/file.ts";
 import { FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./sheet/samples.ts";
 import { CellNotes } from "./sheet/notes.ts";
 import { formatted, toStyle } from "./sheet/formats.ts";
-import { deleted, inserted, restructured } from "./sheet/shift.ts";
+import { deleted, inserted, movedBy, restructured } from "./sheet/shift.ts";
+import { found, replaced, sortMoves, sorted } from "./sheet/sortfind.ts";
 import { CellError } from "./sheet/values.ts";
 
 const { text, btn, textfield, hstack, text_wrapped, on_submit, focus, cells, headers, edit_text, cell_style,
@@ -170,6 +171,37 @@ const restructure = async (axis: "row" | "col", how: "insert" | "delete") => {
   notes.remap((a) => edit.cell(a, { col: false, row: false }), (e) => sheet.language.rewrite(`=${e}`, edit).slice(1));
   await setAll(entries, what);
 };
+
+// The selection's rows sorted by the cursor's column.
+const sort = async (ascending: boolean) => {
+  const sel = selection();
+  const [, , r, c] = ui.datagrid_selection(grid);
+  const cursor = addrAt(r, ui.datagrid_col_model(grid, c));
+  if (!sel || !cursor || sel[0].row === sel[1].row) {
+    status.set("Select the rows to sort, the cursor in the column to sort them by");
+    return;
+  }
+  const col = cursor.col - Math.min(sel[0].col, sel[1].col);
+  const entries = sorted(sheet, sel[0], sel[1], col, ascending, sheet.language);
+  // Notes go with their rows, a conditional style rewritten as its row's formulas are.
+  notes.remap(sortMoves(sheet, sel[0], sel[1], col, ascending),
+    (e, from, to) => movedBy(sheet.language, `=${e}`, { cols: 0, rows: to.row - from.row }).slice(1));
+  await setAll(entries,
+    `sorted ${keyOf(sel[0])}:${keyOf(sel[1])} by ${colName(cursor.col)}, ${ascending ? "ascending" : "descending"}`);
+};
+
+// Find and replace, with the app's three options.
+const findText = state("");
+const replaceText = state("");
+const options = { matchCase: false, wholeCell: false, inFormulas: false };
+const find = () => {
+  const keys = found(sheet, findText.value, options);
+  const next = keys.find((k) => order(addrOf(k)!) > order(addrOf(here())!)) ?? keys[0];
+  if (next) address.set(next);
+  status.set(keys.length ? `${keys.length} found: ${keys.join(", ")}` : `"${findText.value}" not found`);
+  print(`sheet: find ${findText.value}: ${keys.join(" ") || "none"}`);
+};
+const replaceAll = () => setAll(replaced(sheet, findText.value, replaceText.value, options), `replaced ${findText.value}`);
 
 // The major setting: every formula read again in the other language.
 const useFormulas = async (name: "Excel" | "RexxJS") => {
@@ -340,10 +372,21 @@ bind(text_wrapped("", 720), setupScript);
 bind(text(""), summary);
 each(problems, "key", (p: Problem) => text(`${p.key}: ${p.message}`));
 hstack(() => {
+  btn("Sort A→Z", () => sort(true));
+  btn("Sort Z→A", () => sort(false));
   btn("Insert row", () => restructure("row", "insert"));
   btn("Delete row", () => restructure("row", "delete"));
   btn("Insert column", () => restructure("col", "insert"));
   btn("Delete column", () => restructure("col", "delete"));
+});
+hstack(() => {
+  bind(textfield("find", () => {}), findText);
+  bind(textfield("replace with", () => {}), replaceText);
+  btn("Find", find);
+  btn("Replace all", replaceAll);
+  ui.toggle("Match case", (on: boolean) => { options.matchCase = !!on; });
+  ui.toggle("Whole cell", (on: boolean) => { options.wholeCell = !!on; });
+  ui.toggle("In formulas", (on: boolean) => { options.inFormulas = !!on; });
 });
 hstack(() => {
   btn("Paste example", async () => {

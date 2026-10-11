@@ -35,12 +35,12 @@ export class CellNotes {
   // Every note to where its cell went (rows or columns inserted or
   // deleted), its conditional style rewritten as its cell's formula is; a
   // note whose cell went is gone.
-  remap(to: (a: Addr) => Addr | null, rewrite: (expression: string) => string = (e) => e): void {
+  remap(to: (a: Addr) => Addr | null, rewrite: (expression: string, from: Addr, to: Addr) => string = (e) => e): void {
     const notes = [...this.#notes];
     this.#notes.clear();
     for (const [key, note] of notes) {
-      const a = to(addrOf(key)!);
-      if (a) this.#notes.set(keyOf(a), note.styleExpression ? { ...note, styleExpression: rewrite(note.styleExpression) } : note);
+      const from = addrOf(key)!, a = to(from);
+      if (a) this.#notes.set(keyOf(a), note.styleExpression ? { ...note, styleExpression: rewrite(note.styleExpression, from, a) } : note);
     }
   }
 

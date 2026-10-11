@@ -49,6 +49,13 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   reference into what was deleted is `#REF!`. Notes and conditional styles
   move with their cells. One change, so one undo; a non-empty cell would
   never be pushed off the sheet (the insertion is refused).
+- Sort A→Z and Sort Z→A order the selection's rows by the cursor's
+  column: numbers, then text (without case), then empty cells; equal ones
+  keep their order. A row moves whole, its formulas rewritten as a copy by
+  the rows it moved, and its notes with it.
+- Find (a field, and Match case, Whole cell and In formulas) lists the
+  matches and selects the next; Replace all changes every match in
+  constants (in formulas' text too, when asked), as one undo.
 
 **Around the grid** (the page's own `state`, `computed`, `bind`, `each` and
 `batch`):
@@ -144,6 +151,7 @@ The model has no `ui`, and is about 1,500 lines of dialect in `site/sheet/`
 | `file.ts`, `samples.ts` | The Tauri app's sheet file format (its three cell shapes), and its three sample sheets |
 | `notes.ts`, `formats.ts` | A cell's comment, format, style and conditional style; number formats and styles in the app's dialects, as the grid draws them |
 | `shift.ts` | Edits that move references (a copy's offset, rows or columns inserted or deleted), which each language's `rewrite` applies to a formula; `restructured` moves a sheet's cells by one |
+| `sortfind.ts` | Sorting a range by a column (and where each cell went, for notes), find and replace |
 | `copy.ts` | A formula moved (its references rewritten token by token, so the rest stays as typed); copy as tab-separated text; paste, moving formulas when the text came from the sheet; fill down and right. Gives `[key, input]` pairs for `Sheet.setMany` |
 
 `site/sheet.ts` (about 270 lines) is the view: the datagrid's functions read
@@ -177,6 +185,9 @@ summary.
   - `sheet_shift` (19): references under each edit in both languages
     (ranges growing and shrinking, `#REF!`), a sheet's cells restructured,
     notes and conditional styles following, and one undo through a Sheet.
+  - `sheet_sortfind` (14): sort order (numbers, text, empty; stable), rows
+    moving whole with their formulas and notes, find and replace with each
+    option.
   - `sheet_rexx` (25): RexxJS formulas against a stub of the cells (what a
     formula reads, Rexx's operators and functions, errors, the setup
     script, every range function, the copy rule), then the Tauri app's two
@@ -184,7 +195,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 25 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 27 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -198,7 +209,10 @@ summary.
     setting switched to Excel and back;
   - the app's formatted sheet: number formats, its styles, conditional
     styles that follow an edit, and a format and a comment set by hand;
-    a row inserted into its ledger and deleted again.
+    a row inserted into its ledger and deleted again; its products sorted
+    by percentage, their conditional colours following (this needs
+    aether-ui's datagrid style-hash fix, `asks/aether-ui-datagrid-style-
+    hash.md`); find, Replace all and its undo.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -235,26 +249,24 @@ is `src/spreadsheet-model.js`, its control functions
 `src/spreadsheet-control-functions.js`). Each lands in the model with no
 `ui` and its checks headless, then on the page with an `it`:
 
-1. **Sort a range by a column**, ascending or descending.
-2. **Find and replace**, in values or in formulas, whole cell or not.
-3. **Named ranges**, in both languages (`=SUM(prices)`,
+1. **Named ranges**, in both languages (`=SUM(prices)`,
    `=SUM_RANGE("prices")`).
-4. **Several sheets**, with cross-sheet references (`Sheet2.A1` in the
+2. **Several sheets**, with cross-sheet references (`Sheet2.A1` in the
    app; `Sheet2!A1` in Excel formulas).
-5. **Saving and opening**: the app's file format, written by `file.ts`
+3. **Saving and opening**: the app's file format, written by `file.ts`
    too, through `storage` in the browser and `files` in app mode.
-6. **The query functions**: `RANGE("A1:C9") |> WHERE("price > 10") |>
+4. **The query functions**: `RANGE("A1:C9") |> WHERE("price > 10") |>
    GROUP_BY("region")`, PLUCK, SUM, AVG, COUNT, RESULT and TABLE over a
    table's metadata (the app evaluates WHERE's condition with JavaScript's
    `eval`; here it would be the sheet's own language).
-7. **Hide rows and columns, freeze panes** (the datagrid freezes leading
+5. **Hide rows and columns, freeze panes** (the datagrid freezes leading
     columns already), **text wrapping**, **conditional formatting** (a
     RexxJS or Excel expression giving a style), **data validation**
     (lists, number ranges, patterns; on create, on update), **auto IDs**.
-8. **The control functions** (SETCELL, GETCELL and the rest) in RexxJS
+6. **The control functions** (SETCELL, GETCELL and the rest) in RexxJS
     formulas and the setup script, and a **control bus** for other apps
     (the app's is HTTP or postMessage; sae's would be a page service).
-9. **Charts** of a range in `vg` (the app's chart scripts drive Chart.js).
+7. **Charts** of a range in `vg` (the app's chart scripts drive Chart.js).
 
 Not coming over: the DOM itself (React, the DOM functions RexxJS has for
 web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).
