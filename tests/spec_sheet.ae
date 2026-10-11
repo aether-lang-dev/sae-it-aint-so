@@ -116,6 +116,21 @@ editor() -> int {
     return 0
 }
 
+// The header label of column `col`.
+header_id(col: string) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if has_class_(w, "aui-grid-header") == 1 && string.equals(uidriver.field_str(w, "text"), col) == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
 // The resize grip of column `col`'s header.
 grip_of(col: string) -> int {
     v, _jerr = json.parse(uidriver.get_body("/widgets"))
@@ -248,6 +263,29 @@ main() {
             spec.assert_gt(g, 0, "C's grip")
             uidriver.post_ok("/widget/${g}/drag?x=3&y=8&dx=60&dy=0", "drag C's grip right")
             spec.assert_true(b.wait_for_console("sheet: column C is 140 wide"), "80 + 60")
+        }
+        spec.it("double-clicking a header's grip fits its column to its text") callback {
+            // The label is the column less its 6 px grip; wait for the drag's
+            // layout to land first.
+            w0 = 0
+            k = 0
+            while k < TRIES && w0 < 130 {
+                w0 = uidriver.widget_int_field_by_id(header_id("C"), "w")
+                if w0 < 130 { sleep(POLL_MS) }
+                k = k + 1
+            }
+            spec.assert_true(w0 >= 130, "C is 140 wide after the drag (its label ${w0})")
+            uidriver.post_ok("/widget/${grip_of("C")}/double_click", "double-click C's grip")
+            spec.assert_true(b.wait_for_console("sheet: column C is "), "the fit is a resize the page hears")
+            w1 = w0
+            i = 0
+            while i < TRIES && w1 == w0 {
+                w1 = uidriver.widget_int_field_by_id(header_id("C"), "w")
+                if w1 == w0 { sleep(POLL_MS) }
+                i = i + 1
+            }
+            spec.assert_true(w1 < w0, "narrower than 140: Price, 0.45, 2.2 ... are short (got ${w1})")
+            spec.assert_true(w1 > 30, "but wide enough for them (got ${w1})")
         }
         spec.it("Clear all empties the sheet") callback {
             b.click("Clear all")
