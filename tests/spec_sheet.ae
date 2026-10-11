@@ -295,6 +295,21 @@ main() {
             uidriver.post_ok("/widget/${field_with("comment")}/submit", "Return in the comment field")
             spec.assert_true(b.wait_for_text("D12: =D9 → 1493.75 (what is left)"), "the comment on the status line")
         }
+        spec.it("Insert row moves the ledger down, formulas, formats and conditional styles with it; Delete row takes it back") callback {
+            g.pick("A", 5)
+            b.click("Insert row")
+            spec.assert_true(b.wait_for_console("sheet: inserted 1 row at 5:"), "inserted")
+            spec.assert_true(g.wait_cell("D", 6, "$849.50"), "D5 is D6 now, formatted")
+            spec.assert_true(g.wait_cell("B", 5, ""), "an empty row where it was")
+            spec.assert_eq(g.cell_has("C", 6, "\"fg\":\"#d32f2f\""), 1, "C6 (was C5) still red: its STYLE_IF moved with it")
+            g.pick("D", 6)
+            spec.assert_true(b.wait_for_text("D6: =D4 + C6 → 849.5"), "its formula reads its row")
+            g.pick("A", 5)
+            b.click("Delete row")
+            spec.assert_true(b.wait_for_console("sheet: deleted 1 row at 5:"), "deleted")
+            spec.assert_true(g.wait_cell("D", 5, "$849.50"), "D5 again")
+            spec.assert_true(g.wait_cell("D", 12, "1494"), "and the final balance where it was, in its number:0")
+        }
     }
     return spec.run_summary(fw)
 }

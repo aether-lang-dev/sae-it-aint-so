@@ -2,6 +2,7 @@
 // Tauri spreadsheet (RexxJS/example-app-spreadsheet) has them, and file.ts
 // reading that app's sheet files. RexxJS is the vendored bundle.
 import { RexxLanguage } from "./sheet/rexx.ts";
+import { movedBy } from "./sheet/shift.ts";
 import { Sheet } from "./sheet/sheet.ts";
 import { readSheetFile } from "./sheet/file.ts";
 import { SAMPLE_BUDGET, TEST_SHEET } from "./sheet/samples.ts";
@@ -46,9 +47,9 @@ eq("conditional sums and counts", [await run('SUMIF_RANGE("A1:A5", ">1")', cells
 eq("CELL by name; a range across columns", [await run('CELL("B1")', cells), await run('SUM_RANGE("A1:B1")', cells)], ["10", "11"]);
 eq("a condition the app does not read", await run('SUMIF_RANGE("A1:A5", "big")', cells), '#ERROR! Invalid condition format. Use: ">5", "=10", "<100", etc.');
 
-eq("a copy moves its references, in strings too", rexx.moved('=A1 + SUM_RANGE("B1:B3")', { cols: 1, rows: 1 }), '=B2 + SUM_RANGE("C2:C4")');
-eq("$ fixes; off the sheet is #REF!", [rexx.moved("=$A1 + A$1", { cols: 1, rows: 1 }), rexx.moved("=J1 * 2", { cols: 1, rows: 0 })], ["=$A2 + B$1", "=#REF! * 2"]);
-eq("a constant is not moved", rexx.moved("A1", { cols: 1, rows: 1 }), "A1");
+eq("a copy moves its references, in strings too", movedBy(rexx, '=A1 + SUM_RANGE("B1:B3")', { cols: 1, rows: 1 }), '=B2 + SUM_RANGE("C2:C4")');
+eq("$ fixes; off the sheet is #REF!", [movedBy(rexx, "=$A1 + A$1", { cols: 1, rows: 1 }), movedBy(rexx, "=J1 * 2", { cols: 1, rows: 0 })], ["=$A2 + B$1", "=#REF! * 2"]);
+eq("a constant is not moved", movedBy(rexx, "A1", { cols: 1, rows: 1 }), "A1");
 
 for (const data of [TEST_SHEET, SAMPLE_BUDGET] as any[]) {
   const file = readSheetFile(data);

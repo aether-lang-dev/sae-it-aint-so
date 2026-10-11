@@ -1,10 +1,11 @@
 // Copying cells: the clipboard's tab-separated text, paste, and fill down
 // and right. What a formula becomes in another cell is its language's
-// (Language.moved). Nothing here touches a Sheet: these take inputs and give
+// rewrite by the distance (shift.ts's movedBy). Nothing here touches a Sheet: these take inputs and give
 // back [key, input] pairs for Sheet.setMany.
 import { addrOf, keyOf } from "./address.ts";
 import type { Addr } from "./address.ts";
 import type { Language } from "./language.ts";
+import { movedBy } from "./shift.ts";
 
 const corners = (a: Addr, b: Addr) => ({
   top: Math.min(a.row, b.row), bottom: Math.max(a.row, b.row),
@@ -33,7 +34,7 @@ export function pasted(tsv: string, at: Addr, source?: { readonly from: Addr; re
   return tsv.replace(/\r/g, "").replace(/\n+$/, "").split("\n").flatMap((line, r) =>
     line.split("\t").map((input, c): [Addr, string] => [{ col: at.col + c, row: at.row + r }, input.trim()]))
     .filter(([a]) => addrOf(keyOf(a)) !== null)
-    .map(([a, input]) => [keyOf(a), source ? source.language.moved(input, by) : input]);
+    .map(([a, input]) => [keyOf(a), source ? movedBy(source.language, input, by) : input]);
 }
 
 // Fill down: each column's top cell copied into the cells below it in the
@@ -49,7 +50,7 @@ export function filled(input: (key: string) => string, a: Addr, b: Addr, way: "d
   for (let row = down ? first + 1 : top; row <= bottom; row++) {
     for (let col = down ? left : first + 1; col <= right; col++) {
       const src = down ? { col, row: first } : { col: first, row };
-      out.push([keyOf({ col, row }), language.moved(input(keyOf(src)), { cols: col - src.col, rows: row - src.row })]);
+      out.push([keyOf({ col, row }), movedBy(language, input(keyOf(src)), { cols: col - src.col, rows: row - src.row })]);
     }
   }
   return out;

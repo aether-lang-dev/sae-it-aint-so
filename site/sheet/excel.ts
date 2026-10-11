@@ -1,8 +1,12 @@
 // "Excel formulas": the sheet's own language (lexer.ts, parser.ts,
 // evaluate.ts, functions.ts) as a Language. A formula reads the cells its
-// references and ranges name; it moves token by token, so only references
-// change ($ fixes a column or row, and one moved off the sheet is #REF!).
-import { COLS, ROWS, addrOf, colName, range } from "./address.ts";
+// references and ranges name; it is rewritten token by token, so only
+// references change ($ fixes a column or row in a copy, and a reference
+// moved off the sheet, or into what was deleted, is #REF!).
+import { addrOf, colName, range } from "./address.ts";
+import type { Addr } from "./address.ts";
+import { movedBy } from "./shift.ts";
+import type { Edit, Fixed } from "./shift.ts";
 import { evaluate } from "./evaluate.ts";
 import { names } from "./functions.ts";
 import type { Language, Offset } from "./language.ts";
@@ -38,20 +42,21 @@ export function* refsOf(e: Expr): Generator<string, void, undefined> {
 
 type Ref = Extract<Token, { kind: "ref" }>;
 
-// Where a reference lands, written as it was, or null off the sheet.
-function shifted(t: Ref, by: Offset): string | null {
-  const a = addrOf(t.name);
-  if (!a) return null;
-  const col = t.fixCol ? a.col : a.col + by.cols, row = t.fixRow ? a.row : a.row + by.rows;
-  if (col < 0 || row < 0 || col >= COLS || row >= ROWS) return null;
-  if (col === a.col && row === a.row) return t.text;
-  return `${t.fixCol ? "$" : ""}${colName(col)}${t.fixRow ? "$" : ""}${row + 1}`;
+const fixedOf = (t: Ref): Fixed => ({ col: t.fixCol, row: t.fixRow });
+
+// A reference at its new place, written as it was ($ and all), or as typed
+// when it has not moved.
+function written(t: Ref, to: Addr): string {
+  const a = addrOf(t.name)!;
+  if (to.col === a.col && to.row === a.row) return t.text;
+  return `${t.fixCol ? "$" : ""}${colName(to.col)}${t.fixRow ? "$" : ""}${to.row + 1}`;
 }
 
-// A cell's input as it reads moved `by` (a constant, or a formula that does
-// not lex, is unchanged).
-export function moved(input: string, by: Offset): string {
-  if (!input.startsWith("=") || (by.cols === 0 && by.rows === 0)) return input;
+// A cell's input with its references moved by `edit` (a constant, or a
+// formula that does not lex, is unchanged). Token by token, so only the
+// references change.
+function rewrite(input: string, edit: Edit): string {
+  if (!input.startsWith("=")) return input;
   let toks: Token[];
   try {
     toks = [...tokens(input.slice(1), 1)];
@@ -64,16 +69,25 @@ export function moved(input: string, by: Offset): string {
     const t = toks[i];
     if (t.kind !== "ref") continue;
     const end = toks[i + 2];
-    const range = toks[i + 1]?.kind === ":" && end?.kind === "ref" ? end : null;
-    const a = shifted(t, by), b = range ? shifted(range, by) : "";
+    const other = toks[i + 1]?.kind === ":" && end?.kind === "ref" ? end : null;
+    const a = addrOf(t.name), b = other ? addrOf(other.name) : null;
     out += input.slice(from, t.at);
-    out += a === null || b === null ? "#REF!" : range ? a + input.slice(t.at + t.text.length, range.at) + b : a;
-    const last = range ?? t;
+    if (other) {
+      const r = a && b ? edit.range(a, b, fixedOf(t), fixedOf(other)) : null;
+      out += r ? written(t, r[0]) + input.slice(t.at + t.text.length, other.at) + written(other, r[1]) : "#REF!";
+    } else {
+      const to = a ? edit.cell(a, fixedOf(t)) : null;
+      out += to ? written(t, to) : "#REF!";
+    }
+    const last = other ?? t;
     from = last.at + last.text.length;
-    if (range) i += 2;
+    if (other) i += 2;
   }
   return out + input.slice(from);
 }
+
+// A cell's input as it reads copied `by` cells.
+export const moved = (input: string, by: Offset): string => movedBy(EXCEL, input, by);
 
 export const EXCEL: Language = {
   name: "Excel",
@@ -86,6 +100,6 @@ export const EXCEL: Language = {
       return { kind: "broken", error: new CellError("#ERROR!", `parse error at ${e.at}: ${e.message}`) };
     }
   },
-  moved,
+  rewrite,
   functions: names,
 };

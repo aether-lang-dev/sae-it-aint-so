@@ -112,7 +112,7 @@ const stub = (name: "Excel" | "RexxJS", log: string[]): Language => ({
       },
     };
   },
-  moved: (input) => input,
+  rewrite: (input) => input,
   functions: () => [],
 });
 {

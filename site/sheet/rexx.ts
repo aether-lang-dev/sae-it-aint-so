@@ -6,16 +6,18 @@
 // it first. The app's range functions (its public/lib/spreadsheet-functions
 // .js) are here in TypeScript: SUM_RANGE("A1:A3") and friends, and CELL.
 import { addrOf, keyOf, range } from "./address.ts";
-import type { Env, Formula, Language, Offset } from "./language.ts";
+import type { Env, Formula, Language } from "./language.ts";
+import type { Addr } from "./address.ts";
+import type { Edit } from "./shift.ts";
 import { RexxInterpreter, parse } from "./rexxjs.js";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
-import { COLS, ROWS, colName } from "./address.ts";
+import { colName } from "./address.ts";
 
 // A cell name, or a range of two, anywhere in a formula (in a string too:
 // SUM_RANGE("A1:A3") reads A1 to A3). $ is the app's, for copying.
 const REFS = /(?<![\w$])\$?([A-Za-z]+)\$?(\d+)(?:\s*:\s*\$?([A-Za-z]+)\$?(\d+))?(?![\w(])/g;
-const ONE_REF = /(?<![\w$])(\$?)([A-Za-z]+)(\$?)(\d+)(?![\w(])/g;
+const REWRITE = /(?<![\w$])(\$?)([A-Za-z]+)(\$?)(\d+)(?::(\$?)([A-Za-z]+)(\$?)(\d+))?(?![\w(])/g;
 
 const lastLine = (e: unknown): string => String((e as Error)?.message ?? e).split("\n").pop()!;
 
@@ -221,15 +223,20 @@ export class RexxLanguage implements Language {
     };
   }
 
-  // The app's copy rule: every cell name moves, in strings too; $ fixes.
-  moved(input: string, by: Offset): string {
-    if (!input.startsWith("=") || (by.cols === 0 && by.rows === 0)) return input;
-    return input.replace(ONE_REF, (text, fixCol: string, col: string, fixRow: string, row: string) => {
-      const a = addrOf(`${col}${row}`);
-      if (!a) return text;
-      const c = fixCol ? a.col : a.col + by.cols, r = fixRow ? a.row : a.row + by.rows;
-      if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return "#REF!";
-      return `${fixCol}${colName(c)}${fixRow}${r + 1}`;
+  // The app's copy rule, for every edit: every cell name, and range, is
+  // rewritten, in strings too; $ fixes a part in a copy.
+  rewrite(input: string, edit: Edit): string {
+    if (!input.startsWith("=")) return input;
+    const name = (to: Addr, fixCol: string, fixRow: string) => `${fixCol}${colName(to.col)}${fixRow}${to.row + 1}`;
+    return input.replace(REWRITE, (text, fc1: string, c1: string, fr1: string, r1: string, fc2?: string, c2?: string, fr2?: string, r2?: string) => {
+      const a = addrOf(`${c1}${r1}`);
+      if (c2 === undefined) {
+        const to = a ? edit.cell(a, { col: !!fc1, row: !!fr1 }) : null;
+        return to ? (to.col === a!.col && to.row === a!.row ? text : name(to, fc1, fr1)) : "#REF!";
+      }
+      const b = addrOf(`${c2}${r2}`);
+      const r = a && b ? edit.range(a, b, { col: !!fc1, row: !!fr1 }, { col: !!fc2, row: !!fr2 }) : null;
+      return r ? `${name(r[0], fc1, fr1)}:${name(r[1], fc2!, fr2!)}` : "#REF!";
     });
   }
 

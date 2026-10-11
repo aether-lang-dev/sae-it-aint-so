@@ -27,6 +27,7 @@ import type { SheetFile } from "./sheet/file.ts";
 import { FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./sheet/samples.ts";
 import { CellNotes } from "./sheet/notes.ts";
 import { formatted, toStyle } from "./sheet/formats.ts";
+import { deleted, inserted, restructured } from "./sheet/shift.ts";
 import { CellError } from "./sheet/values.ts";
 
 const { text, btn, textfield, hstack, text_wrapped, on_submit, focus, cells, headers, edit_text, cell_style,
@@ -149,6 +150,25 @@ const history = async (way: "undo" | "redo") => {
     settled(here());
   });
   print(`sheet: ${way}: ${changed.length} changed`);
+};
+
+// Rows or columns inserted before the selection, as many as it covers, or
+// the ones it covers deleted: every cell and formula moved, as one change
+// (one undo); notes and conditional styles follow.
+const restructure = async (axis: "row" | "col", how: "insert" | "delete") => {
+  const sel = selection() ?? [addrOf(here())!, addrOf(here())!];
+  const lo = Math.min(sel[0][axis], sel[1][axis]), n = Math.abs(sel[0][axis] - sel[1][axis]) + 1;
+  const edit = how === "insert" ? inserted(axis, lo, n) : deleted(axis, lo, n);
+  const what = `${how === "insert" ? "inserted" : "deleted"} ${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"} at ${axis === "row" ? lo + 1 : colName(lo)}`;
+  let entries: [string, string][];
+  try {
+    entries = restructured(sheet.keys().map((k) => [k, sheet.input(k)]), edit, sheet.language);
+  } catch (e) {
+    status.set(String((e as Error).message));
+    return;
+  }
+  notes.remap((a) => edit.cell(a, { col: false, row: false }), (e) => sheet.language.rewrite(`=${e}`, edit).slice(1));
+  await setAll(entries, what);
 };
 
 // The major setting: every formula read again in the other language.
@@ -319,6 +339,12 @@ bind(text_wrapped("", 720), functionList);
 bind(text_wrapped("", 720), setupScript);
 bind(text(""), summary);
 each(problems, "key", (p: Problem) => text(`${p.key}: ${p.message}`));
+hstack(() => {
+  btn("Insert row", () => restructure("row", "insert"));
+  btn("Delete row", () => restructure("row", "delete"));
+  btn("Insert column", () => restructure("col", "insert"));
+  btn("Delete column", () => restructure("col", "delete"));
+});
 hstack(() => {
   btn("Paste example", async () => {
     if (formulas.value !== "Excel") await useFormulas("Excel");

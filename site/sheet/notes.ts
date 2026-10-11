@@ -3,6 +3,9 @@
 // expression in the sheet's language whose value is a style, worked out
 // with the sheet: STYLE_IF(C5 < 0, RED_TEXT(), GREEN_TEXT()) in RexxJS
 // formulas, IF(C5 < 0, "color: red", "") in Excel ones).
+import { addrOf, keyOf } from "./address.ts";
+import type { Addr } from "./address.ts";
+
 export interface Note {
   readonly comment?: string;
   readonly format?: string;
@@ -27,6 +30,18 @@ export class CellNotes {
   // The cells with a conditional style, and its expression.
   conditional(): [string, string][] {
     return [...this.#notes].filter(([, n]) => n.styleExpression).map(([k, n]) => [k, n.styleExpression!]);
+  }
+
+  // Every note to where its cell went (rows or columns inserted or
+  // deleted), its conditional style rewritten as its cell's formula is; a
+  // note whose cell went is gone.
+  remap(to: (a: Addr) => Addr | null, rewrite: (expression: string) => string = (e) => e): void {
+    const notes = [...this.#notes];
+    this.#notes.clear();
+    for (const [key, note] of notes) {
+      const a = to(addrOf(key)!);
+      if (a) this.#notes.set(keyOf(a), note.styleExpression ? { ...note, styleExpression: rewrite(note.styleExpression) } : note);
+    }
   }
 
   clear(): void {
