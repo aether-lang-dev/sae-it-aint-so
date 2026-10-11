@@ -55,6 +55,7 @@ eq("show", [show(null), show(12), show(1 / 3), show(false), show("x"), show(new 
 ]);
 eq("fmt shows each value as a cell would", fmt`${"B3"} is ${2 / 3} (${true}, ${null})`, "B3 is 0.6666666667 (TRUE, )");
 eq("describe a cell", [describe("A1", "", null), describe("B1", "=A1*2", 4)], ["A1: (empty)", "B1: =A1*2 → 4"]);
+eq("describe a cell with its comment", describe("A5", "=SUM(A1:A3)", 60, "Sum of range A1 to A3"), "A5: =SUM(A1:A3) → 60 (Sum of range A1 to A3)");
 eq("describe an error says why", describe("C1", "=1/0", new CellError("#DIV/0!", "divide by zero")), "C1: =1/0 → #DIV/0! divide by zero");
 // expect: ok arithmetic
 // expect: ok an empty cell is 0, or ''
@@ -83,4 +84,5 @@ eq("describe an error says why", describe("C1", "=1/0", new CellError("#DIV/0!",
 // expect: ok show
 // expect: ok fmt shows each value as a cell would
 // expect: ok describe a cell
+// expect: ok describe a cell with its comment
 // expect: ok describe an error says why

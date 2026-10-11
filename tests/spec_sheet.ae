@@ -103,7 +103,7 @@ main() {
             spec.assert_true(g.wait_cell("E", 3, "3"), "COUNTIF follows an edit")
             spec.assert_true(g.wait_cell("E", 2, "8.8"), "and so does VLOOKUP, through D3")
             spec.assert_true(b.wait_for_text("No problems"), "no problems")
-            spec.assert_true(string.contains(b.page_texts(), "Functions: ABS, AND, AVERAGE,") == 1, "the page lists its functions")
+            spec.assert_true(string.contains(b.page_texts(), "Excel functions: ABS, AND, AVERAGE,") == 1, "the page lists its functions")
         }
         spec.it("a double click edits a cell in place, opening on its formula") callback {
             uidriver.post_ok("/widget/${g.cell_id("D", 2)}/double_click", "double-click D2")
@@ -208,6 +208,40 @@ main() {
             spec.assert_true(g.wait_cell("A", 1, ""), "A1 is empty")
             spec.assert_true(b.wait_for_text("B2: (empty)"), "the status line follows the selected cell, B2")
             spec.assert_true(b.wait_for_text("No problems"), "no problems")
+        }
+        spec.it("RexxJS formulas: the Tauri app's budget opens, its setup script's TAX_RATE in every tax") callback {
+            b.click("Budget (RexxJS)")
+            spec.assert_true(b.wait_for_console("sheet: opened Sample Budget: 20 cells, RexxJS formulas"), "opened")
+            spec.assert_true(b.wait_for_text("RexxJS formulas"), "the setting says so")
+            spec.assert_true(g.wait_cell("C", 2, "96"), "C2 = B2 * TAX_RATE")
+            spec.assert_true(g.wait_cell("D", 6, "1404"), "D6 = SUM_RANGE(\"D2:D4\")")
+            spec.assert_true(b.wait_for_text("Setup script: -- Budget spreadsheet setup"), "its setup script")
+            g.pick("A", 1)
+            spec.assert_true(b.wait_for_text("A1: Item → Item (Item name)"), "a cell's comment, from the file")
+        }
+        spec.it("RexxJS formulas: edits ripple; || joins, |> pipes, > compares; an error says why") callback {
+            g.enter("B2", "1000")
+            spec.assert_true(g.wait_cell("C", 2, "80"), "tax follows the price")
+            spec.assert_true(g.wait_cell("D", 6, "1188"), "and the total below")
+            g.enter("E2", "=UPPER(A2) || '!'")
+            spec.assert_true(g.wait_cell("E", 2, "LAPTOP!"), "||")
+            g.enter("E3", "=A3 |> LOWER")
+            spec.assert_true(g.wait_cell("E", 3, "mouse"), "|>")
+            g.enter("E4", "=B2 > 500")
+            spec.assert_true(g.wait_cell("E", 4, "1"), "a comparison")
+            g.enter("E5", "=1/0")
+            spec.assert_true(g.wait_cell("E", 5, "#ERROR!"), "an error")
+            spec.assert_true(b.wait_for_text("E5: =1/0 → #ERROR! Division by zero"), "why")
+        }
+        spec.it("the setting: the same formulas read as Excel fail, and read as RexxJS again") callback {
+            b.click("Excel formulas")
+            spec.assert_true(b.wait_for_console("sheet: Excel formulas"), "switched")
+            spec.assert_true(g.wait_cell("C", 2, "#ERROR!"), "B2 * TAX_RATE is not Excel")
+            spec.assert_true(g.wait_cell("D", 2, "#ERROR!"), "and what reads it")
+            b.click("RexxJS formulas")
+            spec.assert_true(b.wait_for_console("sheet: RexxJS formulas"), "back")
+            spec.assert_true(g.wait_cell("C", 2, "80"), "C2 again")
+            spec.assert_true(g.wait_cell("D", 6, "1188"), "and D6")
         }
     }
     return spec.run_summary(fw)

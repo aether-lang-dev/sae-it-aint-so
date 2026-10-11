@@ -1,7 +1,9 @@
 // site/sheet/sheet.ts against a mock listener: edits ripple downstream in
 // dependency order, a paste recomputes each cell once, cycles are found and
 // mended, and old dependencies are forgotten.
-import { Sheet, compile, refsOf } from "./sheet/sheet.ts";
+import { Sheet, compile } from "./sheet/sheet.ts";
+import { refsOf } from "./sheet/excel.ts";
+import type { Language } from "./sheet/language.ts";
 import type { SheetListener } from "./sheet/sheet.ts";
 import { parse } from "./sheet/parser.ts";
 import { show } from "./sheet/format.ts";
@@ -18,15 +20,15 @@ eq("refsOf spells out ranges and skips the off-sheet", [...refsOf(parse("A1+SUM(
 {
   const l = mock<SheetListener>();
   const s = new Sheet(l.it);
-  eq("set returns what changed", s.set("A1", "2"), ["A1"]);
-  s.set("B1", "=A1*10");
-  s.set("C1", "=B1+A1");
+  eq("set returns what changed", await s.set("A1", "2"), ["A1"]);
+  await s.set("B1", "=A1*10");
+  await s.set("C1", "=B1+A1");
   eq("formulas read their cells", shown(s, "A1", "B1", "C1"), ["2", "20", "22"]);
   l.calls.length = 0;
-  eq("an edit ripples through everything downstream", s.set("A1", "5"), ["A1", "B1", "C1"]);
+  eq("an edit ripples through everything downstream", await s.set("A1", "5"), ["A1", "B1", "C1"]);
   eq("and the listener hears each, upstream first", l.calls, [["changed", "A1", 5], ["changed", "B1", 50], ["changed", "C1", 55]]);
   l.calls.length = 0;
-  s.set("A2", "7");
+  await s.set("A2", "7");
   eq("an unrelated cell disturbs nothing else", l.calls, [["changed", "A2", 7]]);
   eq("inputs are kept as typed", [s.input("B1"), s.input("Z9"), s.input("D1")], ["=A1*10", "", ""]);
   eq("keys in sheet order", s.keys(), ["A1", "B1", "C1", "A2"]);
@@ -35,61 +37,100 @@ eq("refsOf spells out ranges and skips the off-sheet", [...refsOf(parse("A1+SUM(
 {
   const l = mock<SheetListener>();
   const t = new Sheet(l.it);
-  t.set("B1", "=A1+1");
-  t.set("B1", "=A2+1");
+  await t.set("B1", "=A1+1");
+  await t.set("B1", "=A2+1");
   l.calls.length = 0;
-  t.set("A1", "100");
+  await t.set("A1", "100");
   eq("a formula changed forgets what it read before", l.calls, [["changed", "A1", 100]]);
-  t.set("A2", "1");
+  await t.set("A2", "1");
   eq("and follows what it reads now", show(t.value("B1")), "2");
 }
 
 {
   const l = mock<SheetListener>();
   const s = new Sheet(l.it);
-  s.setMany([["A1", "1"], ["A2", "2"], ["A3", "=A1+A2"], ["A4", "=A3*2"]]);
+  await s.setMany([["A1", "1"], ["A2", "2"], ["A3", "=A1+A2"], ["A4", "=A3*2"]]);
   l.calls.length = 0;
-  const changed = s.setMany([["A1", "10"], ["A2", "20"]]);
+  const changed = await s.setMany([["A1", "10"], ["A2", "20"]]);
   eq("a paste recomputes each cell once", l.calls, [["changed", "A1", 10], ["changed", "A2", 20], ["changed", "A3", 30], ["changed", "A4", 60]]);
   eq("and returns them in sheet order", changed, ["A1", "A2", "A3", "A4"]);
   l.calls.length = 0;
-  s.set("A1", "=10");
+  await s.set("A1", "=10");
   eq("a cell that shows the same is not news downstream", l.calls, [["changed", "A1", 10]]);
 }
 
 {
   const s = new Sheet();
-  s.set("A1", "=B1");
-  s.set("C1", "=A1*2");
-  s.set("B1", "=A1");
+  await s.set("A1", "=B1");
+  await s.set("C1", "=A1*2");
+  await s.set("B1", "=A1");
   eq("both cells of a cycle show #CYCLE!, and what reads them", shown(s, "A1", "B1", "C1"), ["#CYCLE!", "#CYCLE!", "#CYCLE!"]);
   eq("problems say which and how", s.problems(), [
     { key: "A1", message: "#CYCLE! a circular reference: A1 → B1 → A1" },
     { key: "B1", message: "#CYCLE! a circular reference: B1 → A1 → B1" },
     { key: "C1", message: "#CYCLE! a circular reference: A1 → B1 → A1" },
   ]);
-  s.set("B1", "4");
+  await s.set("B1", "4");
   eq("breaking it mends all three", shown(s, "A1", "B1", "C1"), ["4", "4", "8"]);
   eq("no problems left", s.problems(), []);
-  s.set("D1", "=D1+1");
+  await s.set("D1", "=D1+1");
   eq("a cell reading itself", [show(s.value("D1")), s.problems()[0]?.message], ["#CYCLE!", "#CYCLE! a circular reference: D1 → D1"]);
 }
 
 {
   const s = new Sheet();
-  s.set("A1", "=1+");
-  s.set("A2", "=A1*2");
+  await s.set("A1", "=1+");
+  await s.set("A2", "=A1*2");
   eq("a parse error flows downstream too", shown(s, "A1", "A2"), ["#ERROR!", "#ERROR!"]);
   eq("its problem says where", s.problems()[0], { key: "A1", message: "#ERROR! parse error at 4: expected a value but found the end" });
-  s.set("A1", "");
+  await s.set("A1", "");
   eq("clearing a cell makes it empty again", [shown(s, "A1", "A2"), s.keys()], [["", "0"], ["A2"]]);
 }
 
 {
   const s = new Sheet();
   throws("a key off the sheet is refused", () => s.set("K1", "1"), RangeError, "K1 is not a cell on the sheet");
-  s.set("b2", "3");
+  await s.set("b2", "3");
   eq("keys are normalised", [s.input("B2"), s.keys()], ["3", ["B2"]]);
+}
+
+
+// The Sheet against a stub language that records what it was asked: the
+// language says what a formula reads and what it comes to; the sheet does
+// the order, and waits for each.
+const stub = (name: "Excel" | "RexxJS", log: string[]): Language => ({
+  name,
+  compile(formula) {
+    log.push(`${name} compiles ${formula}`);
+    const reads = formula.split("+");
+    return {
+      kind: "formula", reads,
+      run: async (env) => {
+        log.push(`${name} runs ${formula}`);
+        await null;
+        return reads.reduce((n, k) => n + Number(env.get(k) ?? 0), 0);
+      },
+    };
+  },
+  moved: (input) => input,
+  functions: () => [],
+});
+{
+  const log: string[] = [];
+  const s = new Sheet(undefined, stub("RexxJS", log));
+  await s.setMany([["A1", "=B1+C1"], ["B1", "=C1"], ["C1", "2"]]);
+  eq("a formula is its language's: compiled once, run in dependency order, each awaited", log,
+    ["RexxJS compiles B1+C1", "RexxJS compiles C1", "RexxJS runs C1", "RexxJS runs B1+C1"]);
+  eq("to what the language gave", [s.value("A1"), s.value("B1")], [4, 2]);
+  log.length = 0;
+  await s.setLanguage(stub("Excel", log));
+  eq("another language compiles every formula again, and works the sheet out", log,
+    ["Excel compiles B1+C1", "Excel compiles C1", "Excel runs C1", "Excel runs B1+C1"]);
+  eq("and the sheet says which it speaks", s.language.name, "Excel");
+  log.length = 0;
+  const first = s.set("C1", "3"), second = s.set("C1", "5");
+  await Promise.all([first, second]);
+  eq("two settings take turns", [log.filter((l) => l.startsWith("Excel runs C1")).length, s.value("A1")], [2, 10]);
 }
 
 // expect: ok constants: numbers, text, nothing
@@ -118,3 +159,8 @@ eq("refsOf spells out ranges and skips the off-sheet", [...refsOf(parse("A1+SUM(
 // expect: ok clearing a cell makes it empty again
 // expect: ok a key off the sheet is refused
 // expect: ok keys are normalised
+// expect: ok a formula is its language's: compiled once, run in dependency order, each awaited
+// expect: ok to what the language gave
+// expect: ok another language compiles every formula again, and works the sheet out
+// expect: ok and the sheet says which it speaks
+// expect: ok two settings take turns

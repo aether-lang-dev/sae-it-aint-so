@@ -849,5 +849,7 @@ yet: more of the `ui` surface, the bytecode cache, a Win32 build arm,
 
 MIT (`LICENSE`), Copyright (c) 2026 Aether Contributors collectively, as
 aether-ui. Vendored code keeps its own: RexxJS is MIT (`vendor/rexxjs/LICENSE`),
-and the Tauri spreadsheet files in `site/rexxsheet/` are MIT by their
-copyright holder's relicensing (`site/rexxsheet/UPSTREAM.md`).
+and what demo 18 takes from the Tauri spreadsheet (RexxJS/example-app-spreadsheet:
+its range functions in `site/sheet/rexx.ts`, its sample sheets in
+`site/sheet/samples.ts`) is MIT by its copyright holder's relicensing
+(`docs/tauri-spreadsheet-upstream-notes.md`).

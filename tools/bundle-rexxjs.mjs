@@ -10,7 +10,7 @@
 //    each one to go back upstream; one RexxJS already has is skipped).
 //    vendor/rexxjs/UPSTREAM records the commit they came from. With
 //    --from-vendor it skips the copy and bundles what is already vendored.
-// 2. Writes site/rexxsheet/rexxjs.js: each module as a function of
+// 2. Writes site/sheet/rexxjs.js: each module as a function of
 //    (module, exports, require, console, global) in one table, a require that
 //    resolves "./x" against the requiring module, Node's built-ins as empty
 //    objects (as webpack's `fallback: false` gives them; a page has no fs,
@@ -26,7 +26,7 @@ import { execSync } from "node:child_process";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const VENDOR = path.join(ROOT, "vendor/rexxjs");
-const OUT = path.join(ROOT, "site/rexxsheet/rexxjs.js");
+const OUT = path.join(ROOT, "site/sheet/rexxjs.js");
 const ENTRIES = ["interpreter.js", "parser.js"];
 
 const fromVendor = process.argv.includes("--from-vendor");

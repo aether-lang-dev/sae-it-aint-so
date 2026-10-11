@@ -1,0 +1,210 @@
+// "RexxJS formulas": the sheet's other language, as the Tauri spreadsheet
+// (RexxJS/example-app-spreadsheet) has it. A formula is a RexxJS expression
+// (=A1 + B1, =UPPER(A2) || '!', =A2 |> LOWER, =B2 > 500), worked out as
+// `LET CELLRESULT = ...` on one interpreter whose unset variables that name
+// cells read the sheet; a sheet's setup script (LET TAX_RATE = 0.08) runs on
+// it first. The app's range functions (its public/lib/spreadsheet-functions
+// .js) are here in TypeScript: SUM_RANGE("A1:A3") and friends, and CELL.
+import { addrOf, keyOf, range } from "./address.ts";
+import type { Env, Formula, Language, Offset } from "./language.ts";
+import { RexxInterpreter, parse } from "./rexxjs.js";
+import { CellError } from "./values.ts";
+import type { Value } from "./values.ts";
+import { COLS, ROWS, colName } from "./address.ts";
+
+// A cell name, or a range of two, anywhere in a formula (in a string too:
+// SUM_RANGE("A1:A3") reads A1 to A3). $ is the app's, for copying.
+const REFS = /(?<![\w$])\$?([A-Za-z]+)\$?(\d+)(?:\s*:\s*\$?([A-Za-z]+)\$?(\d+))?(?![\w(])/g;
+const ONE_REF = /(?<![\w$])(\$?)([A-Za-z]+)(\$?)(\d+)(?![\w(])/g;
+
+const lastLine = (e: unknown): string => String((e as Error)?.message ?? e).split("\n").pop()!;
+
+function readsOf(formula: string): string[] {
+  const reads = new Set<string>();
+  for (const m of formula.matchAll(REFS)) {
+    const a = addrOf(`${m[1]}${m[2]}`);
+    if (!a) continue;
+    const b = m[3] ? addrOf(`${m[3]}${m[4]}`) : a;
+    if (b) for (const k of range(a, b)) reads.add(k);
+  }
+  return [...reads];
+}
+
+// A number where RexxJS gives one; text, or the JSON of what it built.
+function fromRexx(v: unknown): Value {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "number" || typeof v === "string") return v;
+  return JSON.stringify(v);
+}
+
+// The numbers among a range's values, as the app reads them (parseFloat).
+const numbers = (vs: readonly unknown[]): number[] => vs.map((v) => parseFloat(String(v))).filter((n) => !isNaN(n));
+const mean = (ns: readonly number[]) => ns.reduce((s, n) => s + n, 0) / ns.length;
+const squares = (ns: readonly number[]) => {
+  const m = mean(ns);
+  return ns.reduce((s, n) => s + (n - m) ** 2, 0);
+};
+
+// SUMIF_RANGE's and COUNTIF_RANGE's ">5", "=10", "<>2".
+function criterion(condition: string): (n: number) => boolean {
+  const m = /^([><=!]+)(.+)$/.exec(String(condition));
+  if (!m) throw new Error('Invalid condition format. Use: ">5", "=10", "<100", etc.');
+  const t = parseFloat(m[2]);
+  if (isNaN(t)) throw new Error("Condition value must be a number");
+  switch (m[1]) {
+    case ">": return (n) => n > t;
+    case ">=": return (n) => n >= t;
+    case "<": return (n) => n < t;
+    case "<=": return (n) => n <= t;
+    case "=": case "==": return (n) => n === t;
+    case "!=": case "<>": return (n) => n !== t;
+    default: throw new Error(`Unknown operator: ${m[1]}`);
+  }
+}
+
+// The app's range functions over `read`, a cell's value as RexxJS sees it.
+export function rangeFunctions(read: (key: string) => unknown): Record<string, (...args: any[]) => unknown> {
+  const values = (ref: string): unknown[] => {
+    const [from, to = from] = String(ref).split(":");
+    const a = addrOf(from), b = addrOf(to);
+    if (!a || !b) throw new Error(`Invalid range: ${ref}`);
+    return [...range(a, b)].map(read);
+  };
+  return {
+    SUM_RANGE: (r: string) => numbers(values(r)).reduce((s, n) => s + n, 0),
+    AVERAGE_RANGE: (r: string) => {
+      const ns = numbers(values(r));
+      return ns.length ? mean(ns) : 0;
+    },
+    COUNT_RANGE: (r: string) => values(r).filter((v) => v !== "" && v !== null && v !== undefined).length,
+    MIN_RANGE: (r: string) => {
+      const ns = numbers(values(r));
+      return ns.length ? Math.min(...ns) : 0;
+    },
+    MAX_RANGE: (r: string) => {
+      const ns = numbers(values(r));
+      return ns.length ? Math.max(...ns) : 0;
+    },
+    MEDIAN_RANGE: (r: string) => {
+      const ns = numbers(values(r)).sort((x, y) => x - y);
+      if (!ns.length) return 0;
+      const mid = Math.floor(ns.length / 2);
+      return ns.length % 2 ? ns[mid] : (ns[mid - 1] + ns[mid]) / 2;
+    },
+    STDEV_RANGE: (r: string) => {
+      const ns = numbers(values(r));
+      return ns.length < 2 ? 0 : Math.sqrt(squares(ns) / (ns.length - 1));
+    },
+    STDEVP_RANGE: (r: string) => {
+      const ns = numbers(values(r));
+      return ns.length ? Math.sqrt(squares(ns) / ns.length) : 0;
+    },
+    VAR_RANGE: (r: string) => {
+      const ns = numbers(values(r));
+      return ns.length < 2 ? 0 : squares(ns) / (ns.length - 1);
+    },
+    VARP_RANGE: (r: string) => {
+      const ns = numbers(values(r));
+      return ns.length ? squares(ns) / ns.length : 0;
+    },
+    PRODUCT_RANGE: (r: string) => {
+      const ns = numbers(values(r));
+      return ns.length ? ns.reduce((p, n) => p * n, 1) : 0;
+    },
+    SUMIF_RANGE: (r: string, condition: string) => {
+      const ok = criterion(condition);
+      return numbers(values(r)).filter(ok).reduce((s, n) => s + n, 0);
+    },
+    COUNTIF_RANGE: (r: string, condition: string) => {
+      const ok = criterion(condition);
+      return numbers(values(r)).filter(ok).length;
+    },
+    CELL: (ref: string) => values(ref)[0],
+  };
+}
+
+export class RexxLanguage implements Language {
+  readonly name = "RexxJS";
+  readonly #it: any;
+  readonly #functions: Record<string, (...args: any[]) => unknown>;
+  #env: Env | null = null;
+  #errorRead: CellError | null = null;
+
+  constructor() {
+    this.#it = new RexxInterpreter(null, { output: () => {} });
+    // An unset variable that names a cell reads it.
+    this.#it.variableResolver = (name: string) => (addrOf(name) ? this.#read(keyOf(addrOf(name)!)) : undefined);
+    this.#functions = rangeFunctions((k) => this.#read(k));
+    Object.assign(this.#it.externalFunctions, this.#functions);
+  }
+
+  // A cell's value as RexxJS sees it: '' for an empty one, a number or
+  // text; an error read is remembered, and is the formula's value.
+  #read(key: string): unknown {
+    const v = this.#env?.get(key) ?? null;
+    if (v instanceof CellError) {
+      this.#errorRead ??= v;
+      return "";
+    }
+    if (v === null) return "";
+    if (typeof v === "boolean") return v ? 1 : 0;
+    const n = typeof v === "string" ? parseFloat(v) : NaN;
+    return typeof v === "string" && !isNaN(n) && String(n) === v.trim() ? n : v;
+  }
+
+  // The sheet's setup script, run once on the interpreter: what it LETs,
+  // every formula can read. Null, or why it failed.
+  async setup(script: string): Promise<string | null> {
+    if (!script.trim()) return null;
+    try {
+      await this.#it.run(parse(script));
+      return null;
+    } catch (e) {
+      return String((e as Error)?.message ?? e);
+    }
+  }
+
+  compile(formula: string): Formula {
+    const statements = /^\s*LET\b/i.test(formula) || formula.includes("\n");
+    let commands: unknown;
+    try {
+      commands = parse(statements ? formula : `LET CELLRESULT = ${formula}`);
+    } catch (e) {
+      return { kind: "broken", error: new CellError("#ERROR!", lastLine(e)) };
+    }
+    return {
+      kind: "formula",
+      reads: readsOf(formula),
+      run: async (env) => {
+        this.#env = env;
+        this.#errorRead = null;
+        try {
+          await this.#it.run(commands);
+          if (this.#errorRead) return this.#errorRead;
+          return fromRexx(this.#it.getVariable(statements ? "RESULT" : "CELLRESULT"));
+        } catch (e) {
+          return this.#errorRead ?? new CellError("#ERROR!", lastLine(e));
+        } finally {
+          this.#env = null;
+        }
+      },
+    };
+  }
+
+  // The app's copy rule: every cell name moves, in strings too; $ fixes.
+  moved(input: string, by: Offset): string {
+    if (!input.startsWith("=") || (by.cols === 0 && by.rows === 0)) return input;
+    return input.replace(ONE_REF, (text, fixCol: string, col: string, fixRow: string, row: string) => {
+      const a = addrOf(`${col}${row}`);
+      if (!a) return text;
+      const c = fixCol ? a.col : a.col + by.cols, r = fixRow ? a.row : a.row + by.rows;
+      if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return "#REF!";
+      return `${fixCol}${colName(c)}${fixRow}${r + 1}`;
+    });
+  }
+
+  functions(): readonly string[] {
+    return Object.keys(this.#functions).sort();
+  }
+}

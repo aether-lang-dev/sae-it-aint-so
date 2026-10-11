@@ -1,5 +1,5 @@
 // griddriver.ae — verbs for a page built on ui.datagrid with a formula bar
-// (site/sheet.ts, site/rexxsheet.ts), on saedriver and aether-ui's uidriver.
+// (site/sheet.ts), on saedriver and aether-ui's uidriver.
 //
 // A cell is the aui-grid-cell widget under its column's header
 // (aui-grid-header) and beside its row's number (aui-grid-frozen), read and

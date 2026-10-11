@@ -3,13 +3,14 @@
 // order, once each, however many cells were set together (a paste). A cell
 // on a cycle comes to #CYCLE!, and what reads it inherits the error. The
 // sheet tells a listener which cells now show something else; it never draws.
-import { addrOf, keyOf, order, range } from "./address.ts";
-import { evaluate } from "./evaluate.ts";
+// What a formula means is its Language's (the sheet's major setting, Excel
+// or RexxJS); evaluation may be asynchronous, so setting cells is a promise,
+// and two settings take turns.
+import { addrOf, keyOf, order } from "./address.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
-import { FormulaError } from "./lexer.ts";
-import { parse } from "./parser.ts";
-import type { Expr } from "./parser.ts";
+import { EXCEL } from "./excel.ts";
+import type { Formula, Language } from "./language.ts";
 import { show } from "./format.ts";
 
 export interface SheetListener {
@@ -21,49 +22,16 @@ export interface Problem {
   readonly message: string;
 }
 
-// What a cell's input compiles to: a formula, a parse error, or a constant.
-type Compiled =
-  | { readonly kind: "formula"; readonly expr: Expr }
-  | { readonly kind: "broken"; readonly error: CellError }
-  | { readonly kind: "constant"; readonly value: Value };
+// What a cell's input compiles to: a formula (or a parse error) in the
+// sheet's language, or a constant.
+export type Compiled = Formula | { readonly kind: "constant"; readonly value: Value };
 
 const NUMERIC = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?\s*$/;
 
-export function compile(input: string): Compiled {
-  if (input.startsWith("=")) {
-    try {
-      return { kind: "formula", expr: parse(input.slice(1)) };
-    } catch (e) {
-      if (!(e instanceof FormulaError)) throw e;
-      return { kind: "broken", error: new CellError("#ERROR!", `parse error at ${e.at}: ${e.message}`) };
-    }
-  }
+export function compile(input: string, language: Language = EXCEL): Compiled {
+  if (input.startsWith("=")) return language.compile(input.slice(1));
   if (input === "") return { kind: "constant", value: null };
   return { kind: "constant", value: NUMERIC.test(input) ? Number(input) : input };
-}
-
-// The cells an expression reads, ranges spelled out; off-sheet ones are left
-// to the evaluator (#REF!).
-export function* refsOf(e: Expr): Generator<string, void, undefined> {
-  switch (e.kind) {
-    case "ref":
-      if (addrOf(e.name)) yield e.name;
-      return;
-    case "range": {
-      const a = addrOf(e.from), b = addrOf(e.to);
-      if (a && b) yield* range(a, b);
-      return;
-    }
-    case "neg": return yield* refsOf(e.arg);
-    case "binary":
-      yield* refsOf(e.left);
-      return yield* refsOf(e.right);
-    case "call":
-      for (const a of e.args) yield* refsOf(a);
-      return;
-    default:
-      return;
-  }
 }
 
 const getOrAdd = <K, V>(m: Map<K, V>, k: K, make: () => V): V => {
@@ -81,10 +49,15 @@ export class Sheet {
   readonly #reads = new Map<string, Set<string>>();     // a cell -> the cells it reads
   readonly #readBy = new Map<string, Set<string>>();    // a cell -> the cells that read it
   readonly #listener: SheetListener | undefined;
+  #language: Language;
+  #turn: Promise<unknown> = Promise.resolve();
 
-  constructor(listener?: SheetListener) {
+  constructor(listener?: SheetListener, language: Language = EXCEL) {
     this.#listener = listener;
+    this.#language = language;
   }
+
+  get language(): Language { return this.#language; }
 
   input(key: string): string { return this.#inputs.get(key) ?? ""; }
   value(key: string): Value { return this.#values.get(key) ?? null; }
@@ -101,25 +74,60 @@ export class Sheet {
       });
   }
 
-  set(key: string, input: string): string[] {
+  set(key: string, input: string): Promise<string[]> {
     return this.setMany([[key, input]]);
   }
 
-  // Set several cells, then recompute once. Returns the keys whose shown
-  // value changed, in sheet order (the listener heard each of them).
-  setMany(entries: Iterable<readonly [string, string]>): string[] {
-    const set: string[] = [];
-    for (const [k, input] of entries) {
+  // Set several cells, then recompute once. Gives the keys whose shown value
+  // changed, in sheet order (the listener heard each of them). A key off the
+  // sheet is refused before anything is set.
+  setMany(entries: Iterable<readonly [string, string]>): Promise<string[]> {
+    const list = [...entries].map(([k, input]): [string, string] => {
       const a = addrOf(k);
       if (!a) throw new RangeError(`${k} is not a cell on the sheet`);
-      const key = keyOf(a);
-      if (input === "") this.#inputs.delete(key); else this.#inputs.set(key, input);
-      const c = compile(input);
-      this.#compiled.set(key, c);
-      this.#link(key, c.kind === "formula" ? new Set(refsOf(c.expr)) : new Set());
-      set.push(key);
-    }
-    return this.#recompute(set);
+      return [keyOf(a), input];
+    });
+    return this.#inTurn(() => {
+      for (const [key, input] of list) {
+        if (input === "") this.#inputs.delete(key); else this.#inputs.set(key, input);
+        this.#compile(key);
+      }
+      return this.#recompute(list.map(([key]) => key));
+    });
+  }
+
+  // Another language (the major setting): every formula compiled again in
+  // it, and the whole sheet worked out again.
+  setLanguage(language: Language): Promise<string[]> {
+    return this.#inTurn(() => {
+      this.#language = language;
+      return this.#recomputeAll();
+    });
+  }
+
+  // Everything worked out again, as after a language's setup script ran.
+  recalculate(): Promise<string[]> {
+    return this.#inTurn(() => this.#recomputeAll());
+  }
+
+  #recomputeAll(): Promise<string[]> {
+    const keys = this.keys();
+    keys.forEach((k) => this.#compile(k));
+    return this.#recompute(keys);
+  }
+
+  #compile(key: string): void {
+    const c = compile(this.input(key), this.#language);
+    this.#compiled.set(key, c);
+    this.#link(key, new Set(c.kind === "formula" ? c.reads : []));
+  }
+
+  // One change at a time: a language's evaluation may be asynchronous, and
+  // RexxJS's holds one interpreter.
+  #inTurn<T>(work: () => Promise<T>): Promise<T> {
+    const done = this.#turn.then(work);
+    this.#turn = done.catch(() => {});
+    return done;
   }
 
   #link(key: string, reads: Set<string>): void {
@@ -180,13 +188,13 @@ export class Sheet {
     return walk(start) ? path : null;
   }
 
-  #recompute(set: readonly string[]): string[] {
+  async #recompute(set: readonly string[]): Promise<string[]> {
     const before = new Map<string, string>();
     const affected = this.#downstream(set);
     for (const k of affected) before.set(k, show(this.value(k)));
 
     const { ordered, left } = this.#ordered(affected);
-    for (const k of ordered) this.#evaluate(k);
+    for (const k of ordered) await this.#evaluate(k);
     if (left.size > 0) {
       const onCycle = new Set<string>();
       for (const k of left) {
@@ -197,7 +205,7 @@ export class Sheet {
       }
       // What is downstream of a cycle reads its error, in order.
       const rest = new Set([...left].filter((k) => !onCycle.has(k)));
-      for (const k of this.#ordered(rest).ordered) this.#evaluate(k);
+      for (const k of this.#ordered(rest).ordered) await this.#evaluate(k);
     }
 
     const changed = [...affected].filter((k) => set.includes(k) || before.get(k) !== show(this.value(k))).sort(byOrder);
@@ -205,10 +213,10 @@ export class Sheet {
     return changed;
   }
 
-  #evaluate(key: string): void {
+  async #evaluate(key: string): Promise<void> {
     const c = this.#compiled.get(key);
     let v: Value = null;
-    if (c?.kind === "formula") v = evaluate(c.expr, { get: (k) => this.value(k) }) ?? 0;
+    if (c?.kind === "formula") v = (await c.run({ get: (k) => this.value(k) })) ?? 0;
     else if (c?.kind === "broken") v = c.error;
     else if (c?.kind === "constant") v = c.value;
     if (v === null && !this.#inputs.has(key)) this.#values.delete(key); else this.#values.set(key, v);

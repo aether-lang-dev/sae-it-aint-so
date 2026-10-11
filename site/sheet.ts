@@ -10,14 +10,21 @@
 // computed and each; a paste is one batch, and one refresh of the grid.
 // Over a selection, Delete clears it, Ctrl+C and Ctrl+V copy and paste it
 // within the sheet (formulas move, $ fixes), and Ctrl+D and Ctrl+R fill it
-// down and right.
+// down and right. The major setting is the formula language: "Excel
+// formulas" (=SUM(A1:A3)) or "RexxJS formulas" (=SUM_RANGE("A1:A3"),
+// =A2 |> UPPER), as the Tauri spreadsheet (RexxJS/example-app-spreadsheet)
+// has them, whose sheet files open here with their setup scripts.
 import { COLS, ROWS, addrOf, colName, keyOf, range } from "./sheet/address.ts";
 import type { Addr } from "./sheet/address.ts";
 import { Sheet } from "./sheet/sheet.ts";
 import { copied, filled, pasted } from "./sheet/copy.ts";
 import type { Problem } from "./sheet/sheet.ts";
 import { describe, show } from "./sheet/format.ts";
-import { names } from "./sheet/functions.ts";
+import { EXCEL } from "./sheet/excel.ts";
+import { RexxLanguage } from "./sheet/rexx.ts";
+import { readSheetFile } from "./sheet/file.ts";
+import type { SheetFile } from "./sheet/file.ts";
+import { SAMPLE_BUDGET, TEST_SHEET } from "./sheet/samples.ts";
 import { CellError } from "./sheet/values.ts";
 
 const { text, btn, textfield, hstack, text_wrapped, on_submit, focus, cells, headers, edit_text, cell_style,
@@ -33,6 +40,10 @@ const EXAMPLE = [
 ].join("\n");
 
 const sheet = new Sheet();
+const rexx = new RexxLanguage();
+const languages = { Excel: EXCEL, RexxJS: rexx } as const;
+// A comment per cell, from the sheet file that was opened.
+let comments: ReadonlyMap<string, string> = new Map();
 
 // The grid's column 0 is the frozen row numbers; column c + 1 is sheet
 // column c. The cell, edit_text and cell_style functions and on_cell_edit
@@ -48,6 +59,12 @@ const address = state("A1");
 const input = state("");
 const status = state("");
 const problems = state<Problem[]>([]);
+const formulas = state<"Excel" | "RexxJS">("Excel");
+const setupScript = state("");
+const functionList = computed(() => {
+  const own = formulas.value === "RexxJS" ? ", and RexxJS's own (UPPER, SUBSTR, WORD, LENGTH, ...)" : "";
+  return `${formulas.value} functions: ${languages[formulas.value].functions().join(", ")}${own}`;
+}, formulas);
 const summary = computed(() => {
   const n = problems.value.length;
   return n === 0 ? "No problems" : `${n} problem${n === 1 ? "" : "s"}`;
@@ -55,15 +72,19 @@ const summary = computed(() => {
 
 let grid = 0;
 
+const described = (key: string) => describe(key, sheet.input(key), sheet.value(key), comments.get(key));
+
 const settled = (key: string) => {
   problems.set(sheet.problems());
-  status.set(describe(key, sheet.input(key), sheet.value(key)));
+  status.set(described(key));
   ui.datagrid_refresh(grid);
 };
 
-const commit = (key: string, text: string) => {
+// Each change is worked out (a promise: RexxJS evaluates asynchronously),
+// then shown in one batch.
+const commit = async (key: string, text: string) => {
+  await sheet.set(key, text.trim());
   batch(() => {
-    sheet.set(key, text.trim());
     address.set(key);
     input.set(sheet.input(key));
     settled(key);
@@ -80,14 +101,40 @@ const enter = () => {
   commit(keyOf(at), input.value);
 };
 
+const here = () => keyOf(addrOf(address.value) ?? { col: 0, row: 0 });
+
 // Many cells at once (a paste, a clear): one recompute, one batch.
-const setAll = (entries: readonly (readonly [string, string])[], what: string) => {
-  let changed: string[] = [];
-  batch(() => {
-    changed = sheet.setMany(entries);
-    settled(keyOf(addrOf(address.value) ?? { col: 0, row: 0 }));
-  });
+const setAll = async (entries: readonly (readonly [string, string])[], what: string) => {
+  const changed = await sheet.setMany(entries);
+  batch(() => settled(here()));
   print(`sheet: ${what}: ${entries.length} cells set, ${changed.length} changed`);
+};
+
+// The major setting: every formula read again in the other language.
+const useFormulas = async (name: "Excel" | "RexxJS") => {
+  await sheet.setLanguage(languages[name]);
+  batch(() => {
+    formulas.set(name);
+    settled(here());
+  });
+  print(`sheet: ${name} formulas`);
+};
+
+// A sheet file (the Tauri app's format): the sheet emptied, its language,
+// its setup script run, its cells set, its comments kept.
+const open = async (file: SheetFile) => {
+  await sheet.setMany(sheet.keys().map((k) => [k, ""] as const));
+  const failed = file.language === "RexxJS" ? await rexx.setup(file.setupScript) : null;
+  await sheet.setLanguage(languages[file.language]);
+  await sheet.setMany(file.entries);
+  comments = file.comments;
+  batch(() => {
+    formulas.set(file.language);
+    setupScript.set(file.setupScript ? `Setup script: ${file.setupScript}` : "");
+    settled(here());
+    if (failed) status.set(`The setup script failed: ${failed.split("\n").pop()}`);
+  });
+  print(`sheet: opened ${file.name}: ${file.entries.length} cells, ${file.language} formulas`);
 };
 
 // Where a sheet column is on screen now (columns can be dragged).
@@ -131,18 +178,23 @@ ui.on_key((key: string, mods: number) => {
       print(`sheet: copied ${named}`);
       return;
     case "v":
-      if (clip) setAll(pasted(clip.tsv, topLeft(sel), clip.from), `pasted at ${keyOf(topLeft(sel))}`);
+      if (clip) setAll(pasted(clip.tsv, topLeft(sel), { from: clip.from, language: sheet.language }), `pasted at ${keyOf(topLeft(sel))}`);
       return;
     case "d":
-      setAll(filled(inputOf, a, b, "down"), `filled ${named} down`);
+      setAll(filled(inputOf, a, b, "down", sheet.language), `filled ${named} down`);
       return;
     case "r":
-      setAll(filled(inputOf, a, b, "right"), `filled ${named} right`);
+      setAll(filled(inputOf, a, b, "right", sheet.language), `filled ${named} right`);
       return;
   }
 });
 
 text("Spreadsheet");
+hstack(() => {
+  bind(text(""), computed(() => `${formulas.value} formulas`, formulas));
+  btn("Excel formulas", () => useFormulas("Excel"));
+  btn("RexxJS formulas", () => useFormulas("RexxJS"));
+});
 let formula = 0;
 hstack(() => {
   const cell = bind(textfield("cell", () => {}), address);
@@ -197,15 +249,24 @@ address.subscribe((a: string) => {
   if (r !== at.row || ui.datagrid_col_model(grid, c) !== at.col + 1) ui.datagrid_select(grid, at.row, viewCol(at.col + 1));
   batch(() => {
     input.set(sheet.input(key));
-    status.set(describe(key, sheet.input(key), sheet.value(key)));
+    status.set(described(key));
   });
 });
 
-text_wrapped(`Functions: ${names().join(", ")}`, 720);
+bind(text_wrapped("", 720), functionList);
+bind(text_wrapped("", 720), setupScript);
 bind(text(""), summary);
 each(problems, "key", (p: Problem) => text(`${p.key}: ${p.message}`));
 hstack(() => {
-  btn("Paste example", () => setAll(pasted(EXAMPLE, { col: 0, row: 0 }), "pasted the example"));
-  btn("Clear all", () => setAll(sheet.keys().map((k) => [k, ""] as const), "cleared"));
+  btn("Paste example", async () => {
+    if (formulas.value !== "Excel") await useFormulas("Excel");
+    await setAll(pasted(EXAMPLE, { col: 0, row: 0 }), "pasted the example");
+  });
+  btn("Budget (RexxJS)", () => open(readSheetFile(SAMPLE_BUDGET)));
+  btn("Test sheet (RexxJS)", () => open(readSheetFile(TEST_SHEET)));
+  btn("Clear all", () => {
+    comments = new Map();
+    return setAll(sheet.keys().map((k) => [k, ""] as const), "cleared");
+  });
   btn("Home", () => browserContext.changePage("/"));
 });

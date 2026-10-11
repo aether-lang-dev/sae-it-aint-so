@@ -3,7 +3,8 @@
 // remembers where it came from; a fill repeats the first row (or column) of
 // a selection across the rest.
 import { addrOf } from "./sheet/address.ts";
-import { copied, filled, moved, pasted } from "./sheet/copy.ts";
+import { copied, filled, pasted } from "./sheet/copy.ts";
+import { EXCEL, moved } from "./sheet/excel.ts";
 import { eq } from "./lib/check.ts";
 
 const by = (cols: number, rows: number) => ({ cols, rows });
@@ -32,17 +33,17 @@ eq("a one-cell copy", copied(input, at("B1"), at("B1")), "=A1*2");
 eq("pasted places rows of tabs at a cell", pasted("a\tb\n1\t=A2\n", at("B1")), [["B1", "a"], ["C1", "b"], ["B2", "1"], ["C2", "=A2"]]);
 eq("and drops what falls off the sheet", pasted("1\t2\t3\r\n4\t5\t6", at("I20")), [["I20", "1"], ["J20", "2"]]);
 eq("text from elsewhere keeps its formulas as written", pasted("=A1", at("C3")), [["C3", "=A1"]]);
-eq("a copy pasted elsewhere moves its formulas", pasted("=A1*2\t=$A$1+A2", at("C5"), at("B1")), [["C5", "=B5*2"], ["D5", "=$A$1+B6"]]);
+eq("a copy pasted elsewhere moves its formulas", pasted("=A1*2\t=$A$1+A2", at("C5"), { from: at("B1"), language: EXCEL }), [["C5", "=B5*2"], ["D5", "=$A$1+B6"]]);
 
-eq("fill down repeats the top row, moved", filled(input, at("A1"), at("B3"), "down"),
+eq("fill down repeats the top row, moved", filled(input, at("A1"), at("B3"), "down", EXCEL),
   [["A2", "1"], ["B2", "=A2*2"], ["A3", "1"], ["B3", "=A3*2"]]);
-eq("fill right repeats the left column", filled(input, at("A1"), at("C2"), "right"),
+eq("fill right repeats the left column", filled(input, at("A1"), at("C2"), "right", EXCEL),
   [["B1", "1"], ["C1", "1"], ["B2", "x"], ["C2", "x"]]);
-eq("a one-row selection fills from the row above", filled(input, at("B2"), at("B2"), "down"), [["B2", "=A2*2"]]);
-eq("a one-column selection from the column left", filled(input, at("B2"), at("B2"), "right"), [["B2", "x"]]);
-eq("either corner first", filled(input, at("B3"), at("A1"), "down"), filled(input, at("A1"), at("B3"), "down"));
-eq("nothing above the first row to fill from", filled(input, at("A1"), at("B1"), "down"), []);
-eq("an empty source empties the rest", filled(input, at("C1"), at("C2"), "down"), [["C2", ""]]);
+eq("a one-row selection fills from the row above", filled(input, at("B2"), at("B2"), "down", EXCEL), [["B2", "=A2*2"]]);
+eq("a one-column selection from the column left", filled(input, at("B2"), at("B2"), "right", EXCEL), [["B2", "x"]]);
+eq("either corner first", filled(input, at("B3"), at("A1"), "down", EXCEL), filled(input, at("A1"), at("B3"), "down", EXCEL));
+eq("nothing above the first row to fill from", filled(input, at("A1"), at("B1"), "down", EXCEL), []);
+eq("an empty source empties the rest", filled(input, at("C1"), at("C2"), "down", EXCEL), [["C2", ""]]);
 // expect: ok a relative reference moves with the cell
 // expect: ok $ fixes a column, a row, or both
 // expect: ok a range moves both its corners

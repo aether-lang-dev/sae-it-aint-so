@@ -15,10 +15,10 @@ export function fmt(strings: TemplateStringsArray, ...values: Value[]): string {
   return strings.reduce((out, s, i) => out + s + (i < values.length ? show(values[i]) : ""), "");
 }
 
-// The status line for a cell: what was typed, what it came to, and why it
-// is an error when it is one.
-export function describe(key: string, input: string, value: Value): string {
+// The status line for a cell: what was typed, what it came to, why it is an
+// error when it is one, and its comment, if it has one.
+export function describe(key: string, input: string, value: Value, comment = ""): string {
   if (input === "") return `${key}: (empty)`;
   const why = value instanceof CellError ? ` ${value.why}` : "";
-  return fmt`${key}: ${input} → ${value}` + why;
+  return fmt`${key}: ${input} → ${value}` + why + (comment ? ` (${comment})` : "");
 }
