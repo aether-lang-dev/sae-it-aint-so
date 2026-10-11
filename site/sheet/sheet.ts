@@ -40,6 +40,8 @@ const getOrAdd = <K, V>(m: Map<K, V>, k: K, make: () => V): V => {
   return v;
 };
 
+const HISTORY = 100;   // undo steps kept, as the Tauri spreadsheet keeps
+
 const byOrder = (a: string, b: string): number => order(addrOf(a)!) - order(addrOf(b)!);
 
 export class Sheet {
@@ -51,6 +53,9 @@ export class Sheet {
   readonly #listener: SheetListener | undefined;
   #language: Language;
   #turn: Promise<unknown> = Promise.resolve();
+  // Each step is the inputs a change replaced, to put back.
+  readonly #undo: (readonly [string, string][])[] = [];
+  readonly #redo: (readonly [string, string][])[] = [];
 
   constructor(listener?: SheetListener, language: Language = EXCEL) {
     this.#listener = listener;
@@ -88,12 +93,47 @@ export class Sheet {
       return [keyOf(a), input];
     });
     return this.#inTurn(() => {
-      for (const [key, input] of list) {
-        if (input === "") this.#inputs.delete(key); else this.#inputs.set(key, input);
-        this.#compile(key);
-      }
-      return this.#recompute(list.map(([key]) => key));
+      this.#remember(this.#undo, list);
+      this.#redo.length = 0;
+      return this.#apply(list);
     });
+  }
+
+  get canUndo(): boolean { return this.#undo.length > 0; }
+  get canRedo(): boolean { return this.#redo.length > 0; }
+
+  // The last change taken back (its inputs put back, and the sheet worked
+  // out), or done again. Each gives the keys whose shown value changed.
+  undo(): Promise<string[]> { return this.#inTurn(() => this.#step(this.#undo, this.#redo)); }
+  redo(): Promise<string[]> { return this.#inTurn(() => this.#step(this.#redo, this.#undo)); }
+
+  // No history: a file opened is where undo stops.
+  forget(): void {
+    this.#undo.length = 0;
+    this.#redo.length = 0;
+  }
+
+  async #step(from: (readonly [string, string][])[], to: (readonly [string, string][])[]): Promise<string[]> {
+    const step = from.pop();
+    if (!step) return [];
+    this.#remember(to, step);
+    return this.#apply(step);
+  }
+
+  // The inputs `list` is about to replace, once per key, as one step.
+  #remember(stack: (readonly [string, string][])[], list: readonly (readonly [string, string])[]): void {
+    const before = new Map<string, string>();
+    for (const [key] of list) if (!before.has(key)) before.set(key, this.input(key));
+    stack.push([...before]);
+    if (stack.length > HISTORY) stack.shift();
+  }
+
+  #apply(list: readonly (readonly [string, string])[]): Promise<string[]> {
+    for (const [key, input] of list) {
+      if (input === "") this.#inputs.delete(key); else this.#inputs.set(key, input);
+      this.#compile(key);
+    }
+    return this.#recompute(list.map(([key]) => key));
   }
 
   // Another language (the major setting): every formula compiled again in

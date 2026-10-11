@@ -38,6 +38,10 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   Only references change; the rest of a formula is kept as typed. The
   clipboard is the page's own: there is no system clipboard for pages yet.
 - Delete or BackSpace clears it. In the formula bar they are the field's.
+- Ctrl+Z undoes the last change (a paste or a fill is one), with its
+  ripple, and Ctrl+Y or Ctrl+Shift+Z redoes it; Undo and Redo buttons too.
+  A hundred steps are kept, as the Tauri app keeps; opening a file starts
+  afresh.
 
 **Around the grid** (the page's own `state`, `computed`, `bind`, `each` and
 `batch`):
@@ -136,11 +140,12 @@ summary.
     formatting, a status line with a comment.
   - `sheet_functions` (46): every function, its edge cases and its errors,
     against a fixed set of cells.
-  - `sheet_sheet` (31): the `Sheet` against a recording mock listener.
+  - `sheet_sheet` (39): the `Sheet` against a recording mock listener.
     Edits ripple in dependency order; a paste recomputes each cell once;
     cycles are found and mended; a formula forgets what it used to read.
     And against a stub language: compiled once, run in dependency order and
     awaited, everything compiled again in another, changes taking turns.
+    Undo and redo: a step per change, a paste as one, a hundred kept.
   - `sheet_rexx` (25): RexxJS formulas against a stub of the cells (what a
     formula reads, Rexx's operators and functions, errors, the setup
     script, every range function, the copy rule), then the Tauri app's two
@@ -148,7 +153,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 20 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 21 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -156,7 +161,7 @@ summary.
   - the grid's keys, a grip drag, a grip double-click that fits;
   - Ctrl+D and Ctrl+R; Ctrl+C and Ctrl+V moving `=$B$2+C2` to
     `=$B$2+D4`; Delete over a selection, and not while the formula field
-    has the focus; and Clear all;
+    has the focus; Ctrl+Z, Undo and Redo; and Clear all;
   - the app's budget in RexxJS formulas (its setup script's TAX_RATE, a
     comment), RexxJS's `||`, `|>` and `>`, an error's reason, and the
     setting switched to Excel and back.
@@ -196,33 +201,31 @@ is `src/spreadsheet-model.js`, its control functions
 `src/spreadsheet-control-functions.js`). Each lands in the model with no
 `ui` and its checks headless, then on the page with an `it`:
 
-1. **Undo and redo** (the app keeps 100 levels): `Sheet.setMany` is the one
-   place every change goes, so an undo stack is the inputs it replaced.
-2. **Comments and number formats per cell**: comments are read from files
+1. **Comments and number formats per cell**: comments are read from files
    now; editing them, and formats (currency, percent, fixed places,
    dates) applied in `show()`, with `cell_style` for the alignment.
-3. **Insert and delete rows and columns**, formulas adjusted (the app's
+2. **Insert and delete rows and columns**, formulas adjusted (the app's
    `_adjustCellReferencesInExpression`, per language as `moved` is).
-4. **Sort a range by a column**, ascending or descending.
-5. **Find and replace**, in values or in formulas, whole cell or not.
-6. **Named ranges**, in both languages (`=SUM(prices)`,
+3. **Sort a range by a column**, ascending or descending.
+4. **Find and replace**, in values or in formulas, whole cell or not.
+5. **Named ranges**, in both languages (`=SUM(prices)`,
    `=SUM_RANGE("prices")`).
-7. **Several sheets**, with cross-sheet references (`Sheet2.A1` in the
+6. **Several sheets**, with cross-sheet references (`Sheet2.A1` in the
    app; `Sheet2!A1` in Excel formulas).
-8. **Saving and opening**: the app's file format, written by `file.ts`
+7. **Saving and opening**: the app's file format, written by `file.ts`
    too, through `storage` in the browser and `files` in app mode.
-9. **The query functions**: `RANGE("A1:C9") |> WHERE("price > 10") |>
+8. **The query functions**: `RANGE("A1:C9") |> WHERE("price > 10") |>
    GROUP_BY("region")`, PLUCK, SUM, AVG, COUNT, RESULT and TABLE over a
    table's metadata (the app evaluates WHERE's condition with JavaScript's
    `eval`; here it would be the sheet's own language).
-10. **Hide rows and columns, freeze panes** (the datagrid freezes leading
+9. **Hide rows and columns, freeze panes** (the datagrid freezes leading
     columns already), **text wrapping**, **conditional formatting** (a
     RexxJS or Excel expression giving a style), **data validation**
     (lists, number ranges, patterns; on create, on update), **auto IDs**.
-11. **The control functions** (SETCELL, GETCELL and the rest) in RexxJS
+10. **The control functions** (SETCELL, GETCELL and the rest) in RexxJS
     formulas and the setup script, and a **control bus** for other apps
     (the app's is HTTP or postMessage; sae's would be a page service).
-12. **Charts** of a range in `vg` (the app's chart scripts drive Chart.js).
+11. **Charts** of a range in `vg` (the app's chart scripts drive Chart.js).
 
 Not coming over: the DOM itself (React, the DOM functions RexxJS has for
 web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).

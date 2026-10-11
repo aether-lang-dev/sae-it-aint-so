@@ -200,6 +200,19 @@ main() {
             spec.assert_true(g.wait_cell("F", 4, ""), "F4 is empty")
             spec.assert_true(g.wait_cell("F", 2, "12"), "F2, outside the selection, kept")
         }
+        spec.it("Ctrl+Z undoes a change and its ripple; Redo does it again") callback {
+            g.enter("B4", "20")
+            spec.assert_true(g.wait_cell("D", 4, "23"), "D4 = B4 * C4")
+            g.pick("B", 4)
+            g.key("Ctrl+Z")
+            spec.assert_true(b.wait_for_console("sheet: undo:"), "undone")
+            spec.assert_true(g.wait_cell("B", 4, "2"), "B4 back to 2")
+            spec.assert_true(g.wait_cell("D", 4, "2.3"), "and D4 with it")
+            b.click("Redo")
+            spec.assert_true(g.wait_cell("D", 4, "23"), "redone")
+            b.click("Undo")
+            spec.assert_true(g.wait_cell("B", 4, "2"), "and undone by the button")
+        }
         spec.it("Clear all empties the sheet") callback {
             g.pick("B", 2)
             b.click("Clear all")

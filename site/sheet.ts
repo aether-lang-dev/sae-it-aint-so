@@ -10,7 +10,7 @@
 // computed and each; a paste is one batch, and one refresh of the grid.
 // Over a selection, Delete clears it, Ctrl+C and Ctrl+V copy and paste it
 // within the sheet (formulas move, $ fixes), and Ctrl+D and Ctrl+R fill it
-// down and right. The major setting is the formula language: "Excel
+// down and right, and Ctrl+Z and Ctrl+Y undo and redo. The major setting is the formula language: "Excel
 // formulas" (=SUM(A1:A3)) or "RexxJS formulas" (=SUM_RANGE("A1:A3"),
 // =A2 |> UPPER), as the Tauri spreadsheet (RexxJS/example-app-spreadsheet)
 // has them, whose sheet files open here with their setup scripts.
@@ -110,6 +110,16 @@ const setAll = async (entries: readonly (readonly [string, string])[], what: str
   print(`sheet: ${what}: ${entries.length} cells set, ${changed.length} changed`);
 };
 
+// Undo and redo: the last change taken back, or done again.
+const history = async (way: "undo" | "redo") => {
+  const changed = await (way === "undo" ? sheet.undo() : sheet.redo());
+  batch(() => {
+    input.set(sheet.input(here()));
+    settled(here());
+  });
+  print(`sheet: ${way}: ${changed.length} changed`);
+};
+
 // The major setting: every formula read again in the other language.
 const useFormulas = async (name: "Excel" | "RexxJS") => {
   await sheet.setLanguage(languages[name]);
@@ -127,6 +137,7 @@ const open = async (file: SheetFile) => {
   const failed = file.language === "RexxJS" ? await rexx.setup(file.setupScript) : null;
   await sheet.setLanguage(languages[file.language]);
   await sheet.setMany(file.entries);
+  sheet.forget();
   comments = file.comments;
   batch(() => {
     formulas.set(file.language);
@@ -160,7 +171,7 @@ let clip: { tsv: string; from: Addr } | null = null;
 
 // Keys over the grid's selection; while an editor is open, or a field has
 // the focus, keys are theirs.
-const CTRL = 2, SUPER = 8;
+const SHIFT = 1, CTRL = 2, SUPER = 8;
 ui.on_key((key: string, mods: number) => {
   if (!ui.datagrid_has_focus(grid) || ui.datagrid_editor(grid) !== 0) return;
   const sel = selection();
@@ -173,6 +184,12 @@ ui.on_key((key: string, mods: number) => {
   }
   if ((mods & (CTRL | SUPER)) === 0) return;
   switch (key.toLowerCase()) {
+    case "z":
+      history((mods & SHIFT) !== 0 ? "redo" : "undo");
+      return;
+    case "y":
+      history("redo");
+      return;
     case "c":
       clip = { tsv: copied(inputOf, a, b), from: topLeft(sel) };
       print(`sheet: copied ${named}`);
@@ -264,6 +281,8 @@ hstack(() => {
   });
   btn("Budget (RexxJS)", () => open(readSheetFile(SAMPLE_BUDGET)));
   btn("Test sheet (RexxJS)", () => open(readSheetFile(TEST_SHEET)));
+  btn("Undo", () => history("undo"));
+  btn("Redo", () => history("redo"));
   btn("Clear all", () => {
     comments = new Map();
     return setAll(sheet.keys().map((k) => [k, ""] as const), "cleared");

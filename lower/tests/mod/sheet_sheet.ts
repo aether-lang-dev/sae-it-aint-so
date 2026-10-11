@@ -133,6 +133,34 @@ const stub = (name: "Excel" | "RexxJS", log: string[]): Language => ({
   eq("two settings take turns", [log.filter((l) => l.startsWith("Excel runs C1")).length, s.value("A1")], [2, 10]);
 }
 
+// Undo and redo: each change (one set, or one paste of many) is a step.
+{
+  const s = new Sheet();
+  eq("nothing to undo or redo at first", [s.canUndo, s.canRedo, await s.undo()], [false, false, []]);
+  await s.set("A1", "1");
+  await s.set("B1", "=A1*2");
+  await s.set("A1", "5");
+  eq("undo puts back what a change replaced, and works the sheet out", [await s.undo(), shown(s, "A1", "B1")], [["A1", "B1"], ["1", "2"]]);
+  eq("redo does it again", [await s.redo(), shown(s, "A1", "B1")], [["A1", "B1"], ["5", "10"]]);
+  await s.undo();
+  await s.undo();
+  eq("back to before a formula was typed", [s.input("B1"), s.keys()], ["", ["A1"]]);
+  await s.set("C1", "7");
+  eq("a new change forgets what could be redone", s.canRedo, false);
+  await s.setMany([["A2", "1"], ["A3", "2"], ["A4", "=A2+A3"]]);
+  await s.undo();
+  eq("a paste is one step", s.keys(), ["A1", "C1"]);
+  s.forget();
+  eq("and a sheet can forget its history (a file opened)", [s.canUndo, s.canRedo], [false, false]);
+  for (let i = 0; i < 105; i++) await s.set("D1", String(i));
+  let n = 0;
+  while (s.canUndo) {
+    await s.undo();
+    n++;
+  }
+  eq("a hundred steps are kept", [n, s.input("D1")], [100, "4"]);
+}
+
 // expect: ok constants: numbers, text, nothing
 // expect: ok a formula
 // expect: ok a parse error becomes #ERROR!, with where
@@ -164,3 +192,11 @@ const stub = (name: "Excel" | "RexxJS", log: string[]): Language => ({
 // expect: ok another language compiles every formula again, and works the sheet out
 // expect: ok and the sheet says which it speaks
 // expect: ok two settings take turns
+// expect: ok nothing to undo or redo at first
+// expect: ok undo puts back what a change replaced, and works the sheet out
+// expect: ok redo does it again
+// expect: ok back to before a formula was typed
+// expect: ok a new change forgets what could be redone
+// expect: ok a paste is one step
+// expect: ok and a sheet can forget its history (a file opened)
+// expect: ok a hundred steps are kept
