@@ -844,3 +844,10 @@ as GC roots, per-phase timings; numbers in `docs/spike-results.md`), HTTP
 fetch, history and navigation, browser chrome, the page-dialect lowerer. Not
 yet: more of the `ui` surface, the bytecode cache, a Win32 build arm,
 `class` in the dialect.
+
+## Licence
+
+MIT (`LICENSE`), Copyright (c) 2026 Aether Contributors collectively, as
+aether-ui. Vendored code keeps its own: RexxJS is MIT (`vendor/rexxjs/LICENSE`),
+and the Tauri spreadsheet files in `site/rexxsheet/` are MIT by their
+copyright holder's relicensing (`site/rexxsheet/UPSTREAM.md`).
