@@ -5,6 +5,7 @@
 // (-2^2 is 4). A parse error is a FormulaError at the token it stopped on.
 import { FormulaError, tokens } from "./lexer.ts";
 import type { Op, Token } from "./lexer.ts";
+import type { ErrorCode } from "./values.ts";
 
 export type Expr =
   | { readonly kind: "num"; readonly value: number }
@@ -12,6 +13,7 @@ export type Expr =
   | { readonly kind: "bool"; readonly value: boolean }
   | { readonly kind: "ref"; readonly name: string }
   | { readonly kind: "range"; readonly from: string; readonly to: string }
+  | { readonly kind: "error"; readonly code: ErrorCode }
   | { readonly kind: "neg"; readonly arg: Expr }
   | { readonly kind: "binary"; readonly op: Op; readonly left: Expr; readonly right: Expr }
   | { readonly kind: "call"; readonly name: string; readonly args: readonly Expr[] };
@@ -78,6 +80,7 @@ class Parser {
     switch (t.kind) {
       case "num": return { kind: "num", value: t.value };
       case "str": return { kind: "str", value: t.value };
+      case "error": return { kind: "error", code: t.code };
       case "ref": {
         if (this.#tok.kind !== ":") return { kind: "ref", name: t.name };
         this.#next();

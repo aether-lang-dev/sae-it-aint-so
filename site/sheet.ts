@@ -8,9 +8,13 @@
 // (numbers to the right, errors in red); the formula bar, status line,
 // problem list and summary are state, bind (two-way for the fields),
 // computed and each; a paste is one batch, and one refresh of the grid.
-import { COLS, ROWS, addrOf, colName, keyOf } from "./sheet/address.ts";
+// Over a selection, Delete clears it, Ctrl+C and Ctrl+V copy and paste it
+// within the sheet (formulas move, $ fixes), and Ctrl+D and Ctrl+R fill it
+// down and right.
+import { COLS, ROWS, addrOf, colName, keyOf, range } from "./sheet/address.ts";
 import type { Addr } from "./sheet/address.ts";
-import { Sheet, pasted } from "./sheet/sheet.ts";
+import { Sheet } from "./sheet/sheet.ts";
+import { copied, filled, pasted } from "./sheet/copy.ts";
 import type { Problem } from "./sheet/sheet.ts";
 import { describe, show } from "./sheet/format.ts";
 import { names } from "./sheet/functions.ts";
@@ -91,6 +95,52 @@ const viewCol = (modelCol: number): number => {
   for (let v = 0; v <= COLS; v++) if (ui.datagrid_col_model(grid, v) === modelCol) return v;
   return modelCol;
 };
+
+// The grid's selection as two sheet corners (the row numbers are not on
+// the sheet: a selection reaching them starts at column A), or null.
+const selection = (): [Addr, Addr] | null => {
+  const [ar, ac, r, c] = ui.datagrid_selection(grid);
+  const corner = (row: number, col: number) => addrAt(row, Math.max(1, ui.datagrid_col_model(grid, col)));
+  const a = corner(ar, ac), b = corner(r, c);
+  return a && b ? [a, b] : null;
+};
+const topLeft = ([a, b]: [Addr, Addr]): Addr => ({ col: Math.min(a.col, b.col), row: Math.min(a.row, b.row) });
+const inputOf = (key: string) => sheet.input(key);
+
+// The sheet's own clipboard: what was copied, and from where, so a paste
+// moves its formulas. Pages have no system clipboard yet.
+let clip: { tsv: string; from: Addr } | null = null;
+
+// Keys over the grid's selection; while an editor is open, or a field has
+// the focus, keys are theirs.
+const CTRL = 2, SUPER = 8;
+ui.on_key((key: string, mods: number) => {
+  if (!ui.datagrid_has_focus(grid) || ui.datagrid_editor(grid) !== 0) return;
+  const sel = selection();
+  if (!sel) return;
+  const [a, b] = sel;
+  const named = `${keyOf(a)}:${keyOf(b)}`;
+  if (key === "Delete" || key === "BackSpace") {
+    setAll([...range(a, b)].map((k) => [k, ""] as const), `cleared ${named}`);
+    return;
+  }
+  if ((mods & (CTRL | SUPER)) === 0) return;
+  switch (key.toLowerCase()) {
+    case "c":
+      clip = { tsv: copied(inputOf, a, b), from: topLeft(sel) };
+      print(`sheet: copied ${named}`);
+      return;
+    case "v":
+      if (clip) setAll(pasted(clip.tsv, topLeft(sel), clip.from), `pasted at ${keyOf(topLeft(sel))}`);
+      return;
+    case "d":
+      setAll(filled(inputOf, a, b, "down"), `filled ${named} down`);
+      return;
+    case "r":
+      setAll(filled(inputOf, a, b, "right"), `filled ${named} right`);
+      return;
+  }
+});
 
 text("Spreadsheet");
 let formula = 0;

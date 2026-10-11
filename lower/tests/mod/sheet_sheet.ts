@@ -1,7 +1,7 @@
 // site/sheet/sheet.ts against a mock listener: edits ripple downstream in
 // dependency order, a paste recomputes each cell once, cycles are found and
 // mended, and old dependencies are forgotten.
-import { Sheet, compile, pasted, refsOf } from "./sheet/sheet.ts";
+import { Sheet, compile, refsOf } from "./sheet/sheet.ts";
 import type { SheetListener } from "./sheet/sheet.ts";
 import { parse } from "./sheet/parser.ts";
 import { show } from "./sheet/format.ts";
@@ -92,8 +92,6 @@ eq("refsOf spells out ranges and skips the off-sheet", [...refsOf(parse("A1+SUM(
   eq("keys are normalised", [s.input("B2"), s.keys()], ["3", ["B2"]]);
 }
 
-eq("pasted places rows of tabs at a cell", pasted("a\tb\n1\t=A2\n", { col: 1, row: 0 }), [["B1", "a"], ["C1", "b"], ["B2", "1"], ["C2", "=A2"]]);
-eq("and drops what falls off the sheet", pasted("1\t2\t3\r\n4\t5\t6", { col: 8, row: 19 }), [["I20", "1"], ["J20", "2"]]);
 // expect: ok constants: numbers, text, nothing
 // expect: ok a formula
 // expect: ok a parse error becomes #ERROR!, with where
@@ -120,5 +118,3 @@ eq("and drops what falls off the sheet", pasted("1\t2\t3\r\n4\t5\t6", { col: 8, 
 // expect: ok clearing a cell makes it empty again
 // expect: ok a key off the sheet is refused
 // expect: ok keys are normalised
-// expect: ok pasted places rows of tabs at a cell
-// expect: ok and drops what falls off the sheet

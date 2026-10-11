@@ -21,9 +21,15 @@ eq("refs and names are upper-cased", [...tokens("a1+sum")].filter((t) => t.kind 
 throws("an unknown character", () => [...tokens("1 # 2")], FormulaError, "unexpected '#'");
 throws("an unclosed string", () => [...tokens(`1 & "abc`)], FormulaError, "a string that never ends");
 try { [...tokens("1 # 2")]; } catch (e) { eq("the error knows where", (e as FormulaError).at, 4); }
+const refs = (src: string) => [...tokens(src)].flatMap((t) => (t.kind === "ref" ? [`${t.name} ${t.fixCol} ${t.fixRow}`] : []));
+eq("$ fixes a reference's column, row or both", refs("a1+$B2+C$3+$d$4"), ["A1 false false", "B2 true false", "C3 false true", "D4 true true"]);
+eq("letters and digits run on are a name", [...tokens("A1B")].map((t) => t.kind), ["name", "end"]);
+eq("an error written in a formula, either case", [...tokens("#REF!+#n/a")].map((t) => (t.kind === "error" ? t.code : t.kind)), ["#REF!", "op", "#N/A", "end"]);
 
 eq("a number", parse("42"), { kind: "num", value: 42 });
 eq("a range", parse("A1:B2"), { kind: "range", from: "A1", to: "B2" });
+eq("$ is only for copying: a fixed reference is the cell", parse("$A$1:B$2"), { kind: "range", from: "A1", to: "B2" });
+eq("an error", parse("#DIV/0!"), { kind: "error", code: "#DIV/0!" });
 eq("TRUE and FALSE", [parse("TRUE"), parse("false")], [{ kind: "bool", value: true }, { kind: "bool", value: false }]);
 eq("a call with arguments", parse("SUM(A1, 2)"), { kind: "call", name: "SUM", args: [{ kind: "ref", name: "A1" }, { kind: "num", value: 2 }] });
 eq("a call without", parse("SUM()"), { kind: "call", name: "SUM", args: [] });
@@ -36,6 +42,7 @@ const tree = (src: string): string => {
       case "str": return JSON.stringify(e.value);
       case "ref": return e.name;
       case "range": return `${e.from}:${e.to}`;
+      case "error": return e.code;
       case "neg": return `(-${go(e.arg)})`;
       case "binary": return `(${go(e.left)} ${e.op} ${go(e.right)})`;
       case "call": return `${e.name}(${e.args.map(go).join(", ")})`;
@@ -70,8 +77,13 @@ eq("each error's position, counting the '='", [at("SUM(A1"), at("1+"), at("1 2")
 // expect: ok an unknown character
 // expect: ok an unclosed string
 // expect: ok the error knows where
+// expect: ok $ fixes a reference's column, row or both
+// expect: ok letters and digits run on are a name
+// expect: ok an error written in a formula, either case
 // expect: ok a number
 // expect: ok a range
+// expect: ok $ is only for copying: a fixed reference is the cell
+// expect: ok an error
 // expect: ok TRUE and FALSE
 // expect: ok a call with arguments
 // expect: ok a call without

@@ -1,12 +1,16 @@
 // A formula's tokens, one at a time, from a generator. Each knows where it
 // starts (1-based, counting the formula's leading '=') so an error can say
-// "at 8" of what the person typed.
+// "at 8" of what the person typed. A reference's $ (fixing its column or
+// row when the formula is copied) is in the token; its name is the cell.
+import type { ErrorCode } from "./values.ts";
+
 export type Op = "+" | "-" | "*" | "/" | "^" | "&" | "=" | "<>" | "<" | ">" | "<=" | ">=";
 
 export type Token = (
   | { readonly kind: "num"; readonly value: number }
   | { readonly kind: "str"; readonly value: string }
-  | { readonly kind: "ref"; readonly name: string }
+  | { readonly kind: "ref"; readonly name: string; readonly fixCol: boolean; readonly fixRow: boolean }
+  | { readonly kind: "error"; readonly code: ErrorCode }
   | { readonly kind: "name"; readonly name: string }
   | { readonly kind: "op"; readonly op: Op }
   | { readonly kind: "(" | ")" | "," | ":" }
@@ -25,7 +29,10 @@ export class FormulaError extends Error {
 const OPS: readonly Op[] = ["<>", "<=", ">=", "+", "-", "*", "/", "^", "&", "=", "<", ">"];
 const NUMBER = /^(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/;
 const WORD = /^[A-Za-z_][A-Za-z0-9_]*/;
-const REF = /^[A-Za-z]+[0-9]+$/;
+const REF = /^(\$?)([A-Za-z]+)(\$?)([0-9]+)(?![A-Za-z0-9_])/;
+// The errors a formula can be written with (a copy writes #REF! for a
+// reference it moved off the sheet).
+const ERRORS: readonly ErrorCode[] = ["#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A"];
 
 // `formula` is what follows the '='; `from` is where it starts in the input.
 export function* tokens(formula: string, from = 2): Generator<Token, void, undefined> {
@@ -39,11 +46,23 @@ export function* tokens(formula: string, from = 2): Generator<Token, void, undef
       i += num.length;
       continue;
     }
+    const ref = REF.exec(rest);
+    if (ref) {
+      const [text, fixCol, col, fixRow, row] = ref;
+      yield { kind: "ref", name: col.toUpperCase() + row, fixCol: fixCol === "$", fixRow: fixRow === "$", at, text };
+      i += text.length;
+      continue;
+    }
     const word = WORD.exec(rest)?.[0];
     if (word) {
-      const upper = word.toUpperCase();
-      yield REF.test(word) ? { kind: "ref", name: upper, at, text: word } : { kind: "name", name: upper, at, text: word };
+      yield { kind: "name", name: word.toUpperCase(), at, text: word };
       i += word.length;
+      continue;
+    }
+    const code = ERRORS.find((e) => rest.toUpperCase().startsWith(e));
+    if (code) {
+      yield { kind: "error", code, at, text: rest.slice(0, code.length) };
+      i += code.length;
       continue;
     }
     if (c === '"') {

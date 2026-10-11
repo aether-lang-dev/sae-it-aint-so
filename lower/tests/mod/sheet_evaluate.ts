@@ -38,6 +38,7 @@ eq("an error flows through what reads it", [why("B1+1"), why("SUM(A1:B1)"), why(
   "#DIV/0! divide by zero", "#DIV/0! divide by zero", "#DIV/0! divide by zero",
 ]);
 eq("off the sheet", [why("K1"), why("SUM(A1:K2)")], ["#REF! K1 is not on the sheet", "#REF! K2 is not on the sheet"]);
+eq("an error written in a formula is that error", [why("#REF!+1"), ev("IFERROR(#N/A, 0)")], ["#REF! a reference moved off the sheet", "0"]);
 eq("no such function", why("NOPE(1)"), "#NAME? no function NOPE");
 eq("a range where one value goes", why("A1:A2+1"), "#VALUE! A1:A2 is a range where one value goes");
 eq("wrong argument counts", [why("ABS(1, 2)"), why("ROUND(1, 2, 3)"), why("IF(1)"), why("SUM()"), why("PI(1)")], [
@@ -71,6 +72,7 @@ eq("describe an error says why", describe("C1", "=1/0", new CellError("#DIV/0!",
 // expect: ok text where a number goes
 // expect: ok an error flows through what reads it
 // expect: ok off the sheet
+// expect: ok an error written in a formula is that error
 // expect: ok no such function
 // expect: ok a range where one value goes
 // expect: ok wrong argument counts

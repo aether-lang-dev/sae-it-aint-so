@@ -55,6 +55,7 @@ extern aether_ui_surface_flush_deferred_impl()
 extern aether_ui_widget_count_impl() -> int
 extern aether_ui_test_server_banner_handle() -> int
 extern aether_ui_current_sheet_set_impl(sheet: ptr)
+extern aether_ui_widget_parent_impl(handle: int) -> int
 
 const STACK_MAX = 64
 // A page's runtime: its heap cap, and how long one entry into its JS (the
@@ -1303,6 +1304,30 @@ sae_ui_datagrid_editor(ctx: ptr, this_val: int, argv: int) -> int {
     g = dgrid_arg_(ctx, argv, argc)
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_editor: g is not a grid this page made") }
     return quickjs.new_int(ctx, ui.datagrid_editor(g))
+}
+
+// ui.datagrid_has_focus(g) -> boolean: the keyboard focus is in the grid (a
+// cell, or its editor), so a key the page hears is the grid's and not a
+// field's: Delete in a formula field is not Delete over the selection.
+sae_ui_datagrid_has_focus(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_has_focus: g is not a grid this page made") }
+    return quickjs.new_bool(ctx, focus_within_(ui.datagrid_widget(g)))
+}
+
+// 1 when the focused widget is `w` or inside it (its nearest registered
+// ancestors, as aether-ui's on_key(widget) scopes keys).
+focus_within_(w: int) -> int {
+    f = ui.focused_widget()
+    hops = 0
+    while f != 0 && hops < 64 {
+        if f == w { return 1 }
+        f = aether_ui_widget_parent_impl(f)
+        hops = hops + 1
+    }
+    return 0
 }
 
 // ui.datagrid_edit_text(g, fn(r, c) -> string): what an editor opened by F2,
@@ -6624,6 +6649,7 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_edit_commit", 1, sae_ui_datagrid_edit_commit)
     reg_(q, u, "datagrid_edit_cancel", 1, sae_ui_datagrid_edit_cancel)
     reg_(q, u, "datagrid_editor", 1, sae_ui_datagrid_editor)
+    reg_(q, u, "datagrid_has_focus", 1, sae_ui_datagrid_has_focus)
     reg_(q, u, "datagrid_edit_text", 2, sae_ui_datagrid_edit_text)
     reg_(q, u, "datagrid_cell_style", 2, sae_ui_datagrid_cell_style)
     reg_(q, u, "datagrid_fit_col", 2, sae_ui_datagrid_fit_col)

@@ -2,7 +2,9 @@
 // bar or into a cell, an edit rippling downstream, a parse error that says
 // where, a cycle found and mended, a paste in one batch, the function
 // library, per-cell styles (numbers to the right, errors in red), the
-// grid's keys and column resize, and clearing. The page is site/sheet.ts;
+// grid's keys and column resize, fill down and right, copy and paste within
+// the sheet (formulas moving, $ fixing), Delete over a selection, and
+// clearing. The page is site/sheet.ts;
 // lower/tests/mod/sheet_*.ts test its model headless.
 //
 // The grid is ui.datagrid: a cell is the aui-grid-cell widget under its
@@ -153,6 +155,8 @@ grip_of(col: string) -> int {
     return id
 }
 
+key(combo: string) { uidriver.post_ok("/window/key?combo=${b.url_encode(combo)}", combo) }
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -287,7 +291,54 @@ main() {
             spec.assert_true(w1 < w0, "narrower than 140: Price, 0.45, 2.2 ... are short (got ${w1})")
             spec.assert_true(w1 > 30, "but wide enough for them (got ${w1})")
         }
+        spec.it("Ctrl+D fills a formula down, its references moving with it") callback {
+            enter("F2", "=B2*2")
+            spec.assert_true(wait_cell("F", 2, "12"), "F2 doubles B2")
+            pick("F", 2)
+            key("Shift+Down")
+            key("Shift+Down")
+            key("Ctrl+D")
+            spec.assert_true(b.wait_for_console("sheet: filled F2:F4 down: 2 cells set"), "F3 and F4 set in one go")
+            spec.assert_true(wait_cell("F", 3, "8"), "F3 = B3*2")
+            spec.assert_true(wait_cell("F", 4, "4"), "F4 = B4*2")
+        }
+        spec.it("Ctrl+R fills right") callback {
+            pick("F", 2)
+            key("Shift+Right")
+            key("Ctrl+R")
+            spec.assert_true(b.wait_for_console("sheet: filled F2:G2 right: 1 cells set"), "G2 set")
+            spec.assert_true(wait_cell("G", 2, "0.9"), "G2 = C2*2")
+        }
+        spec.it("Ctrl+C and Ctrl+V copy within the sheet: relative references move, $ ones stay") callback {
+            enter("H2", "=$B$2+C2")
+            spec.assert_true(wait_cell("H", 2, "6.45"), "H2 = 6 + 0.45")
+            pick("H", 2)
+            key("Ctrl+C")
+            spec.assert_true(b.wait_for_console("sheet: copied H2:H2"), "copied")
+            pick("I", 4)
+            key("Ctrl+V")
+            spec.assert_true(b.wait_for_console("sheet: pasted at I4: 1 cells set"), "pasted")
+            spec.assert_true(wait_cell("I", 4, "8.3"), "I4 = $B$2 + D4 = 6 + 2.3")
+            spec.assert_true(b.wait_for_text("I4: =$B$2+D4 → 8.3"), "C2 moved one right and two down; $B$2 stayed")
+        }
+        spec.it("Delete clears the selection, but not while a field has the focus") callback {
+            pick("F", 3)
+            key("Shift+Down")
+            uidriver.post_ok("/widget/${formula_field()}/focus", "focus the formula field")
+            key("Delete")
+            sleep(300)
+            spec.assert_eq(b.console_contains("sheet: cleared F3:F4"), 0, "Delete in the field is the field's")
+            spec.assert_true(wait_cell("F", 3, "8"), "F3 kept")
+            pick("F", 3)
+            key("Shift+Down")
+            key("Delete")
+            spec.assert_true(b.wait_for_console("sheet: cleared F3:F4: 2 cells set"), "both cleared")
+            spec.assert_true(wait_cell("F", 3, ""), "F3 is empty")
+            spec.assert_true(wait_cell("F", 4, ""), "F4 is empty")
+            spec.assert_true(wait_cell("F", 2, "12"), "F2, outside the selection, kept")
+        }
         spec.it("Clear all empties the sheet") callback {
+            pick("B", 2)
             b.click("Clear all")
             spec.assert_true(b.wait_for_console("sheet: cleared:"), "cleared")
             spec.assert_true(wait_cell("D", 5, ""), "D5 is empty")

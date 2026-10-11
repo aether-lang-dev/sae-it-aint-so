@@ -42,6 +42,8 @@ class Evaluator {
         return e.value;
       case "ref":
         return addrOf(e.name) ? this.#env.get(e.name) : fail("#REF!", `${e.name} is not on the sheet`);
+      case "error":
+        return fail(e.code, e.code === "#REF!" ? "a reference moved off the sheet" : "written in the formula");
       case "range":
         return fail("#VALUE!", `${e.from}:${e.to} is a range where one value goes`);
       case "neg":

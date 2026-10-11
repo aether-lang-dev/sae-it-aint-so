@@ -4,7 +4,6 @@
 // on a cycle comes to #CYCLE!, and what reads it inherits the error. The
 // sheet tells a listener which cells now show something else; it never draws.
 import { addrOf, keyOf, order, range } from "./address.ts";
-import type { Addr } from "./address.ts";
 import { evaluate } from "./evaluate.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
@@ -65,15 +64,6 @@ export function* refsOf(e: Expr): Generator<string, void, undefined> {
     default:
       return;
   }
-}
-
-// Tab-separated rows, as a clipboard holds them, placed with their first
-// cell at `at`; what falls off the sheet is dropped.
-export function pasted(tsv: string, at: Addr): [string, string][] {
-  return tsv.replace(/\r/g, "").replace(/\n+$/, "").split("\n").flatMap((line, r) =>
-    line.split("\t").map((input, c): [Addr, string] => [{ col: at.col + c, row: at.row + r }, input.trim()]))
-    .filter(([a]) => addrOf(keyOf(a)) !== null)
-    .map(([a, input]) => [keyOf(a), input]);
 }
 
 const getOrAdd = <K, V>(m: Map<K, V>, k: K, make: () => V): V => {
