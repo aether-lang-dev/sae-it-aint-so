@@ -1,7 +1,7 @@
 # The spreadsheet demo: done, and still to do
 
 Demo 18 (`docs/roadmap.md`), `site/sheet.ts`, as of sae `2acfb0a`
-(2026-10-11), pinned to aether-ui `e50baa53`. It began as the third of five
+(2026-10-11), pinned to aether-ui `0cfbf942`. It began as the third of five
 demo ideas meant to show off sae's TypeScript dialect, and grew into the
 sae page that uses the most of the page API.
 
