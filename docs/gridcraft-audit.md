@@ -123,7 +123,7 @@ These need more of it (each would be an ask, as
    (done: `site/sheet/commands.ts`, the page as panels over it).
 2. ~~Named ranges and the Name Box~~ (done).
 3. ~~Fill Series, AutoSum, Paste Special, the Clear variants~~ (done).
-4. Data validation.
+4. ~~Data validation~~ (done).
 5. Several sheets.
 6. Saving and opening, and CSV.
 7. Formula auditing, and Show Formulas.

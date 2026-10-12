@@ -14,6 +14,7 @@ import type { Note } from "./notes.ts";
 import { RexxLanguage } from "./rexx.ts";
 import { Sheet } from "./sheet.ts";
 import { CellError } from "./values.ts";
+import { check } from "./validation.ts";
 
 export type LanguageName = "Excel" | "RexxJS";
 
@@ -37,6 +38,9 @@ export class Workbook {
   setupScript = "";
   clip: Clip | null = null;
   #conditional = new Map<string, string>();
+  // Circle Invalid: on, the cells whose input breaks their rule are marked.
+  circling = false;
+  #circled = new Set<string>();
 
   language(name: LanguageName): Language {
     return name === "Excel" ? EXCEL : this.rexx;
@@ -48,6 +52,16 @@ export class Workbook {
     const next = new Map<string, string>();
     for (const [key, expr] of this.notes.conditional()) next.set(key, toStyle(await this.sheet.evaluate(expr)));
     this.#conditional = next;
+    this.#circled = new Set(this.circling ? this.invalid() : []);
+  }
+
+  // The cells whose input breaks their rule, whenever it was typed, in sheet
+  // order.
+  invalid(): string[] {
+    return this.sheet.keys().filter((k) => {
+      const rule = this.notes.get(k).validation;
+      return rule && check({ ...rule, when: "always" }, this.sheet.input(k), false) !== null;
+    });
   }
 
   // What a cell shows: its value in its number format.
@@ -57,11 +71,12 @@ export class Workbook {
   }
 
   // Its style, each layer over the last: numbers to the right, its own
-  // style, its format's style parts, its conditional style, an error in red.
+  // style, its format's style parts, its conditional style, a circle (its
+  // input breaks its rule), an error in red.
   styleOf(key: string): string {
     const v = this.sheet.value(key), n = this.notes.get(key);
     return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), toStyle(n.format), this.#conditional.get(key) ?? "",
-      v instanceof CellError ? "color: #c0392b" : ""].filter((p) => p).join("; ");
+      this.#circled.has(key) ? "background: #ffd6d6" : "", v instanceof CellError ? "color: #c0392b" : ""].filter((p) => p).join("; ");
   }
 
   // The status line for a cell.

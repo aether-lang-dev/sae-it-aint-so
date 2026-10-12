@@ -1,12 +1,15 @@
 // What a cell carries besides its input, as the Tauri spreadsheet's cells
-// do: a comment, a number format, a fixed style, and a conditional style (an
+// do: a validation rule (validation.ts), a comment, a number format, a fixed
+// style, and a conditional style (an
 // expression in the sheet's language whose value is a style, worked out
 // with the sheet: STYLE_IF(C5 < 0, RED_TEXT(), GREEN_TEXT()) in RexxJS
 // formulas, IF(C5 < 0, "color: red", "") in Excel ones).
 import { addrOf, keyOf } from "./address.ts";
 import type { Addr } from "./address.ts";
+import type { Rule } from "./validation.ts";
 
 export interface Note {
+  readonly validation?: Rule;
   readonly comment?: string;
   readonly format?: string;
   readonly style?: unknown;

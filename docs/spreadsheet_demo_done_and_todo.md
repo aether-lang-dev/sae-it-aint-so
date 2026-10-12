@@ -62,6 +62,12 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
 - Paste Special: values (what the cells showed), formulas (moved, without
   formats), formats (the notes alone), or all, transposed or not. Clear
   formats, Clear comments and Clear cells (inputs and notes).
+- Data validation on the selection (the validation bar): a list, whole
+  numbers or decimals within limits ("1..10", ">=0"), a text length; stop
+  (refuse, and say why) or warn (keep, and say so); and, from the Tauri
+  app, on create or on update only. Typed values are checked (pastes and
+  fills are not, as in Excel); Circle invalid marks what breaks a rule.
+  Rules move with their cells.
 - Named ranges: name the selection (the names bar), and a formula reads
   the name in either language (`=SUM(qty)`, `=SUM_RANGE("qty")`, a bare
   `rate`); redefining it moves what reads it, deleting it makes them
@@ -233,6 +239,9 @@ summary.
   - `sheet_editing` (20): series of each kind, Fill Series down and right
     (formulas moved), AutoSum in both languages and its refusals, Paste
     Special values, formulas, formats and transposed, the Clears.
+  - `sheet_validation` (16): each kind of rule and its limits, stop and
+    warn, on create and on update, refusals, a paste got past and
+    circled, rules moving with rows, cleared.
   - `sheet_names` (12): names defined, read in both languages, followed,
     deleted to `#NAME?`, refused, listed, journaled.
   - `sheet_rexx` (25): RexxJS formulas against a stub of the cells (what a
@@ -242,7 +251,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 31 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 32 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;

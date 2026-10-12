@@ -17,6 +17,7 @@ import { show } from "./format.ts";
 import { EXAMPLE, FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./samples.ts";
 import { runScript } from "./script.ts";
 import { continued } from "./series.ts";
+import { check, describeRule, ruleOf } from "./validation.ts";
 import { deleted, inserted, movedBy, restructured } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
 import { CellError } from "./values.ts";
@@ -163,8 +164,12 @@ const SPECS: readonly Spec[] = [
     id: "cell.set", label: "Set a cell", params: ["cell", "input"], journaled: true,
     run: async (wb, p) => {
       const key = cellOf(p.cell);
+      // Its rule, if it has one: stop refuses what breaks it, warn says so.
+      const rule = wb.notes.get(key).validation;
+      const broken = rule ? check(rule, p.input, wb.sheet.input(key) === "") : null;
+      if (broken && rule!.mode === "stop") refuse(`${key} ${broken}`);
       const changed = await wb.sheet.set(key, p.input);
-      return changedBy(wb, changed, `${key} = ${show(wb.sheet.value(key))}`);
+      return changedBy(wb, changed, `${key} = ${show(wb.sheet.value(key))}${broken ? ` (${key} ${broken})` : ""}`);
     },
   },
   {
@@ -195,6 +200,31 @@ const SPECS: readonly Spec[] = [
     run: (wb, p) => {
       const r = rangeOf(p.range);
       return setting(wb, [...range(r[0], r[1])].map((k) => [k, ""] as const), `cleared ${named(r)}`);
+    },
+  },
+  {
+    id: "validation.set", label: "Data Validation", params: ["range", "kind"], optional: ["values", "min", "max", "mode", "when"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), rule = ruleOf(p), keys = [...range(r[0], r[1])];
+      for (const k of keys) wb.notes.set(k, { validation: rule });
+      return changedBy(wb, keys, `${named(r)} ${describeRule(rule)}`);
+    },
+  },
+  {
+    id: "validation.clear", label: "Clear Validation", params: ["range"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), keys = [...range(r[0], r[1])];
+      for (const k of keys) wb.notes.set(k, { validation: undefined });
+      return changedBy(wb, keys, `${named(r)} has no rule`);
+    },
+  },
+  {
+    id: "validation.circle", label: "Circle Invalid Data", params: [], optional: ["off"], journaled: true,
+    run: async (wb, p) => {
+      wb.circling = !flag(p.off);
+      const invalid = wb.invalid();
+      await wb.restyle();
+      return { ok: true, message: wb.circling ? `${invalid.length} invalid: ${invalid.join(" ") || "none"}` : "circles cleared", changed: invalid, output: invalid };
     },
   },
   {

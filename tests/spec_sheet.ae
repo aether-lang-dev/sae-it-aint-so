@@ -384,6 +384,26 @@ main() {
             b.click("Paste values")
             spec.assert_true(b.wait_for_text("C19: 15 → 15"), "the value, not the formula")
         }
+        spec.it("a validation rule refuses what breaks it; Circle invalid marks what got past") callback {
+            g.pick("H", 14)
+            g.key("Shift+Down")
+            b.set_field_by("allowed", "1..10")
+            b.click("Allow whole numbers")
+            spec.assert_true(b.wait_for_console("sheet: H14:H15 must be a whole number from 1 to 10"), "set")
+            g.enter("H14", "50")
+            spec.assert_true(b.wait_for_console("sheet: refused: H14 must be a whole number from 1 to 10"), "refused")
+            spec.assert_true(b.wait_for_text("H14 must be a whole number from 1 to 10"), "and said")
+            spec.assert_true(g.wait_cell("H", 14, ""), "the cell keeps what it had")
+            g.enter("H14", "7")
+            spec.assert_true(g.wait_cell("H", 14, "7"), "a whole number in range is kept")
+            g.command("cell.set cell=J9 input=99")
+            g.command("edit.copy range=J9")
+            g.command("edit.paste at=H15")
+            b.click("Circle invalid")
+            spec.assert_true(b.wait_for_console("sheet: 1 invalid: H15"), "a paste got past it; circled")
+            g.pick("A", 1)
+            spec.assert_eq(g.cell_has("H", 15, "\"bg\":\"#ffd6d6\""), 1, "marked")
+        }
     }
     return spec.run_summary(fw)
 }
