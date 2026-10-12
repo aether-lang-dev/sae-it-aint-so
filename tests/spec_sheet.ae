@@ -538,6 +538,31 @@ main() {
             spec.assert_true(g.wait_cell("F", 16, "6"), "spilled again")
             spec.assert_true(g.wait_cell("G", 14, "12"), "and read again")
         }
+        spec.it("Goal seek, Text to columns and Remove duplicates from the data bar") callback {
+            g.enter("I2", "1")
+            g.enter("I3", "=I2*I2+2*I2")
+            g.pick("I", 3)
+            b.set_field_by("goal", "15")
+            b.set_field_by("by changing", "I2")
+            b.click("Goal seek")
+            spec.assert_true(b.wait_for_console("sheet: I3 = 15 with I2 = 3"), "sought")
+            spec.assert_true(g.wait_cell("I", 2, "3"), "the input changed")
+            g.enter("I5", "p;q")
+            g.pick("I", 5)
+            b.set_field_by("delimiter", ";")
+            b.click("Text to columns")
+            spec.assert_true(g.wait_cell("J", 5, "q"), "split into J5")
+            spec.assert_true(g.wait_cell("I", 5, "p"), "the first part in place")
+            g.enter("I6", "a")
+            g.enter("I7", "A")
+            g.enter("I8", "b")
+            g.pick("I", 6)
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            b.click("Remove duplicates")
+            spec.assert_true(b.wait_for_console("sheet: removed 1 duplicate row of I6:I8; 2 left"), "removed")
+            spec.assert_true(g.wait_cell("I", 7, "b"), "the rest moved up")
+        }
     }
     return spec.run_summary(fw)
 }

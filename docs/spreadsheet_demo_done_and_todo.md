@@ -98,6 +98,15 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   rules. Each sheet has its rules, the first listed winning; they follow
   edits, move with inserted and deleted rows, and are saved with the
   file. Data bars need a fill per cell from aether-ui.
+- What-if and data tools (the data bar), as Excel's Data tab has them:
+  Goal Seek (the selected formula brought to a goal by changing one
+  input, the secant method over the sheet); Data Table (a formula worked
+  out for each value of a row input, a column input or both, the results
+  written as values); Remove Duplicates (rows whose chosen columns repeat
+  an earlier row's, any case, the rest moved up with their formulas);
+  Text to Columns (split in place at a delimiter, quotes kept together,
+  numbers as numbers; not over cells holding something unless told).
+  Trials set cells with no undo steps (`Sheet.trial`); each is one step.
 - Charts of the selection (the chart panel): bar, line and pie, each a
   `vg` scene under the sheet, redrawn as its cells change, with a title,
   round ticks, categories and a legend; Excel's reading of a range (text
@@ -286,6 +295,7 @@ in `site/sheet/` (and the generated RexxJS bundle):
 | `file.ts`, `samples.ts` | The Tauri app's sheet file format (its three cell shapes), and its three sample sheets |
 | `numfmt.ts` | Excel's number-format language |
 | `dates.ts`, `finance.ts` | Date arithmetic on serial numbers, and the money functions' arithmetic |
+| `whatif.ts` | The secant method, text split for Text to Columns, the rows Remove Duplicates keeps |
 | `charts.ts` | Chart data from a range, a round scale, bar, line and pie charts as shapes; sparklines |
 | `rules.ts` | Conditional-format rules, and what each cell gets from them |
 | `notes.ts`, `formats.ts` | A cell's comment, format, style and conditional style; number formats and styles in the app's dialects, as the grid draws them |
@@ -382,6 +392,10 @@ summary.
     `#N/A`), IF over one, every array function, the LAMBDA helpers; in a
     sheet, spilling, `A1#`, a blocker and its clearing, undo, the edge, a
     spill that shrinks, a copy, styles.
+  - `sheet_whatif` (14): the secant method, splitting, distinct rows;
+    Goal Seek (reached, undone, unreachable, refused), one- and
+    two-input data tables, Remove Duplicates by every column and by
+    chosen ones, Text to Columns and its refusals.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
@@ -393,7 +407,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 39 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 40 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -427,7 +441,8 @@ summary.
   - a bar chart of a selection, read back from the vg scene (its
     categories, its palette), its scale following an edit; a sparkline;
     the chart deleted;
-  - a dynamic array spilling, read whole by `F14#`, blocked and cleared.
+  - a dynamic array spilling, read whole by `F14#`, blocked and cleared;
+  - Goal seek, Text to columns and Remove duplicates from the data bar.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.

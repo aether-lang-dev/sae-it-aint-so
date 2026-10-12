@@ -20,7 +20,7 @@ import { EXAMPLE, FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./samples.ts";
 import { runScript } from "./script.ts";
 import { continued } from "./series.ts";
 import { check, describeRule, ruleOf } from "./validation.ts";
-import { ICONS, describeRule as describeCf } from "./rules.ts";
+import { ICONS, describeRule as describeCf, rangeName } from "./rules.ts";
 import type { CfRule, Comparison, IconSet } from "./rules.ts";
 import { toStyle } from "./formats.ts";
 import { CHART_KINDS } from "./charts.ts";
@@ -29,6 +29,7 @@ import type { ChartSpec } from "./workbook.ts";
 import { deleted, inserted, movedBy, restructured } from "./shift.ts";
 import type { Scope } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
+import { distinctRows, secant, splitText } from "./whatif.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
 import type { Direction, LanguageName, Page, Workbook } from "./workbook.ts";
@@ -240,6 +241,34 @@ const pageOf = (wb: Workbook, name: string) => wb.page(name) ?? refuse(`no sheet
 
 // What the grid shows changes wholesale when the active sheet does.
 const shownKeys = (wb: Workbook, before: readonly string[]) => [...new Set([...before, ...wb.sheet.keys()])];
+
+// ---- What-if and data tools (whatif.ts).
+
+const numberOf = (s: string): number => {
+  const n = Number(s);
+  return s.trim() !== "" && Number.isFinite(n) ? n : refuse(`${s} is not a number`);
+};
+
+// A value as an input that comes back to it (a number in full).
+const inputOf = (v: Value): string => (v === null ? "" : v instanceof CellError ? v.code : typeof v === "boolean" ? (v ? "TRUE" : "FALSE") : String(v));
+
+// Cells tried with each of `trials` in turn, then put back as they were;
+// what `read` gave for each.
+async function tried<T>(wb: Workbook, cells: readonly string[], trials: readonly (readonly string[])[], read: () => T): Promise<T[]> {
+  const was = cells.map((k) => [k, wb.sheet.input(k)] as [string, string]);
+  const out: T[] = [];
+  try {
+    for (const t of trials) {
+      await wb.sheet.trial(cells.map((k, i) => [k, t[i]] as [string, string]));
+      out.push(read());
+    }
+  } finally {
+    await wb.sheet.trial(was);
+  }
+  return out;
+}
+
+const DELIMITERS: Record<string, string> = { comma: ",", tab: "\t", space: " ", semicolon: ";" };
 
 // ---- Conditional-format rules (rules.ts), on the active sheet.
 
@@ -688,6 +717,111 @@ const SPECS: readonly Spec[] = [
       const formula = wb.sheet.language.name === "Excel" ? `=SPARKLINE(${named(r)})` : `=SPARKLINE_RANGE("${named(r)}")`;
       const changed = await wb.sheet.set(key, formula);
       return changedBy(wb, changed, `${key} = ${show(wb.sheet.value(key))}`);
+    },
+  },
+  {
+    id: "data.goalSeek", label: "Goal Seek", params: ["set", "to", "by"], journaled: true,
+    run: async (wb, p) => {
+      const target = cellOf(p.set), by = cellOf(p.by), to = numberOf(p.to);
+      if (!wb.sheet.input(target).startsWith("=")) refuse(`${target} is not a formula`);
+      if (wb.sheet.input(by).startsWith("=")) refuse(`${by} holds a formula, not a value to change`);
+      const start = Number(wb.sheet.input(by)) || 0, was = wb.sheet.input(by);
+      let found: { x: number } | null = null;
+      try {
+        found = await secant(async (x) => {
+          await wb.sheet.trial([[by, String(x)]]);
+          const v = wb.sheet.value(target);
+          return typeof v === "number" ? v - to : NaN;
+        }, start);
+      } finally {
+        await wb.sheet.trial([[by, was]]);
+      }
+      if (!found) return refuse(`${target} cannot reach ${p.to} by changing ${by}`);
+      const changed = await wb.sheet.set(by, String(Number(found.x.toPrecision(12))));
+      return changedBy(wb, changed, `${target} = ${show(wb.sheet.value(target))} with ${by} = ${show(wb.sheet.value(by))}`);
+    },
+  },
+  {
+    id: "data.table", label: "Data Table", params: ["range"], optional: ["row", "column"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), tl = topLeft(r);
+      const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
+      const at = (i: number, j: number) => keyOf({ col: tl.col + j, row: tl.row + i });
+      const formula = (k: string) => wb.sheet.input(k).startsWith("=");
+      const row = p.row === undefined ? null : cellOf(p.row), column = p.column === undefined ? null : cellOf(p.column);
+      const entries: [string, string][] = [];
+      if (row && column) {
+        // Two inputs: the formula at the corner, the row's values across the
+        // top, the column's down the left.
+        if (!formula(at(0, 0))) refuse(`${at(0, 0)} has no formula`);
+        const pairs = Array.from({ length: (rows - 1) * (cols - 1) }, (_, n) => [Math.floor(n / (cols - 1)) + 1, (n % (cols - 1)) + 1]);
+        const got = await tried(wb, [row, column], pairs.map(([i, j]) => [wb.sheet.input(at(0, j)), wb.sheet.input(at(i, 0))]), () => inputOf(wb.sheet.value(at(0, 0))));
+        pairs.forEach(([i, j], n) => entries.push([at(i, j), got[n]]));
+      } else if (row || column) {
+        // One input: its values along one edge, formulas along the other.
+        const down = !!column, input = (column ?? row)!;
+        const formulas = Array.from({ length: down ? cols - 1 : rows - 1 }, (_, n) => (down ? at(0, n + 1) : at(n + 1, 0))).filter(formula);
+        if (!formulas.length) refuse(`${named(r)} has no formula in its ${down ? "top row" : "left column"}`);
+        const values = Array.from({ length: down ? rows - 1 : cols - 1 }, (_, n) => (down ? at(n + 1, 0) : at(0, n + 1)));
+        const got = await tried(wb, [input], values.map((k) => [wb.sheet.input(k)]), () => formulas.map((f) => inputOf(wb.sheet.value(f))));
+        values.forEach((_, n) => formulas.forEach((f, m) => {
+          const a = parseRange(f)![0];
+          entries.push([down ? keyOf({ col: a.col, row: tl.row + n + 1 }) : keyOf({ col: tl.col + n + 1, row: a.row }), got[n][m]]);
+        }));
+      } else refuse("a data table needs a row input, a column input, or both");
+      const changed = await wb.sheet.setMany(entries);
+      return changedBy(wb, changed, `filled the data table ${named(r)}: ${entries.length} results`);
+    },
+  },
+  {
+    id: "data.removeDuplicates", label: "Remove Duplicates", params: ["range"], optional: ["columns", "headers"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), tl = topLeft(r);
+      const first = flag(p.headers) ? 1 : 0;
+      const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
+      const at = (i: number, j: number) => keyOf({ col: tl.col + j, row: tl.row + i });
+      const by = p.columns === undefined ? Array.from({ length: cols }, (_, j) => j)
+        : p.columns.split(",").map((c) => {
+          const j = columnOf(c) - tl.col;
+          return j >= 0 && j < cols ? j : refuse(`${c.trim()} is not a column of ${named(r)}`);
+        });
+      const body = Array.from({ length: rows - first }, (_, i) => Array.from({ length: cols }, (_, j) => show(wb.sheet.value(at(i + first, j)))));
+      const kept = distinctRows(body, by);
+      const entries: [string, string][] = [];
+      // The rows kept move up, their formulas with them; the rest are cleared.
+      for (let i = 0; i < rows - first; i++) {
+        for (let j = 0; j < cols; j++) {
+          const from = kept[i];
+          entries.push([at(i + first, j), from === undefined ? "" : movedBy(wb.sheet.language, wb.sheet.input(at(from + first, j)), { cols: 0, rows: i - from })]);
+        }
+      }
+      const gone = body.length - kept.length;
+      const changed = await wb.sheet.setMany(entries);
+      return changedBy(wb, changed, `removed ${gone} duplicate row${gone === 1 ? "" : "s"} of ${named(r)}; ${kept.length} left`);
+    },
+  },
+  {
+    id: "data.textToColumns", label: "Text to Columns", params: ["range"], optional: ["delimiter", "replace"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range);
+      if (r[0].col !== r[1].col) refuse("Text to Columns splits one column");
+      const d = p.delimiter === undefined ? "," : DELIMITERS[p.delimiter.toLowerCase()] ?? (p.delimiter.length === 1 ? p.delimiter : refuse(`${p.delimiter} is not a delimiter (one character, or comma, tab, space, semicolon)`));
+      const keys = [...range(r[0], r[1])];
+      const split = keys.map((k) => splitText(show(wb.sheet.value(k)), d));
+      const width = Math.max(...split.map((s) => s.length));
+      const col = r[0].col;
+      if (col + width > COLS) refuse(`${width} columns from ${colName(col)} do not fit on the sheet`);
+      const entries: [string, string][] = [];
+      split.forEach((fields, i) => {
+        const row = parseRange(keys[i])![0].row;
+        fields.forEach((field, j) => {
+          const key = keyOf({ col: col + j, row });
+          if (j > 0 && !flag(p.replace) && wb.sheet.input(key) !== "") refuse(`${key} is not empty`);
+          entries.push([key, field]);
+        });
+      });
+      const changed = await wb.sheet.setMany(entries);
+      return changedBy(wb, changed, `split ${rangeName(r)} into ${width} columns`);
     },
   },
   {

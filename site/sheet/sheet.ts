@@ -167,15 +167,27 @@ export class Sheet {
   // changed, in sheet order (the listener heard each of them). A key off the
   // sheet is refused before anything is set.
   setMany(entries: Iterable<readonly [string, string]>): Promise<string[]> {
-    const list = [...entries].map(([k, input]): [string, string] => {
-      const a = addrOf(k);
-      if (!a) throw new RangeError(`${k} is not a cell on the sheet`);
-      return [keyOf(a), input];
-    });
+    const list = this.#checked(entries);
     return this.#inTurn(() => {
       this.#remember(this.#undo, list);
       this.#redo.length = 0;
       return this.#apply(list);
+    });
+  }
+
+  // Cells set to try something (Goal Seek, a data table): worked out as
+  // any change, but no step to undo; the trier puts them back.
+  trial(entries: Iterable<readonly [string, string]>): Promise<string[]> {
+    const list = this.#checked(entries);
+    return this.#inTurn(() => this.#apply(list));
+  }
+
+  // Entries with their keys normalised; a key off the sheet is refused.
+  #checked(entries: Iterable<readonly [string, string]>): [string, string][] {
+    return [...entries].map(([k, input]): [string, string] => {
+      const a = addrOf(k);
+      if (!a) throw new RangeError(`${k} is not a cell on the sheet`);
+      return [keyOf(a), input];
     });
   }
 
