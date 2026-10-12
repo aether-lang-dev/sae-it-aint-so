@@ -30,6 +30,11 @@ export class CellNotes {
     if (Object.keys(note).length) this.#notes.set(key, note as Note); else this.#notes.delete(key);
   }
 
+  // The cells with a note.
+  keys(): string[] {
+    return [...this.#notes.keys()];
+  }
+
   // The cells with a conditional style, and its expression.
   conditional(): [string, string][] {
     return [...this.#notes].filter(([, n]) => n.styleExpression).map(([k, n]) => [k, n.styleExpression!]);

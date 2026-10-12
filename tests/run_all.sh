@@ -39,7 +39,7 @@ T=$ROOT/target
 # Fresh app storage and shell logs every run: the specs that use them expect
 # a first launch (pomatez's tasks were left from the run before, so its
 # "2 to do" read 3 and failed on every run after the first).
-rm -rf "$T/spec-storage" "$T/caps-appdata" "$T/globals-appdata" \
+rm -rf "$T/spec-storage" "$T/sheet-storage" "$T/caps-appdata" "$T/globals-appdata" \
        "$T/spec-shell.log" "$T/caps-shell.log"
 # label | environment (space-separated NAME=value) | command
 TABLE="
@@ -58,7 +58,7 @@ spec_reactive||spec spec_reactive
 spec_terrain||spec spec_terrain
 spec_life||spec spec_life
 spec_algos||spec spec_algos
-spec_sheet||spec spec_sheet
+spec_sheet|SAE_STORAGE_DIR=$T/sheet-storage|spec spec_sheet
 spec_keys||spec spec_keys
 spec_grid||spec spec_grid
 spec_aevg||spec spec_aevg

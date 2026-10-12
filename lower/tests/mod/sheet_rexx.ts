@@ -56,15 +56,15 @@ for (const data of [TEST_SHEET, SAMPLE_BUDGET] as any[]) {
   const lang = new RexxLanguage();
   await lang.setup(file.setupScript);
   const s = new Sheet(undefined, lang);
-  await s.setMany(file.entries);
+  await s.setMany(file.sheets[0].entries);
   eq(`${data.name}: every cell comes to the value the file stored`,
     Object.keys(data.cells).map((k) => `${k}=${show(s.value(k))}`), Object.entries(data.cells).map(([k, c]: [string, any]) => `${k}=${c.value}`));
 }
 {
   const file = readSheetFile(SAMPLE_BUDGET);
-  eq("a sheet file: its language, its setup script, its inputs and comments", [file.language, file.setupScript.split("\n")[1], file.entries.slice(0, 3), file.notes.get("A1")?.comment],
+  eq("a sheet file: its language, its setup script, its inputs and comments", [file.language, file.setupScript.split("\n")[1], file.sheets[0].entries.slice(0, 3), file.sheets[0].notes.get("A1")?.comment],
     ["RexxJS", "LET TAX_RATE = 0.08", [["A1", "Item"], ["B1", "Price"], ["C1", "Tax"]], "Item name"]);
-  eq("a formula is its expression after =", file.entries.find(([k]) => k === "C2"), ["C2", "=B2 * TAX_RATE"]);
+  eq("a formula is its expression after =", file.sheets[0].entries.find(([k]) => k === "C2"), ["C2", "=B2 * TAX_RATE"]);
   eq("one that says Excel is Excel", readSheetFile({ formulas: "excel", cells: { A1: { value: "1", expression: "SUM(B1:B2)" } } }).language, "Excel");
 }
 // expect: ok what a formula reads: its cells, any case, and a range's, even in a string

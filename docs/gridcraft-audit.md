@@ -126,7 +126,9 @@ These need more of it (each would be an ask, as
 4. ~~Data validation~~ (done).
 5. ~~Several sheets~~ (done: `sheet.add`, `sheet.activate`,
    `sheet.delete`, tabs, `Costs!B2` and `Costs_B2`).
-6. Saving and opening, and CSV.
+6. ~~Saving and opening, and CSV~~ (done: `file.save`, `file.open`,
+   `file.list`, `file.delete`, `file.new`, `file.exportCsv`,
+   `file.importCsv`).
 7. Formula auditing, and Show Formulas.
 8. The number-format language; conditional-format rules (colour scales,
    icon sets).

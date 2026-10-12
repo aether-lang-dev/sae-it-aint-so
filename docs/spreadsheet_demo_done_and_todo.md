@@ -89,6 +89,16 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   inserted on a sheet move every sheet's references to it, and no others.
   The language is the workbook's, for every sheet; each sheet has its own
   named ranges and its own undo.
+- Files (the file bar): Save keeps the workbook in the page's `storage`
+  under a name (every sheet, its notes, rules and names, its language and
+  setup script), Open brings it back worked out, Delete file forgets it,
+  and the saved files are listed; New starts an empty workbook. The
+  format is the Tauri app's (a formula as its value and expression, notes
+  beside), with sae's additions the app passes over: validation rules,
+  named ranges, and the other sheets. Export CSV gives what the selection
+  (or everything used) shows; Import CSV puts the CSV field's rows at the
+  selected cell. (The field is one line: aether-ui has no multi-line
+  field yet; the command bar's `file.importCsv` takes several.)
 
 **Around the grid** (the page's own `state`, `computed`, `bind`, `each` and
 `batch`):
@@ -264,6 +274,13 @@ summary.
     parsed and read in each language, edits moving only the references
     they are for, and a Sheet against a stubbed `Context` (another sheet's
     values, `touch`, sheets sharing `Turns` taking turns).
+  - `sheet_files` (19): the file written in the Tauri app's shapes and
+    read back (rules, names, other sheets); save, open, list and delete
+    against a fake store that holds keys to `storage`'s rule; CSV out of
+    a range or everything used, in at a cell, refused where it does not
+    fit; New.
+  - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
+    its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
     deleted to `#NAME?`, refused, listed, journaled.
   - `sheet_rexx` (25): RexxJS formulas against a stub of the cells (what a
@@ -273,7 +290,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 33 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 35 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -295,7 +312,10 @@ summary.
     and why, an output; a RexxJS script through ADDRESS SHEET, SETCELL
     and GETCELL, and its changes undone;
   - sheets as tabs: one added, a RexxJS formula reading it and following
-    it, and `#REF!` when it is deleted.
+    it, and `#REF!` when it is deleted;
+  - Save, New and Open through the page's storage (`$SAE_STORAGE_DIR`, a
+    fresh one per run), formats and conditional styles kept; CSV imported
+    at a cell and exported from a selection.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -341,8 +361,9 @@ is `src/spreadsheet-model.js`, its control functions
    undo is its own, and adding or deleting a sheet is not undone), names
    scoped to the workbook, and a cycle through two sheets found as one
    (settle() passes changes between sheets twenty times, then stops).
-2. **Saving and opening**: the app's file format, written by `file.ts`
-   too, through `storage` in the browser and `files` in app mode.
+2. ~~Saving and opening~~ (done, through `storage`). Still to come:
+   `files` in app mode (a `.json` or `.rexxsheet` the app can open too,
+   and a `.csv`), and a multi-line field for CSV.
 3. **The query functions**: `RANGE("A1:C9") |> WHERE("price > 10") |>
    GROUP_BY("region")`, PLUCK, SUM, AVG, COUNT, RESULT and TABLE over a
    table's metadata (the app evaluates WHERE's condition with JavaScript's

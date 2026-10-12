@@ -426,6 +426,30 @@ main() {
             spec.assert_true(b.wait_for_text("On Sheet1:"), "on Sheet1 again")
             spec.assert_true(g.wait_cell("J", 10, "#REF!"), "what read it is #REF!")
         }
+        spec.it("Save keeps the workbook in the page's storage; New empties it; Open brings it back") callback {
+            b.set_field_by("file name", "Spec book")
+            b.click("Save")
+            spec.assert_true(b.wait_for_console("sheet: saved Spec book: 1 sheet, "), "saved")
+            spec.assert_true(b.wait_for_text("saved: Spec book"), "listed")
+            b.click("New")
+            spec.assert_true(b.wait_for_console("sheet: a new workbook"), "new")
+            spec.assert_true(g.wait_cell("J", 4, ""), "empty")
+            b.click("Open")
+            spec.assert_true(b.wait_for_console("sheet: opened Spec book: "), "opened")
+            spec.assert_true(g.wait_cell("J", 4, "1494.75"), "its formulas, worked out")
+            spec.assert_true(g.wait_cell("C", 4, "$1,000.00"), "its formats")
+            spec.assert_eq(g.cell_has("C", 5, "\"fg\":\"#d32f2f\""), 1, "its conditional styles")
+        }
+        spec.it("CSV: imported at the selected cell, and exported from the selection") callback {
+            b.set_field_by("CSV", "x,\"y, z\"")
+            g.pick("H", 17)
+            b.click("Import CSV")
+            spec.assert_true(b.wait_for_console("sheet: imported 1 rows at H17"), "imported")
+            spec.assert_true(g.wait_cell("I", 17, "y, z"), "a quoted field")
+            g.key("Shift+Right")
+            b.click("Export CSV")
+            spec.assert_true(b.wait_for_text("x,\"y, z\""), "exported, quoted again")
+        }
     }
     return spec.run_summary(fw)
 }

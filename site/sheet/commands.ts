@@ -11,7 +11,8 @@
 import { COLS, ROWS, colName, keyOf, parseRange, range } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { copied, filled, pasted } from "./copy.ts";
-import { readSheetFile } from "./file.ts";
+import { fromCsv, toCsv } from "./csv.ts";
+import { readSheetFile, writeSheetFile } from "./file.ts";
 import type { SheetFile } from "./file.ts";
 import { show } from "./format.ts";
 import { EXAMPLE, FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./samples.ts";
@@ -27,6 +28,19 @@ import type { LanguageName, Workbook } from "./workbook.ts";
 
 export type Params = Readonly<Record<string, string>>;
 
+// Where files are saved: the page's `storage` (get, set, remove; a key is
+// letters, digits, '.', '_' or '-'), or one in memory.
+export interface Store {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+  remove(key: string): void;
+}
+
+export function memoryStore(): Store {
+  const m = new Map<string, string>();
+  return { get: (k) => m.get(k) ?? null, set: (k, v) => { m.set(k, v); }, remove: (k) => { m.delete(k); } };
+}
+
 export interface Outcome {
   readonly ok: boolean;
   readonly message: string;
@@ -40,7 +54,7 @@ interface Spec {
   readonly params: readonly string[];       // each required
   readonly optional?: readonly string[];
   readonly journaled: boolean;              // it changes the workbook (or the clipboard)
-  run(wb: Workbook, p: Params): Promise<Outcome>;
+  run(wb: Workbook, p: Params, store: Store): Promise<Outcome>;
 }
 
 // A command that cannot run as asked: its message is the Outcome's.
@@ -104,22 +118,52 @@ async function changedBy(wb: Workbook, changed: readonly string[], message: stri
 
 const SAMPLES: Record<string, unknown> = { budget: SAMPLE_BUDGET, test: TEST_SHEET, formatted: FORMATTED };
 
-// A sheet file: the workbook emptied (one sheet), its language, its setup
-// script run, its cells set, its notes kept; where undo stops.
+// A sheet file: the workbook emptied, its language, its setup script run,
+// each sheet's cells set, its notes and names kept; where undo stops.
 async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
   const before = wb.sheet.keys();
-  wb.reset();
+  wb.reset(file.sheets[0].name);
   const failed = file.language === "RexxJS" ? await wb.rexx.setup(file.setupScript) : null;
   await wb.setLanguage(wb.language(file.language));
-  const changed = await wb.sheet.setMany(file.entries);
-  wb.sheet.forget();
-  wb.notes.clear();
-  for (const [key, note] of file.notes) wb.notes.set(key, note);
+  for (const [i, s] of file.sheets.entries()) {
+    if (i > 0) await wb.add(s.name);
+    for (const [n, r] of s.names) {
+      const corners = parseRange(r);
+      if (corners) await wb.sheet.define(n, corners);
+    }
+    await wb.sheet.setMany(s.entries);
+    wb.sheet.forget();
+    for (const [key, note] of s.notes) wb.notes.set(key, note);
+  }
+  wb.activate(file.sheets[0].name);
   wb.name = file.name;
   wb.setupScript = file.setupScript;
   await wb.settle();
-  const message = `opened ${file.name}: ${file.entries.length} cells, ${file.language} formulas`;
-  return { ok: true, message: failed ? `${message}; its setup script failed: ${failed.split("\n").pop()}` : message, changed: [...new Set([...before, ...changed])] };
+  const cells = file.sheets.reduce((n, s) => n + s.entries.length, 0);
+  const message = `opened ${file.name}: ${cells} cells, ${file.language} formulas`;
+  return { ok: true, message: failed ? `${message}; its setup script failed: ${failed.split("\n").pop()}` : message, changed: [...new Set([...before, ...wb.sheet.keys()])] };
+}
+
+// Saved files: each under "sheet.file.<name>" (any character of the name
+// but a letter or digit as _ and its code: "Spec book" is Spec_0020book),
+// and their names, in the order saved, under "sheet.files".
+const FILES = "sheet.files";
+const fileKey = (name: string) => `sheet.file.${name.replace(/[^A-Za-z0-9]/g, (c) => `_${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}`;
+const savedNames = (store: Store): string[] => {
+  try {
+    const v = JSON.parse(store.get(FILES) ?? "[]");
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch {
+    return [];
+  }
+};
+const savedName = (store: Store, name: string): string =>
+  savedNames(store).find((n) => n.toUpperCase() === name.trim().toUpperCase()) ?? refuse(`no saved file ${name}`);
+
+// The used part of the sheet: A1 to its last row and column.
+function usedRange(wb: Workbook): [Addr, Addr] {
+  const used = wb.sheet.keys().map((k) => parseRange(k)![0]);
+  return [{ col: 0, row: 0 }, { col: Math.max(0, ...used.map((a) => a.col)), row: Math.max(0, ...used.map((a) => a.row)) }];
 }
 
 // Rows or columns inserted or deleted: every cell and formula moved, as one
@@ -486,8 +530,73 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
-    id: "file.open", label: "Open a sample", params: ["sample"], journaled: true,
-    run: (wb, p) => open(wb, readSheetFile(SAMPLES[p.sample.toLowerCase()] ?? refuse(`no sample ${p.sample} (budget, test, formatted)`))),
+    id: "file.open", label: "Open", params: [], optional: ["name", "sample"], journaled: true,
+    run: (wb, p, store) => {
+      if (p.name !== undefined) return open(wb, readSheetFile(JSON.parse(store.get(fileKey(savedName(store, p.name)))!)));
+      if (p.sample !== undefined) return open(wb, readSheetFile(SAMPLES[p.sample.toLowerCase()] ?? refuse(`no sample ${p.sample} (budget, test, formatted)`)));
+      return refuse("file.open needs a name or a sample");
+    },
+  },
+  {
+    id: "file.save", label: "Save", params: [], optional: ["name"], journaled: false,
+    run: async (wb, p, store) => {
+      const name = (p.name ?? wb.name).trim() || refuse("a file needs a name");
+      const file = writeSheetFile(wb);
+      store.set(fileKey(name), JSON.stringify({ ...file, name }));
+      const names = savedNames(store).filter((n) => n.toUpperCase() !== name.toUpperCase());
+      store.set(FILES, JSON.stringify([...names, name]));
+      wb.name = name;
+      const cells = wb.pages().reduce((n, page) => n + page.sheet.keys().length, 0);
+      return { ok: true, message: `saved ${name}: ${wb.pages().length} sheet${wb.pages().length === 1 ? "" : "s"}, ${cells} cells`, changed: [] };
+    },
+  },
+  {
+    id: "file.list", label: "Saved files", params: [], journaled: false,
+    run: async (_wb, _p, store) => {
+      const names = savedNames(store);
+      return { ok: true, message: names.length ? `saved: ${names.join(", ")}` : "no saved files", changed: [], output: names };
+    },
+  },
+  {
+    id: "file.delete", label: "Delete a saved file", params: ["name"], journaled: false,
+    run: async (_wb, p, store) => {
+      const name = savedName(store, p.name);
+      store.remove(fileKey(name));
+      store.set(FILES, JSON.stringify(savedNames(store).filter((n) => n !== name)));
+      return { ok: true, message: `deleted ${name}`, changed: [] };
+    },
+  },
+  {
+    id: "file.new", label: "New", params: [], journaled: true,
+    run: async (wb) => {
+      const before = wb.sheet.keys();
+      wb.reset();
+      wb.name = "Untitled";
+      wb.setupScript = "";
+      await wb.settle();
+      return { ok: true, message: "a new workbook", changed: before };
+    },
+  },
+  {
+    id: "file.exportCsv", label: "Export CSV", params: [], optional: ["range"], journaled: false,
+    run: async (wb, p) => {
+      const r = p.range === undefined ? usedRange(wb) : rangeOf(p.range), tl = topLeft(r);
+      const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
+      const csv = wb.sheet.keys().length || p.range !== undefined ? toCsv(Array.from({ length: rows }, (_, i) =>
+        Array.from({ length: cols }, (_, j) => wb.textOf(keyOf({ col: tl.col + j, row: tl.row + i }))))) : "";
+      return { ok: true, message: `${named(r)} as CSV: ${csv ? rows : 0} rows`, changed: [], output: csv };
+    },
+  },
+  {
+    id: "file.importCsv", label: "Import CSV", params: ["at", "text"], journaled: true,
+    run: (wb, p) => {
+      const at = rangeOf(p.at)[0], rows = fromCsv(p.text);
+      const cols = Math.max(0, ...rows.map((r) => r.length));
+      if (at.col + cols > COLS) refuse(`${cols} columns from ${keyOf(at)} do not fit on the sheet`);
+      if (at.row + rows.length > ROWS) refuse(`${rows.length} rows from ${keyOf(at)} do not fit on the sheet`);
+      const entries = rows.flatMap((row, i) => row.map((input, j): [string, string] => [keyOf({ col: at.col + j, row: at.row + i }), input]));
+      return setting(wb, entries, `imported ${rows.length} rows at ${keyOf(at)}`);
+    },
   },
   {
     id: "example.paste", label: "Paste the Excel example", params: [], journaled: true,
@@ -505,10 +614,12 @@ const scripted = (v: Value): unknown => (v === null ? "" : v instanceof CellErro
 
 export class Commands {
   readonly #wb: Workbook;
+  readonly #store: Store;
   readonly #journal: string[] = [];
 
-  constructor(wb: Workbook) {
+  constructor(wb: Workbook, store: Store = memoryStore()) {
     this.#wb = wb;
+    this.#store = store;
   }
 
   // Every command whose id or label holds `search` (any case).
@@ -523,7 +634,7 @@ export class Commands {
     try {
       if (!spec) refuse(`no command ${id}`);
       for (const name of spec!.params) if (params[name] === undefined) refuse(`${id} needs ${name}`);
-      const outcome = await spec!.run(this.#wb, params);
+      const outcome = await spec!.run(this.#wb, params, this.#store);
       if (outcome.ok && spec!.journaled) this.#journal.push(lineOf(id, params));
       return outcome;
     } catch (e) {

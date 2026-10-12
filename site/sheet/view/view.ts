@@ -12,7 +12,8 @@ import { Workbook } from "../workbook.ts";
 
 export class SheetView {
   readonly wb = new Workbook();
-  readonly cmds = new Commands(this.wb);
+  // Files are saved in the page's storage.
+  readonly cmds = new Commands(this.wb, storage);
   readonly address = state("A1");
   readonly input = state("");
   readonly status = state("");
@@ -72,13 +73,23 @@ export class SheetView {
   }
 
   // A command run, its outcome printed, the workbook shown again.
-  async run(id: string, params: Params = {}): Promise<Outcome> {
-    return this.#shown(await this.cmds.execute(id, params));
+  run(id: string, params: Params = {}): Promise<Outcome> {
+    return this.#outcome(() => this.cmds.execute(id, params));
   }
 
   // The same, from a command line (the command bar, and specs through it).
-  async runLine(line: string): Promise<Outcome> {
-    return this.#shown(await this.cmds.run(line));
+  runLine(line: string): Promise<Outcome> {
+    return this.#outcome(() => this.cmds.run(line));
+  }
+
+  // A command that throws (a bug, as against a refusal) is said too: a
+  // button's handler that returns a promise has no one to tell.
+  async #outcome(command: () => Promise<Outcome>): Promise<Outcome> {
+    try {
+      return this.#shown(await command());
+    } catch (e) {
+      return this.#shown({ ok: false, message: `failed: ${String((e as Error)?.message ?? e)}`, changed: [] });
+    }
   }
 
   #shown(o: Outcome): Outcome {

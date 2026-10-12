@@ -40,16 +40,16 @@ eq("what the grid cannot draw is left out, and nothing is nothing", [toStyle("un
 }
 
 const file = readSheetFile(FORMATTED);
-eq("the formatted sample's cells: text, a formula in content, a number", file.entries.filter(([k]) => ["A1", "A4", "D5", "C5"].includes(k)),
+eq("the formatted sample's cells: text, a formula in content, a number", file.sheets[0].entries.filter(([k]) => ["A1", "A4", "D5", "C5"].includes(k)),
   [["A1", "Account Ledger"], ["A4", "2025-01-15"], ["C5", "-150.50"], ["D5", "=D4 + C5"]]);
-eq("and their notes: a format, a style, a conditional style", [file.notes.get("C5"), file.notes.get("A3")],
+eq("and their notes: a format, a style, a conditional style", [file.sheets[0].notes.get("C5"), file.sheets[0].notes.get("A3")],
   [{ format: "$#,##0.00", styleExpression: "STYLE_IF(C5 < 0, RED_TEXT(), GREEN_TEXT())" }, { style: { fontWeight: "bold", backgroundColor: "#f5f5f5" } }]);
 
 const rexx = new RexxLanguage();
 const s = new Sheet(undefined, rexx);
-await s.setMany(file.entries);
+await s.setMany(file.sheets[0].entries);
 eq("its ledger works out", [s.value("D9"), s.value("C11"), s.value("D12")], [3998.75, 3998.75, 3998.75]);
-const styles = await Promise.all(["C5", "C6", "G4", "G5", "G7", "G10"].map(async (k) => toStyle(await s.evaluate(file.notes.get(k)!.styleExpression!))));
+const styles = await Promise.all(["C5", "C6", "G4", "G5", "G7", "G10"].map(async (k) => toStyle(await s.evaluate(file.sheets[0].notes.get(k)!.styleExpression!))));
 eq("conditional styles, worked out in the sheet's language, by the app's style functions", styles,
   ["color: #d32f2f", "color: #388e3c", "background: #e8f5e9", "background: #ffebee", "background: #fff9c4", "background: #bbdefb; color: #0d47a1"]);
 eq("one that fails is no style", toStyle(await s.evaluate("NOSUCH()")), "");

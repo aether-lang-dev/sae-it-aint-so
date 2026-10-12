@@ -122,9 +122,9 @@ export class Workbook {
     await this.#recalculate();
   }
 
-  // One empty sheet, Sheet1, as a file opened starts.
-  reset(): void {
-    this.#active = this.#make("Sheet1", this.sheet.language);
+  // One empty sheet, as a file opened starts.
+  reset(name = "Sheet1"): void {
+    this.#active = this.#make(name, this.sheet.language);
     this.#pages = [this.#active];
     this.#pending.clear();
   }
