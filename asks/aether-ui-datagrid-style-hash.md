@@ -1,5 +1,7 @@
 # Ask (aether-ui): a datagrid cell's style can change without being redrawn
 
+**Landed** in aether-ui `0cfbf942`; sae pins it (`8a502f0`).
+
 ## What happens
 
 `_datagrid_style` re-applies `cell_style` to a shown cell only when the
@@ -56,7 +58,3 @@ Verified in sae with the patch applied to `../aether-ui` at e50baa53: every
 `spec_sheet` test passes, including the sort whose conditional colours
 change in place ("Sort Z→A orders the selection's rows ... formats and
 conditional styles with them"); without it, that test's colour checks fail.
-
-## Once it lands
-
-Bump `AETHER_UI_REF` in sae's `pins` to the commit that has it.

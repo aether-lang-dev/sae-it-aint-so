@@ -64,4 +64,7 @@ AEB_REF=v0.326
 # 32c5facf (2026-10-11): datagrid cell_style and edit_text.
 # e50baa53 (2026-10-11): datagrid_fit_col, text_measure; GTK sliders draw no value.
 AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
-AETHER_UI_REF=e50baa53c1c8bfde60eed68783dd17c606b5e5ce
+# 0cfbf942 (2026-10-12): a datagrid cell whose style changes is redrawn
+# (the style hash overflowed): the spreadsheet's cells turn red on an error
+# and back when it is mended. Verified: spec_sheet, spec_grid, spec_keys.
+AETHER_UI_REF=0cfbf942d5a2ec127fee382d31c7a9742e70217c

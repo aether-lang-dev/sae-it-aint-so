@@ -1,6 +1,7 @@
 # The spreadsheet demo: done, and still to do
 
-Demo 18 (`docs/roadmap.md`), `site/sheet.ts`, as of 2026-10-11, pinned to aether-ui `e50baa53`. It began as the third of five
+Demo 18 (`docs/roadmap.md`), `site/sheet.ts`, as of 2026-10-12, pinned
+to aether-ui `0cfbf942`. It began as the third of five
 demo ideas meant to show off sae's TypeScript dialect, and grew into the
 sae page that uses the most of the page API. It is taking in the Tauri
 spreadsheet (RexxJS/example-app-spreadsheet) as pure sae TypeScript, with
@@ -210,9 +211,9 @@ summary.
   - the app's formatted sheet: number formats, its styles, conditional
     styles that follow an edit, and a format and a comment set by hand;
     a row inserted into its ledger and deleted again; its products sorted
-    by percentage, their conditional colours following (this needs
-    aether-ui's datagrid style-hash fix, `asks/aether-ui-datagrid-style-
-    hash.md`); find, Replace all and its undo.
+    by percentage, their conditional colours following (aether-ui
+    `0cfbf942` redraws a cell whose style changes); find, Replace all and
+    its undo.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
