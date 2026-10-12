@@ -132,8 +132,32 @@ fields under the formula bar:
 
 ## How it is built
 
-The model has no `ui`, and is about 1,500 lines of dialect in `site/sheet/`
-(and the generated RexxJS bundle):
+Three layers, each testable on its own:
+
+1. **The page** (`site/sheet.ts`, 30 lines) only declares which panels, in
+   which order: `languageBar(sheet); formulaBar(sheet); notesBar(sheet);
+   statusLine(sheet); sheetGrid(sheet); editBar(sheet); ...`.
+2. **The panels** (`site/sheet/view/`, one file each: the grid, the
+   formula bar, the notes bar, the edit bar, the find bar, the file bar, the
+   command bar, the lists) are pseudo-declarative Sae-TS: widgets bound to
+   state, and handlers that run commands and nothing else, through
+   `SheetView.run` (`view.ts`), which runs a command, prints its outcome
+   (`sheet: ...`, what specs read) and shows the workbook again in one
+   batch.
+3. **The seam** (`commands.ts`, `workbook.ts`, `script.ts`), with no `ui`:
+   every action on the workbook is a command with an id and string
+   parameters (`data.sortDescending range=F4:G7 by=G`), as GridCraft's
+   engine commands and the Tauri app's control bus have them. A command
+   gives an Outcome (ok or refused, a message, what changed, an output);
+   the ones that change the workbook are journaled as command lines, which
+   replay. Three things drive it: the panels; RexxJS scripts, through
+   `ADDRESS SHEET "..."` (RC and RESULT), `SETCELL` and `GETCELL`, on an
+   interpreter of their own, `;` ending a clause; and specs, headless
+   (`sheet_commands`) and in the browser through the page's command bar
+   (`griddriver`'s `command` and `script`), as a person would type them.
+
+The model under the seam has no `ui`, and is about 1,900 lines of dialect
+in `site/sheet/` (and the generated RexxJS bundle):
 
 | Module | What |
 |---|---|
@@ -153,10 +177,10 @@ The model has no `ui`, and is about 1,500 lines of dialect in `site/sheet/`
 | `notes.ts`, `formats.ts` | A cell's comment, format, style and conditional style; number formats and styles in the app's dialects, as the grid draws them |
 | `shift.ts` | Edits that move references (a copy's offset, rows or columns inserted or deleted), which each language's `rewrite` applies to a formula; `restructured` moves a sheet's cells by one |
 | `sortfind.ts` | Sorting a range by a column (and where each cell went, for notes), find and replace |
+| `commands.ts` | The seam: the catalogue of commands, the command line, the journal, scripts |
+| `workbook.ts` | The Sheet, notes, both languages, the file's name and setup script, the clipboard, conditional styles; what a cell shows, its style, its status line |
+| `script.ts` | RexxJS scripts over the commands: ADDRESS SHEET, SETCELL, GETCELL |
 | `copy.ts` | A formula moved (its references rewritten token by token, so the rest stays as typed); copy as tab-separated text; paste, moving formulas when the text came from the sheet; fill down and right. Gives `[key, input]` pairs for `Sheet.setMany` |
-
-`site/sheet.ts` (about 270 lines) is the view: the datagrid's functions read
-the `Sheet`, and its edits go back through it.
 
 The prelude's `computed` takes a fixed list of input states, and a sheet's
 dependencies change with every edit, so the `Sheet` is its own dynamic
@@ -189,6 +213,10 @@ summary.
   - `sheet_sortfind` (14): sort order (numbers, text, empty; stable), rows
     moving whole with their formulas and notes, find and replace with each
     option.
+  - `sheet_commands` (27): the seam. The command-line grammar, the
+    catalogue, refusals, every command the panels run, the journal
+    replayed to the same sheet, RexxJS scripts (ADDRESS SHEET, SETCELL,
+    GETCELL, RC and RESULT, `;`), and a formula refused SETCELL.
   - `sheet_rexx` (25): RexxJS formulas against a stub of the cells (what a
     formula reads, Rexx's operators and functions, errors, the setup
     script, every range function, the copy rule), then the Tauri app's two
@@ -196,7 +224,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 27 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 29 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -213,7 +241,10 @@ summary.
     a row inserted into its ledger and deleted again; its products sorted
     by percentage, their conditional colours following (aether-ui
     `0cfbf942` redraws a cell whose style changes); find, Replace all and
-    its undo.
+    its undo;
+  - the command bar: a command run as the panels run theirs, a refusal
+    and why, an output; a RexxJS script through ADDRESS SHEET, SETCELL
+    and GETCELL, and its changes undone.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.

@@ -83,6 +83,9 @@ eq("file.open a sample", [(await cmds.run("file.open sample=budget")).message, v
   eq("a RexxJS script drives the sheet: ADDRESS SHEET, SETCELL, GETCELL, RC and RESULT", [said, out.ok, value("E2")],
     [["set E1, rc 0", "E2 is 42", "off the sheet, rc 1", "D6 is 1404"], true, "42"]);
   eq("its changes are journaled as the commands they ran", cmds.journal().slice(-2), ["cell.set cell=E1 input=7", 'cell.set cell=E2 input="=E1 * 6"']);
+  const one: string[] = [];
+  await cmds.script(`ADDRESS SHEET "cell.set cell=E3 input=1"; SAY "a;b" GETCELL("E3")`, (line) => one.push(line));
+  eq("a ';' ends a clause, as in Rexx, but not in a string", one, ["a;b 1"]);
   eq("a script that fails says why", (await cmds.script("LET x = 1/0", () => {})).message, "Division by zero");
 }
 await cmds.run('cell.set cell=F1 input="=SETCELL(""A1"", 9)"');
@@ -111,5 +114,6 @@ eq("a formula cannot change the sheet", [value("F1"), wb.sheet.value("F1") && St
 // expect: ok the journal replays to the same sheet
 // expect: ok a RexxJS script drives the sheet: ADDRESS SHEET, SETCELL, GETCELL, RC and RESULT
 // expect: ok its changes are journaled as the commands they ran
+// expect: ok a ';' ends a clause, as in Rexx, but not in a string
 // expect: ok a script that fails says why
 // expect: ok a formula cannot change the sheet

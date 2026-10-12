@@ -8,7 +8,7 @@
 
 exports(
     cell_id, cell_text, wait_cell, cell_has, pick, formula_field, enter, editor,
-    header_id, grip_of, key
+    header_id, grip_of, key, field, command, script
 )
 
 import std.string
@@ -176,3 +176,33 @@ grip_of(col: string) -> int {
 }
 
 key(combo: string) { uidriver.post_ok("/window/key?combo=${b.url_encode(combo)}", combo) }
+
+// The page's text field with this placeholder, or 0.
+field(placeholder: string) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "placeholder"), placeholder) == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
+// A command line run through the page's command bar ("command" field,
+// Return), as a person would type it: the seam under the panels.
+command(line: string) {
+    b.set_field_by("command", line)
+    uidriver.post_ok("/widget/${field("command")}/submit", "Return in the command bar")
+}
+
+// A RexxJS script run through the command bar ("RexxJS script" field, the
+// Run script button); ';' ends a clause.
+script(text: string) {
+    b.set_field_by("RexxJS script", text)
+    b.click("Run script")
+}
+

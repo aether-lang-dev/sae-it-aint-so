@@ -24,6 +24,25 @@ export interface ScriptHost {
 
 const lastLine = (e: unknown): string => String((e as Error)?.message ?? e).split("\n").pop()!;
 
+// Rexx separates clauses with ';' as well as with line ends (RexxJS reads
+// only line ends): a ';' outside quotes is a line end, so a script fits on
+// one line.
+export function clauses(text: string): string {
+  let out = "", quote = "";
+  for (const c of text) {
+    if (quote) {
+      if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === ";") {
+      out += "\n";
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
 export async function runScript(text: string, host: ScriptHost, say: (line: string) => void): Promise<Outcome> {
   const it = new RexxInterpreter(null, { output: (line: unknown) => say(String(line)) });
   it.variableResolver = (name: string) => (addrOf(name) ? host.get(keyOf(addrOf(name)!)) : undefined);
@@ -44,7 +63,7 @@ export async function runScript(text: string, host: ScriptHost, say: (line: stri
     GETCELL: (cell: string) => host.get(String(cell).toUpperCase()),
   });
   try {
-    await it.run(parse(text));
+    await it.run(parse(clauses(text)));
     return { ok: true, message: "ran" };
   } catch (e) {
     return { ok: false, message: lastLine(e) };

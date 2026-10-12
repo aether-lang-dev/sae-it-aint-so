@@ -30,8 +30,9 @@ page_file_(site: *Site, path: string) -> string {
     return "${stem}.js"
 }
 
-// Routes for the pages of <site>/<sub> (sub "" or "lib/", say), one level
-// of subdirectories under the root.
+// Routes for the pages of <site>/<sub> (sub "" or "lib/", say), and of its
+// subdirectories, four levels deep (a page's modules can be in folders of
+// folders: site/sheet/view/).
 route_dir_(server: ptr, site: *Site, sub: string) {
     l, lerr = dir.list("${site.dir}/${sub}")
     if lerr != "" {
@@ -47,11 +48,22 @@ route_dir_(server: ptr, site: *Site, sub: string) {
             route = "/${sub}${string.string_substring(name, 0, string.length(name) - 3)}"
             http.server_get(server, route, serve_page_, site)
             http.server_get(server, "/${sub}${name}", serve_page_, site)
-        } else if is_page == 0 && sub == "" && string.contains(name, ".") == 0 {
-            route_dir_(server, site, "${name}/")
+        } else if is_page == 0 && string.contains(name, ".") == 0 && depth_(sub) < 4 {
+            route_dir_(server, site, "${sub}${name}/")
         }
         i = i + 1
     }
+}
+
+// How many folders deep `sub` ("a/b/" is 2) is.
+depth_(sub: string) -> int {
+    n = 0
+    i = 0
+    while i < string.length(sub) {
+        if string.char_at(sub, i) == 47 { n = n + 1 }
+        i = i + 1
+    }
+    return n
 }
 
 serve_page_(req: ptr, res: ptr, ud: ptr) {
