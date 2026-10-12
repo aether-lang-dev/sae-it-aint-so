@@ -20,6 +20,9 @@ import { EXAMPLE, FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./samples.ts";
 import { runScript } from "./script.ts";
 import { continued } from "./series.ts";
 import { check, describeRule, ruleOf } from "./validation.ts";
+import { ICONS, describeRule as describeCf } from "./rules.ts";
+import type { CfRule, Comparison, IconSet } from "./rules.ts";
+import { toStyle } from "./formats.ts";
 import { deleted, inserted, movedBy, restructured } from "./shift.ts";
 import type { Scope } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
@@ -136,6 +139,7 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     await wb.sheet.setMany(s.entries);
     wb.sheet.forget();
     for (const [key, note] of s.notes) wb.notes.set(key, note);
+    wb.page(s.name)!.rules = [...s.rules];
   }
   wb.activate(file.sheets[0].name);
   wb.name = file.name;
@@ -188,6 +192,11 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
       if (rewritten.length) await page.sheet.setMany(rewritten);
     }
     wb.notes.remap((a) => edit.cell(a, { col: false, row: false }), (e) => wb.sheet.language.rewrite(`=${e}`, edit).slice(1));
+    const page = wb.page(wb.active)!, still = { col: false, row: false };
+    page.rules = page.rules.flatMap((r): CfRule[] => {
+      const to = edit.range(r.range[0], r.range[1], still, still);
+      return to ? [{ ...r, range: to }] : [];
+    });
     const thing = `${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"}`;
     return setting(wb, entries, `${how === "insert" ? "inserted" : "deleted"} ${thing} at ${axis === "row" ? at + 1 : colName(at)}`);
   };
@@ -223,6 +232,22 @@ const pageOf = (wb: Workbook, name: string) => wb.page(name) ?? refuse(`no sheet
 
 // What the grid shows changes wholesale when the active sheet does.
 const shownKeys = (wb: Workbook, before: readonly string[]) => [...new Set([...before, ...wb.sheet.keys()])];
+
+// ---- Conditional-format rules (rules.ts), on the active sheet.
+
+const COMPARISONS: Record<string, Comparison> = {
+  greater: ">", less: "<", between: "between", equal: "=", notequal: "<>", greaterorequal: ">=", lessorequal: "<=", contains: "contains",
+  ">": ">", "<": "<", "=": "=", "<>": "<>", ">=": ">=", "<=": "<=",
+};
+// Excel's Light Red Fill with Dark Red Text.
+const HIGHLIGHT = "background: #ffc7ce; color: #9c0006";
+const styleParam = (p: Params): string => (p.style === undefined ? HIGHLIGHT : toStyle(p.style) || refuse(`${p.style} is not a style the grid can draw`));
+
+// A rule added to the active sheet's, last (so the earlier ones win).
+async function addRule(wb: Workbook, rule: CfRule): Promise<Outcome> {
+  wb.page(wb.active)!.rules.push(rule);
+  return changedBy(wb, [...range(rule.range[0], rule.range[1])], describeCf(rule));
+}
 
 // Trace Precedents or Dependents: a level further each time.
 function trace(direction: Direction) {
@@ -554,6 +579,72 @@ const SPECS: readonly Spec[] = [
       const [page, cell] = watchedOf(wb, p.cell);
       if (!wb.unwatch(page, cell)) refuse(`not watching ${page.name}!${cell}`);
       return { ok: true, message: `stopped watching ${page.name}!${cell}`, changed: [] };
+    },
+  },
+  {
+    id: "format.highlight", label: "Highlight Cells Rules", params: ["range", "op", "value"], optional: ["value2", "style"], journaled: true,
+    run: (wb, p) => {
+      const op = COMPARISONS[p.op.toLowerCase()] ?? refuse(`${p.op} is not a comparison (greater, less, between, equal, notEqual, greaterOrEqual, lessOrEqual, contains)`);
+      if (op === "between" && p.value2 === undefined) refuse("between needs value2");
+      return addRule(wb, { kind: "cellValue", range: rangeOf(p.range), op, value: p.value, ...(op === "between" ? { value2: p.value2 } : {}), style: styleParam(p) });
+    },
+  },
+  {
+    id: "format.topBottom", label: "Top/Bottom Rules", params: ["range"], optional: ["n", "bottom", "percent", "style"], journaled: true,
+    run: (wb, p) => addRule(wb, { kind: "top", range: rangeOf(p.range), n: countOf(p.n ?? "10"), bottom: flag(p.bottom), percent: flag(p.percent), style: styleParam(p) }),
+  },
+  {
+    id: "format.aboveAverage", label: "Above Average", params: ["range"], optional: ["below", "style"], journaled: true,
+    run: (wb, p) => addRule(wb, { kind: "average", range: rangeOf(p.range), below: flag(p.below), style: styleParam(p) }),
+  },
+  {
+    id: "format.duplicates", label: "Duplicate Values", params: ["range"], optional: ["unique", "style"], journaled: true,
+    run: (wb, p) => addRule(wb, { kind: "duplicates", range: rangeOf(p.range), unique: flag(p.unique), style: styleParam(p) }),
+  },
+  {
+    id: "format.colorScale", label: "Color Scales", params: ["range"], optional: ["colors"], journaled: true,
+    run: (wb, p) => {
+      const colors = (p.colors ?? "#f8696b,#ffeb84,#63be7b").split(",").map((c) => c.trim().toLowerCase());
+      if (colors.length < 2 || colors.length > 3 || colors.some((c) => !/^#[0-9a-f]{6}$/.test(c))) refuse("a colour scale takes 2 or 3 colours (#rrggbb)");
+      return addRule(wb, { kind: "colorScale", range: rangeOf(p.range), colors });
+    },
+  },
+  {
+    id: "format.iconSet", label: "Icon Sets", params: ["range"], optional: ["icons"], journaled: true,
+    run: (wb, p) => {
+      const icons = (p.icons ?? "arrows").toLowerCase();
+      if (!(icons in ICONS)) refuse(`${p.icons} is not an icon set (${Object.keys(ICONS).join(", ")})`);
+      return addRule(wb, { kind: "iconSet", range: rangeOf(p.range), icons: icons as IconSet });
+    },
+  },
+  {
+    id: "format.rules", label: "Manage Rules", params: [], journaled: false,
+    run: async (wb) => {
+      const listed = wb.page(wb.active)!.rules.map((r, i) => `${i + 1}. ${describeCf(r)}`);
+      return { ok: true, message: listed.length ? listed.join("; ") : "no rules", changed: [], output: listed };
+    },
+  },
+  {
+    id: "format.deleteRule", label: "Delete Rule", params: ["index"], journaled: true,
+    run: async (wb, p) => {
+      const rules = wb.page(wb.active)!.rules, i = Number(p.index) - 1;
+      if (!Number.isInteger(i) || !rules[i]) refuse(`no rule ${p.index}`);
+      const [gone] = rules.splice(i, 1);
+      return changedBy(wb, [...range(gone.range[0], gone.range[1])], `deleted ${describeCf(gone)}`);
+    },
+  },
+  {
+    id: "format.clearRules", label: "Clear Rules", params: ["range"], journaled: true,
+    run: async (wb, p) => {
+      const [a, b] = rangeOf(p.range), page = wb.page(wb.active)!;
+      const over = (r: CfRule) => {
+        const [c, d] = r.range;
+        return Math.max(Math.min(a.col, b.col), Math.min(c.col, d.col)) <= Math.min(Math.max(a.col, b.col), Math.max(c.col, d.col))
+          && Math.max(Math.min(a.row, b.row), Math.min(c.row, d.row)) <= Math.min(Math.max(a.row, b.row), Math.max(c.row, d.row));
+      };
+      const n = page.rules.filter(over).length;
+      page.rules = page.rules.filter((r) => !over(r));
+      return changedBy(wb, wb.sheet.keys(), `cleared ${n} rule${n === 1 ? "" : "s"}`);
     },
   },
   {

@@ -6,10 +6,13 @@
 // app's are, unless the file says "formulas": "excel".
 //
 // sae's own additions, which the app passes over: a cell's validation rule
-// (validation.ts's, as an object), the first sheet's name (sheetName) and
-// named ranges (names: { QTY: "B2:B4" }), and the workbook's other sheets
-// (sheets: [{ name, cells, names }]). writeSheetFile writes it all.
-import { addrOf, order } from "./address.ts";
+// (validation.ts's, as an object), the first sheet's name (sheetName), named
+// ranges (names: { QTY: "B2:B4" }) and conditional-format rules (rules.ts's,
+// their ranges as text), and the workbook's other sheets (sheets: [{ name,
+// cells, names, rules }]). writeSheetFile writes it all.
+import { addrOf, order, parseRange } from "./address.ts";
+import { ICONS, rangeName } from "./rules.ts";
+import type { CfRule } from "./rules.ts";
 import { show } from "./format.ts";
 import type { Note } from "./notes.ts";
 import { ruleOf } from "./validation.ts";
@@ -20,6 +23,7 @@ export interface FileSheet {
   readonly entries: readonly [string, string][];   // [key, input] for Sheet.setMany
   readonly notes: ReadonlyMap<string, Note>;
   readonly names: readonly [string, string][];     // [NAME, "B2:B4"]
+  readonly rules: readonly CfRule[];
 }
 
 export interface SheetFile {
@@ -68,13 +72,25 @@ function noteOf(c: string | FileCell): Note {
   return note;
 }
 
-function sheetOf(name: string, cells: Cells | undefined, names: unknown): FileSheet {
+// Rules as written, read back; one that is not a rule is left out.
+function rulesOf(rules: unknown): CfRule[] {
+  if (!Array.isArray(rules)) return [];
+  const kinds = ["cellValue", "top", "average", "duplicates", "colorScale", "iconSet"];
+  return rules.flatMap((r: any): CfRule[] => {
+    const corners = parseRange(String(r?.range ?? ""));
+    if (!corners || !kinds.includes(r?.kind) || (r.kind === "iconSet" && !(r.icons in ICONS))) return [];
+    return [{ ...r, range: corners } as CfRule];
+  });
+}
+
+function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown): FileSheet {
   const list = Object.entries(cells ?? {}).map(([k, c]): [string, string | FileCell] => [k.toUpperCase(), c]);
   return {
     name,
     entries: list.map(([k, c]): [string, string] => [k, inputOf(c)]).filter(([, input]) => input !== ""),
     notes: new Map(list.map(([k, c]): [string, Note] => [k, noteOf(c)]).filter(([, n]) => Object.keys(n).length)),
     names: Object.entries((names ?? {}) as Record<string, unknown>).map(([n, r]): [string, string] => [n.toUpperCase(), String(r)]),
+    rules: rulesOf(rules),
   };
 }
 
@@ -85,8 +101,8 @@ export function readSheetFile(data: any): SheetFile {
     language: String(data?.formulas ?? "").toLowerCase() === "excel" ? "Excel" : "RexxJS",
     setupScript: String(data?.setupScript ?? ""),
     sheets: [
-      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names),
-      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names)),
+      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules),
+      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules)),
     ],
   };
 }
@@ -110,6 +126,7 @@ function cellsOf(page: Page): Cells {
 }
 
 const namesOf = (page: Page): Record<string, string> => Object.fromEntries(page.sheet.names());
+const rulesIn = (page: Page) => page.rules.map((r) => ({ ...r, range: rangeName(r.range) }));
 
 // The workbook as a file: JSON-ready.
 export function writeSheetFile(wb: Workbook) {
@@ -121,6 +138,7 @@ export function writeSheetFile(wb: Workbook) {
     sheetName: first.name,
     cells: cellsOf(first),
     names: namesOf(first),
-    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p) })),
+    rules: rulesIn(first),
+    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p) })),
   };
 }

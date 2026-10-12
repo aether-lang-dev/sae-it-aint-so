@@ -132,8 +132,9 @@ These need more of it (each would be an ask, as
 7. ~~Formula auditing, and Show Formulas~~ (done: trace precedents and
    dependents, remove arrows, Show Formulas, Evaluate Formula with a
    formula printer, the Watch Window).
-8. The number-format language; conditional-format rules (colour scales,
-   icon sets).
+8. ~~The number-format language; conditional-format rules (colour
+   scales, icon sets)~~ (done: `numfmt.ts`, `rules.ts`, the `format.*`
+   commands; data bars wait on aether-ui).
 9. Charts and sparklines in `vg`.
 10. Functions in batches (lookup and conditional, date, financial), then
     LET and LAMBDA, then dynamic arrays.

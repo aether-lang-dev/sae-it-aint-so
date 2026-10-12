@@ -23,6 +23,8 @@ import { Sheet, Turns } from "./sheet.ts";
 import type { Context } from "./sheet.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
+import { applied } from "./rules.ts";
+import type { CfRule, Mark } from "./rules.ts";
 import { check } from "./validation.ts";
 
 export type LanguageName = "Excel" | "RexxJS";
@@ -39,11 +41,13 @@ export interface Clip {
   readonly notes: readonly (readonly Note[])[];
 }
 
-// A sheet of the workbook: its name as given, its cells and their notes.
+// A sheet of the workbook: its name as given, its cells and their notes, and
+// its conditional-format rules (rules.ts), in priority order.
 export interface Page {
   readonly name: string;
   readonly sheet: Sheet;
   readonly notes: CellNotes;
+  rules: CfRule[];
 }
 
 export type Direction = "precedents" | "dependents";
@@ -89,6 +93,7 @@ export class Workbook {
   showFormulas = false;
   #traces: Trace[] = [];
   #traced = new Map<string, string>();
+  #marks = new Map<string, Mark>();
   #watches: { readonly page: Page; readonly cell: string }[] = [];
 
   constructor() {
@@ -117,7 +122,7 @@ export class Workbook {
       if (!keys) this.#pending.set(upper, (keys = new Set()));
       keys.add(key);
     };
-    return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes() };
+    return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [] };
   }
 
   // A cell on another sheet ("COSTS!B2"), or #REF! when there is no such sheet.
@@ -268,6 +273,8 @@ export class Workbook {
     for (const [key, expr] of this.notes.conditional()) next.set(key, toStyle(await this.sheet.evaluate(expr)));
     this.#conditional = next;
     this.#circled = new Set(this.circling ? this.invalid() : []);
+    const page = this.#active;
+    this.#marks = applied(page.rules, (k) => page.sheet.value(k));
     this.#traces = this.#traces.filter((t) => this.#pages.includes(t.page));
     this.#traced = new Map();
     for (const t of this.#traces) {
@@ -284,10 +291,12 @@ export class Workbook {
     });
   }
 
-  // What a cell shows: its value in its number format, or with Show
-  // Formulas on, its input.
+  // What a cell shows: its value in its number format (after its icon, if a
+  // rule gives it one), or with Show Formulas on, its input.
   textOf(key: string): string {
-    return this.showFormulas ? this.sheet.input(key) : this.#shown(this.#active, key);
+    if (this.showFormulas) return this.sheet.input(key);
+    const icon = this.#marks.get(key)?.icon, text = this.#shown(this.#active, key);
+    return icon ? `${icon} ${text}` : text;
   }
 
   #shown(page: Page, key: string): string {
@@ -296,11 +305,11 @@ export class Workbook {
   }
 
   // Its style, each layer over the last: numbers to the right, its own
-  // style, its format's style parts, its conditional style, a trace, a
-  // circle (its input breaks its rule), an error in red.
+  // style, its format's style parts, its conditional style, its rules', a
+  // trace, a circle (its input breaks its rule), an error in red.
   styleOf(key: string): string {
     const v = this.sheet.value(key), n = this.notes.get(key);
-    return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), formatStyle(v, n.format ?? ""), this.#conditional.get(key) ?? "", this.#traced.get(key) ?? "",
+    return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), formatStyle(v, n.format ?? ""), this.#conditional.get(key) ?? "", this.#marks.get(key)?.style ?? "", this.#traced.get(key) ?? "",
       this.#circled.has(key) ? "background: #ffd6d6" : "", v instanceof CellError ? "color: #c0392b" : ""].filter((p) => p).join("; ");
   }
 
