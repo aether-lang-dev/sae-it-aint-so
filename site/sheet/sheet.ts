@@ -10,7 +10,8 @@ import { addrOf, keyOf, order } from "./address.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
 import { EXCEL } from "./excel.ts";
-import type { Formula, Language } from "./language.ts";
+import type { Formula, Language, Names } from "./language.ts";
+import type { Addr } from "./address.ts";
 import { show } from "./format.ts";
 
 export interface SheetListener {
@@ -28,8 +29,8 @@ export type Compiled = Formula | { readonly kind: "constant"; readonly value: Va
 
 const NUMERIC = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?\s*$/;
 
-export function compile(input: string, language: Language = EXCEL): Compiled {
-  if (input.startsWith("=")) return language.compile(input.slice(1));
+export function compile(input: string, language: Language = EXCEL, names?: Names): Compiled {
+  if (input.startsWith("=")) return language.compile(input.slice(1), names);
   if (input === "") return { kind: "constant", value: null };
   return { kind: "constant", value: NUMERIC.test(input) ? Number(input) : input };
 }
@@ -54,6 +55,7 @@ export class Sheet {
   #language: Language;
   #turn: Promise<unknown> = Promise.resolve();
   #busy = false;
+  readonly #names = new Map<string, [Addr, Addr]>();
   // Each step is the inputs a change replaced, to put back.
   readonly #undo: (readonly [string, string][])[] = [];
   readonly #redo: (readonly [string, string][])[] = [];
@@ -154,8 +156,26 @@ export class Sheet {
   // (a conditional style): its value, or the error it came to.
   evaluate(formula: string): Promise<Value> {
     return this.#inTurn(async () => {
-      const f = this.#language.compile(formula);
+      const f = this.#language.compile(formula, (n) => this.#names.get(n) ?? null);
       return f.kind === "broken" ? f.error : (await f.run({ get: (k) => this.value(k) })) ?? null;
+    });
+  }
+
+  // The named ranges, by name: [NAME, "B2:B4"].
+  names(): [string, string][] {
+    return [...this.#names].sort(([x], [y]) => (x < y ? -1 : 1)).map(([n, [a, b]]) => [n, keyOf(a) === keyOf(b) ? keyOf(a) : `${keyOf(a)}:${keyOf(b)}`]);
+  }
+
+  name(n: string): [Addr, Addr] | null {
+    return this.#names.get(n.toUpperCase()) ?? null;
+  }
+
+  // A name for a range defined (or redefined), or deleted (null): every
+  // formula compiled again, as any may read it.
+  define(n: string, r: [Addr, Addr] | null): Promise<string[]> {
+    return this.#inTurn(() => {
+      if (r) this.#names.set(n.toUpperCase(), r); else this.#names.delete(n.toUpperCase());
+      return this.#recomputeAll();
     });
   }
 
@@ -171,7 +191,7 @@ export class Sheet {
   }
 
   #compile(key: string): void {
-    const c = compile(this.input(key), this.#language);
+    const c = compile(this.input(key), this.#language, (n) => this.#names.get(n) ?? null);
     this.#compiled.set(key, c);
     this.#link(key, new Set(c.kind === "formula" ? c.reads : []));
   }

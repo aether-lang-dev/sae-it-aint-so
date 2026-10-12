@@ -40,6 +40,18 @@ export class SheetView {
     return a && b ? [a, b] : null;
   }
 
+  // Where a sheet column is on screen now (columns can be dragged).
+  viewCol(modelCol: number): number {
+    for (let c = 0; c <= COLS; c++) if (ui.datagrid_col_model(this.grid, c) === modelCol) return c;
+    return modelCol;
+  }
+
+  // A range selected, its first cell the address.
+  select([a, b]: [Addr, Addr]): void {
+    ui.datagrid_select_range(this.grid, a.row, this.viewCol(a.col + 1), b.row, this.viewCol(b.col + 1));
+    this.address.set(keyOf(a));
+  }
+
   // The selection as a command's range parameter: "F4:G7", or the cell.
   range(): string {
     const s = this.selection();

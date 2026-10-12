@@ -91,9 +91,9 @@ export const moved = (input: string, by: Offset): string => movedBy(EXCEL, input
 
 export const EXCEL: Language = {
   name: "Excel",
-  compile(formula) {
+  compile(formula, names) {
     try {
-      const expr = parse(formula);
+      const expr = parse(formula, names ?? (() => null));
       return { kind: "formula", reads: [...refsOf(expr)], run: (env) => evaluate(expr, env) };
     } catch (e) {
       if (!(e instanceof FormulaError)) throw e;

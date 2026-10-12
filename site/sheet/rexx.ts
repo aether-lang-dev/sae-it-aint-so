@@ -5,8 +5,8 @@
 // cells read the sheet; a sheet's setup script (LET TAX_RATE = 0.08) runs on
 // it first. The app's range functions (its public/lib/spreadsheet-functions
 // .js) are here in TypeScript: SUM_RANGE("A1:A3") and friends, and CELL.
-import { addrOf, keyOf, range } from "./address.ts";
-import type { Env, Formula, Language } from "./language.ts";
+import { addrOf, keyOf, parseRange, range } from "./address.ts";
+import type { Env, Formula, Language, Names } from "./language.ts";
 import type { Addr } from "./address.ts";
 import type { Edit } from "./shift.ts";
 import { RexxInterpreter, parse } from "./rexxjs.js";
@@ -21,13 +21,18 @@ const REWRITE = /(?<![\w$])(\$?)([A-Za-z]+)(\$?)(\d+)(?::(\$?)([A-Za-z]+)(\$?)(\
 
 const lastLine = (e: unknown): string => String((e as Error)?.message ?? e).split("\n").pop()!;
 
-function readsOf(formula: string): string[] {
+function readsOf(formula: string, names?: Names): string[] {
   const reads = new Set<string>();
   for (const m of formula.matchAll(REFS)) {
     const a = addrOf(`${m[1]}${m[2]}`);
     if (!a) continue;
     const b = m[3] ? addrOf(`${m[3]}${m[4]}`) : a;
     if (b) for (const k of range(a, b)) reads.add(k);
+  }
+  // A named range's cells, wherever its name is (bare, or in a string).
+  for (const m of formula.matchAll(/[A-Za-z_]\w*/g)) {
+    const r = names?.(m[0].toUpperCase());
+    if (r) for (const k of range(r[0], r[1])) reads.add(k);
   }
   return [...reads];
 }
@@ -66,12 +71,11 @@ function criterion(condition: string): (n: number) => boolean {
 }
 
 // The app's range functions over `read`, a cell's value as RexxJS sees it.
-export function rangeFunctions(read: (key: string) => unknown): Record<string, (...args: any[]) => unknown> {
+export function rangeFunctions(read: (key: string) => unknown, names: () => Names | undefined = () => undefined): Record<string, (...args: any[]) => unknown> {
   const values = (ref: string): unknown[] => {
-    const [from, to = from] = String(ref).split(":");
-    const a = addrOf(from), b = addrOf(to);
-    if (!a || !b) throw new Error(`Invalid range: ${ref}`);
-    return [...range(a, b)].map(read);
+    const r = parseRange(String(ref)) ?? names()?.(String(ref).trim().toUpperCase());
+    if (!r) throw new Error(`Invalid range: ${ref}`);
+    return [...range(r[0], r[1])].map(read);
   };
   return {
     SUM_RANGE: (r: string) => numbers(values(r)).reduce((s, n) => s + n, 0),
@@ -160,13 +164,21 @@ export class RexxLanguage implements Language {
   readonly #it: any;
   readonly #functions: Record<string, (...args: any[]) => unknown>;
   #env: Env | null = null;
+  #names: Names | undefined;
   #errorRead: CellError | null = null;
 
   constructor() {
     this.#it = new RexxInterpreter(null, { output: () => {} });
-    // An unset variable that names a cell reads it.
-    this.#it.variableResolver = (name: string) => (addrOf(name) ? this.#read(keyOf(addrOf(name)!)) : undefined);
-    this.#functions = { ...rangeFunctions((k) => this.#read(k)), ...STYLE_FUNCTIONS };
+    // An unset variable that names a cell reads it; a named range's name
+    // reads its cell, or its cells' values.
+    this.#it.variableResolver = (name: string) => {
+      if (addrOf(name)) return this.#read(keyOf(addrOf(name)!));
+      const r = this.#names?.(name.toUpperCase());
+      if (!r) return undefined;
+      const vs = [...range(r[0], r[1])].map((k) => this.#read(k));
+      return vs.length === 1 ? vs[0] : vs;
+    };
+    this.#functions = { ...rangeFunctions((k) => this.#read(k), () => this.#names), ...STYLE_FUNCTIONS };
     Object.assign(this.#it.externalFunctions, this.#functions, {
       // A formula only reads: scripts change cells (script.ts).
       SETCELL: () => {
@@ -201,7 +213,7 @@ export class RexxLanguage implements Language {
     }
   }
 
-  compile(formula: string): Formula {
+  compile(formula: string, names?: Names): Formula {
     const statements = /^\s*LET\b/i.test(formula) || formula.includes("\n");
     let commands: unknown;
     try {
@@ -211,9 +223,10 @@ export class RexxLanguage implements Language {
     }
     return {
       kind: "formula",
-      reads: readsOf(formula),
+      reads: readsOf(formula, names),
       run: async (env) => {
         this.#env = env;
+        this.#names = names;
         this.#errorRead = null;
         try {
           await this.#it.run(commands);

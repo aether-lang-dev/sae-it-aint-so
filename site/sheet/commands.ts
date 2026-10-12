@@ -146,6 +146,14 @@ function sort(ascending: boolean) {
   };
 }
 
+// A name for a range: a letter first, then letters, digits or _; not a
+// cell, nor TRUE or FALSE.
+const nameOf = (s: string): string => {
+  if (/^[A-Za-z]+\d+$/.test(s)) refuse(`${s} is a cell, not a name`);
+  if (!/^[A-Za-z_]\w*$/.test(s) || /^(TRUE|FALSE)$/i.test(s)) refuse(`${s} is not a name: a letter first, then letters, digits or _`);
+  return s.toUpperCase();
+};
+
 const findOptions = (p: Params) => ({ matchCase: flag(p.matchCase), wholeCell: flag(p.wholeCell), inFormulas: flag(p.inFormulas) });
 const FIND_OPTIONS = ["matchCase", "wholeCell", "inFormulas"];
 
@@ -256,6 +264,30 @@ const SPECS: readonly Spec[] = [
   { id: "columns.delete", label: "Delete Sheet Columns", params: ["at"], optional: ["count"], journaled: true, run: restructure("delete", "col") },
   { id: "data.sortAscending", label: "Sort A to Z", params: ["range", "by"], journaled: true, run: sort(true) },
   { id: "data.sortDescending", label: "Sort Z to A", params: ["range", "by"], journaled: true, run: sort(false) },
+  {
+    id: "names.define", label: "Define Name", params: ["name", "range"], journaled: true,
+    run: async (wb, p) => {
+      const n = nameOf(p.name), r = rangeOf(p.range);
+      const changed = await wb.sheet.define(n, r);
+      return changedBy(wb, changed, `${n} is ${wb.sheet.names().find(([x]) => x === n)![1]}`);
+    },
+  },
+  {
+    id: "names.delete", label: "Delete Name", params: ["name"], journaled: true,
+    run: async (wb, p) => {
+      const n = p.name.toUpperCase();
+      if (!wb.sheet.name(n)) refuse(`no name ${n}`);
+      const changed = await wb.sheet.define(n, null);
+      return changedBy(wb, changed, `${n} deleted`);
+    },
+  },
+  {
+    id: "names.list", label: "Name Manager", params: [], journaled: false,
+    run: async (wb) => {
+      const names = wb.sheet.names().map(([n, r]) => `${n} ${r}`);
+      return { ok: true, message: names.length ? names.join(", ") : "no names", changed: [], output: names };
+    },
+  },
   {
     id: "formulas.use", label: "Formula language", params: ["language"], journaled: true,
     run: async (wb, p) => {

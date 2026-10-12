@@ -6,6 +6,8 @@
 import { FormulaError, tokens } from "./lexer.ts";
 import type { Op, Token } from "./lexer.ts";
 import type { ErrorCode } from "./values.ts";
+import { keyOf } from "./address.ts";
+import type { Names } from "./language.ts";
 
 export type Expr =
   | { readonly kind: "num"; readonly value: number }
@@ -13,7 +15,7 @@ export type Expr =
   | { readonly kind: "bool"; readonly value: boolean }
   | { readonly kind: "ref"; readonly name: string }
   | { readonly kind: "range"; readonly from: string; readonly to: string }
-  | { readonly kind: "error"; readonly code: ErrorCode }
+  | { readonly kind: "error"; readonly code: ErrorCode; readonly why?: string }
   | { readonly kind: "neg"; readonly arg: Expr }
   | { readonly kind: "binary"; readonly op: Op; readonly left: Expr; readonly right: Expr }
   | { readonly kind: "call"; readonly name: string; readonly args: readonly Expr[] };
@@ -32,8 +34,11 @@ class Parser {
   readonly #tokens: Iterator<Token, void, undefined>;
   #tok!: Token;
 
-  constructor(formula: string) {
+  readonly #names: Names | undefined;
+
+  constructor(formula: string, names?: Names) {
     this.#tokens = tokens(formula);
+    this.#names = names;
     this.#next();
   }
 
@@ -92,7 +97,13 @@ class Parser {
       case "name": {
         if (this.#tok.kind !== "(") {
           if (t.name === "TRUE" || t.name === "FALSE") return { kind: "bool", value: t.name === "TRUE" };
-          throw new FormulaError(t.at, `unknown name '${t.text}'`);
+          // A named range is its cell or range; with no names to ask, a bare
+          // name does not parse.
+          if (!this.#names) throw new FormulaError(t.at, `unknown name '${t.text}'`);
+          const r = this.#names(t.name);
+          if (!r) return { kind: "error", code: "#NAME?", why: `no name ${t.name}` };
+          const [a, b] = [keyOf(r[0]), keyOf(r[1])];
+          return a === b ? { kind: "ref", name: a } : { kind: "range", from: a, to: b };
         }
         this.#next();
         const args: Expr[] = [];
@@ -117,5 +128,5 @@ class Parser {
   }
 }
 
-// `formula` is what follows the '='.
-export const parse = (formula: string): Expr => new Parser(formula).whole();
+// `formula` is what follows the '='; `names`, the sheet's named ranges.
+export const parse = (formula: string, names?: Names): Expr => new Parser(formula, names).whole();

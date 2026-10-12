@@ -7,6 +7,10 @@
 // is), so `run` may give a promise; the Sheet awaits each in turn.
 import type { CellError, Value } from "./values.ts";
 import type { Edit } from "./shift.ts";
+import type { Addr } from "./address.ts";
+
+// The sheet's named ranges: a name (upper case) to its two corners, or null.
+export type Names = (name: string) => [Addr, Addr] | null;
 
 export interface Env {
   get(key: string): Value;
@@ -23,7 +27,8 @@ export type Formula =
 
 export interface Language {
   readonly name: "Excel" | "RexxJS";
-  compile(formula: string): Formula;
+  // `names` reads the sheet's named ranges; a name it does not know is #NAME?.
+  compile(formula: string, names?: Names): Formula;
   // A cell's input (a formula or a constant) with its references moved by
   // an edit (a copy, rows or columns inserted or deleted: shift.ts); one
   // whose cell is gone is #REF!.

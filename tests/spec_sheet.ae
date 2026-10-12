@@ -249,8 +249,8 @@ main() {
         spec.it("the setting: the same formulas read as Excel fail, and read as RexxJS again") callback {
             b.click("Excel formulas")
             spec.assert_true(b.wait_for_console("sheet: Excel formulas"), "switched")
-            spec.assert_true(g.wait_cell("C", 2, "#ERROR!"), "B2 * TAX_RATE is not Excel")
-            spec.assert_true(g.wait_cell("D", 2, "#ERROR!"), "and what reads it")
+            spec.assert_true(g.wait_cell("C", 2, "#NAME?"), "B2 * TAX_RATE: Excel has no name TAX_RATE")
+            spec.assert_true(g.wait_cell("D", 2, "#NAME?"), "and what reads it")
             b.click("RexxJS formulas")
             spec.assert_true(b.wait_for_console("sheet: RexxJS formulas"), "back")
             spec.assert_true(g.wait_cell("C", 2, "80"), "C2 again")
@@ -341,6 +341,25 @@ main() {
             g.pick("J", 2)
             g.key("Ctrl+Z")
             spec.assert_true(g.wait_cell("J", 3, ""), "a script's changes undo as commands do")
+        }
+        spec.it("Name the selection names a range; a formula reads it; the Name Box goes to it") callback {
+            g.pick("C", 4)
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            b.set_field_by("name", "amounts")
+            b.click("Name the selection")
+            spec.assert_true(b.wait_for_console("sheet: AMOUNTS is C4:C9"), "named")
+            spec.assert_true(b.wait_for_text("AMOUNTS = C4:C9"), "listed")
+            g.enter("J4", "=SUM_RANGE(\"amounts\")")
+            spec.assert_true(g.wait_cell("J", 4, "1493.75"), "a RexxJS formula reads it")
+            g.enter("C9", "1801")
+            spec.assert_true(g.wait_cell("J", 4, "1494.75"), "and follows its cells")
+            b.set_field_by("cell", "amounts")
+            uidriver.post_ok("/widget/${g.field("cell")}/submit", "Return in the address field")
+            spec.assert_true(b.wait_for_text("AMOUNTS is C4:C9"), "the Name Box goes to it")
         }
     }
     return spec.run_summary(fw)

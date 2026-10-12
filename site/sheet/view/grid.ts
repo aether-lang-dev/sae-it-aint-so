@@ -49,18 +49,12 @@ export function sheetGrid(v: SheetView): void {
   });
   ui.datagrid_set_col_width(v.grid, 0, 34);     // the row numbers
 
-  // Where a sheet column is on screen now (columns can be dragged).
-  const viewCol = (modelCol: number): number => {
-    for (let c = 0; c <= COLS; c++) if (ui.datagrid_col_model(v.grid, c) === modelCol) return c;
-    return modelCol;
-  };
-
   // The address field drives the grid's selection: name a cell, go to it.
   v.address.subscribe((a: string) => {
     const at = addrOf(a);
     if (!at) return;
     const [, , r, c] = ui.datagrid_selection(v.grid);
-    if (r !== at.row || ui.datagrid_col_model(v.grid, c) !== at.col + 1) ui.datagrid_select(v.grid, at.row, viewCol(at.col + 1));
+    if (r !== at.row || ui.datagrid_col_model(v.grid, c) !== at.col + 1) ui.datagrid_select(v.grid, at.row, v.viewCol(at.col + 1));
     v.follow(keyOf(at));
   });
 
