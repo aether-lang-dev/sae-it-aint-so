@@ -274,7 +274,7 @@ summary.
     parsed and read in each language, edits moving only the references
     they are for, and a Sheet against a stubbed `Context` (another sheet's
     values, `touch`, sheets sharing `Turns` taking turns).
-  - `sheet_files` (19): the file written in the Tauri app's shapes and
+  - `sheet_files` (18): the file written in the Tauri app's shapes and
     read back (rules, names, other sheets); save, open, list and delete
     against a fake store that holds keys to `storage`'s rule; CSV out of
     a range or everything used, in at a cell, refused where it does not
