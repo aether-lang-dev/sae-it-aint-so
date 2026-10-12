@@ -41,6 +41,7 @@ function nodeOf(e: Expr): Node {
   const n: Node = { e, kids: kidsOf(e).map(nodeOf) };
   if (e.kind === "num" || e.kind === "str" || e.kind === "bool") n.text = literal(e.value);
   if (e.kind === "error") n.text = e.code;
+  if (e.kind === "missing") n.text = "";
   return n;
 }
 
@@ -59,6 +60,7 @@ function printed(n: Node): string {
       return `${wrap(n.kids[0], level(n.kids[0]) < l)}${e.op}${wrap(n.kids[1], level(n.kids[1]) <= l)}`;
     }
     case "call": return `${e.name}(${n.kids.map(printed).join(",")})`;
+    case "missing": return "";
     default: return "";
   }
 }

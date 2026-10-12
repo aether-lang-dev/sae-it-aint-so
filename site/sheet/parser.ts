@@ -18,7 +18,9 @@ export type Expr =
   | { readonly kind: "error"; readonly code: ErrorCode; readonly why?: string }
   | { readonly kind: "neg"; readonly arg: Expr }
   | { readonly kind: "binary"; readonly op: Op; readonly left: Expr; readonly right: Expr }
-  | { readonly kind: "call"; readonly name: string; readonly args: readonly Expr[] };
+  | { readonly kind: "call"; readonly name: string; readonly args: readonly Expr[] }
+  // An argument left out: XLOOKUP(25, E1:H1, E2:H2, , -1).
+  | { readonly kind: "missing" };
 
 const LEVELS: readonly (readonly Op[])[] = [
   ["=", "<>", "<", ">", "<=", ">="],
@@ -110,11 +112,12 @@ class Parser {
         }
         this.#next();
         const args: Expr[] = [];
+        const arg = (): Expr => (this.#tok.kind === "," || this.#tok.kind === ")" ? { kind: "missing" } : this.#binary(0));
         if (this.#tok.kind !== ")") {
-          args.push(this.#binary(0));
+          args.push(arg());
           while (this.#tok.kind === ",") {
             this.#next();
-            args.push(this.#binary(0));
+            args.push(arg());
           }
         }
         this.#expect(")");

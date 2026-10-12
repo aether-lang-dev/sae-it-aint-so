@@ -194,18 +194,25 @@ fields under the formula bar:
   (`#REF!`, `#N/A`, ...).
 - Operators: `+ - * / ^ &` and the comparisons, with spreadsheet
   precedence. Unary minus binds tightest, so `-2^2` is 4.
-- 53 functions (`site/sheet/functions.ts`):
+- 81 functions (`site/sheet/functions.ts`), and arguments left out
+  (`XLOOKUP(25,E1:H1,E2:H2,,-1)`):
   - maths and statistics: SUM, PRODUCT, AVERAGE, MIN, MAX, MEDIAN, STDEV,
     COUNT, COUNTA, COUNTBLANK, ABS, SIGN, INT, ROUND, ROUNDUP, ROUNDDOWN,
     MOD, POWER, SQRT, PI;
   - conditionals with spreadsheet criteria (`">3"`, `"<>"`, `""`): SUMIF,
-    COUNTIF, AVERAGEIF;
+    COUNTIF, AVERAGEIF, and over several criteria SUMIFS, COUNTIFS,
+    AVERAGEIFS, MAXIFS, MINIFS; SUMPRODUCT;
+  - order statistics: LARGE, SMALL, RANK, PERCENTILE, QUARTILE, MODE, VAR,
+    VARP, STDEVP;
   - logic: IF (only the branch taken is worked out), AND, OR, NOT, IFERROR,
-    ISERROR, ISNUMBER, ISTEXT, ISBLANK, CHOOSE;
+    ISERROR, ISNUMBER, ISTEXT, ISBLANK, CHOOSE, IFS, SWITCH, IFNA, NA;
   - text: CONCAT, TEXTJOIN, LEN, UPPER, LOWER, PROPER, TRIM, LEFT, RIGHT,
     MID, FIND, SUBSTITUTE, REPT, EXACT, VALUE;
-  - lookup: INDEX, MATCH (exact, ascending, descending), VLOOKUP (exact and
-    approximate), ROWS, COLUMNS.
+  - lookup: INDEX, MATCH (exact, ascending, descending), VLOOKUP and
+    HLOOKUP (exact and approximate), XLOOKUP and XMATCH (exact, next
+    smaller or larger, wildcards `* ? ~`; first to last or last to first;
+    a value if not found), ROWS, COLUMNS;
+  - SPARKLINE.
 - Errors are values that flow through whatever reads them: `#DIV/0!`,
   `#VALUE!`, `#REF!`, `#NAME?`, `#NUM!`, `#N/A`, `#CYCLE!` (with the path,
   `A2 → B2 → A2`), and `#ERROR!` (a parse error, with the column).
@@ -339,6 +346,9 @@ summary.
     scales, bar, line and pie layouts (bars in proportion on one
     baseline, lines rising, slices and their shares), sparklines; the
     chart.* commands and insert.sparkline in both languages.
+  - `sheet_lookup` (20): the conditionals, XLOOKUP and XMATCH in every
+    mode, HLOOKUP, the *IFS family, SUMPRODUCT, and the order statistics,
+    with their errors.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,

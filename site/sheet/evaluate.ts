@@ -21,6 +21,7 @@ class Evaluator {
   // A function's argument: a range's cells and width, or one value. An
   // error is passed on as a value, for IFERROR and ISERROR to see.
   #arg(e: Expr): Arg {
+    if (e.kind === "missing") return { values: [], cols: 0 };
     if (e.kind === "range") {
       const s = span(e.from, e.to);
       if (!s) return fail("#REF!", `${cellAddr(e.from) ? e.to : e.from} is not on the sheet`);
@@ -42,6 +43,8 @@ class Evaluator {
         return e.value;
       case "ref":
         return cellAddr(e.name) ? this.#env.get(e.name) : fail("#REF!", `${e.name} is not on the sheet`);
+      case "missing":
+        return null;
       case "error":
         return fail(e.code, e.why ?? (e.code === "#REF!" ? "a reference moved off the sheet" : "written in the formula"));
       case "range":

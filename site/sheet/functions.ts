@@ -45,15 +45,18 @@ export const names = (): string[] => [...library.keys(), "IF"].sort();
 
 // --- reading arguments ---
 
+// Whether argument i was left out (missing, or written as nothing: f(a,,c)).
+const absent = (args: readonly Arg[], i: number): boolean => !args[i] || args[i].values.length === 0;
+
 // Argument i as one value (null when it was left out).
 function val(args: readonly Arg[], i: number): Value {
   const a = args[i];
-  if (!a) return null;
+  if (absent(args, i)) return null;
   return a.values.length === 1 ? a.values[0] : fail("#VALUE!", `argument ${i + 1} is a range where one value goes`);
 }
 
-const num = (args: readonly Arg[], i: number, absent?: number): number =>
-  args[i] === undefined && absent !== undefined ? absent : toNumber(val(args, i));
+const num = (args: readonly Arg[], i: number, otherwise?: number): number =>
+  absent(args, i) && otherwise !== undefined ? otherwise : toNumber(val(args, i));
 const str = (args: readonly Arg[], i: number): string => toText(val(args, i));
 const every = (args: readonly Arg[]): Value[] => args.flatMap((a) => a.values);
 const numbers = (args: readonly Arg[]): number[] =>
@@ -229,7 +232,172 @@ def("REPT", 2, 2, (args) => {
 def("EXACT", 2, 2, (args) => str(args, 0) === str(args, 1));
 def("VALUE", 1, 1, (args) => num(args, 0));
 
+// --- conditionals ---
+
+def("IFS", 2, Infinity, (args) => {
+  for (let i = 0; i + 1 < args.length; i += 2) if (toNumber(val(args, i)) !== 0) return val(args, i + 1);
+  return fail("#N/A", "no condition was true");
+});
+def("SWITCH", 3, Infinity, (args) => {
+  const x = scalar(val(args, 0));
+  let i = 1;
+  for (; i + 1 < args.length; i += 2) if (compare("=", x, scalar(val(args, i)))) return val(args, i + 1);
+  return i < args.length ? val(args, i) : fail("#N/A", `${toText(x)} matched no case`);
+});
+def("IFNA", 2, 2, (args) => {
+  const v = val(args, 0);
+  return v instanceof CellError && v.code === "#N/A" ? val(args, 1) : v;
+});
+def("NA", 0, 0, () => fail("#N/A", "NA()"));
+
+// --- conditional aggregates over several criteria ---
+
+// The values of `of` where every (range, criterion) pair holds.
+function where(name: string, of: Arg, pairs: readonly Arg[]): Value[] {
+  const tests: [readonly Value[], (v: Value) => boolean][] = [];
+  for (let i = 0; i + 1 < pairs.length; i += 2) {
+    if (pairs[i].values.length !== of.values.length) return fail("#VALUE!", `${name}'s ranges differ in size`);
+    tests.push([pairs[i].values, criterion(scalar(pairs[i + 1].values[0] ?? null))]);
+  }
+  return of.values.filter((_, j) => tests.every(([vs, ok]) => ok(vs[j])));
+}
+const numbersIn = (vs: readonly Value[]): number[] => vs.map(scalar).filter((v): v is number => typeof v === "number");
+
+def("SUMIFS", 3, Infinity, (args) => sum(numbersIn(where("SUMIFS", args[0], args.slice(1)))));
+def("COUNTIFS", 2, Infinity, (args) => where("COUNTIFS", args[0], args).length);
+def("AVERAGEIFS", 3, Infinity, (args) => {
+  const ns = numbersIn(where("AVERAGEIFS", args[0], args.slice(1)));
+  return ns.length ? sum(ns) / ns.length : fail("#DIV/0!", "AVERAGEIFS matched no numbers");
+});
+def("MAXIFS", 3, Infinity, (args) => {
+  const ns = numbersIn(where("MAXIFS", args[0], args.slice(1)));
+  return ns.length ? Math.max(...ns) : 0;
+});
+def("MINIFS", 3, Infinity, (args) => {
+  const ns = numbersIn(where("MINIFS", args[0], args.slice(1)));
+  return ns.length ? Math.min(...ns) : 0;
+});
+def("SUMPRODUCT", 1, Infinity, (args) => {
+  const n = args[0].values.length;
+  if (args.some((a) => a.values.length !== n)) return fail("#VALUE!", "SUMPRODUCT's ranges differ in size");
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const vs = args.map((a) => scalar(a.values[i]));
+    total += vs.every((v) => typeof v === "number") ? vs.reduce((p, v) => p * (v as number), 1) : 0;
+  }
+  return total;
+});
+
+// --- order statistics ---
+
+const sorted = (args: readonly Arg[], i: number): number[] => numbersIn(args[i].values).sort((x, y) => x - y);
+function kth(name: string, largest: boolean): Fn {
+  return (args) => {
+    const ns = sorted(args, 0), k = Math.trunc(num(args, 1));
+    if (k < 1 || k > ns.length) return fail("#NUM!", `${name}'s k is ${k} of ${ns.length} numbers`);
+    return largest ? ns[ns.length - k] : ns[k - 1];
+  };
+}
+def("LARGE", 2, 2, kth("LARGE", true));
+def("SMALL", 2, 2, kth("SMALL", false));
+def("RANK", 2, 3, (args) => {
+  const x = num(args, 0), ns = sorted(args, 1), ascending = num(args, 2, 0) !== 0;
+  if (!ns.includes(x)) return notFound(x);
+  return 1 + ns.filter((n) => (ascending ? n < x : n > x)).length;
+});
+// PERCENTILE (inclusive): k from 0 to 1, between the numbers in order.
+function percentile(ns: readonly number[], k: number, name: string): number {
+  if (!ns.length) return fail("#NUM!", `${name} of no numbers`);
+  if (k < 0 || k > 1) return fail("#NUM!", `${name}'s k is outside 0 to 1`);
+  const at = k * (ns.length - 1), lo = Math.floor(at);
+  return lo + 1 < ns.length ? ns[lo] + (at - lo) * (ns[lo + 1] - ns[lo]) : ns[lo];
+}
+def("PERCENTILE", 2, 2, (args) => percentile(sorted(args, 0), num(args, 1), "PERCENTILE"));
+def("QUARTILE", 2, 2, (args) => {
+  const q = Math.trunc(num(args, 1));
+  return q < 0 || q > 4 ? fail("#NUM!", "QUARTILE's quart is 0 to 4") : percentile(sorted(args, 0), q / 4, "QUARTILE");
+});
+def("MODE", 1, Infinity, (args) => {
+  const ns = numbers(args), counts = new Map<number, number>();
+  for (const n of ns) counts.set(n, (counts.get(n) ?? 0) + 1);
+  let best: number | null = null;
+  for (const n of ns) if (counts.get(n)! > 1 && (best === null || counts.get(n)! > counts.get(best)!)) best = n;
+  return best ?? fail("#N/A", "MODE: no number repeats");
+});
+const squares = (ns: readonly number[]): number => {
+  const m = sum(ns) / ns.length;
+  return ns.reduce((s, n) => s + (n - m) ** 2, 0);
+};
+def("VAR", 1, Infinity, (args) => {
+  const ns = numbers(args);
+  return ns.length < 2 ? fail("#DIV/0!", "VAR needs two numbers or more") : squares(ns) / (ns.length - 1);
+});
+def("VARP", 1, Infinity, (args) => {
+  const ns = numbers(args);
+  return ns.length ? squares(ns) / ns.length : fail("#DIV/0!", "VARP of no numbers");
+});
+def("STDEVP", 1, Infinity, (args) => {
+  const ns = numbers(args);
+  return ns.length ? Math.sqrt(squares(ns) / ns.length) : fail("#DIV/0!", "STDEVP of no numbers");
+});
+
 // --- lookup ---
+
+// A wildcard pattern (* any run, ? one character, ~ before either for
+// itself) as a test, ignoring case.
+function wildcard(pattern: string): (v: Value) => boolean {
+  let re = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "~" && i + 1 < pattern.length) re += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    else if (c === "*") re += ".*";
+    else if (c === "?") re += ".";
+    else re += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  const r = new RegExp(`^${re}$`, "i");
+  return (v) => v !== null && !(v instanceof CellError) && r.test(toText(v));
+}
+
+// XLOOKUP's and XMATCH's search: the index in `list` of x by match mode
+// (0 exact, -1 exact or next smaller, 1 exact or next larger, 2 wildcard),
+// searching first to last (1) or last to first (-1); -1 when not there.
+function xsearch(x: Value, list: readonly Value[], mode: number, from: number): number {
+  const order = list.map((_, i) => i);
+  if (from < 0) order.reverse();
+  if (mode === 2) {
+    const ok = wildcard(toText(x));
+    return order.find((i) => ok(list[i])) ?? -1;
+  }
+  const real = (v: Value) => v !== null && !(v instanceof CellError);
+  const exact = order.find((i) => real(list[i]) && compare("=", list[i], x));
+  if (exact !== undefined || mode === 0) return exact ?? -1;
+  let best = -1;
+  for (const i of order) {
+    const v = list[i];
+    if (!real(v) || !(mode < 0 ? compare("<", v, x) : compare(">", v, x))) continue;
+    if (best < 0 || (mode < 0 ? compare(">", v, list[best]) : compare("<", v, list[best]))) best = i;
+  }
+  return best;
+}
+
+def("XLOOKUP", 3, 6, (args) => {
+  const x = scalar(val(args, 0)), list = args[1].values, back = args[2].values;
+  if (back.length !== list.length) return fail("#VALUE!", "XLOOKUP's lookup and return ranges differ in size");
+  const at = xsearch(x, list, num(args, 4, 0), num(args, 5, 1));
+  if (at >= 0) return back[at];
+  return absent(args, 3) ? notFound(x) : val(args, 3);
+});
+def("XMATCH", 2, 4, (args) => {
+  const x = scalar(val(args, 0)), at = xsearch(x, args[1].values, num(args, 2, 0), num(args, 3, 1));
+  return at < 0 ? notFound(x) : at + 1;
+});
+def("HLOOKUP", 3, 4, (args) => {
+  const x = scalar(val(args, 0)), { values, cols } = args[1], r = Math.trunc(num(args, 2)), rows = values.length / cols;
+  if (r < 1) return fail("#VALUE!", "HLOOKUP's row starts at 1");
+  if (r > rows) return fail("#REF!", `HLOOKUP row ${r} of a table ${rows} high`);
+  const c = position(x, values.slice(0, cols), num(args, 3, 1) !== 0 ? 1 : 0);
+  return c < 0 ? notFound(x) : values[(r - 1) * cols + c];
+});
 
 def("ROWS", 1, 1, (args) => args[0].values.length / args[0].cols);
 def("COLUMNS", 1, 1, (args) => args[0].cols);
