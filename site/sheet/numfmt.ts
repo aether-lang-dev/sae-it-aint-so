@@ -12,6 +12,7 @@
 //     y, m, d, h, s runs, AM/PM, [h] for elapsed hours; m is minutes beside
 //     h or s;
 //   - General, or @ (the text itself).
+import { parseDate, parts } from "./dates.ts";
 import { show } from "./format.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
@@ -236,7 +237,7 @@ const two = (n: number) => String(n).padStart(2, "0");
 function dated(serial: number, toks: readonly Tok[]): string | null {
   if (serial < 0) return null;
   const seconds = Math.round(serial * 86400);
-  const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(seconds / 86400) * 86400000);
+  const d = parts(Math.floor(seconds / 86400));
   const secOfDay = seconds % 86400;
   const h = Math.floor(secOfDay / 3600), mi = Math.floor((secOfDay % 3600) / 60), s = secOfDay % 60;
   const twelve = toks.some((t) => t.t === "date" && /^a/i.test(t.s));
@@ -258,13 +259,13 @@ function dated(serial: number, toks: readonly Tok[]): string | null {
     } else if (run === "[h]") text += Math.floor(seconds / 3600);
     else if (run === "[m]") text += Math.floor(seconds / 60);
     else if (run === "[s]") text += seconds;
-    else if (run[0] === "y") text += n <= 2 ? two(d.getUTCFullYear() % 100) : String(d.getUTCFullYear());
+    else if (run[0] === "y") text += n <= 2 ? two(d.y % 100) : String(d.y);
     else if (run[0] === "m" && minute(i)) text += n === 1 ? mi : two(mi);
     else if (run[0] === "m") {
-      const m = d.getUTCMonth();
+      const m = d.m - 1;
       text += n === 1 ? m + 1 : n === 2 ? two(m + 1) : n === 3 ? MONTHS[m].slice(0, 3) : n === 4 ? MONTHS[m] : MONTHS[m][0];
     } else if (run[0] === "d") {
-      const day = d.getUTCDate(), w = d.getUTCDay();
+      const day = d.d, w = d.weekday;
       text += n === 1 ? day : n === 2 ? two(day) : n === 3 ? DAYS[w].slice(0, 3) : DAYS[w];
     } else if (run[0] === "h") {
       const hh = twelve ? (h % 12 || 12) : h;
@@ -275,12 +276,6 @@ function dated(serial: number, toks: readonly Tok[]): string | null {
 }
 
 const isDate = (s: Section) => s.toks.some((t) => t.t === "date");
-
-// "2024-01-15" as a serial number, for a date format given text.
-function serialOf(text: string): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
-  return m ? (Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - Date.UTC(1899, 11, 30)) / 86400000 : null;
-}
 
 function render(n: number, s: Section, signed: boolean): string | null {
   return isDate(s) ? dated(n, s.toks) : numeric(n, s.toks, signed);
@@ -296,7 +291,7 @@ export function numberFormat(v: Value, pattern: string): Shown | null {
   if (typeof v === "string") {
     const textSection = sections.length === 4 ? sections[3] : sections.length === 1 && sections[0].toks.some((t) => t.t === "@") ? sections[0] : null;
     if (textSection) return shown(textSection.toks.map((t) => (t.t === "lit" ? t.s : t.t === "@" ? v : "")).join(""), textSection);
-    const serial = serialOf(v);
+    const serial = parseDate(v);
     return serial !== null && isDate(sections[0]) ? shown(dated(serial, sections[0].toks), sections[0]) : null;
   }
   const numbers = sections.slice(0, 3);

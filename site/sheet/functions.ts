@@ -6,6 +6,8 @@
 import { CellError, compare, fail, finite, scalar, toNumber, toText } from "./values.ts";
 import type { Comparison, Value } from "./values.ts";
 import { sparkline } from "./charts.ts";
+import { addMonths, dateDif, endOfMonth, now, parseDate, parts, serial, workdayFrom, workdaysBetween } from "./dates.ts";
+import { fv, irr, nper, npv, pmt, pv, rate } from "./finance.ts";
 
 export interface Arg {
   readonly values: readonly Value[];
@@ -339,6 +341,62 @@ def("VARP", 1, Infinity, (args) => {
 def("STDEVP", 1, Infinity, (args) => {
   const ns = numbers(args);
   return ns.length ? Math.sqrt(squares(ns) / ns.length) : fail("#DIV/0!", "STDEVP of no numbers");
+});
+
+// --- dates and times (dates.ts) ---
+
+// Argument i as a serial: a number, or a date written as text.
+function date(args: readonly Arg[], i: number): number {
+  const v = scalar(val(args, i));
+  if (typeof v === "string") return parseDate(v) ?? fail("#VALUE!", `'${v}' is not a date`);
+  return toNumber(v);
+}
+const holidays = (args: readonly Arg[], i: number): Set<number> =>
+  new Set(absent(args, i) ? [] : args[i].values.filter((v) => v !== null).map((v) => Math.floor(typeof v === "string" ? parseDate(v) ?? NaN : toNumber(v))));
+
+def("DATE", 3, 3, (args) => {
+  const y = Math.trunc(num(args, 0));
+  return serial(y < 1900 ? y + 1900 : y, Math.trunc(num(args, 1)), Math.trunc(num(args, 2)));
+});
+def("DATEVALUE", 1, 1, (args) => date(args, 0));
+def("YEAR", 1, 1, (args) => parts(date(args, 0)).y);
+def("MONTH", 1, 1, (args) => parts(date(args, 0)).m);
+def("DAY", 1, 1, (args) => parts(date(args, 0)).d);
+def("WEEKDAY", 1, 2, (args) => {
+  const w = parts(date(args, 0)).weekday, type = num(args, 1, 1);
+  return type === 2 ? ((w + 6) % 7) + 1 : type === 3 ? (w + 6) % 7 : w + 1;
+});
+def("EDATE", 2, 2, (args) => addMonths(date(args, 0), Math.trunc(num(args, 1))));
+def("EOMONTH", 2, 2, (args) => endOfMonth(date(args, 0), Math.trunc(num(args, 1))));
+def("DAYS", 2, 2, (args) => Math.floor(date(args, 0)) - Math.floor(date(args, 1)));
+def("DATEDIF", 3, 3, (args) => {
+  const a = date(args, 0), b = date(args, 1);
+  if (a > b) return fail("#NUM!", "DATEDIF's start is after its end");
+  return dateDif(a, b, str(args, 2)) ?? fail("#NUM!", `${str(args, 2)} is not a unit (Y, M, D, YM, MD, YD)`);
+});
+def("NETWORKDAYS", 2, 3, (args) => workdaysBetween(date(args, 0), date(args, 1), holidays(args, 2)));
+def("WORKDAY", 2, 3, (args) => workdayFrom(date(args, 0), Math.trunc(num(args, 1)), holidays(args, 2)));
+def("TIME", 3, 3, (args) => ((num(args, 0) * 3600 + num(args, 1) * 60 + num(args, 2)) / 86400) % 1);
+const clock = (args: readonly Arg[]) => Math.round((date(args, 0) % 1) * 86400);
+def("HOUR", 1, 1, (args) => Math.floor(clock(args) / 3600) % 24);
+def("MINUTE", 1, 1, (args) => Math.floor(clock(args) / 60) % 60);
+def("SECOND", 1, 1, (args) => clock(args) % 60);
+def("TODAY", 0, 0, () => Math.floor(now()));
+def("NOW", 0, 0, () => now());
+
+// --- money (finance.ts) ---
+
+def("PMT", 3, 5, (args) => finite(pmt(num(args, 0), num(args, 1), num(args, 2), num(args, 3, 0), num(args, 4, 0))));
+def("FV", 3, 5, (args) => finite(fv(num(args, 0), num(args, 1), num(args, 2), num(args, 3, 0), num(args, 4, 0))));
+def("PV", 3, 5, (args) => finite(pv(num(args, 0), num(args, 1), num(args, 2), num(args, 3, 0), num(args, 4, 0))));
+def("NPER", 3, 5, (args) => finite(nper(num(args, 0), num(args, 1), num(args, 2), num(args, 3, 0), num(args, 4, 0))));
+def("RATE", 3, 6, (args) =>
+  rate(num(args, 0), num(args, 1), num(args, 2), num(args, 3, 0), num(args, 4, 0), num(args, 5, 0.1)) ?? fail("#NUM!", "RATE did not settle"));
+def("NPV", 2, Infinity, (args) => npv(num(args, 0), numbers(args.slice(1))));
+def("IRR", 1, 2, (args) => {
+  const flows = numbersIn(args[0].values);
+  if (!flows.some((c) => c < 0) || !flows.some((c) => c > 0)) return fail("#NUM!", "IRR needs a negative and a positive cash flow");
+  return irr(flows, num(args, 1, 0.1)) ?? fail("#NUM!", "IRR did not settle");
 });
 
 // --- lookup ---
