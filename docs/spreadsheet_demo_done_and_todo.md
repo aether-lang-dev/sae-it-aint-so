@@ -200,6 +200,16 @@ fields under the formula bar:
   called at once (`LAMBDA(x, x*2)(5)`) or through a name. A formula that
   comes to a LAMBDA is `#CALC!`. (Named LAMBDAs in the Name Manager, and
   so recursion, are still to come.)
+- Dynamic arrays, as Excel 365 has them. A formula may come to an array:
+  a range, an operator over ranges cell by cell (`=A1:A3*2`; a row or a
+  column broadcast across the other, `#N/A` where one runs out), IF over
+  one, SEQUENCE, FILTER, SORT, SORTBY, UNIQUE, TRANSPOSE, an XLOOKUP that
+  returns a row, and MAP, REDUCE, SCAN, BYROW, BYCOL and MAKEARRAY with a
+  LAMBDA. It spills into the cells below and to the right: they show its
+  values and are read as any cell, `A1#` is all of it (and moves in a
+  copy), and an input in the way, or the sheet's edge, makes it `#SPILL!`
+  until cleared. (Scalar functions do not yet lift over arrays:
+  `UPPER(A1:A3)` is `#VALUE!`; spills are within a sheet.)
 - 108 functions (`site/sheet/functions.ts`), and arguments left out
   (`XLOOKUP(25,E1:H1,E2:H2,,-1)`):
   - maths and statistics: SUM, PRODUCT, AVERAGE, MIN, MAX, MEDIAN, STDEV,
@@ -368,6 +378,10 @@ summary.
   - `sheet_let` (12): LET's scoping, LAMBDA called at once and by name,
     closures, the errors, what it reads, printing, and a copy that moves
     references but not names.
+  - `sheet_arrays` (20): arrays from ranges and operators (broadcast,
+    `#N/A`), IF over one, every array function, the LAMBDA helpers; in a
+    sheet, spilling, `A1#`, a blocker and its clearing, undo, the edge, a
+    spill that shrinks, a copy, styles.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
@@ -379,7 +393,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 38 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 39 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -412,7 +426,8 @@ summary.
     section;
   - a bar chart of a selection, read back from the vg scene (its
     categories, its palette), its scale following an edit; a sparkline;
-    the chart deleted.
+    the chart deleted;
+  - a dynamic array spilling, read whole by `F14#`, blocked and cleared.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -495,9 +510,11 @@ web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).
    Recompute already touches only what is downstream of a change.
 4. **More functions.**
    - Done: lookups, conditionals, order statistics, dates, money.
-   - Done too: LET and LAMBDA.
-   - Next: dynamic arrays (FILTER, SORT, UNIQUE, SEQUENCE, spilling), and
-     MAP, REDUCE, BYROW over them.
+   - Done too: LET and LAMBDA; dynamic arrays and spilling; MAP, REDUCE,
+     SCAN, BYROW, BYCOL, MAKEARRAY.
+   - Next: scalar functions lifted over arrays; named LAMBDAs; TAKE, DROP,
+     CHOOSECOLS, VSTACK, HSTACK; a text batch (TEXT, TEXTBEFORE,
+     TEXTAFTER, TEXTSPLIT).
 5. **Highlighting what a formula reads while it is typed.** Trace
    precedents marks them once it is entered; while it is being typed needs
    the editor's text as it changes (an aether-ui ask). Evaluate Formula

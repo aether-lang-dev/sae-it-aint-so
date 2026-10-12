@@ -10,7 +10,7 @@ export type Op = "+" | "-" | "*" | "/" | "^" | "&" | "=" | "<>" | "<" | ">" | "<
 export type Token = (
   | { readonly kind: "num"; readonly value: number }
   | { readonly kind: "str"; readonly value: string }
-  | { readonly kind: "ref"; readonly name: string; readonly fixCol: boolean; readonly fixRow: boolean }
+  | { readonly kind: "ref"; readonly name: string; readonly fixCol: boolean; readonly fixRow: boolean; readonly spill: boolean }
   | { readonly kind: "error"; readonly code: ErrorCode }
   | { readonly kind: "name"; readonly name: string }
   | { readonly kind: "op"; readonly op: Op }
@@ -30,8 +30,9 @@ export class FormulaError extends Error {
 const OPS: readonly Op[] = ["<>", "<=", ">=", "+", "-", "*", "/", "^", "&", "=", "<", ">"];
 const NUMBER = /^(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/;
 const WORD = /^[A-Za-z_][A-Za-z0-9_]*/;
-// A reference, perhaps on another sheet: Costs!B2, 'My Costs'!$B$2.
-const REF = /^(?:(?:([A-Za-z_]\w*)|'([^']+)')!)?(\$?)([A-Za-z]+)(\$?)([0-9]+)(?![A-Za-z0-9_])/;
+// A reference, perhaps on another sheet: Costs!B2, 'My Costs'!$B$2; A1#
+// is the whole of what A1 spills.
+const REF = /^(?:(?:([A-Za-z_]\w*)|'([^']+)')!)?(\$?)([A-Za-z]+)(\$?)([0-9]+)(?![A-Za-z0-9_])(#(?![A-Za-z/]))?/;
 // The errors a formula can be written with (a copy writes #REF! for a
 // reference it moved off the sheet).
 const ERRORS: readonly ErrorCode[] = ["#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#CALC!"];
@@ -50,10 +51,10 @@ export function* tokens(formula: string, from = 2): Generator<Token, void, undef
     }
     const ref = REF.exec(rest);
     if (ref) {
-      const [text, bare, quoted, fixCol, col, fixRow, row] = ref;
+      const [text, bare, quoted, fixCol, col, fixRow, row, spill] = ref;
       const sheet = bare ?? quoted;
       const cell = col.toUpperCase() + row;
-      yield { kind: "ref", name: sheet ? `${sheet.toUpperCase()}!${cell}` : cell, fixCol: fixCol === "$", fixRow: fixRow === "$", at, text };
+      yield { kind: "ref", name: sheet ? `${sheet.toUpperCase()}!${cell}` : cell, fixCol: fixCol === "$", fixRow: fixRow === "$", spill: !!spill, at, text };
       i += text.length;
       continue;
     }

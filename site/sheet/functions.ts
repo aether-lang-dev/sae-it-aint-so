@@ -3,8 +3,9 @@
 // range's width (VLOOKUP and INDEX need its shape), or one value. An
 // argument that is an error arrives as that error, so IFERROR and ISERROR
 // can look at it; everything else rethrows it as soon as it reads it.
-import { CellError, compare, fail, finite, scalar, toNumber, toText } from "./values.ts";
-import type { Comparison, Value } from "./values.ts";
+import { CellError, array, compare, fail, finite, scalar, toNumber, toText } from "./values.ts";
+import type { ArrayValue, Comparison, Result, Value } from "./values.ts";
+import { sortOrder } from "./sortfind.ts";
 import { sparkline } from "./charts.ts";
 import { addMonths, dateDif, endOfMonth, now, parseDate, parts, serial, workdayFrom, workdaysBetween } from "./dates.ts";
 import { fv, irr, nper, npv, pmt, pv, rate } from "./finance.ts";
@@ -16,7 +17,8 @@ export interface Arg {
 
 export const single = (v: Value): Arg => ({ values: [v], cols: 1 });
 
-type Fn = (args: readonly Arg[]) => Value;
+// A function gives one value, or (SEQUENCE, FILTER ...) a dynamic array.
+type Fn = (args: readonly Arg[]) => Value | ArrayValue;
 
 interface Spec {
   readonly min: number;
@@ -36,7 +38,7 @@ const takes = (min: number, max: number): string =>
 
 // Call a function by name; IF is the evaluator's, since it must not work
 // out the branch it does not take.
-export function call(name: string, args: readonly Arg[]): Value {
+export function call(name: string, args: readonly Arg[]): Result {
   const spec = library.get(name);
   if (!spec) return fail("#NAME?", `no function ${name}`);
   if (args.length < spec.min || args.length > spec.max) return fail("#VALUE!", `${name} takes ${takes(spec.min, spec.max)}`);
@@ -399,6 +401,78 @@ def("IRR", 1, 2, (args) => {
   return irr(flows, num(args, 1, 0.1)) ?? fail("#NUM!", "IRR did not settle");
 });
 
+// --- dynamic arrays ---
+
+const rowsOf = (a: Arg): Value[][] => Array.from({ length: a.values.length / a.cols }, (_, i) => a.values.slice(i * a.cols, (i + 1) * a.cols));
+const fromRows = (rows: readonly (readonly Value[])[]): ArrayValue => array(rows.length, rows[0]?.length ?? 0, rows.flat());
+const transposed = (a: Arg): Arg => {
+  const rows = a.values.length / a.cols;
+  return { values: Array.from({ length: a.values.length }, (_, k) => a.values[(k % rows) * a.cols + Math.floor(k / rows)]), cols: rows };
+};
+const turned = (x: ArrayValue): ArrayValue => {
+  const t = transposed({ values: x.values, cols: x.cols });
+  return array(t.values.length / t.cols, t.cols, t.values);
+};
+
+def("SEQUENCE", 1, 4, (args) => {
+  const rows = Math.trunc(num(args, 0)), cols = Math.trunc(num(args, 1, 1)), start = num(args, 2, 1), step = num(args, 3, 1);
+  if (rows < 1 || cols < 1) return fail("#CALC!", `SEQUENCE of no ${rows < 1 ? "rows" : "columns"}`);
+  if (rows * cols > 10_000) return fail("#NUM!", "SEQUENCE of more than 10000 values");
+  return array(rows, cols, Array.from({ length: rows * cols }, (_, i) => start + step * i));
+});
+def("FILTER", 2, 3, (args) => {
+  const a = args[0], include = args[1], rows = a.values.length / a.cols;
+  const keep = include.values.map((v) => toNumber(v) !== 0);
+  // A column of TRUE and FALSE keeps rows; a row of them keeps columns.
+  const byRow = include.cols === 1 && keep.length === rows;
+  if (!byRow && !(keep.length === a.cols && include.cols === keep.length)) return fail("#VALUE!", "FILTER's include is not the array's height or width");
+  const lines = rowsOf(byRow ? a : transposed(a)).filter((_, i) => keep[i]);
+  if (!lines.length) return absent(args, 2) ? fail("#CALC!", "FILTER found nothing") : val(args, 2);
+  return byRow ? fromRows(lines) : turned(fromRows(lines));
+});
+// Rows in order of a key each (ascending, or not), equal ones as they were.
+const ordered = <T>(items: readonly T[], key: (t: T) => Value, ascending: boolean): T[] =>
+  items.map((t, i) => ({ t, i })).sort((p, q) => (ascending ? 1 : -1) * sortOrder(key(p.t), key(q.t)) || p.i - q.i).map((x) => x.t);
+def("SORT", 1, 4, (args) => {
+  const byCol = !absent(args, 3) && num(args, 3) !== 0, a = byCol ? transposed(args[0]) : args[0];
+  const index = Math.trunc(num(args, 1, 1)), ascending = num(args, 2, 1) >= 0;
+  if (index < 1 || index > a.cols) return fail("#VALUE!", `SORT's index ${index} is outside the array`);
+  const out = fromRows(ordered(rowsOf(a), (row) => row[index - 1], ascending));
+  return byCol ? turned(out) : out;
+});
+def("SORTBY", 2, Infinity, (args) => {
+  const rows = rowsOf(args[0]), keys: { by: readonly Value[]; ascending: boolean }[] = [];
+  for (let i = 1; i < args.length; i += 2) {
+    if (args[i].values.length !== rows.length) return fail("#VALUE!", "SORTBY's arrays differ in size");
+    keys.push({ by: args[i].values, ascending: num(args, i + 1, 1) >= 0 });
+  }
+  const order = rows.map((_, i) => i).sort((p, q) => {
+    for (const k of keys) {
+      const c = (k.ascending ? 1 : -1) * sortOrder(k.by[p], k.by[q]);
+      if (c) return c;
+    }
+    return p - q;
+  });
+  return fromRows(order.map((i) => rows[i]));
+});
+def("UNIQUE", 1, 3, (args) => {
+  const byCol = !absent(args, 1) && num(args, 1) !== 0, once = !absent(args, 2) && num(args, 2) !== 0;
+  const lines = rowsOf(byCol ? transposed(args[0]) : args[0]);
+  const keyOf = (line: readonly Value[]) => JSON.stringify(line.map((v) => (v instanceof CellError ? v.code : toText(v).toUpperCase())));
+  const counts = new Map<string, number>();
+  for (const line of lines) counts.set(keyOf(line), (counts.get(keyOf(line)) ?? 0) + 1);
+  const seen = new Set<string>();
+  const kept = lines.filter((line) => {
+    const k = keyOf(line);
+    if (seen.has(k) || (once && counts.get(k)! > 1)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (!kept.length) return fail("#CALC!", "UNIQUE found nothing");
+  return byCol ? turned(fromRows(kept)) : fromRows(kept);
+});
+def("TRANSPOSE", 1, 1, (args) => turned(array(args[0].values.length / args[0].cols, args[0].cols, args[0].values)));
+
 // --- lookup ---
 
 // A wildcard pattern (* any run, ? one character, ~ before either for
@@ -438,12 +512,17 @@ function xsearch(x: Value, list: readonly Value[], mode: number, from: number): 
   return best;
 }
 
+// XLOOKUP's return: the value at the match, or, when the return range is
+// wider (taller) than a column (row) of lookups, the whole row (column).
 def("XLOOKUP", 3, 6, (args) => {
-  const x = scalar(val(args, 0)), list = args[1].values, back = args[2].values;
-  if (back.length !== list.length) return fail("#VALUE!", "XLOOKUP's lookup and return ranges differ in size");
+  const x = scalar(val(args, 0)), list = args[1].values, back = args[2];
+  const lookRows = list.length / args[1].cols, backRows = back.values.length / back.cols;
+  const down = args[1].cols === 1 && backRows === list.length, across = lookRows === 1 && back.cols === list.length;
+  if (!down && !across) return fail("#VALUE!", "XLOOKUP's lookup and return ranges differ in size");
   const at = xsearch(x, list, num(args, 4, 0), num(args, 5, 1));
-  if (at >= 0) return back[at];
-  return absent(args, 3) ? notFound(x) : val(args, 3);
+  if (at < 0) return absent(args, 3) ? notFound(x) : val(args, 3);
+  if (down) return back.cols === 1 ? back.values[at] : array(1, back.cols, back.values.slice(at * back.cols, (at + 1) * back.cols));
+  return backRows === 1 ? back.values[at] : array(backRows, 1, back.values.filter((_, k) => k % back.cols === at));
 });
 def("XMATCH", 2, 4, (args) => {
   const x = scalar(val(args, 0)), at = xsearch(x, args[1].values, num(args, 2, 0), num(args, 3, 1));

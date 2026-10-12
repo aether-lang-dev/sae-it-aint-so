@@ -5,7 +5,7 @@
 // it reads when its references move (a copy, rows or columns inserted or
 // deleted). Evaluation may be asynchronous (RexxJS's
 // is), so `run` may give a promise; the Sheet awaits each in turn.
-import type { CellError, Value } from "./values.ts";
+import type { ArrayValue, CellError, Result, Value } from "./values.ts";
 import type { Edit } from "./shift.ts";
 import type { Addr } from "./address.ts";
 
@@ -14,6 +14,8 @@ export type Names = (name: string) => [Addr, Addr] | null;
 
 export interface Env {
   get(key: string): Value;
+  // What a cell spills (A1#), or null.
+  spill?(key: string): ArrayValue | null;
 }
 
 export interface Offset {
@@ -22,7 +24,7 @@ export interface Offset {
 }
 
 export type Formula =
-  | { readonly kind: "formula"; readonly reads: readonly string[]; run(env: Env): Value | Promise<Value> }
+  | { readonly kind: "formula"; readonly reads: readonly string[]; run(env: Env): Result | Promise<Result> }
   | { readonly kind: "broken"; readonly error: CellError };
 
 export interface Language {

@@ -526,6 +526,18 @@ main() {
             b.click("Delete chart 1")
             spec.assert_true(b.wait_for_text_gone("Chart 1: bar chart of A15:B17"), "deleted")
         }
+        spec.it("a dynamic array spills, is #SPILL! while something is in the way, and spills again when it is cleared") callback {
+            g.enter("F14", "=SEQUENCE(3)*2")
+            spec.assert_true(g.wait_cell("F", 16, "6"), "spilled into F15:F16")
+            g.enter("G14", "=SUM(F14#)")
+            spec.assert_true(g.wait_cell("G", 14, "12"), "F14# is all of it")
+            g.enter("F15", "x")
+            spec.assert_true(g.wait_cell("F", 14, "#SPILL!"), "in the way")
+            spec.assert_true(g.wait_cell("F", 16, ""), "the spill gone")
+            g.command("cell.set cell=F15 input=\"\"")
+            spec.assert_true(g.wait_cell("F", 16, "6"), "spilled again")
+            spec.assert_true(g.wait_cell("G", 14, "12"), "and read again")
+        }
     }
     return spec.run_summary(fw)
 }

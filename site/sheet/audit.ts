@@ -8,15 +8,14 @@
 // innermost reference, range or operation whose operands are known, until
 // one value is left; a range shows as an array ({1;2;3} down, {1,2} across);
 // IF works out its condition, then becomes the branch it takes.
-import { span } from "./address.ts";
 import { evaluate } from "./evaluate.ts";
 import type { Env } from "./evaluate.ts";
 import { show } from "./format.ts";
 import type { Names } from "./language.ts";
 import { parse } from "./parser.ts";
 import type { Expr } from "./parser.ts";
-import { CellError, toNumber } from "./values.ts";
-import type { Value } from "./values.ts";
+import { CellError, isArray, toNumber } from "./values.ts";
+import type { Result, Value } from "./values.ts";
 
 const LEVEL: Record<string, number> = { "=": 0, "<>": 0, "<": 0, ">": 0, "<=": 0, ">=": 0, "&": 1, "+": 2, "-": 2, "*": 3, "/": 3, "^": 4 };
 const NEG = 5, ATOM = 6;
@@ -42,8 +41,12 @@ const kidsOf = (e: Expr): readonly Expr[] => {
 // LET, LAMBDA and a call of one are worked out whole, in one step.
 const whole = (e: Expr) => e.kind === "let" || e.kind === "lambda" || e.kind === "apply";
 
-// A value as a formula writes it.
-export function literal(v: Value): string {
+// A value as a formula writes it; an array as {1,2;3,4} (rows split by ;).
+export function literal(v: Result): string {
+  if (isArray(v)) {
+    const rows = Array.from({ length: v.rows }, (_, i) => v.values.slice(i * v.cols, (i + 1) * v.cols).map(literal).join(","));
+    return `{${rows.join(";")}}`;
+  }
   if (typeof v === "string") return `"${v.replace(/"/g, '""')}"`;
   if (v === null) return '""';
   return show(v);
@@ -65,6 +68,7 @@ function printed(n: Node): string {
   const wrap = (k: Node, parens: boolean) => (parens ? `(${printed(k)})` : printed(k));
   switch (e.kind) {
     case "ref": return e.name;
+    case "spill": return `${e.name}#`;
     case "range": return `${e.from}:${e.to}`;
     case "neg": return `-${wrap(n.kids[0], level(n.kids[0]) < NEG)}`;
     case "binary": {
@@ -96,15 +100,6 @@ function next(n: Node): Node | null {
   return n;
 }
 
-// A range's values as an array literal.
-function array(e: Extract<Expr, { kind: "range" }>, env: Env): string {
-  const s = span(e.from, e.to);
-  if (!s) return "#REF!";
-  const rows: string[] = [];
-  for (let i = 0; i < s.keys.length; i += s.cols) rows.push(s.keys.slice(i, i + s.cols).map((k) => literal(env.get(k))).join(","));
-  return `{${rows.join(";")}}`;
-}
-
 // `formula` (what follows its '=') printed, then after each step. A parse
 // error is thrown, as parse() throws it.
 export function evaluationSteps(formula: string, env: Env, names: Names = () => null): string[] {
@@ -125,7 +120,7 @@ export function evaluationSteps(formula: string, env: Env, names: Names = () => 
       else if (taken) Object.assign(n, { e: taken.e, kids: taken.kids, text: taken.text });
       else n.text = "FALSE";
     } else {
-      n.text = n.e.kind === "range" ? array(n.e, env) : literal(evaluate(n.e, env));
+      n.text = literal(evaluate(n.e, env));
     }
     steps.push(printed(root));
   }

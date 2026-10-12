@@ -17,6 +17,7 @@ export type Expr =
   | { readonly kind: "bool"; readonly value: boolean }
   | { readonly kind: "ref"; readonly name: string }
   | { readonly kind: "range"; readonly from: string; readonly to: string }
+  | { readonly kind: "spill"; readonly name: string }
   | { readonly kind: "error"; readonly code: ErrorCode; readonly why?: string }
   | { readonly kind: "neg"; readonly arg: Expr }
   | { readonly kind: "binary"; readonly op: Op; readonly left: Expr; readonly right: Expr }
@@ -189,6 +190,7 @@ class Parser {
       case "str": return { kind: "str", value: t.value };
       case "error": return { kind: "error", code: t.code };
       case "ref": {
+        if (t.spill) return { kind: "spill", name: t.name };
         if (this.#tok.kind !== ":") return { kind: "ref", name: t.name };
         this.#next();
         const to = this.#tok;

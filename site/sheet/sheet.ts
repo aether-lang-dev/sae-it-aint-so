@@ -9,9 +9,15 @@
 // another sheet's cells ("COSTS!B2"): the sheet's Context answers them, and
 // touch() works out again what reads them when they change; the sheets of a
 // workbook share one Turns.
-import { addrOf, cellAddr, keyOf, order, splitKey } from "./address.ts";
-import { CellError } from "./values.ts";
-import type { Value } from "./values.ts";
+//
+// A formula that comes to an array spills it into the cells below and to
+// its right (its area): they show its values and are read as any cell, and
+// each reads, for ordering, the formula it shows. A cell with an input in
+// the area, or the sheet's edge, makes the formula #SPILL!; setting any cell
+// of an area works its formula out again, so clearing the way spills it.
+import { COLS, ROWS, addrOf, cellAddr, keyOf, order, splitKey } from "./address.ts";
+import { CellError, isArray } from "./values.ts";
+import type { ArrayValue, Result, Value } from "./values.ts";
 import { EXCEL } from "./excel.ts";
 import type { Formula, Language, Names } from "./language.ts";
 import type { Addr } from "./address.ts";
@@ -102,6 +108,10 @@ export class Sheet {
   #language: Language;
   readonly #context: Context;
   readonly #names = new Map<string, [Addr, Addr]>();
+  readonly #areas = new Map<string, string[]>();          // a formula -> the cells its array covers (or would)
+  readonly #spills = new Map<string, ArrayValue>();       // a formula -> the array it spills
+  readonly #spilledBy = new Map<string, string>();        // a cell -> the formula whose array it shows
+  #spillChanged = new Set<string>();
   // Each step is the inputs a change replaced, to put back.
   readonly #undo: (readonly [string, string][])[] = [];
   readonly #redo: (readonly [string, string][])[] = [];
@@ -220,7 +230,8 @@ export class Sheet {
   evaluate(formula: string): Promise<Value> {
     return this.#inTurn(async () => {
       const f = this.#language.compile(formula, (n) => this.#names.get(n) ?? null);
-      return f.kind === "broken" ? f.error : (await f.run({ get: (k) => this.value(k) })) ?? null;
+      const r = f.kind === "broken" ? f.error : (await f.run(this.#env())) ?? null;
+      return isArray(r) ? r.values[0] ?? null : r;
     });
   }
 
@@ -276,13 +287,29 @@ export class Sheet {
     for (const r of reads) getOrAdd(this.#readBy, r, () => new Set()).add(key);
   }
 
+  // What a cell reads, and what reads it, a spilled cell reading the
+  // formula it shows.
+  #readsOf(k: string): string[] {
+    const by = this.#spilledBy.get(k);
+    return [...(this.#reads.get(k) ?? []), ...(by ? [by] : [])];
+  }
+
+  #readersOf(k: string): string[] {
+    return [...(this.#readBy.get(k) ?? []), ...(this.#spills.has(k) ? this.#areas.get(k) ?? [] : [])];
+  }
+
+  // What formulas see: the cells, and what a cell spills (A1#).
+  #env() {
+    return { get: (k: string) => this.value(k), spill: (k: string) => this.#spills.get(this.#local(k) ?? "") ?? null };
+  }
+
   // The set cells and everything downstream of them.
   #downstream(from: readonly string[]): Set<string> {
     const seen = new Set<string>();
     const visit = (k: string): void => {
       if (seen.has(k)) return;
       seen.add(k);
-      this.#readBy.get(k)?.forEach(visit);
+      this.#readersOf(k).forEach(visit);
     };
     from.forEach(visit);
     return seen;
@@ -292,13 +319,15 @@ export class Sheet {
   // the ones it can order, and the ones left (on a cycle, or downstream of
   // one).
   #ordered(cells: Set<string>): { ordered: string[]; left: Set<string> } {
+    // The edges as they are now: working a formula out may move a spill.
+    const readers = new Map([...cells].map((k) => [k, this.#readersOf(k)]));
     const waiting = new Map<string, number>();
-    for (const k of cells) waiting.set(k, [...(this.#reads.get(k) ?? [])].filter((r) => cells.has(r)).length);
+    for (const k of cells) waiting.set(k, new Set(this.#readsOf(k).filter((r) => cells.has(r))).size);
     const ready = [...cells].filter((k) => waiting.get(k) === 0).sort(byOrder);
     const ordered: string[] = [];
     for (let k = ready.shift(); k !== undefined; k = ready.shift()) {
       ordered.push(k);
-      for (const d of this.#readBy.get(k) ?? []) {
+      for (const d of new Set(readers.get(k))) {
         if (!cells.has(d)) continue;
         const n = waiting.get(d)! - 1;
         waiting.set(d, n);
@@ -315,7 +344,7 @@ export class Sheet {
     const seen = new Set<string>();
     const walk = (k: string): boolean => {
       path.push(k);
-      for (const r of this.#reads.get(k) ?? []) {
+      for (const r of this.#readsOf(k)) {
         if (r === start) return true;
         if (left.has(r) && !seen.has(r)) {
           seen.add(r);
@@ -329,10 +358,14 @@ export class Sheet {
   }
 
   // The set cells (and cells on other sheets, which are not worked out
-  // here) and what reads them, worked out in order.
-  async #recompute(set: readonly string[]): Promise<string[]> {
+  // here) and what reads them, worked out in order; a formula whose area a
+  // set cell is in, too. When spills moved, what reads the cells they left
+  // or took is worked out again.
+  async #recompute(set: readonly string[], depth = 0): Promise<string[]> {
     const before = new Map<string, string>();
-    const affected = this.#downstream(set);
+    const anchors = [...this.#areas].filter(([, area]) => area.some((k) => set.includes(k))).map(([a]) => a);
+    const affected = this.#downstream([...set, ...anchors]);
+    this.#spillChanged = new Set();
     const mine = [...affected].filter((k) => !k.includes("!"));
     for (const k of mine) before.set(k, show(this.value(k)));
 
@@ -351,17 +384,62 @@ export class Sheet {
       for (const k of this.#ordered(rest).ordered) await this.#evaluate(k);
     }
 
-    const changed = mine.filter((k) => set.includes(k) || before.get(k) !== show(this.value(k))).sort(byOrder);
+    let changed = mine.filter((k) => set.includes(k) || before.get(k) !== show(this.value(k))).sort(byOrder);
     for (const k of changed) this.#listener?.changed(k, this.value(k));
+    const moved = [...this.#spillChanged];
+    if (moved.length && depth < 4) changed = [...new Set([...changed, ...(await this.#recompute(moved, depth + 1))])].sort(byOrder);
     return changed;
   }
 
+  // A formula's spill taken back: its cells empty again (but for any that
+  // have an input of their own).
+  #unspill(anchor: string): void {
+    for (const k of this.#areas.get(anchor) ?? []) {
+      if (this.#spilledBy.get(k) !== anchor) continue;
+      this.#spilledBy.delete(k);
+      if (!this.#inputs.has(k)) this.#values.delete(k);
+    }
+    this.#spills.delete(anchor);
+  }
+
+  // An array result spilled from `key`, or why not: the formula's own value.
+  #spill(key: string, v: ArrayValue): Value {
+    const a = addrOf(key)!, area: string[] = [];
+    let offSheet = false;
+    for (let i = 0; i < v.rows; i++) {
+      for (let j = 0; j < v.cols; j++) {
+        if (i === 0 && j === 0) continue;
+        if (a.col + j >= COLS || a.row + i >= ROWS) offSheet = true; else area.push(keyOf({ col: a.col + j, row: a.row + i }));
+      }
+    }
+    this.#areas.set(key, area);
+    if (offSheet) return new CellError("#SPILL!", "the result does not fit on the sheet");
+    const blocker = area.find((k) => this.#inputs.has(k) || (this.#spilledBy.has(k) && this.#spilledBy.get(k) !== key));
+    if (blocker) return new CellError("#SPILL!", `${blocker} is in the way`);
+    this.#spills.set(key, v);
+    area.forEach((k, i) => {
+      this.#spilledBy.set(k, key);
+      this.#values.set(k, v.values[i + 1]);
+    });
+    return v.values[0];
+  }
+
   async #evaluate(key: string): Promise<void> {
+    // A cell another formula spills into shows that formula's value.
+    if (!this.#inputs.has(key) && this.#spilledBy.has(key)) return;
     const c = this.#compiled.get(key);
-    let v: Value = null;
-    if (c?.kind === "formula") v = (await c.run({ get: (k) => this.value(k) })) ?? 0;
-    else if (c?.kind === "broken") v = c.error;
-    else if (c?.kind === "constant") v = c.value;
+    let r: Result = null;
+    if (c?.kind === "formula") r = (await c.run(this.#env())) ?? 0;
+    else if (c?.kind === "broken") r = c.error;
+    else if (c?.kind === "constant") r = c.value;
+    const area = this.#areas.get(key) ?? [];
+    const was = area.map((k) => show(this.value(k)));
+    this.#unspill(key);
+    this.#areas.delete(key);
+    const v = isArray(r) ? this.#spill(key, r) : r;
+    const now = this.#areas.get(key) ?? [];
+    for (const [i, k] of area.entries()) if (show(this.value(k)) !== was[i]) this.#spillChanged.add(k);
+    for (const k of now) if (!area.includes(k) && this.#spilledBy.get(k) === key) this.#spillChanged.add(k);
     if (v === null && !this.#inputs.has(key)) this.#values.delete(key); else this.#values.set(key, v);
   }
 }

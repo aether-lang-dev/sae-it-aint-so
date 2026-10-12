@@ -137,8 +137,9 @@ These need more of it (each would be an ask, as
    commands; data bars wait on aether-ui).
 9. ~~Charts and sparklines in `vg`~~ (done: `charts.ts`, the chart panel,
    SPARKLINE).
-10. Functions in batches (lookup and conditional, date, financial), then
-    LET and LAMBDA, then dynamic arrays.
+10. ~~Functions in batches (lookup and conditional, date, financial), then
+    LET and LAMBDA, then dynamic arrays~~ (done: 135 functions and special
+    forms, spilling).
 11. Goal Seek, Data Table, Remove Duplicates, Text to Columns.
 12. The aether-ui asks, as the features that need them come up: hidden
     rows and frozen rows first.

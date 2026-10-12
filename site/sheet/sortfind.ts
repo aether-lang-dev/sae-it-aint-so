@@ -17,7 +17,7 @@ export interface Cells {
 }
 
 // Numbers first (by size), then text (without case), then empty cells.
-function compare(x: Value, y: Value): number {
+export function sortOrder(x: Value, y: Value): number {
   const rank = (v: Value) => (typeof v === "number" ? 0 : v === null || v === "" ? 2 : 1);
   const rx = rank(x), ry = rank(y);
   if (rx !== ry) return rx - ry;
@@ -37,7 +37,7 @@ export function sortedRows(cells: Cells, a: Addr, b: Addr, col: number, ascendin
   for (let row = top; row <= bottom; row++) rows.push(row);
   const key = (row: number) => cells.value(keyOf({ col: left + col, row }));
   return rows.map((row, i) => ({ row, i })).sort((p, q) => {
-    const c = compare(key(p.row), key(q.row));
+    const c = sortOrder(key(p.row), key(q.row));
     return c !== 0 ? (ascending ? c : -c) : p.i - q.i;
   }).map(({ row }) => row);
 }

@@ -7,7 +7,7 @@ import { cellAddr, colName, span, splitKey } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { movedBy } from "./shift.ts";
 import type { Edit, Fixed } from "./shift.ts";
-import { evaluate } from "./evaluate.ts";
+import { SPECIAL_FORMS, evaluate } from "./evaluate.ts";
 import { names } from "./functions.ts";
 import type { Language, Offset } from "./language.ts";
 import { FormulaError, tokens } from "./lexer.ts";
@@ -21,6 +21,7 @@ import { CellError } from "./values.ts";
 export function* refsOf(e: Expr): Generator<string, void, undefined> {
   switch (e.kind) {
     case "ref":
+    case "spill":
       if (cellAddr(e.name)) yield e.name;
       return;
     case "range":
@@ -56,7 +57,7 @@ const fixedOf = (t: Ref): Fixed => ({ col: t.fixCol, row: t.fixRow });
 function written(t: Ref, to: Addr): string {
   const a = cellAddr(t.name)!;
   if (to.col === a.col && to.row === a.row) return t.text;
-  return `${t.text.slice(0, t.text.lastIndexOf("!") + 1)}${t.fixCol ? "$" : ""}${colName(to.col)}${t.fixRow ? "$" : ""}${to.row + 1}`;
+  return `${t.text.slice(0, t.text.lastIndexOf("!") + 1)}${t.fixCol ? "$" : ""}${colName(to.col)}${t.fixRow ? "$" : ""}${to.row + 1}${t.spill ? "#" : ""}`;
 }
 
 // A cell's input with its references moved by `edit` (a constant, or a
@@ -112,5 +113,5 @@ export const EXCEL: Language = {
     }
   },
   rewrite,
-  functions: names,
+  functions: () => [...names(), ...SPECIAL_FORMS].sort(),
 };

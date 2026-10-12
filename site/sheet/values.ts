@@ -1,7 +1,7 @@
 // What a cell holds once worked out, and the coercions every operator and
 // function goes through. An error is a value too (a CellError): it flows
 // through whatever reads it, so a cell that sums a #DIV/0! shows #DIV/0!.
-export type ErrorCode = "#DIV/0!" | "#VALUE!" | "#REF!" | "#NAME?" | "#NUM!" | "#N/A" | "#CYCLE!" | "#ERROR!" | "#CALC!";
+export type ErrorCode = "#DIV/0!" | "#VALUE!" | "#REF!" | "#NAME?" | "#NUM!" | "#N/A" | "#CYCLE!" | "#ERROR!" | "#CALC!" | "#SPILL!";
 
 export class CellError {
   readonly code: ErrorCode;
@@ -17,6 +17,25 @@ export class CellError {
 
 // null is an empty cell.
 export type Value = number | string | boolean | null | CellError;
+
+// A dynamic array: what a formula may come to (a range, SEQUENCE, FILTER
+// ...), row by row; in a sheet it spills.
+export interface ArrayValue {
+  readonly kind: "array";
+  readonly rows: number;
+  readonly cols: number;
+  readonly values: readonly Value[];
+}
+
+// What a formula comes to: one value, or an array.
+export type Result = Value | ArrayValue;
+
+export const isArray = (v: unknown): v is ArrayValue => typeof v === "object" && v !== null && (v as ArrayValue).kind === "array";
+
+export const array = (rows: number, cols: number, values: readonly Value[]): ArrayValue => ({ kind: "array", rows, cols, values });
+
+// An array of one value is that value.
+export const collapsed = (r: Result): Result => (isArray(r) && r.rows === 1 && r.cols === 1 ? r.values[0] : r);
 
 export const fail = (code: ErrorCode, why: string): never => { throw new CellError(code, why); };
 
