@@ -87,7 +87,8 @@ value for effort:
 ## Features that need aether-ui first
 
 `ui.datagrid` draws a cell's text, background, colour, bold and alignment.
-These need more of it (each would be an ask, as
+These need more of it (asked for in
+`asks/aether-ui-datagrid-rows-and-cells.md`, as
 `asks/aether-ui-datagrid-style-hash.md` was):
 
 - **Hidden rows and columns**, which AutoFilter, outlines, Hide/Unhide and
@@ -143,4 +144,6 @@ These need more of it (each would be an ask, as
 11. ~~Goal Seek, Data Table, Remove Duplicates, Text to Columns~~ (done:
     `whatif.ts`, the `data.*` commands, the data bar).
 12. The aether-ui asks, as the features that need them come up: hidden
-    rows and frozen rows first.
+    rows and frozen rows first. Written up as one ask, in order:
+    `asks/aether-ui-datagrid-rows-and-cells.md` (open; aether-ui `main` at
+    `63a6633d` has none of it yet).

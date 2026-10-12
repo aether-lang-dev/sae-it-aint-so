@@ -509,6 +509,13 @@ is `src/spreadsheet-model.js`, its control functions
 Not coming over: the DOM itself (React, the DOM functions RexxJS has for
 web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).
 
+**Waiting on aether-ui** (`asks/aether-ui-datagrid-rows-and-cells.md`,
+open): hidden rows and columns (AutoFilter, outlines, the Tauri app's
+row filter), frozen rows, italic, underline, strikethrough, sizes and
+borders, data bars, a comment's corner marker, merged cells, wrapped
+text and row heights, the editor's text as it is typed (point mode), and
+a multi-line field.
+
 **Demo 18's own:**
 
 1. **The system clipboard.** Copy and paste work within the sheet only.
