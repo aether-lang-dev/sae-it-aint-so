@@ -33,6 +33,14 @@ export function* refsOf(e: Expr): Generator<string, void, undefined> {
     case "call":
       for (const a of e.args) yield* refsOf(a);
       return;
+    case "let":
+      for (const [, v] of e.bindings) yield* refsOf(v);
+      return yield* refsOf(e.body);
+    case "lambda": return yield* refsOf(e.body);
+    case "apply":
+      yield* refsOf(e.fn);
+      for (const a of e.args) yield* refsOf(a);
+      return;
     default:
       return;
   }

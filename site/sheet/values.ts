@@ -1,7 +1,7 @@
 // What a cell holds once worked out, and the coercions every operator and
 // function goes through. An error is a value too (a CellError): it flows
 // through whatever reads it, so a cell that sums a #DIV/0! shows #DIV/0!.
-export type ErrorCode = "#DIV/0!" | "#VALUE!" | "#REF!" | "#NAME?" | "#NUM!" | "#N/A" | "#CYCLE!" | "#ERROR!";
+export type ErrorCode = "#DIV/0!" | "#VALUE!" | "#REF!" | "#NAME?" | "#NUM!" | "#N/A" | "#CYCLE!" | "#ERROR!" | "#CALC!";
 
 export class CellError {
   readonly code: ErrorCode;

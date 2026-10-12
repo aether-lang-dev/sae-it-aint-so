@@ -3,6 +3,8 @@
 // spreadsheet ranks them: comparisons, then &, then + -, then * /, then ^,
 // each left-associative; a unary minus binds tighter than all of them
 // (-2^2 is 4). A parse error is a FormulaError at the token it stopped on.
+// LET and LAMBDA bind names: the parser keeps their scopes, so a bound name
+// is a local, and anything else bare a named range (or #NAME?).
 import { FormulaError, tokens } from "./lexer.ts";
 import type { Op, Token } from "./lexer.ts";
 import type { ErrorCode } from "./values.ts";
@@ -20,7 +22,13 @@ export type Expr =
   | { readonly kind: "binary"; readonly op: Op; readonly left: Expr; readonly right: Expr }
   | { readonly kind: "call"; readonly name: string; readonly args: readonly Expr[] }
   // An argument left out: XLOOKUP(25, E1:H1, E2:H2, , -1).
-  | { readonly kind: "missing" };
+  | { readonly kind: "missing" }
+  // A name LET or LAMBDA bound; LET(x, 1, y, x+1, x*y); LAMBDA(x, x*2);
+  // a call of what an expression comes to, LAMBDA(x, x*2)(5) or f(5).
+  | { readonly kind: "local"; readonly name: string }
+  | { readonly kind: "let"; readonly bindings: readonly (readonly [string, Expr])[]; readonly body: Expr }
+  | { readonly kind: "lambda"; readonly params: readonly string[]; readonly body: Expr }
+  | { readonly kind: "apply"; readonly fn: Expr; readonly args: readonly Expr[] };
 
 const LEVELS: readonly (readonly Op[])[] = [
   ["=", "<>", "<", ">", "<=", ">="],
@@ -35,6 +43,8 @@ const shown = (t: Token): string => (t.kind === "end" ? "the end" : `'${t.text}'
 class Parser {
   readonly #tokens: Iterator<Token, void, undefined>;
   #tok!: Token;
+  #ahead: Token | null = null;
+  readonly #scopes: Set<string>[] = [];
 
   readonly #names: Names | undefined;
 
@@ -46,9 +56,99 @@ class Parser {
 
   #next(): Token {
     const was = this.#tok;
+    if (this.#ahead) {
+      this.#tok = this.#ahead;
+      this.#ahead = null;
+      return was;
+    }
     const r = this.#tokens.next();
     if (!r.done) this.#tok = r.value;
     return was;
+  }
+
+  // The token after this one, not yet taken.
+  #peek(): Token {
+    if (!this.#ahead) {
+      const r = this.#tokens.next();
+      this.#ahead = r.done ? this.#tok : r.value;
+    }
+    return this.#ahead;
+  }
+
+  #bound(name: string): boolean {
+    return this.#scopes.some((s) => s.has(name));
+  }
+
+  // A function's arguments, from '(' to ')'; one left out is missing.
+  #args(): Expr[] {
+    this.#expect("(");
+    const args: Expr[] = [];
+    const arg = (): Expr => (this.#tok.kind === "," || this.#tok.kind === ")" ? { kind: "missing" } : this.#binary(0));
+    if (this.#tok.kind !== ")") {
+      args.push(arg());
+      while (this.#tok.kind === ",") {
+        this.#next();
+        args.push(arg());
+      }
+    }
+    this.#expect(")");
+    return args;
+  }
+
+  // What an expression comes to, called: f(1)(2) as often as written.
+  #applied(fn: Expr): Expr {
+    while (this.#tok.kind === "(") fn = { kind: "apply", fn, args: this.#args() };
+    return fn;
+  }
+
+  // The names a LET or LAMBDA binds: each a name followed by ',' (a cell
+  // there is refused); `each` parses what follows a name, if anything.
+  #binding(what: string, each: (name: string) => void): void {
+    for (;;) {
+      const t = this.#tok;
+      if (this.#peek().kind !== "," || (t.kind !== "name" && t.kind !== "ref")) return;
+      if (t.kind === "ref") throw new FormulaError(t.at, `${what} are names, not cells: ${t.text}`);
+      this.#next();
+      this.#next();
+      each((t as { name: string }).name);
+    }
+  }
+
+  // LET(name, value, ..., body): each value sees the names before it.
+  #let(at: number): Expr {
+    this.#expect("(");
+    const scope = new Set<string>(), bindings: [string, Expr][] = [];
+    this.#scopes.push(scope);
+    try {
+      this.#binding("LET's names", (name) => {
+        const value = this.#binary(0);
+        if (this.#tok.kind !== ",") throw new FormulaError(at, "LET needs a name, its value, and then the value it comes to");
+        this.#next();
+        bindings.push([name, value]);
+        scope.add(name);
+      });
+      if (!bindings.length) throw new FormulaError(at, "LET needs a name, its value, and then the value it comes to");
+      const body = this.#binary(0);
+      this.#expect(")");
+      return { kind: "let", bindings, body };
+    } finally {
+      this.#scopes.pop();
+    }
+  }
+
+  // LAMBDA(param, ..., body).
+  #lambda(): Expr {
+    this.#expect("(");
+    const params: string[] = [];
+    this.#binding("LAMBDA's parameters", (name) => params.push(name));
+    this.#scopes.push(new Set(params));
+    try {
+      const body = this.#binary(0);
+      this.#expect(")");
+      return { kind: "lambda", params, body };
+    } finally {
+      this.#scopes.pop();
+    }
   }
 
   #expect(kind: Token["kind"]): Token {
@@ -100,7 +200,9 @@ class Parser {
         return { kind: "range", from: t.name, to: sheet === null ? other.cell : `${sheet}!${other.cell}` };
       }
       case "name": {
+        const local = this.#bound(t.name);
         if (this.#tok.kind !== "(") {
+          if (local) return { kind: "local", name: t.name };
           if (t.name === "TRUE" || t.name === "FALSE") return { kind: "bool", value: t.name === "TRUE" };
           // A named range is its cell or range; with no names to ask, a bare
           // name does not parse.
@@ -110,23 +212,15 @@ class Parser {
           const [a, b] = [keyOf(r[0]), keyOf(r[1])];
           return a === b ? { kind: "ref", name: a } : { kind: "range", from: a, to: b };
         }
-        this.#next();
-        const args: Expr[] = [];
-        const arg = (): Expr => (this.#tok.kind === "," || this.#tok.kind === ")" ? { kind: "missing" } : this.#binary(0));
-        if (this.#tok.kind !== ")") {
-          args.push(arg());
-          while (this.#tok.kind === ",") {
-            this.#next();
-            args.push(arg());
-          }
-        }
-        this.#expect(")");
-        return { kind: "call", name: t.name, args };
+        if (local) return this.#applied({ kind: "local", name: t.name });
+        if (t.name === "LET") return this.#applied(this.#let(t.at));
+        if (t.name === "LAMBDA") return this.#applied(this.#lambda());
+        return { kind: "call", name: t.name, args: this.#args() };
       }
       case "(": {
         const e = this.#binary(0);
         this.#expect(")");
-        return e;
+        return this.#applied(e);
       }
       default:
         throw new FormulaError(t.at, `expected a value but found ${shown(t)}`);

@@ -34,7 +34,7 @@ const WORD = /^[A-Za-z_][A-Za-z0-9_]*/;
 const REF = /^(?:(?:([A-Za-z_]\w*)|'([^']+)')!)?(\$?)([A-Za-z]+)(\$?)([0-9]+)(?![A-Za-z0-9_])/;
 // The errors a formula can be written with (a copy writes #REF! for a
 // reference it moved off the sheet).
-const ERRORS: readonly ErrorCode[] = ["#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A"];
+const ERRORS: readonly ErrorCode[] = ["#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#CALC!"];
 
 // `formula` is what follows the '='; `from` is where it starts in the input.
 export function* tokens(formula: string, from = 2): Generator<Token, void, undefined> {

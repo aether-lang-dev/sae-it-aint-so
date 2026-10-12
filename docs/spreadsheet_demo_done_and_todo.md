@@ -194,6 +194,12 @@ fields under the formula bar:
   (`#REF!`, `#N/A`, ...).
 - Operators: `+ - * / ^ &` and the comparisons, with spreadsheet
   precedence. Unary minus binds tightest, so `-2^2` is 4.
+- LET and LAMBDA: `=LET(x, A1, sq, LAMBDA(n, n*n), sq(x) + 1)`. Each of
+  LET's values sees the names before it, an inner name hides an outer
+  one, a LAMBDA's body sees the names where it was written, and it is
+  called at once (`LAMBDA(x, x*2)(5)`) or through a name. A formula that
+  comes to a LAMBDA is `#CALC!`. (Named LAMBDAs in the Name Manager, and
+  so recursion, are still to come.)
 - 108 functions (`site/sheet/functions.ts`), and arguments left out
   (`XLOOKUP(25,E1:H1,E2:H2,,-1)`):
   - maths and statistics: SUM, PRODUCT, AVERAGE, MIN, MAX, MEDIAN, STDEV,
@@ -359,6 +365,9 @@ summary.
   - `sheet_dates` (14): the date and time functions, and the money
     ones against Excel's documented examples (the solvers' roots checked
     by bisection).
+  - `sheet_let` (12): LET's scoping, LAMBDA called at once and by name,
+    closures, the errors, what it reads, printing, and a copy that moves
+    references but not names.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
@@ -486,8 +495,9 @@ web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).
    Recompute already touches only what is downstream of a change.
 4. **More functions.**
    - Done: lookups, conditionals, order statistics, dates, money.
-   - Next: LET and LAMBDA, then dynamic arrays (FILTER, SORT, UNIQUE,
-     SEQUENCE, spilling).
+   - Done too: LET and LAMBDA.
+   - Next: dynamic arrays (FILTER, SORT, UNIQUE, SEQUENCE, spilling), and
+     MAP, REDUCE, BYROW over them.
 5. **Highlighting what a formula reads while it is typed.** Trace
    precedents marks them once it is entered; while it is being typed needs
    the editor's text as it changes (an aether-ui ask). Evaluate Formula

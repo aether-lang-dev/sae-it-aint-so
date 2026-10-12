@@ -28,7 +28,19 @@ interface Node {
   text?: string;
 }
 
-const kidsOf = (e: Expr): readonly Expr[] => (e.kind === "neg" ? [e.arg] : e.kind === "binary" ? [e.left, e.right] : e.kind === "call" ? e.args : []);
+const kidsOf = (e: Expr): readonly Expr[] => {
+  switch (e.kind) {
+    case "neg": return [e.arg];
+    case "binary": return [e.left, e.right];
+    case "call": return e.args;
+    case "let": return [...e.bindings.map(([, v]) => v), e.body];
+    case "lambda": return [e.body];
+    case "apply": return [e.fn, ...e.args];
+    default: return [];
+  }
+};
+// LET, LAMBDA and a call of one are worked out whole, in one step.
+const whole = (e: Expr) => e.kind === "let" || e.kind === "lambda" || e.kind === "apply";
 
 // A value as a formula writes it.
 export function literal(v: Value): string {
@@ -61,6 +73,10 @@ function printed(n: Node): string {
     }
     case "call": return `${e.name}(${n.kids.map(printed).join(",")})`;
     case "missing": return "";
+    case "local": return e.name;
+    case "let": return `LET(${e.bindings.map(([name], i) => `${name},${printed(n.kids[i])}`).join(",")},${printed(n.kids[n.kids.length - 1])})`;
+    case "lambda": return `LAMBDA(${[...e.params, printed(n.kids[0])].join(",")})`;
+    case "apply": return `${printed(n.kids[0])}(${n.kids.slice(1).map(printed).join(",")})`;
     default: return "";
   }
 }
@@ -72,6 +88,7 @@ const isIf = (n: Node) => n.e.kind === "call" && n.e.name === "IF" && (n.kids.le
 // The next part to work out: leftmost innermost, IF's condition before it.
 function next(n: Node): Node | null {
   if (n.text !== undefined) return null;
+  if (whole(n.e)) return n;
   for (const k of isIf(n) ? n.kids.slice(0, 1) : n.kids) {
     const found = next(k);
     if (found) return found;
