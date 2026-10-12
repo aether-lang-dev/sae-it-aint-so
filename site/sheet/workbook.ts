@@ -24,6 +24,9 @@ import type { Context } from "./sheet.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
 import { applied } from "./rules.ts";
+import { chartData, layout } from "./charts.ts";
+import type { ChartData, ChartKind, Shape } from "./charts.ts";
+import { rangeName } from "./rules.ts";
 import type { CfRule, Mark } from "./rules.ts";
 import { check } from "./validation.ts";
 
@@ -41,13 +44,32 @@ export interface Clip {
   readonly notes: readonly (readonly Note[])[];
 }
 
-// A sheet of the workbook: its name as given, its cells and their notes, and
-// its conditional-format rules (rules.ts), in priority order.
+// A chart on a sheet: what kind, of which range, under what title.
+export interface ChartSpec {
+  readonly kind: ChartKind;
+  readonly range: [Addr, Addr];
+  readonly title: string;
+}
+
+// A chart as the page draws it, its shapes laid out in CHART_W x CHART_H.
+export interface ChartView {
+  readonly kind: ChartKind;
+  readonly title: string;
+  readonly range: string;
+  readonly data: ChartData;
+  readonly shapes: readonly Shape[];
+}
+
+export const CHART_W = 400, CHART_H = 240;
+
+// A sheet of the workbook: its name as given, its cells and their notes, its
+// conditional-format rules (rules.ts), in priority order, and its charts.
 export interface Page {
   readonly name: string;
   readonly sheet: Sheet;
   readonly notes: CellNotes;
   rules: CfRule[];
+  charts: ChartSpec[];
 }
 
 export type Direction = "precedents" | "dependents";
@@ -122,7 +144,7 @@ export class Workbook {
       if (!keys) this.#pending.set(upper, (keys = new Set()));
       keys.add(key);
     };
-    return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [] };
+    return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [], charts: [] };
   }
 
   // A cell on another sheet ("COSTS!B2"), or #REF! when there is no such sheet.
@@ -264,6 +286,15 @@ export class Workbook {
   watches(): Watch[] {
     this.#watches = this.#watches.filter((w) => this.#pages.includes(w.page));
     return this.#watches.map(({ page, cell }) => ({ sheet: page.name, cell, input: page.sheet.input(cell), shown: this.#shown(page, cell) }));
+  }
+
+  // The active sheet's charts, laid out from its cells as they are now.
+  charts(): ChartView[] {
+    const page = this.#active;
+    return page.charts.map((c) => {
+      const data = chartData(c.range, (k) => page.sheet.value(k));
+      return { kind: c.kind, title: c.title, range: rangeName(c.range), data, shapes: layout(c.kind, data, c.title, CHART_W, CHART_H) };
+    });
   }
 
   // Every conditional style worked out again, in the sheet's language (it

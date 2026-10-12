@@ -5,6 +5,7 @@
 // can look at it; everything else rethrows it as soon as it reads it.
 import { CellError, compare, fail, finite, scalar, toNumber, toText } from "./values.ts";
 import type { Comparison, Value } from "./values.ts";
+import { sparkline } from "./charts.ts";
 
 export interface Arg {
   readonly values: readonly Value[];
@@ -194,6 +195,8 @@ def("TEXTJOIN", 3, Infinity, (args) => {
   const skip = num(args, 1) !== 0;
   return every(args.slice(2)).map(toText).filter((s) => !(skip && s === "")).join(str(args, 0));
 });
+// A range's numbers as a line of blocks (as Google Sheets' SPARKLINE, in text).
+def("SPARKLINE", 1, 1, (args) => sparkline(numbers(args)));
 def("LEN", 1, 1, (args) => str(args, 0).length);
 def("UPPER", 1, 1, (args) => str(args, 0).toUpperCase());
 def("LOWER", 1, 1, (args) => str(args, 0).toLowerCase());

@@ -16,6 +16,7 @@ import { RexxInterpreter, parse } from "./rexxjs.js";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
 import { colName } from "./address.ts";
+import { sparkline } from "./charts.ts";
 
 // A cell name, or a range of two, anywhere in a formula (in a string too:
 // SUM_RANGE("A1:A3") reads A1 to A3), perhaps on another sheet
@@ -149,6 +150,7 @@ export function rangeFunctions(read: (key: string) => unknown, names: () => Name
       return numbers(values(r)).filter(ok).length;
     },
     CELL: (ref: string) => values(ref)[0],
+    SPARKLINE_RANGE: (r: string) => sparkline(numbers(values(r))),
   };
 }
 

@@ -505,6 +505,27 @@ main() {
             spec.assert_true(b.wait_for_console("sheet: cleared 2 rules"), "cleared")
             spec.assert_true(g.wait_cell("B", 18, "5"), "no icon")
         }
+        spec.it("a chart of the selection, drawn in vg, follows its cells; a sparkline in a cell") callback {
+            g.pick("A", 15)
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Right")
+            b.click("Bar chart")
+            spec.assert_true(b.wait_for_console("sheet: inserted a bar chart of A15:B17"), "inserted")
+            spec.assert_true(b.wait_for_text("Chart 1: bar chart of A15:B17"), "listed")
+            spec.assert_true(string.contains(b.vg_nodes(), "\"text\":\"Tue\"") == 1, "its categories drawn")
+            spec.assert_true(string.contains(b.vg_nodes(), "\"fill\":\"#4472c4\"") == 1, "its bars, in the palette")
+            g.enter("B17", "40")
+            spec.assert_true(b.wait_for_console("sheet: B17 = 40"), "an edit")
+            spec.assert_true(string.contains(b.vg_nodes(), "\"text\":\"40\"") == 1, "the scale follows it")
+            g.pick("B", 15)
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            b.click("Sparkline")
+            spec.assert_true(g.wait_cell("C", 15, "▁▁█"), "a sparkline beside it")
+            b.click("Delete chart 1")
+            spec.assert_true(b.wait_for_text_gone("Chart 1: bar chart of A15:B17"), "deleted")
+        }
     }
     return spec.run_summary(fw)
 }

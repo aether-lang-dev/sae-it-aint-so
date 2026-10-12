@@ -23,6 +23,9 @@ import { check, describeRule, ruleOf } from "./validation.ts";
 import { ICONS, describeRule as describeCf } from "./rules.ts";
 import type { CfRule, Comparison, IconSet } from "./rules.ts";
 import { toStyle } from "./formats.ts";
+import { CHART_KINDS } from "./charts.ts";
+import type { ChartKind } from "./charts.ts";
+import type { ChartSpec } from "./workbook.ts";
 import { deleted, inserted, movedBy, restructured } from "./shift.ts";
 import type { Scope } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
@@ -140,6 +143,7 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     wb.sheet.forget();
     for (const [key, note] of s.notes) wb.notes.set(key, note);
     wb.page(s.name)!.rules = [...s.rules];
+    wb.page(s.name)!.charts = [...s.charts];
   }
   wb.activate(file.sheets[0].name);
   wb.name = file.name;
@@ -196,6 +200,10 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
     page.rules = page.rules.flatMap((r): CfRule[] => {
       const to = edit.range(r.range[0], r.range[1], still, still);
       return to ? [{ ...r, range: to }] : [];
+    });
+    page.charts = page.charts.flatMap((c): ChartSpec[] => {
+      const to = edit.range(c.range[0], c.range[1], still, still);
+      return to ? [{ ...c, range: to }] : [];
     });
     const thing = `${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"}`;
     return setting(wb, entries, `${how === "insert" ? "inserted" : "deleted"} ${thing} at ${axis === "row" ? at + 1 : colName(at)}`);
@@ -645,6 +653,41 @@ const SPECS: readonly Spec[] = [
       const n = page.rules.filter(over).length;
       page.rules = page.rules.filter((r) => !over(r));
       return changedBy(wb, wb.sheet.keys(), `cleared ${n} rule${n === 1 ? "" : "s"}`);
+    },
+  },
+  {
+    id: "chart.insert", label: "Insert Chart", params: ["kind", "range"], optional: ["title"], journaled: true,
+    run: async (wb, p) => {
+      const kind = p.kind.toLowerCase() as ChartKind;
+      if (!CHART_KINDS.includes(kind)) refuse(`${p.kind} is not a chart (${CHART_KINDS.join(", ")})`);
+      const page = wb.page(wb.active)!, r = rangeOf(p.range);
+      page.charts.push({ kind, range: r, title: p.title ?? `Chart ${page.charts.length + 1}` });
+      return changedBy(wb, [], `inserted a ${kind} chart of ${named(r)}`);
+    },
+  },
+  {
+    id: "chart.list", label: "Charts", params: [], journaled: false,
+    run: async (wb) => {
+      const listed = wb.charts().map((c, i) => `${i + 1}. ${c.title}: ${c.kind} chart of ${c.range}`);
+      return { ok: true, message: listed.length ? listed.join("; ") : "no charts", changed: [], output: listed };
+    },
+  },
+  {
+    id: "chart.delete", label: "Delete Chart", params: ["index"], journaled: true,
+    run: async (wb, p) => {
+      const charts = wb.page(wb.active)!.charts, i = Number(p.index) - 1;
+      if (!Number.isInteger(i) || !charts[i]) refuse(`no chart ${p.index}`);
+      const [gone] = charts.splice(i, 1);
+      return changedBy(wb, [], `deleted ${gone.title}`);
+    },
+  },
+  {
+    id: "insert.sparkline", label: "Sparkline", params: ["range", "at"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), key = cellOf(p.at);
+      const formula = wb.sheet.language.name === "Excel" ? `=SPARKLINE(${named(r)})` : `=SPARKLINE_RANGE("${named(r)}")`;
+      const changed = await wb.sheet.set(key, formula);
+      return changedBy(wb, changed, `${key} = ${show(wb.sheet.value(key))}`);
     },
   },
   {

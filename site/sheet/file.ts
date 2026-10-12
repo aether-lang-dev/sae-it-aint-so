@@ -7,12 +7,16 @@
 //
 // sae's own additions, which the app passes over: a cell's validation rule
 // (validation.ts's, as an object), the first sheet's name (sheetName), named
-// ranges (names: { QTY: "B2:B4" }) and conditional-format rules (rules.ts's,
-// their ranges as text), and the workbook's other sheets (sheets: [{ name,
-// cells, names, rules }]). writeSheetFile writes it all.
+// ranges (names: { QTY: "B2:B4" }), conditional-format rules (rules.ts's,
+// their ranges as text) and charts ({ kind, range, title }), and the
+// workbook's other sheets (sheets: [{ name, cells, names, rules, charts }]).
+// writeSheetFile writes it all.
 import { addrOf, order, parseRange } from "./address.ts";
 import { ICONS, rangeName } from "./rules.ts";
 import type { CfRule } from "./rules.ts";
+import { CHART_KINDS } from "./charts.ts";
+import type { ChartKind } from "./charts.ts";
+import type { ChartSpec } from "./workbook.ts";
 import { show } from "./format.ts";
 import type { Note } from "./notes.ts";
 import { ruleOf } from "./validation.ts";
@@ -24,6 +28,7 @@ export interface FileSheet {
   readonly notes: ReadonlyMap<string, Note>;
   readonly names: readonly [string, string][];     // [NAME, "B2:B4"]
   readonly rules: readonly CfRule[];
+  readonly charts: readonly ChartSpec[];
 }
 
 export interface SheetFile {
@@ -83,7 +88,15 @@ function rulesOf(rules: unknown): CfRule[] {
   });
 }
 
-function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown): FileSheet {
+function chartsOf(charts: unknown): ChartSpec[] {
+  if (!Array.isArray(charts)) return [];
+  return charts.flatMap((c: any): ChartSpec[] => {
+    const corners = parseRange(String(c?.range ?? ""));
+    return corners && CHART_KINDS.includes(c?.kind) ? [{ kind: c.kind as ChartKind, range: corners, title: String(c.title ?? "") }] : [];
+  });
+}
+
+function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown, charts: unknown): FileSheet {
   const list = Object.entries(cells ?? {}).map(([k, c]): [string, string | FileCell] => [k.toUpperCase(), c]);
   return {
     name,
@@ -91,6 +104,7 @@ function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: 
     notes: new Map(list.map(([k, c]): [string, Note] => [k, noteOf(c)]).filter(([, n]) => Object.keys(n).length)),
     names: Object.entries((names ?? {}) as Record<string, unknown>).map(([n, r]): [string, string] => [n.toUpperCase(), String(r)]),
     rules: rulesOf(rules),
+    charts: chartsOf(charts),
   };
 }
 
@@ -101,8 +115,8 @@ export function readSheetFile(data: any): SheetFile {
     language: String(data?.formulas ?? "").toLowerCase() === "excel" ? "Excel" : "RexxJS",
     setupScript: String(data?.setupScript ?? ""),
     sheets: [
-      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules),
-      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules)),
+      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules, data?.charts),
+      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules, s?.charts)),
     ],
   };
 }
@@ -127,6 +141,7 @@ function cellsOf(page: Page): Cells {
 
 const namesOf = (page: Page): Record<string, string> => Object.fromEntries(page.sheet.names());
 const rulesIn = (page: Page) => page.rules.map((r) => ({ ...r, range: rangeName(r.range) }));
+const chartsIn = (page: Page) => page.charts.map((c) => ({ kind: c.kind, range: rangeName(c.range), title: c.title }));
 
 // The workbook as a file: JSON-ready.
 export function writeSheetFile(wb: Workbook) {
@@ -139,6 +154,7 @@ export function writeSheetFile(wb: Workbook) {
     cells: cellsOf(first),
     names: namesOf(first),
     rules: rulesIn(first),
-    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p) })),
+    charts: chartsIn(first),
+    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p) })),
   };
 }
