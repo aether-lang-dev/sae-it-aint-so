@@ -16,6 +16,7 @@ import type { SheetFile } from "./file.ts";
 import { show } from "./format.ts";
 import { EXAMPLE, FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./samples.ts";
 import { runScript } from "./script.ts";
+import { continued } from "./series.ts";
 import { deleted, inserted, movedBy, restructured } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
 import { CellError } from "./values.ts";
@@ -197,6 +198,30 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
+    id: "range.clearFormats", label: "Clear Formats", params: ["range"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), keys = [...range(r[0], r[1])];
+      for (const k of keys) wb.notes.set(k, { format: "", style: "", styleExpression: "" });
+      return changedBy(wb, keys, `cleared the formats of ${named(r)}`);
+    },
+  },
+  {
+    id: "range.clearComments", label: "Clear Comments", params: ["range"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), keys = [...range(r[0], r[1])];
+      for (const k of keys) wb.notes.set(k, { comment: "" });
+      return changedBy(wb, keys, `cleared the comments of ${named(r)}`);
+    },
+  },
+  {
+    id: "range.clearAll", label: "Clear All", params: ["range"], journaled: true,
+    run: (wb, p) => {
+      const r = rangeOf(p.range), keys = [...range(r[0], r[1])];
+      for (const k of keys) wb.notes.set(k, { comment: "", format: "", style: "", styleExpression: "" });
+      return setting(wb, keys.map((k) => [k, ""] as const), `cleared all of ${named(r)}`);
+    },
+  },
+  {
     id: "sheet.clear", label: "Clear all", params: [], journaled: true,
     run: (wb) => {
       wb.notes.clear();
@@ -206,8 +231,14 @@ const SPECS: readonly Spec[] = [
   {
     id: "edit.copy", label: "Copy", params: ["range"], journaled: true,
     run: async (wb, p) => {
-      const r = rangeOf(p.range);
-      wb.clip = { tsv: copied(inputs(wb), r[0], r[1]), from: topLeft(r), language: wb.sheet.language };
+      const r = rangeOf(p.range), from = topLeft(r);
+      const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
+      const grid = <T>(f: (key: string) => T): T[][] =>
+        Array.from({ length: rows }, (_, i) => Array.from({ length: cols }, (_, j) => f(keyOf({ col: from.col + j, row: from.row + i }))));
+      wb.clip = {
+        tsv: copied(inputs(wb), r[0], r[1]), from, language: wb.sheet.language,
+        inputs: grid((k) => wb.sheet.input(k)), shown: grid((k) => show(wb.sheet.value(k))), notes: grid((k) => wb.notes.get(k)),
+      };
       return { ok: true, message: `copied ${named(r)}`, changed: [] };
     },
   },
@@ -217,6 +248,81 @@ const SPECS: readonly Spec[] = [
       const at = rangeOf(p.at)[0];
       const clip = wb.clip ?? refuse("nothing copied");
       return setting(wb, pasted(clip.tsv, at, { from: clip.from, language: clip.language }), `pasted at ${keyOf(at)}`);
+    },
+  },
+  {
+    id: "edit.pasteSpecial", label: "Paste Special", params: ["at", "what"], optional: ["transpose"], journaled: true,
+    run: async (wb, p) => {
+      const at = rangeOf(p.at)[0];
+      const clip = wb.clip ?? refuse("nothing copied");
+      const what = p.what.toLowerCase();
+      if (!["values", "formulas", "formats", "all"].includes(what)) refuse(`${p.what} is not values, formulas, formats or all`);
+      const turned = flag(p.transpose);
+      const entries: [string, string][] = [];
+      clip.inputs.forEach((row, i) => row.forEach((input, j) => {
+        const to = { col: at.col + (turned ? i : j), row: at.row + (turned ? j : i) };
+        if (to.col >= COLS || to.row >= ROWS) return;
+        const by = { cols: to.col - (clip.from.col + j), rows: to.row - (clip.from.row + i) };
+        const key = keyOf(to);
+        if (what === "values") entries.push([key, clip.shown[i][j]]);
+        if (what === "formulas" || what === "all") entries.push([key, movedBy(clip.language, input, by)]);
+        if (what === "formats" || what === "all") {
+          const n = clip.notes[i][j];
+          wb.notes.set(key, {
+            format: n.format ?? "", style: n.style ?? "",
+            styleExpression: n.styleExpression ? movedBy(clip.language, `=${n.styleExpression}`, by).slice(1) : "",
+            ...(what === "all" ? { comment: n.comment ?? "" } : {}),
+          });
+        }
+      }));
+      return setting(wb, entries, `pasted ${what}${turned ? ", transposed," : ""} at ${keyOf(at)}`);
+    },
+  },
+  {
+    id: "edit.fillSeries", label: "Series", params: ["range"], journaled: true,
+    run: (wb, p) => {
+      const r = rangeOf(p.range), tl = topLeft(r);
+      const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
+      // Down each column, or across each row when the selection is one row tall.
+      const down = rows > 1;
+      const lines = down ? cols : rows, length = down ? rows : cols;
+      const at = (line: number, i: number) => keyOf(down ? { col: tl.col + line, row: tl.row + i } : { col: tl.col + i, row: tl.row + line });
+      const entries: [string, string][] = [];
+      for (let line = 0; line < lines; line++) {
+        const first = [wb.sheet.input(at(line, 0))];
+        if (!first[0]) continue;
+        if (length > 2 && wb.sheet.input(at(line, 1))) first.push(wb.sheet.input(at(line, 1)));
+        // A formula is moved by its offset from the cell it repeats, as Fill Down moves it.
+        continued(first, length - first.length).forEach((input, i) => {
+          const n = first.length + i, src = n % first.length;
+          const off = n - src;
+          entries.push([at(line, n), movedBy(wb.sheet.language, input, down ? { cols: 0, rows: off } : { cols: off, rows: 0 })]);
+        });
+      }
+      return setting(wb, entries, `filled ${named(r)} as a series`);
+    },
+  },
+  {
+    id: "formulas.autoSum", label: "AutoSum", params: ["cell"], journaled: true,
+    run: async (wb, p) => {
+      const key = cellOf(p.cell), a = parseRange(key)![0];
+      const isNumber = (col: number, row: number) => col >= 0 && row >= 0 && typeof wb.sheet.value(keyOf({ col, row })) === "number";
+      let from: Addr | null = null;
+      if (isNumber(a.col, a.row - 1)) {
+        let row = a.row - 1;
+        while (isNumber(a.col, row - 1)) row--;
+        from = { col: a.col, row };
+      } else if (isNumber(a.col - 1, a.row)) {
+        let col = a.col - 1;
+        while (isNumber(col - 1, a.row)) col--;
+        from = { col, row: a.row };
+      }
+      if (!from) refuse(`no numbers above or to the left of ${key}`);
+      const to = from!.col === a.col ? { col: a.col, row: a.row - 1 } : { col: a.col - 1, row: a.row };
+      const span = `${keyOf(from!)}:${keyOf(to)}`;
+      const formula = wb.sheet.language.name === "Excel" ? `=SUM(${span})` : `=SUM_RANGE("${span}")`;
+      const changed = await wb.sheet.set(key, formula);
+      return changedBy(wb, changed, `${key} = ${show(wb.sheet.value(key))}`);
     },
   },
   {

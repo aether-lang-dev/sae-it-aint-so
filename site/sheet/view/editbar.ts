@@ -1,5 +1,7 @@
-// Undo and redo, sorting the selection by the cursor's column, and rows or
-// columns inserted before the selection (as many as it covers) or deleted.
+// Undo and redo, sorting the selection by the cursor's column, rows or
+// columns inserted before the selection (as many as it covers) or deleted;
+// then Fill Series and AutoSum, Paste Special (what was copied, at the
+// selection), and the Clears.
 import { addrOf, colName } from "../address.ts";
 import type { SheetView } from "./view.ts";
 
@@ -27,5 +29,16 @@ export function editBar(v: SheetView): void {
     ui.btn("Delete row", () => v.run("rows.delete", span("row")));
     ui.btn("Insert column", () => v.run("columns.insert", span("col")));
     ui.btn("Delete column", () => v.run("columns.delete", span("col")));
+  });
+  const at = () => v.range().split(":")[0];
+  ui.hstack(() => {
+    ui.btn("Fill series", () => v.run("edit.fillSeries", { range: v.range() }));
+    ui.btn("AutoSum", () => v.run("formulas.autoSum", { cell: v.here() }));
+    ui.btn("Paste values", () => v.run("edit.pasteSpecial", { at: at(), what: "values" }));
+    ui.btn("Paste formats", () => v.run("edit.pasteSpecial", { at: at(), what: "formats" }));
+    ui.btn("Paste transposed", () => v.run("edit.pasteSpecial", { at: at(), what: "all", transpose: "true" }));
+    ui.btn("Clear formats", () => v.run("range.clearFormats", { range: v.range() }));
+    ui.btn("Clear comments", () => v.run("range.clearComments", { range: v.range() }));
+    ui.btn("Clear cells", () => v.run("range.clearAll", { range: v.range() }));
   });
 }

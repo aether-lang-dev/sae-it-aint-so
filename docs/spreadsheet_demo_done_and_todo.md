@@ -54,6 +54,14 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   column: numbers, then text (without case), then empty cells; equal ones
   keep their order. A row moves whole, its formulas rewritten as a copy by
   the rows it moved, and its notes with it.
+- Fill Series continues each column (or row) of the selection from its
+  first cells: numbers by 1 or their step, dates, text ending in a
+  number, days, months and quarters round and round, a formula moved as
+  Fill Down moves it. AutoSum sums the numbers just above (or to the left)
+  in the sheet's language (`=SUM(B1:B5)`, `=SUM_RANGE("B1:B5")`).
+- Paste Special: values (what the cells showed), formulas (moved, without
+  formats), formats (the notes alone), or all, transposed or not. Clear
+  formats, Clear comments and Clear cells (inputs and notes).
 - Named ranges: name the selection (the names bar), and a formula reads
   the name in either language (`=SUM(qty)`, `=SUM_RANGE("qty")`, a bare
   `rate`); redefining it moves what reads it, deleting it makes them
@@ -222,6 +230,9 @@ summary.
     catalogue, refusals, every command the panels run, the journal
     replayed to the same sheet, RexxJS scripts (ADDRESS SHEET, SETCELL,
     GETCELL, RC and RESULT, `;`), and a formula refused SETCELL.
+  - `sheet_editing` (20): series of each kind, Fill Series down and right
+    (formulas moved), AutoSum in both languages and its refusals, Paste
+    Special values, formulas, formats and transposed, the Clears.
   - `sheet_names` (12): names defined, read in both languages, followed,
     deleted to `#NAME?`, refused, listed, journaled.
   - `sheet_rexx` (25): RexxJS formulas against a stub of the cells (what a
@@ -231,7 +242,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 30 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 31 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;

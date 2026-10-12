@@ -119,10 +119,10 @@ These need more of it (each would be an ask, as
 
 ## Recommended order
 
-1. The command layer (idea 1), with RexxJS's `ADDRESS SHEET` over it:
-   everything after lands as a command.
-2. Named ranges and the Name Box.
-3. Fill Series, AutoSum, Paste Special, the Clear variants.
+1. ~~The command layer (idea 1), with RexxJS's `ADDRESS SHEET` over it~~
+   (done: `site/sheet/commands.ts`, the page as panels over it).
+2. ~~Named ranges and the Name Box~~ (done).
+3. ~~Fill Series, AutoSum, Paste Special, the Clear variants~~ (done).
 4. Data validation.
 5. Several sheets.
 6. Saving and opening, and CSV.

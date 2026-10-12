@@ -361,6 +361,29 @@ main() {
             uidriver.post_ok("/widget/${g.field("cell")}/submit", "Return in the address field")
             spec.assert_true(b.wait_for_text("AMOUNTS is C4:C9"), "the Name Box goes to it")
         }
+        spec.it("Fill series, AutoSum and Paste values, from the edit bar") callback {
+            g.enter("A14", "Mon")
+            g.enter("B14", "1")
+            g.enter("B15", "2")
+            g.pick("A", 14)
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Down")
+            g.key("Shift+Right")
+            b.click("Fill series")
+            spec.assert_true(b.wait_for_console("sheet: filled A14:B18 as a series"), "filled")
+            spec.assert_true(g.wait_cell("A", 18, "Fri"), "Mon to Fri")
+            spec.assert_true(g.wait_cell("B", 18, "5"), "1, 2 ... 5")
+            g.pick("B", 19)
+            b.click("AutoSum")
+            spec.assert_true(g.wait_cell("B", 19, "15"), "AutoSum of the numbers above")
+            spec.assert_true(b.wait_for_text("B19: =SUM_RANGE(\"B14:B18\") → 15"), "in RexxJS formulas, SUM_RANGE")
+            g.key("Ctrl+C")
+            g.pick("C", 19)
+            b.click("Paste values")
+            spec.assert_true(b.wait_for_text("C19: 15 → 15"), "the value, not the formula")
+        }
     }
     return spec.run_summary(fw)
 }

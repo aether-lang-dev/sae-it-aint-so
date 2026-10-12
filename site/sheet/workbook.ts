@@ -10,6 +10,7 @@ import { describe, show } from "./format.ts";
 import { formatted, toStyle } from "./formats.ts";
 import type { Language } from "./language.ts";
 import { CellNotes } from "./notes.ts";
+import type { Note } from "./notes.ts";
 import { RexxLanguage } from "./rexx.ts";
 import { Sheet } from "./sheet.ts";
 import { CellError } from "./values.ts";
@@ -17,11 +18,15 @@ import { CellError } from "./values.ts";
 export type LanguageName = "Excel" | "RexxJS";
 
 // What was copied, from where, in which language (so a paste moves its
-// formulas). Pages have no system clipboard yet.
+// formulas): as tab-separated text, and cell by cell (inputs, what they
+// showed, their notes) for Paste Special. Pages have no system clipboard yet.
 export interface Clip {
   readonly tsv: string;
   readonly from: Addr;
   readonly language: Language;
+  readonly inputs: readonly (readonly string[])[];
+  readonly shown: readonly (readonly string[])[];
+  readonly notes: readonly (readonly Note[])[];
 }
 
 export class Workbook {
