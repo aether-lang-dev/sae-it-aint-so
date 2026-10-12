@@ -14,7 +14,7 @@ import { splitKey } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { EXCEL } from "./excel.ts";
 import { describe, show } from "./format.ts";
-import { formatted, toStyle } from "./formats.ts";
+import { formatStyle, formatted, toStyle } from "./formats.ts";
 import type { Language } from "./language.ts";
 import { CellNotes } from "./notes.ts";
 import type { Note } from "./notes.ts";
@@ -300,7 +300,7 @@ export class Workbook {
   // circle (its input breaks its rule), an error in red.
   styleOf(key: string): string {
     const v = this.sheet.value(key), n = this.notes.get(key);
-    return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), toStyle(n.format), this.#conditional.get(key) ?? "", this.#traced.get(key) ?? "",
+    return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), formatStyle(v, n.format ?? ""), this.#conditional.get(key) ?? "", this.#traced.get(key) ?? "",
       this.#circled.has(key) ? "background: #ffd6d6" : "", v instanceof CellError ? "color: #c0392b" : ""].filter((p) => p).join("; ");
   }
 

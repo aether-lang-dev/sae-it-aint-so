@@ -5,6 +5,7 @@
 // of one (what a RexxJS style function gives). A style comes out as the AeCS
 // a ui.datagrid cell draws: background, color (hex), font-weight: bold and
 // text-align; what the grid cannot draw (italic, sizes, underline) is left out.
+import { numberFormat } from "./numfmt.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
 
@@ -27,15 +28,6 @@ function written(n: number, places: number, group: boolean, prefix = "", suffix 
 
 const placesIn = (pattern: string): number => /\.(0+)/.exec(pattern)?.[1].length ?? 0;
 
-// An Excel-style pattern: text before the digits is a prefix, after them a
-// suffix; % multiplies by a hundred; a comma groups thousands.
-function excelPattern(n: number, pattern: string): string | null {
-  const m = /^([^#0]*)([#0,]*(?:\.0+)?)(%?)(.*)$/.exec(pattern);
-  if (!m || !m[2]) return null;
-  const percent = m[3] === "%";
-  return written(percent ? n * 100 : n, placesIn(m[2]), m[2].includes(","), m[1], m[3] + m[4]);
-}
-
 function numberPart(n: number, part: string): string | null {
   const [kind, arg = ""] = part.split(/:(.*)/s);
   switch (kind.trim()) {
@@ -45,14 +37,21 @@ function numberPart(n: number, part: string): string | null {
       return written(n, 2, true, CURRENCIES[code] ?? `${code} `);
     }
     case "percent": return written(n * 100, placesIn(arg), false, "", "%");
-    default: return /^[^:]*[#0]/.test(part) ? excelPattern(n, part.trim()) : null;
+    default: return /^[^:]*[#0]/.test(part) ? numberFormat(n, part.trim())?.text ?? null : null;
   }
 }
+
+// The app's part names: a format with one of these is in its dialect, and
+// ';' separates its parts; any other is Excel's number-format language
+// (numfmt.ts), where ';' separates sections.
+const APP_PART = /^\s*(bold|italic|underline|(number|currency|percent|background|background-color|backgroundcolor|bg|color|text-color|font-weight|fontweight|align|text-align|textalign)\s*:)/i;
+const appDialect = (format: string): boolean => format.split(";").some((p) => APP_PART.test(p));
 
 // A value as its format writes it, or null when the format does not apply
 // (no number format in it, or the value is not a number).
 export function formatted(v: Value, format: string): string | null {
   if (!format) return null;
+  if (!appDialect(format)) return numberFormat(v, format)?.text ?? null;
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" && !isNaN(Number(v)) ? Number(v) : NaN;
   if (isNaN(n) || v instanceof CellError) return null;
   for (const part of format.split(";")) {
@@ -91,6 +90,15 @@ function declaration(name: string, value: string): string | null {
     default:
       return null;
   }
+}
+
+// The style a format gives a value: the app's style parts, or the colour of
+// an Excel section ([Red]).
+export function formatStyle(v: Value, format: string): string {
+  if (!format) return "";
+  if (appDialect(format)) return toStyle(format);
+  const c = numberFormat(v, format)?.color;
+  return c ? `color: ${c}` : "";
 }
 
 // A style in any of the dialects, as the grid's AeCS ("" for none).
