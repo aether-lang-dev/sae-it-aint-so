@@ -48,6 +48,12 @@ const HISTORY = 100;   // undo steps kept, as the Tauri spreadsheet keeps
 
 const byOrder = (a: string, b: string): number => order(cellAddr(a)!) - order(cellAddr(b)!);
 
+// This sheet's keys in sheet order, then other sheets' by name.
+const byKey = (a: string, b: string): number => {
+  const x = a.includes("!"), y = b.includes("!");
+  return x !== y ? (x ? 1 : -1) : x ? (a < b ? -1 : a > b ? 1 : 0) : byOrder(a, b);
+};
+
 // One change at a time, across the sheets that share it: a language's
 // evaluation may be asynchronous, and RexxJS's holds one interpreter.
 export class Turns {
@@ -128,6 +134,11 @@ export class Sheet {
 
   // The cells holding something, in sheet order.
   keys(): string[] { return [...this.#inputs.keys()].sort(byOrder); }
+
+  // What a cell reads, and what reads it (a key on another sheet qualified,
+  // after this sheet's own, which are in sheet order).
+  reads(key: string): string[] { return [...(this.#reads.get(key) ?? [])].sort(byKey); }
+  readBy(key: string): string[] { return [...(this.#readBy.get(key) ?? [])].sort(byKey); }
 
   // Every cell whose value is an error, in sheet order.
   problems(): Problem[] {

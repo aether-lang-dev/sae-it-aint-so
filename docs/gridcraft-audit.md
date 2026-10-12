@@ -129,7 +129,9 @@ These need more of it (each would be an ask, as
 6. ~~Saving and opening, and CSV~~ (done: `file.save`, `file.open`,
    `file.list`, `file.delete`, `file.new`, `file.exportCsv`,
    `file.importCsv`).
-7. Formula auditing, and Show Formulas.
+7. ~~Formula auditing, and Show Formulas~~ (done: trace precedents and
+   dependents, remove arrows, Show Formulas, Evaluate Formula with a
+   formula printer, the Watch Window).
 8. The number-format language; conditional-format rules (colour scales,
    icon sets).
 9. Charts and sparklines in `vg`.

@@ -1,6 +1,6 @@
 // What the spreadsheet's panels share: the workbook and its commands (the
 // seam), the view's own state (the selected cell's address, the formula
-// bar, the status line, the problems, the sheets' names), the grid's handle and selection, and
+// bar, the status line, the problems, the sheets' names, the watched cells), the grid's handle and selection, and
 // run(), the one way a panel changes anything: it runs a command, prints
 // its outcome (what specs read), and shows the workbook again, in one batch.
 import { COLS, addrOf, keyOf } from "../address.ts";
@@ -9,6 +9,7 @@ import { Commands } from "../commands.ts";
 import type { Outcome, Params } from "../commands.ts";
 import type { Problem } from "../sheet.ts";
 import { Workbook } from "../workbook.ts";
+import type { Watch } from "../workbook.ts";
 
 export class SheetView {
   readonly wb = new Workbook();
@@ -24,6 +25,7 @@ export class SheetView {
   readonly problems = state<Problem[]>([]);
   readonly sheets = state<string[]>(["Sheet1"]);
   readonly active = state("Sheet1");
+  readonly watches = state<Watch[]>([]);
   grid = 0;
 
   // The selected cell's key (A1 when the address field names none).
@@ -105,6 +107,7 @@ export class SheetView {
       this.problems.set(this.wb.sheet.problems());
       this.sheets.set(this.wb.sheetNames());
       this.active.set(this.wb.active);
+      this.watches.set(this.wb.watches());
       this.formulas.set(this.wb.sheet.language.name);
       this.setup.set(this.wb.setupScript ? `Setup script: ${this.wb.setupScript}` : "");
       this.follow();

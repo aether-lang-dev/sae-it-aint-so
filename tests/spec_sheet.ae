@@ -450,6 +450,33 @@ main() {
             b.click("Export CSV")
             spec.assert_true(b.wait_for_text("x,\"y, z\""), "exported, quoted again")
         }
+        spec.it("auditing: trace precedents and dependents, Show formulas, Evaluate formula, a watch") callback {
+            b.click("Excel formulas")
+            g.enter("H18", "2")
+            g.enter("I18", "=H18*21")
+            g.enter("J18", "=SUM(H18:I18)")
+            g.pick("J", 18)
+            b.click("Trace precedents")
+            spec.assert_true(b.wait_for_console("sheet: J18 reads H18 I18"), "traced")
+            spec.assert_eq(g.cell_has("I", 18, "\"bg\":\"#dbe9ff\""), 1, "what it reads, in blue")
+            b.click("Evaluate formula")
+            spec.assert_true(b.wait_for_text("J18: SUM(H18:I18) → SUM({2,42}) → 44"), "the steps")
+            b.click("Add watch")
+            spec.assert_true(b.wait_for_text("Watch Sheet1!J18: =SUM(H18:I18) = 44"), "watched")
+            g.pick("H", 18)
+            b.click("Trace dependents")
+            spec.assert_true(b.wait_for_console("sheet: H18 is read by I18 J18"), "dependents")
+            spec.assert_eq(g.cell_has("J", 18, "\"bg\":\"#ffe3c2\""), 1, "in orange")
+            b.click("Remove arrows")
+            g.enter("H18", "3")
+            spec.assert_true(b.wait_for_text("Watch Sheet1!J18: =SUM(H18:I18) = 66"), "the watch follows")
+            b.click("Show formulas")
+            spec.assert_true(g.wait_cell("I", 18, "=H18*21"), "formulas shown")
+            b.click("Show formulas")
+            spec.assert_true(g.wait_cell("I", 18, "63"), "values again")
+            b.click("Unwatch Sheet1!J18")
+            spec.assert_true(b.wait_for_text_gone("Watch Sheet1!J18: =SUM(H18:I18) = 66"), "unwatched")
+        }
     }
     return spec.run_summary(fw)
 }

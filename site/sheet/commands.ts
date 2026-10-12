@@ -8,7 +8,8 @@
 // script.ts), and the specs, headless and in the browser (the page's
 // command bar). The commands that change the workbook are journaled as
 // command lines, which replay.
-import { COLS, ROWS, colName, keyOf, parseRange, range } from "./address.ts";
+import { COLS, ROWS, colName, keyOf, parseRange, range, splitKey } from "./address.ts";
+import { evaluationSteps } from "./audit.ts";
 import type { Addr } from "./address.ts";
 import { copied, filled, pasted } from "./copy.ts";
 import { fromCsv, toCsv } from "./csv.ts";
@@ -24,7 +25,8 @@ import type { Scope } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
-import type { LanguageName, Workbook } from "./workbook.ts";
+import type { Direction, LanguageName, Page, Workbook } from "./workbook.ts";
+import { FormulaError } from "./lexer.ts";
 
 export type Params = Readonly<Record<string, string>>;
 
@@ -221,6 +223,23 @@ const pageOf = (wb: Workbook, name: string) => wb.page(name) ?? refuse(`no sheet
 
 // What the grid shows changes wholesale when the active sheet does.
 const shownKeys = (wb: Workbook, before: readonly string[]) => [...new Set([...before, ...wb.sheet.keys()])];
+
+// Trace Precedents or Dependents: a level further each time.
+function trace(direction: Direction) {
+  const [verb, more] = direction === "precedents" ? ["reads", "they read"] : ["is read by", "they are read by"];
+  return async (wb: Workbook, p: Params): Promise<Outcome> => {
+    const key = cellOf(p.cell), levels = wb.trace(key, direction);
+    await wb.settle();
+    const said = levels.length ? levels.map((l, i) => `${i ? `, and ${more}` : verb} ${l.join(" ")}`).join("") : `${verb} nothing`;
+    return { ok: true, message: `${key} ${said}`, changed: wb.sheet.keys(), output: levels };
+  };
+}
+
+// A watched cell: "Costs!B2", or B2 on the active sheet.
+const watchedOf = (wb: Workbook, s: string): [Page, string] => {
+  const { sheet, cell } = splitKey(s.trim());
+  return [sheet === null ? wb.page(wb.active)! : pageOf(wb, sheet), cellOf(cell)];
+};
 
 const findOptions = (p: Params) => ({ matchCase: flag(p.matchCase), wholeCell: flag(p.wholeCell), inFormulas: flag(p.inFormulas) });
 const FIND_OPTIONS = ["matchCase", "wholeCell", "inFormulas"];
@@ -488,6 +507,53 @@ const SPECS: readonly Spec[] = [
     run: async (wb) => {
       const names = wb.sheet.names().map(([n, r]) => `${n} ${r}`);
       return { ok: true, message: names.length ? names.join(", ") : "no names", changed: [], output: names };
+    },
+  },
+  { id: "formulas.tracePrecedents", label: "Trace Precedents", params: ["cell"], journaled: false, run: trace("precedents") },
+  { id: "formulas.traceDependents", label: "Trace Dependents", params: ["cell"], journaled: false, run: trace("dependents") },
+  {
+    id: "formulas.removeArrows", label: "Remove Arrows", params: [], journaled: false,
+    run: async (wb) => {
+      wb.clearTraces();
+      return changedBy(wb, wb.sheet.keys(), "arrows removed");
+    },
+  },
+  {
+    id: "formulas.showFormulas", label: "Show Formulas", params: [], optional: ["off"], journaled: false,
+    run: async (wb, p) => {
+      wb.showFormulas = !flag(p.off);
+      return changedBy(wb, wb.sheet.keys(), wb.showFormulas ? "showing formulas" : "showing values");
+    },
+  },
+  {
+    id: "formulas.evaluate", label: "Evaluate Formula", params: ["cell"], journaled: false,
+    run: async (wb, p) => {
+      const key = cellOf(p.cell), input = wb.sheet.input(key);
+      if (!input.startsWith("=")) refuse(`${key} is not a formula`);
+      if (wb.sheet.language.name !== "Excel") refuse("Evaluate Formula steps through Excel formulas");
+      let steps: string[] = [];
+      try {
+        steps = evaluationSteps(input.slice(1), { get: (k) => wb.sheet.value(k) }, (n) => wb.sheet.name(n));
+      } catch (e) {
+        if (!(e instanceof FormulaError)) throw e;
+        refuse(`${key}: parse error at ${e.at}: ${e.message}`);
+      }
+      return { ok: true, message: `${key}: ${steps.join(" → ")}`, changed: [], output: steps };
+    },
+  },
+  {
+    id: "formulas.watch", label: "Add Watch", params: ["cell"], journaled: false,
+    run: async (wb, p) => {
+      const [page, cell] = watchedOf(wb, p.cell);
+      return { ok: true, message: `${wb.watch(page, cell) ? "watching" : "already watching"} ${page.name}!${cell}`, changed: [] };
+    },
+  },
+  {
+    id: "formulas.unwatch", label: "Delete Watch", params: ["cell"], journaled: false,
+    run: async (wb, p) => {
+      const [page, cell] = watchedOf(wb, p.cell);
+      if (!wb.unwatch(page, cell)) refuse(`not watching ${page.name}!${cell}`);
+      return { ok: true, message: `stopped watching ${page.name}!${cell}`, changed: [] };
     },
   },
   {

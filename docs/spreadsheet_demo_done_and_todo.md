@@ -89,6 +89,17 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   inserted on a sheet move every sheet's references to it, and no others.
   The language is the workbook's, for every sheet; each sheet has its own
   named ranges and its own undo.
+- Formula auditing (the audit bar), as Excel's Formulas tab has it:
+  Trace precedents marks what the selected cell reads in blue, Trace
+  dependents what reads it in orange, a level further each time and
+  across sheets (`A1 is read by A2 A3 Costs!B1, and they are read by
+  A4`); Remove arrows. Show formulas shows inputs in the grid. Evaluate
+  formula steps through an Excel formula as Excel's dialog does, leftmost
+  innermost first, a range as an array, IF taking only its branch
+  (`SUM(H18:I18) → SUM({2,42}) → 44`); it is printed by a formula printer
+  (`audit.ts`: upper case, parentheses only where precedence needs them).
+  Add watch keeps a cell, on any sheet, in the Watch Window with its
+  formula and value as they change.
 - Files (the file bar): Save keeps the workbook in the page's `storage`
   under a name (every sheet, its notes, rules and names, its language and
   setup script), Open brings it back worked out, Delete file forgets it,
@@ -223,6 +234,7 @@ in `site/sheet/` (and the generated RexxJS bundle):
 | `commands.ts` | The seam: the catalogue of commands, the command line, the journal, scripts |
 | `workbook.ts` | The sheets (each a Sheet and its notes), the active one, both languages, the file's name and setup script, the clipboard, conditional styles; `settle()` passes changes between sheets; what a cell shows, its style, its status line |
 | `script.ts` | RexxJS scripts over the commands: ADDRESS SHEET, SETCELL, GETCELL |
+| `audit.ts` | The formula printer, and Evaluate Formula's steps |
 | `copy.ts` | A formula moved (its references rewritten token by token, so the rest stays as typed); copy as tab-separated text; paste, moving formulas when the text came from the sheet; fill down and right. Gives `[key, input]` pairs for `Sheet.setMany` |
 
 The prelude's `computed` takes a fixed list of input states, and a sheet's
@@ -279,6 +291,11 @@ summary.
     against a fake store that holds keys to `storage`'s rule; CSV out of
     a range or everything used, in at a cell, refused where it does not
     fit; New.
+  - `sheet_audit` (20): the printer and its parentheses; Evaluate
+    Formula's steps (references, ranges as arrays, order, IF, text,
+    another sheet, an error); traces a level at a time and across sheets,
+    removed; Show Formulas; the Watch Window, across sheets and after one
+    goes.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
@@ -290,7 +307,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 35 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 36 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -315,7 +332,9 @@ summary.
     it, and `#REF!` when it is deleted;
   - Save, New and Open through the page's storage (`$SAE_STORAGE_DIR`, a
     fresh one per run), formats and conditional styles kept; CSV imported
-    at a cell and exported from a selection.
+    at a cell and exported from a selection;
+  - auditing: traces in blue and orange, Evaluate formula's steps, a
+    watch that follows an edit and is removed, Show formulas on and off.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -400,9 +419,10 @@ web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).
    - HLOOKUP, XLOOKUP, SUMPRODUCT, COUNTIFS and SUMIFS, and ROUND's
      siblings.
    - Each is a `def()` plus checks in `sheet_functions.ts`.
-5. **Highlighting what a formula reads.** While a formula is being edited,
-   the cells it references could take a `cell_style` background; the
-   parser already gives `refsOf`.
+5. **Highlighting what a formula reads while it is typed.** Trace
+   precedents marks them once it is entered; while it is being typed needs
+   the editor's text as it changes (an aether-ui ask). Evaluate Formula
+   for RexxJS formulas would need RexxJS's own expression tree.
 
 **Correctness edges, known and accepted:**
 

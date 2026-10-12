@@ -5,7 +5,10 @@
 // file's name and setup script, the clipboard, and each conditional style
 // of the active sheet as last worked out. A formula on one sheet can read
 // another's cells (Costs!B2); after a change, settle() works out what reads
-// them. It answers what a cell shows, its style and its status line.
+// them. Formula auditing's state is here too: the traces (precedents or
+// dependents of a cell, a number of levels deep, across sheets), Show
+// Formulas, and the watched cells. It answers what a cell shows, its style
+// and its status line.
 // Commands (commands.ts) change it; the page's panels read it.
 import { splitKey } from "./address.ts";
 import type { Addr } from "./address.ts";
@@ -43,6 +46,26 @@ export interface Page {
   readonly notes: CellNotes;
 }
 
+export type Direction = "precedents" | "dependents";
+
+interface Trace {
+  readonly page: Page;
+  readonly cell: string;
+  readonly direction: Direction;
+  levels: number;
+}
+
+// What a traced cell's background is: blue for what it reads, orange for
+// what reads it.
+const TRACED: Record<Direction, string> = { precedents: "background: #dbe9ff", dependents: "background: #ffe3c2" };
+
+export interface Watch {
+  readonly sheet: string;
+  readonly cell: string;
+  readonly input: string;
+  readonly shown: string;
+}
+
 // How many times settle() passes changes between sheets before it stops (a
 // cycle through two sheets would go on for ever).
 const ROUNDS = 20;
@@ -62,6 +85,11 @@ export class Workbook {
   // Circle Invalid: on, the cells whose input breaks their rule are marked.
   circling = false;
   #circled = new Set<string>();
+  // Show Formulas: the grid shows inputs rather than values.
+  showFormulas = false;
+  #traces: Trace[] = [];
+  #traced = new Map<string, string>();
+  #watches: { readonly page: Page; readonly cell: string }[] = [];
 
   constructor() {
     this.#active = this.#make("Sheet1", EXCEL);
@@ -163,13 +191,88 @@ export class Workbook {
     await this.#restyle();
   }
 
+  // A cell's neighbours in the graph, on any sheet: what it reads, or what
+  // reads it.
+  #neighbours(page: Page, cell: string, direction: Direction): [Page, string][] {
+    if (direction === "precedents") {
+      return page.sheet.reads(cell).flatMap((k): [Page, string][] => {
+        const { sheet, cell: c } = splitKey(k);
+        const p = sheet === null ? page : this.page(sheet);
+        return p ? [[p, c]] : [];
+      });
+    }
+    const here = page.name.toUpperCase();
+    return [
+      ...page.sheet.readBy(cell).map((k): [Page, string] => [page, k]),
+      ...this.#pages.filter((p) => p !== page).flatMap((p) => p.sheet.readBy(`${here}!${cell}`).map((k): [Page, string] => [p, k])),
+    ];
+  }
+
+  // The cells `levels` steps from a cell, a level at a time (each cell once).
+  #levels(t: Trace): [Page, string][][] {
+    const seen = new Set([`${t.page.name}!${t.cell}`]);
+    const out: [Page, string][][] = [];
+    let frontier: [Page, string][] = [[t.page, t.cell]];
+    for (let i = 0; i < t.levels; i++) {
+      const next = frontier.flatMap(([p, c]) => this.#neighbours(p, c, t.direction)).filter(([p, c]) => {
+        const id = `${p.name}!${c}`;
+        return !seen.has(id) && !!seen.add(id);
+      });
+      if (!next.length) break;
+      out.push(next);
+      frontier = next;
+    }
+    return out;
+  }
+
+  // A cell's precedents or dependents traced on the active sheet, a level
+  // further than the last time it was; each level's cells, those on another
+  // sheet named with it ("Costs!B1").
+  trace(cell: string, direction: Direction): string[][] {
+    let t = this.#traces.find((x) => x.page === this.#active && x.cell === cell && x.direction === direction);
+    if (t) {
+      if (this.#levels(t).length === t.levels) t.levels++;
+    } else {
+      this.#traces.push((t = { page: this.#active, cell, direction, levels: 1 }));
+    }
+    return this.#levels(t).map((level) => level.map(([p, c]) => (p === this.#active ? c : `${p.name}!${c}`)));
+  }
+
+  clearTraces(): void {
+    this.#traces = [];
+  }
+
+  // A cell watched (the Watch Window), on its sheet; false if it already was.
+  watch(page: Page, cell: string): boolean {
+    if (this.#watches.some((w) => w.page === page && w.cell === cell)) return false;
+    this.#watches.push({ page, cell });
+    return true;
+  }
+
+  unwatch(page: Page, cell: string): boolean {
+    const n = this.#watches.length;
+    this.#watches = this.#watches.filter((w) => w.page !== page || w.cell !== cell);
+    return this.#watches.length < n;
+  }
+
+  // The watched cells whose sheets are still here, as they are now.
+  watches(): Watch[] {
+    this.#watches = this.#watches.filter((w) => this.#pages.includes(w.page));
+    return this.#watches.map(({ page, cell }) => ({ sheet: page.name, cell, input: page.sheet.input(cell), shown: this.#shown(page, cell) }));
+  }
+
   // Every conditional style worked out again, in the sheet's language (it
-  // may read any cell).
+  // may read any cell); what is traced, marked.
   async #restyle(): Promise<void> {
     const next = new Map<string, string>();
     for (const [key, expr] of this.notes.conditional()) next.set(key, toStyle(await this.sheet.evaluate(expr)));
     this.#conditional = next;
     this.#circled = new Set(this.circling ? this.invalid() : []);
+    this.#traces = this.#traces.filter((t) => this.#pages.includes(t.page));
+    this.#traced = new Map();
+    for (const t of this.#traces) {
+      for (const level of this.#levels(t)) for (const [p, c] of level) if (p === this.#active) this.#traced.set(c, TRACED[t.direction]);
+    }
   }
 
   // The cells whose input breaks their rule, whenever it was typed, in sheet
@@ -181,18 +284,23 @@ export class Workbook {
     });
   }
 
-  // What a cell shows: its value in its number format.
+  // What a cell shows: its value in its number format, or with Show
+  // Formulas on, its input.
   textOf(key: string): string {
-    const v = this.sheet.value(key);
-    return formatted(v, this.notes.get(key).format ?? "") ?? show(v);
+    return this.showFormulas ? this.sheet.input(key) : this.#shown(this.#active, key);
+  }
+
+  #shown(page: Page, key: string): string {
+    const v = page.sheet.value(key);
+    return formatted(v, page.notes.get(key).format ?? "") ?? show(v);
   }
 
   // Its style, each layer over the last: numbers to the right, its own
-  // style, its format's style parts, its conditional style, a circle (its
-  // input breaks its rule), an error in red.
+  // style, its format's style parts, its conditional style, a trace, a
+  // circle (its input breaks its rule), an error in red.
   styleOf(key: string): string {
     const v = this.sheet.value(key), n = this.notes.get(key);
-    return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), toStyle(n.format), this.#conditional.get(key) ?? "",
+    return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), toStyle(n.format), this.#conditional.get(key) ?? "", this.#traced.get(key) ?? "",
       this.#circled.has(key) ? "background: #ffd6d6" : "", v instanceof CellError ? "color: #c0392b" : ""].filter((p) => p).join("; ");
   }
 
