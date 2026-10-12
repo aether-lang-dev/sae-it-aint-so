@@ -22,6 +22,14 @@ export function addrOf(s: string): Addr | null {
   return col < COLS && row < ROWS ? { col, row } : null;
 }
 
+// "B2:C4", "c4:b2" or "B2" (a range of one) as its two corners, or null.
+export function parseRange(s: string): [Addr, Addr] | null {
+  const [from, to = from, extra] = String(s).split(":");
+  if (extra !== undefined) return null;
+  const a = addrOf(from), b = addrOf(to);
+  return a && b ? [a, b] : null;
+}
+
 // Row-major order, so a list of cells reads the way the sheet does.
 export const order = (a: Addr): number => a.row * COLS + a.col;
 

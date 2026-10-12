@@ -167,7 +167,12 @@ export class RexxLanguage implements Language {
     // An unset variable that names a cell reads it.
     this.#it.variableResolver = (name: string) => (addrOf(name) ? this.#read(keyOf(addrOf(name)!)) : undefined);
     this.#functions = { ...rangeFunctions((k) => this.#read(k)), ...STYLE_FUNCTIONS };
-    Object.assign(this.#it.externalFunctions, this.#functions);
+    Object.assign(this.#it.externalFunctions, this.#functions, {
+      // A formula only reads: scripts change cells (script.ts).
+      SETCELL: () => {
+        throw new Error("SETCELL changes the sheet: run it in a script, not a formula");
+      },
+    });
   }
 
   // A cell's value as RexxJS sees it: '' for an empty one, a number or

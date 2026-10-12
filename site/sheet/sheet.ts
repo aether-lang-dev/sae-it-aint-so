@@ -53,6 +53,7 @@ export class Sheet {
   readonly #listener: SheetListener | undefined;
   #language: Language;
   #turn: Promise<unknown> = Promise.resolve();
+  #busy = false;
   // Each step is the inputs a change replaced, to put back.
   readonly #undo: (readonly [string, string][])[] = [];
   readonly #redo: (readonly [string, string][])[] = [];
@@ -63,6 +64,10 @@ export class Sheet {
   }
 
   get language(): Language { return this.#language; }
+
+  // Working the sheet out now: a formula is running (so whatever it calls
+  // must not wait for the sheet to change, which waits for it).
+  get busy(): boolean { return this.#busy; }
 
   input(key: string): string { return this.#inputs.get(key) ?? ""; }
   value(key: string): Value { return this.#values.get(key) ?? null; }
@@ -174,7 +179,14 @@ export class Sheet {
   // One change at a time: a language's evaluation may be asynchronous, and
   // RexxJS's holds one interpreter.
   #inTurn<T>(work: () => Promise<T>): Promise<T> {
-    const done = this.#turn.then(work);
+    const done = this.#turn.then(async () => {
+      this.#busy = true;
+      try {
+        return await work();
+      } finally {
+        this.#busy = false;
+      }
+    });
     this.#turn = done.catch(() => {});
     return done;
   }

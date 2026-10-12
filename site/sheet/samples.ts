@@ -413,3 +413,13 @@ export const FORMATTED = {
     "7": 140
   }
 };
+
+// The Excel example the page pastes at A1, as tab-separated rows.
+export const EXAMPLE = [
+  "Item\tQty\tPrice\tTotal",
+  "Apples\t6\t0.45\t=B2*C2",
+  "Bread\t1\t2.2\t=B3*C3",
+  "Milk\t2\t1.15\t=B4*C4",
+  "Total\t=SUM(B2:B4)\t\t=SUM(D2:D4)",
+  "Average\t\t=AVERAGE(C2:C4)\t=ROUND(D5/B5, 2)",
+].join("\n");
