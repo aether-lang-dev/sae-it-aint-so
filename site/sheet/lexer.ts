@@ -1,7 +1,8 @@
 // A formula's tokens, one at a time, from a generator. Each knows where it
 // starts (1-based, counting the formula's leading '=') so an error can say
 // "at 8" of what the person typed. A reference's $ (fixing its column or
-// row when the formula is copied) is in the token; its name is the cell.
+// row when the formula is copied) is in the token; its name is the cell, or
+// SHEET!CELL on another sheet.
 import type { ErrorCode } from "./values.ts";
 
 export type Op = "+" | "-" | "*" | "/" | "^" | "&" | "=" | "<>" | "<" | ">" | "<=" | ">=";
@@ -29,7 +30,8 @@ export class FormulaError extends Error {
 const OPS: readonly Op[] = ["<>", "<=", ">=", "+", "-", "*", "/", "^", "&", "=", "<", ">"];
 const NUMBER = /^(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/;
 const WORD = /^[A-Za-z_][A-Za-z0-9_]*/;
-const REF = /^(\$?)([A-Za-z]+)(\$?)([0-9]+)(?![A-Za-z0-9_])/;
+// A reference, perhaps on another sheet: Costs!B2, 'My Costs'!$B$2.
+const REF = /^(?:(?:([A-Za-z_]\w*)|'([^']+)')!)?(\$?)([A-Za-z]+)(\$?)([0-9]+)(?![A-Za-z0-9_])/;
 // The errors a formula can be written with (a copy writes #REF! for a
 // reference it moved off the sheet).
 const ERRORS: readonly ErrorCode[] = ["#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A"];
@@ -48,8 +50,10 @@ export function* tokens(formula: string, from = 2): Generator<Token, void, undef
     }
     const ref = REF.exec(rest);
     if (ref) {
-      const [text, fixCol, col, fixRow, row] = ref;
-      yield { kind: "ref", name: col.toUpperCase() + row, fixCol: fixCol === "$", fixRow: fixRow === "$", at, text };
+      const [text, bare, quoted, fixCol, col, fixRow, row] = ref;
+      const sheet = bare ?? quoted;
+      const cell = col.toUpperCase() + row;
+      yield { kind: "ref", name: sheet ? `${sheet.toUpperCase()}!${cell}` : cell, fixCol: fixCol === "$", fixRow: fixRow === "$", at, text };
       i += text.length;
       continue;
     }

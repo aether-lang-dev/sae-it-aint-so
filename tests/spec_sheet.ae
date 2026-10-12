@@ -404,6 +404,28 @@ main() {
             g.pick("A", 1)
             spec.assert_eq(g.cell_has("H", 15, "\"bg\":\"#ffd6d6\""), 1, "marked")
         }
+        spec.it("sheets as tabs: a formula reads another sheet, follows it, and is #REF! when it goes") callback {
+            b.set_field_by("sheet", "Costs")
+            b.click("Add sheet")
+            spec.assert_true(b.wait_for_console("sheet: added Costs"), "added")
+            spec.assert_true(b.wait_for_text("On Costs:"), "and on it")
+            spec.assert_true(g.wait_cell("D", 12, ""), "an empty sheet")
+            g.enter("B2", "100")
+            b.click("Sheet1")
+            spec.assert_true(b.wait_for_console("sheet: Sheet1"), "back")
+            spec.assert_true(g.wait_cell("J", 4, "1494.75"), "Sheet1's cells")
+            g.enter("J10", "=Costs_B2 * 2")
+            spec.assert_true(g.wait_cell("J", 10, "200"), "Costs_B2, in RexxJS formulas")
+            b.click("Costs")
+            g.enter("B2", "21")
+            b.click("Sheet1")
+            spec.assert_true(g.wait_cell("J", 10, "42"), "follows it")
+            b.click("Costs")
+            b.click("Delete sheet")
+            spec.assert_true(b.wait_for_console("sheet: deleted Costs"), "deleted")
+            spec.assert_true(b.wait_for_text("On Sheet1:"), "on Sheet1 again")
+            spec.assert_true(g.wait_cell("J", 10, "#REF!"), "what read it is #REF!")
+        }
     }
     return spec.run_summary(fw)
 }

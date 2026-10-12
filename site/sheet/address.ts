@@ -22,6 +22,28 @@ export function addrOf(s: string): Addr | null {
   return col < COLS && row < ROWS ? { col, row } : null;
 }
 
+// A key can name a cell on another sheet: "COSTS!B2" (the sheet's name in
+// upper case, as formulas are). Its parts: the sheet (null for this one) and
+// the cell.
+export function splitKey(key: string): { sheet: string | null; cell: string } {
+  const i = key.lastIndexOf("!");
+  return i < 0 ? { sheet: null, cell: key } : { sheet: key.slice(0, i), cell: key.slice(i + 1) };
+}
+
+export const qualified = (sheet: string, cell: string): string => `${sheet.toUpperCase()}!${cell}`;
+
+// A key's cell, wherever its sheet: "COSTS!B2" and "B2" are both B2.
+export const cellAddr = (key: string): Addr | null => addrOf(splitKey(key).cell);
+
+// The keys from one corner to another (`to` on `from`'s sheet), and how
+// many columns wide; null when either is off the sheet.
+export function span(from: string, to: string): { keys: string[]; cols: number } | null {
+  const { sheet } = splitKey(from);
+  const a = cellAddr(from), b = cellAddr(to);
+  if (!a || !b) return null;
+  return { keys: [...range(a, b)].map((k) => (sheet === null ? k : `${sheet}!${k}`)), cols: Math.abs(a.col - b.col) + 1 };
+}
+
 // "B2:C4", "c4:b2" or "B2" (a range of one) as its two corners, or null.
 export function parseRange(s: string): [Addr, Addr] | null {
   const [from, to = from, extra] = String(s).split(":");

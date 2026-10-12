@@ -1,6 +1,6 @@
 // What the spreadsheet's panels share: the workbook and its commands (the
 // seam), the view's own state (the selected cell's address, the formula
-// bar, the status line, the problems), the grid's handle and selection, and
+// bar, the status line, the problems, the sheets' names), the grid's handle and selection, and
 // run(), the one way a panel changes anything: it runs a command, prints
 // its outcome (what specs read), and shows the workbook again, in one batch.
 import { COLS, addrOf, keyOf } from "../address.ts";
@@ -21,6 +21,8 @@ export class SheetView {
   readonly formulas = state<string>("Excel");
   readonly setup = state("");
   readonly problems = state<Problem[]>([]);
+  readonly sheets = state<string[]>(["Sheet1"]);
+  readonly active = state("Sheet1");
   grid = 0;
 
   // The selected cell's key (A1 when the address field names none).
@@ -90,6 +92,8 @@ export class SheetView {
   refresh(): void {
     batch(() => {
       this.problems.set(this.wb.sheet.problems());
+      this.sheets.set(this.wb.sheetNames());
+      this.active.set(this.wb.active);
       this.formulas.set(this.wb.sheet.language.name);
       this.setup.set(this.wb.setupScript ? `Setup script: ${this.wb.setupScript}` : "");
       this.follow();

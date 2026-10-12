@@ -27,7 +27,9 @@ export type Formula =
 
 export interface Language {
   readonly name: "Excel" | "RexxJS";
-  // `names` reads the sheet's named ranges; a name it does not know is #NAME?.
+  // `names` reads the sheet's named ranges; a name it does not know is
+  // #NAME?. A read of a cell on another sheet is its key qualified:
+  // "COSTS!B2".
   compile(formula: string, names?: Names): Formula;
   // A cell's input (a formula or a constant) with its references moved by
   // an edit (a copy, rows or columns inserted or deleted: shift.ts); one

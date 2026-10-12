@@ -1,6 +1,6 @@
 // How a formula's Expr is worked out against the sheet's cells. Values,
 // errors and coercions are values.ts; the functions are functions.ts.
-import { addrOf, range } from "./address.ts";
+import { cellAddr, span } from "./address.ts";
 import type { Expr } from "./parser.ts";
 import { call, single } from "./functions.ts";
 import type { Arg } from "./functions.ts";
@@ -22,9 +22,9 @@ class Evaluator {
   // error is passed on as a value, for IFERROR and ISERROR to see.
   #arg(e: Expr): Arg {
     if (e.kind === "range") {
-      const a = addrOf(e.from), b = addrOf(e.to);
-      if (!a || !b) return fail("#REF!", `${a ? e.to : e.from} is not on the sheet`);
-      return { values: [...range(a, b)].map((k) => this.#env.get(k)), cols: Math.abs(a.col - b.col) + 1 };
+      const s = span(e.from, e.to);
+      if (!s) return fail("#REF!", `${cellAddr(e.from) ? e.to : e.from} is not on the sheet`);
+      return { values: s.keys.map((k) => this.#env.get(k)), cols: s.cols };
     }
     try {
       return single(this.value(e));
@@ -41,7 +41,7 @@ class Evaluator {
       case "bool":
         return e.value;
       case "ref":
-        return addrOf(e.name) ? this.#env.get(e.name) : fail("#REF!", `${e.name} is not on the sheet`);
+        return cellAddr(e.name) ? this.#env.get(e.name) : fail("#REF!", `${e.name} is not on the sheet`);
       case "error":
         return fail(e.code, e.why ?? (e.code === "#REF!" ? "a reference moved off the sheet" : "written in the formula"));
       case "range":

@@ -76,6 +76,19 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
 - Find (a field, and Match case, Whole cell and In formulas) lists the
   matches and selects the next; Replace all changes every match in
   constants (in formulas' text too, when asked), as one undo.
+- Several sheets, as tabs under the grid: a button per sheet, Add sheet
+  (named in the field, or Sheet2, Sheet3 ...) and Delete sheet (the active
+  one; never the last). A formula reads another sheet's cells:
+  `=Costs!B2`, `=SUM(Costs!B1:B3)` and `='My Costs'!B2` in Excel formulas,
+  `=Costs_B2` and `=SUM_RANGE("Costs!B1:B3")` in RexxJS ones (the Tauri
+  app's `Sheet2.A1` is a compound variable in RexxJS, so sae takes `_`; an
+  unset `Name_A1` variable is always a reference, a set one is the
+  script's). It follows them when they change, and reads `#REF!` ("no
+  sheet COSTS") when there is no such sheet, until there is again. A copy
+  moves a reference to another sheet as any other; rows or columns
+  inserted on a sheet move every sheet's references to it, and no others.
+  The language is the workbook's, for every sheet; each sheet has its own
+  named ranges and its own undo.
 
 **Around the grid** (the page's own `state`, `computed`, `bind`, `each` and
 `batch`):
@@ -153,9 +166,10 @@ fields under the formula bar:
 
 Three layers, each testable on its own:
 
-1. **The page** (`site/sheet.ts`, 30 lines) only declares which panels, in
+1. **The page** (`site/sheet.ts`, 35 lines) only declares which panels, in
    which order: `languageBar(sheet); formulaBar(sheet); notesBar(sheet);
-   statusLine(sheet); sheetGrid(sheet); editBar(sheet); ...`.
+   statusLine(sheet); sheetGrid(sheet); sheetTabs(sheet); editBar(sheet);
+   ...`.
 2. **The panels** (`site/sheet/view/`, one file each: the grid, the
    formula bar, the notes bar, the edit bar, the find bar, the file bar, the
    command bar, the lists) are pseudo-declarative Sae-TS: widgets bound to
@@ -180,14 +194,14 @@ in `site/sheet/` (and the generated RexxJS bundle):
 
 | Module | What |
 |---|---|
-| `address.ts` | A1..J20; ranges as a generator; a template-literal `Key` type |
+| `address.ts` | A1..J20; ranges as a generator; a template-literal `Key` type; a key on another sheet (`COSTS!B2`) and its parts |
 | `lexer.ts` | A tokenizer generator; each token knows its column, for errors, and a reference its `$`s |
 | `parser.ts` | Recursive descent into a discriminated `Expr`, with binary operators by precedence climbing over a table |
 | `values.ts` | `CellError`, the coercions, `compare` |
 | `functions.ts` | The library: each function declared with its arity, given `Arg`s (a range's cells and width, or one value; an error arrives as a value) |
 | `evaluate.ts` | The evaluator; IF is its special form |
 | `format.ts` | `show`, the `fmt` tagged template, the status line |
-| `sheet.ts` | `Sheet`: inputs, compiled formulas, `Map<string, Set<string>>` edges both ways; Kahn's algorithm downstream of a change; what it cannot order is checked for cycles |
+| `sheet.ts` | `Sheet`: inputs, compiled formulas, `Map<string, Set<string>>` edges both ways; Kahn's algorithm downstream of a change; what it cannot order is checked for cycles. Its `Context` answers other sheets' cells, `touch()` works out what reads them, and `Turns` is shared by a workbook's sheets |
 | `language.ts` | `Language`: what a formula reads, what it comes to (perhaps a promise), and how it reads moved; the major setting is which one the Sheet holds |
 | `excel.ts` | The Excel language over the modules above; moving a formula token by token |
 | `rexx.ts` | The RexxJS language: one interpreter, cells read through its `variableResolver`, the setup script, the app's range functions in TypeScript, the app's copy rule |
@@ -197,7 +211,7 @@ in `site/sheet/` (and the generated RexxJS bundle):
 | `shift.ts` | Edits that move references (a copy's offset, rows or columns inserted or deleted), which each language's `rewrite` applies to a formula; `restructured` moves a sheet's cells by one |
 | `sortfind.ts` | Sorting a range by a column (and where each cell went, for notes), find and replace |
 | `commands.ts` | The seam: the catalogue of commands, the command line, the journal, scripts |
-| `workbook.ts` | The Sheet, notes, both languages, the file's name and setup script, the clipboard, conditional styles; what a cell shows, its style, its status line |
+| `workbook.ts` | The sheets (each a Sheet and its notes), the active one, both languages, the file's name and setup script, the clipboard, conditional styles; `settle()` passes changes between sheets; what a cell shows, its style, its status line |
 | `script.ts` | RexxJS scripts over the commands: ADDRESS SHEET, SETCELL, GETCELL |
 | `copy.ts` | A formula moved (its references rewritten token by token, so the rest stays as typed); copy as tab-separated text; paste, moving formulas when the text came from the sheet; fill down and right. Gives `[key, input]` pairs for `Sheet.setMany` |
 
@@ -242,6 +256,14 @@ summary.
   - `sheet_validation` (16): each kind of rule and its limits, stop and
     warn, on create and on update, refusals, a paste got past and
     circled, rules moving with rows, cleared.
+  - `sheet_sheets` (16): sheets added, activated and deleted by command,
+    and refused; Excel and RexxJS formulas reading another sheet and
+    following it; `#REF!` for a sheet not there; copies, and rows inserted
+    here and there; the journal replayed.
+  - `sheet_context` (14): below the workbook: qualified references lexed,
+    parsed and read in each language, edits moving only the references
+    they are for, and a Sheet against a stubbed `Context` (another sheet's
+    values, `touch`, sheets sharing `Turns` taking turns).
   - `sheet_names` (12): names defined, read in both languages, followed,
     deleted to `#NAME?`, refused, listed, journaled.
   - `sheet_rexx` (25): RexxJS formulas against a stub of the cells (what a
@@ -251,7 +273,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 32 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 33 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -271,7 +293,9 @@ summary.
     its undo;
   - the command bar: a command run as the panels run theirs, a refusal
     and why, an output; a RexxJS script through ADDRESS SHEET, SETCELL
-    and GETCELL, and its changes undone.
+    and GETCELL, and its changes undone;
+  - sheets as tabs: one added, a RexxJS formula reading it and following
+    it, and `#REF!` when it is deleted.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -312,8 +336,11 @@ is `src/spreadsheet-model.js`, its control functions
 `src/spreadsheet-control-functions.js`). Each lands in the model with no
 `ui` and its checks headless, then on the page with an `it`:
 
-1. **Several sheets**, with cross-sheet references (`Sheet2.A1` in the
-   app; `Sheet2!A1` in Excel formulas).
+1. ~~Several sheets~~ (done). Still to come: renaming and moving a sheet
+   (a rename rewrites what reads it), undo across sheets (each sheet's
+   undo is its own, and adding or deleting a sheet is not undone), names
+   scoped to the workbook, and a cycle through two sheets found as one
+   (settle() passes changes between sheets twenty times, then stops).
 2. **Saving and opening**: the app's file format, written by `file.ts`
    too, through `storage` in the browser and `files` in app mode.
 3. **The query functions**: `RANGE("A1:C9") |> WHERE("price > 10") |>

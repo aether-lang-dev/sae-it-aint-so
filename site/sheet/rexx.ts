@@ -5,7 +5,10 @@
 // cells read the sheet; a sheet's setup script (LET TAX_RATE = 0.08) runs on
 // it first. The app's range functions (its public/lib/spreadsheet-functions
 // .js) are here in TypeScript: SUM_RANGE("A1:A3") and friends, and CELL.
-import { addrOf, keyOf, parseRange, range } from "./address.ts";
+// Another sheet's cell is a variable, Costs_B2 (the app's Sheet.A1 is a
+// RexxJS compound variable, so sae takes _), and its ranges are strings,
+// SUM_RANGE("Costs!B1:B3").
+import { addrOf, keyOf, parseRange, qualified, range } from "./address.ts";
 import type { Env, Formula, Language, Names } from "./language.ts";
 import type { Addr } from "./address.ts";
 import type { Edit } from "./shift.ts";
@@ -15,19 +18,29 @@ import type { Value } from "./values.ts";
 import { colName } from "./address.ts";
 
 // A cell name, or a range of two, anywhere in a formula (in a string too:
-// SUM_RANGE("A1:A3") reads A1 to A3). $ is the app's, for copying.
-const REFS = /(?<![\w$])\$?([A-Za-z]+)\$?(\d+)(?:\s*:\s*\$?([A-Za-z]+)\$?(\d+))?(?![\w(])/g;
-const REWRITE = /(?<![\w$])(\$?)([A-Za-z]+)(\$?)(\d+)(?::(\$?)([A-Za-z]+)(\$?)(\d+))?(?![\w(])/g;
+// SUM_RANGE("A1:A3") reads A1 to A3), perhaps on another sheet
+// ("Costs!B1:B3", "'My Costs'!B1"). $ is the app's, for copying.
+const SHEET = "(?:([A-Za-z_]\\w*)|'([^']+)')!";
+const REFS = new RegExp(`(?<![\\w$!])(?:${SHEET})?\\$?([A-Za-z]+)\\$?(\\d+)(?:\\s*:\\s*\\$?([A-Za-z]+)\\$?(\\d+))?(?![\\w(])`, "g");
+const REWRITE = new RegExp(`(?<![\\w$!])(${SHEET})?(\\$?)([A-Za-z]+)(\\$?)(\\d+)(?::(\\$?)([A-Za-z]+)(\\$?)(\\d+))?(?![\\w(])`, "g");
+// Another sheet's cell as a variable: Costs_B2 (the last _ splits it). Only
+// an unset variable is read so, so a setup script's RATE_Q1 is its own.
+const SHEET_CELL = /^(\w+)_([A-Za-z]+\d+)$/;
 
 const lastLine = (e: unknown): string => String((e as Error)?.message ?? e).split("\n").pop()!;
 
 function readsOf(formula: string, names?: Names): string[] {
   const reads = new Set<string>();
   for (const m of formula.matchAll(REFS)) {
-    const a = addrOf(`${m[1]}${m[2]}`);
+    const sheet = m[1] ?? m[2];
+    const a = addrOf(`${m[3]}${m[4]}`);
     if (!a) continue;
-    const b = m[3] ? addrOf(`${m[3]}${m[4]}`) : a;
-    if (b) for (const k of range(a, b)) reads.add(k);
+    const b = m[5] ? addrOf(`${m[5]}${m[6]}`) : a;
+    if (b) for (const k of range(a, b)) reads.add(sheet ? qualified(sheet, k) : k);
+  }
+  for (const m of formula.matchAll(/(?<![\w$])\w+(?![\w(])/g)) {
+    const v = sheetCell(m[0]);
+    if (v) reads.add(v);
   }
   // A named range's cells, wherever its name is (bare, or in a string).
   for (const m of formula.matchAll(/[A-Za-z_]\w*/g)) {
@@ -35,6 +48,12 @@ function readsOf(formula: string, names?: Names): string[] {
     if (r) for (const k of range(r[0], r[1])) reads.add(k);
   }
   return [...reads];
+}
+
+// Costs_B2 as the key COSTS!B2.
+function sheetCell(name: string): string | null {
+  const m = SHEET_CELL.exec(name), a = m ? addrOf(m[2]) : null;
+  return m && a ? qualified(m[1], keyOf(a)) : null;
 }
 
 // A number where RexxJS gives one; text, or the JSON of what it built.
@@ -73,9 +92,12 @@ function criterion(condition: string): (n: number) => boolean {
 // The app's range functions over `read`, a cell's value as RexxJS sees it.
 export function rangeFunctions(read: (key: string) => unknown, names: () => Names | undefined = () => undefined): Record<string, (...args: any[]) => unknown> {
   const values = (ref: string): unknown[] => {
-    const r = parseRange(String(ref)) ?? names()?.(String(ref).trim().toUpperCase());
+    // "Costs!B1:B3" is on Costs; a name is on this sheet.
+    const m = /^\s*(?:'([^']+)'|([^'!]+))!(.*)$/.exec(String(ref));
+    const sheet = m ? (m[1] ?? m[2]).trim() : null;
+    const r = sheet !== null ? parseRange(m![3]) : parseRange(String(ref)) ?? names()?.(String(ref).trim().toUpperCase());
     if (!r) throw new Error(`Invalid range: ${ref}`);
-    return [...range(r[0], r[1])].map(read);
+    return [...range(r[0], r[1])].map((k) => read(sheet !== null ? qualified(sheet, k) : k));
   };
   return {
     SUM_RANGE: (r: string) => numbers(values(r)).reduce((s, n) => s + n, 0),
@@ -173,6 +195,8 @@ export class RexxLanguage implements Language {
     // reads its cell, or its cells' values.
     this.#it.variableResolver = (name: string) => {
       if (addrOf(name)) return this.#read(keyOf(addrOf(name)!));
+      const other = sheetCell(name);
+      if (other) return this.#read(other);
       const r = this.#names?.(name.toUpperCase());
       if (!r) return undefined;
       const vs = [...range(r[0], r[1])].map((k) => this.#read(k));
@@ -242,19 +266,24 @@ export class RexxLanguage implements Language {
   }
 
   // The app's copy rule, for every edit: every cell name, and range, is
-  // rewritten, in strings too; $ fixes a part in a copy.
+  // rewritten, in strings too; $ fixes a part in a copy. (Costs_B2 is a
+  // variable, and stays as written.)
   rewrite(input: string, edit: Edit): string {
     if (!input.startsWith("=")) return input;
     const name = (to: Addr, fixCol: string, fixRow: string) => `${fixCol}${colName(to.col)}${fixRow}${to.row + 1}`;
-    return input.replace(REWRITE, (text, fc1: string, c1: string, fr1: string, r1: string, fc2?: string, c2?: string, fr2?: string, r2?: string) => {
+    return input.replace(REWRITE, (text, prefix: string | undefined, bare: string | undefined, quoted: string | undefined,
+      fc1: string, c1: string, fr1: string, r1: string, fc2?: string, c2?: string, fr2?: string, r2?: string) => {
+      const sheet = bare ?? quoted;
+      if (!edit.moves(sheet ? sheet.toUpperCase() : null)) return text;
+      const p = prefix ?? "";
       const a = addrOf(`${c1}${r1}`);
       if (c2 === undefined) {
         const to = a ? edit.cell(a, { col: !!fc1, row: !!fr1 }) : null;
-        return to ? (to.col === a!.col && to.row === a!.row ? text : name(to, fc1, fr1)) : "#REF!";
+        return to ? (to.col === a!.col && to.row === a!.row ? text : p + name(to, fc1, fr1)) : "#REF!";
       }
       const b = addrOf(`${c2}${r2}`);
       const r = a && b ? edit.range(a, b, { col: !!fc1, row: !!fr1 }, { col: !!fc2, row: !!fr2 }) : null;
-      return r ? `${name(r[0], fc1, fr1)}:${name(r[1], fc2!, fr2!)}` : "#REF!";
+      return r ? `${p}${name(r[0], fc1, fr1)}:${name(r[1], fc2!, fr2!)}` : "#REF!";
     });
   }
 

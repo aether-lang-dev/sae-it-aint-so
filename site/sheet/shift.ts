@@ -2,7 +2,9 @@
 // go when a formula is copied, or rows or columns are inserted or deleted.
 // A language rewrites a formula's references by an edit (Language.rewrite);
 // restructured() moves a sheet's cells by one. Null is gone (off the sheet,
-// or deleted): the reference becomes #REF!.
+// or deleted): the reference becomes #REF!. An edit says which references
+// it moves, by their sheet: a copy moves every one; rows inserted on a sheet
+// move the references to that sheet, and no others.
 import { COLS, ROWS, addrOf, keyOf } from "./address.ts";
 import type { Addr } from "./address.ts";
 import type { Language, Offset } from "./language.ts";
@@ -18,7 +20,14 @@ export interface Edit {
   range(a: Addr, b: Addr, fa: Fixed, fb: Fixed): [Addr, Addr] | null;
   // A cell this edit deletes (as against one it pushes off the sheet).
   deletes(a: Addr): boolean;
+  // Whether it moves a reference on `sheet` (its name in upper case, as a
+  // key has it; null for a reference with none).
+  moves(sheet: string | null): boolean;
 }
+
+// Which references a structural edit moves: unqualified ones, by default.
+export type Scope = (sheet: string | null) => boolean;
+const LOCAL: Scope = (sheet) => sheet === null;
 
 const onSheet = (a: Addr): Addr | null => (a.col >= 0 && a.row >= 0 && a.col < COLS && a.row < ROWS ? a : null);
 
@@ -32,6 +41,7 @@ export function byOffset(by: Offset): Edit {
       return x && y ? [x, y] : null;
     },
     deletes: () => false,
+    moves: () => true,
   };
 }
 
@@ -41,7 +51,7 @@ const moved = (a: Addr, axis: Axis, to: number): Addr => (axis === "row" ? { col
 
 // `n` rows (or columns) inserted before index `at`: what is at or after it
 // moves on, $ or not; a range that spans it grows.
-export function inserted(axis: Axis, at: number, n: number): Edit {
+export function inserted(axis: Axis, at: number, n: number, moves: Scope = LOCAL): Edit {
   const cell = (a: Addr) => {
     const i = along(a, axis);
     return onSheet(i >= at ? moved(a, axis, i + n) : a);
@@ -53,13 +63,14 @@ export function inserted(axis: Axis, at: number, n: number): Edit {
       return x && y ? [x, y] : null;
     },
     deletes: () => false,
+    moves,
   };
 }
 
 // `n` rows (or columns) from index `at` deleted: what was in them is gone,
 // what was after them moves back; a range loses what it had of them, and is
 // gone when that was all of it.
-export function deleted(axis: Axis, at: number, n: number): Edit {
+export function deleted(axis: Axis, at: number, n: number, moves: Scope = LOCAL): Edit {
   const gone = (i: number) => i >= at && i < at + n;
   return {
     cell: (a) => {
@@ -75,6 +86,7 @@ export function deleted(axis: Axis, at: number, n: number): Edit {
       return [moved(a, axis, first ? start : end), moved(b, axis, first ? end : start)];
     },
     deletes: (a) => gone(along(a, axis)),
+    moves,
   };
 }
 

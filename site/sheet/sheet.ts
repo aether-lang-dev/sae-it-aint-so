@@ -5,8 +5,11 @@
 // sheet tells a listener which cells now show something else; it never draws.
 // What a formula means is its Language's (the sheet's major setting, Excel
 // or RexxJS); evaluation may be asynchronous, so setting cells is a promise,
-// and two settings take turns.
-import { addrOf, keyOf, order } from "./address.ts";
+// and two settings take turns. In a workbook (workbook.ts) a formula can read
+// another sheet's cells ("COSTS!B2"): the sheet's Context answers them, and
+// touch() works out again what reads them when they change; the sheets of a
+// workbook share one Turns.
+import { addrOf, cellAddr, keyOf, order, splitKey } from "./address.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
 import { EXCEL } from "./excel.ts";
@@ -43,7 +46,45 @@ const getOrAdd = <K, V>(m: Map<K, V>, k: K, make: () => V): V => {
 
 const HISTORY = 100;   // undo steps kept, as the Tauri spreadsheet keeps
 
-const byOrder = (a: string, b: string): number => order(addrOf(a)!) - order(addrOf(b)!);
+const byOrder = (a: string, b: string): number => order(cellAddr(a)!) - order(cellAddr(b)!);
+
+// One change at a time, across the sheets that share it: a language's
+// evaluation may be asynchronous, and RexxJS's holds one interpreter.
+export class Turns {
+  #turn: Promise<unknown> = Promise.resolve();
+  #busy = false;
+
+  // Working a sheet out now: a formula is running (so whatever it calls
+  // must not wait for a sheet to change, which waits for it).
+  get busy(): boolean { return this.#busy; }
+
+  take<T>(work: () => Promise<T>): Promise<T> {
+    const done = this.#turn.then(async () => {
+      this.#busy = true;
+      try {
+        return await work();
+      } finally {
+        this.#busy = false;
+      }
+    });
+    this.#turn = done.catch(() => {});
+    return done;
+  }
+}
+
+// Where a sheet is: its name (upper case, as keys have it), the turns it
+// shares, and the other sheets' cells' values.
+export interface Context {
+  readonly name: string;
+  readonly turns: Turns;
+  value(key: string): Value;
+}
+
+// A sheet on its own: no other sheet to read.
+export const alone = (): Context => ({
+  name: "", turns: new Turns(),
+  value: (key) => new CellError("#REF!", `no sheet ${splitKey(key).sheet}`),
+});
 
 export class Sheet {
   readonly #inputs = new Map<string, string>();
@@ -53,26 +94,37 @@ export class Sheet {
   readonly #readBy = new Map<string, Set<string>>();    // a cell -> the cells that read it
   readonly #listener: SheetListener | undefined;
   #language: Language;
-  #turn: Promise<unknown> = Promise.resolve();
-  #busy = false;
+  readonly #context: Context;
   readonly #names = new Map<string, [Addr, Addr]>();
   // Each step is the inputs a change replaced, to put back.
   readonly #undo: (readonly [string, string][])[] = [];
   readonly #redo: (readonly [string, string][])[] = [];
 
-  constructor(listener?: SheetListener, language: Language = EXCEL) {
+  constructor(listener?: SheetListener, language: Language = EXCEL, context: Context = alone()) {
     this.#listener = listener;
     this.#language = language;
+    this.#context = context;
   }
 
   get language(): Language { return this.#language; }
 
-  // Working the sheet out now: a formula is running (so whatever it calls
-  // must not wait for the sheet to change, which waits for it).
-  get busy(): boolean { return this.#busy; }
+  // Working a sheet out now (see Turns).
+  get busy(): boolean { return this.#context.turns.busy; }
 
   input(key: string): string { return this.#inputs.get(key) ?? ""; }
-  value(key: string): Value { return this.#values.get(key) ?? null; }
+
+  // A cell's value; a key on another sheet is the context's to answer.
+  value(key: string): Value {
+    const local = this.#local(key);
+    return local === null ? this.#context.value(key) : this.#values.get(local) ?? null;
+  }
+
+  // A key as this sheet's own ("SHEET1!B2" on Sheet1 is B2), or null for a
+  // cell on another sheet.
+  #local(key: string): string | null {
+    const { sheet, cell } = splitKey(key);
+    return sheet === null ? key : sheet === this.#context.name ? cell : null;
+  }
 
   // The cells holding something, in sheet order.
   keys(): string[] { return [...this.#inputs.keys()].sort(byOrder); }
@@ -179,9 +231,16 @@ export class Sheet {
     });
   }
 
-  // Everything worked out again, as after a language's setup script ran.
+  // Everything compiled and worked out again, as after a language's setup
+  // script ran, or a sheet was added to the workbook or deleted from it.
   recalculate(): Promise<string[]> {
     return this.#inTurn(() => this.#recomputeAll());
+  }
+
+  // Cells on other sheets changed (qualified keys): what reads them worked
+  // out again. Not a change to undo.
+  touch(keys: readonly string[]): Promise<string[]> {
+    return this.#inTurn(() => this.#recompute(keys));
   }
 
   #recomputeAll(): Promise<string[]> {
@@ -193,22 +252,11 @@ export class Sheet {
   #compile(key: string): void {
     const c = compile(this.input(key), this.#language, (n) => this.#names.get(n) ?? null);
     this.#compiled.set(key, c);
-    this.#link(key, new Set(c.kind === "formula" ? c.reads : []));
+    this.#link(key, new Set(c.kind === "formula" ? c.reads.map((k) => this.#local(k) ?? k) : []));
   }
 
-  // One change at a time: a language's evaluation may be asynchronous, and
-  // RexxJS's holds one interpreter.
   #inTurn<T>(work: () => Promise<T>): Promise<T> {
-    const done = this.#turn.then(async () => {
-      this.#busy = true;
-      try {
-        return await work();
-      } finally {
-        this.#busy = false;
-      }
-    });
-    this.#turn = done.catch(() => {});
-    return done;
+    return this.#context.turns.take(work);
   }
 
   #link(key: string, reads: Set<string>): void {
@@ -269,13 +317,16 @@ export class Sheet {
     return walk(start) ? path : null;
   }
 
+  // The set cells (and cells on other sheets, which are not worked out
+  // here) and what reads them, worked out in order.
   async #recompute(set: readonly string[]): Promise<string[]> {
     const before = new Map<string, string>();
     const affected = this.#downstream(set);
-    for (const k of affected) before.set(k, show(this.value(k)));
+    const mine = [...affected].filter((k) => !k.includes("!"));
+    for (const k of mine) before.set(k, show(this.value(k)));
 
     const { ordered, left } = this.#ordered(affected);
-    for (const k of ordered) await this.#evaluate(k);
+    for (const k of ordered) if (!k.includes("!")) await this.#evaluate(k);
     if (left.size > 0) {
       const onCycle = new Set<string>();
       for (const k of left) {
@@ -289,7 +340,7 @@ export class Sheet {
       for (const k of this.#ordered(rest).ordered) await this.#evaluate(k);
     }
 
-    const changed = [...affected].filter((k) => set.includes(k) || before.get(k) !== show(this.value(k))).sort(byOrder);
+    const changed = mine.filter((k) => set.includes(k) || before.get(k) !== show(this.value(k))).sort(byOrder);
     for (const k of changed) this.#listener?.changed(k, this.value(k));
     return changed;
   }

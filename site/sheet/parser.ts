@@ -6,7 +6,7 @@
 import { FormulaError, tokens } from "./lexer.ts";
 import type { Op, Token } from "./lexer.ts";
 import type { ErrorCode } from "./values.ts";
-import { keyOf } from "./address.ts";
+import { keyOf, splitKey } from "./address.ts";
 import type { Names } from "./language.ts";
 
 export type Expr =
@@ -92,7 +92,10 @@ class Parser {
         const to = this.#tok;
         if (to.kind !== "ref") throw new FormulaError(to.at, `expected a cell after ':' but found ${shown(to)}`);
         this.#next();
-        return { kind: "range", from: t.name, to: to.name };
+        // Costs!B1:B3 is all on Costs.
+        const sheet = splitKey(t.name).sheet, other = splitKey(to.name);
+        if (other.sheet !== null && other.sheet !== sheet) throw new FormulaError(to.at, "a range on two sheets");
+        return { kind: "range", from: t.name, to: sheet === null ? other.cell : `${sheet}!${other.cell}` };
       }
       case "name": {
         if (this.#tok.kind !== "(") {

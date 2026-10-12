@@ -124,7 +124,8 @@ These need more of it (each would be an ask, as
 2. ~~Named ranges and the Name Box~~ (done).
 3. ~~Fill Series, AutoSum, Paste Special, the Clear variants~~ (done).
 4. ~~Data validation~~ (done).
-5. Several sheets.
+5. ~~Several sheets~~ (done: `sheet.add`, `sheet.activate`,
+   `sheet.delete`, tabs, `Costs!B2` and `Costs_B2`).
 6. Saving and opening, and CSV.
 7. Formula auditing, and Show Formulas.
 8. The number-format language; conditional-format rules (colour scales,

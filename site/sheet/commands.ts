@@ -19,6 +19,7 @@ import { runScript } from "./script.ts";
 import { continued } from "./series.ts";
 import { check, describeRule, ruleOf } from "./validation.ts";
 import { deleted, inserted, movedBy, restructured } from "./shift.ts";
+import type { Scope } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
@@ -92,44 +93,54 @@ const inputs = (wb: Workbook) => (key: string) => wb.sheet.input(key);
 
 async function setting(wb: Workbook, entries: readonly (readonly [string, string])[], what: string): Promise<Outcome> {
   const changed = await wb.sheet.setMany(entries);
-  await wb.restyle();
+  await wb.settle();
   return { ok: true, message: `${what}: ${new Set(entries.map(([k]) => k)).size} cells set, ${changed.length} changed`, changed };
 }
 
 async function changedBy(wb: Workbook, changed: readonly string[], message: string): Promise<Outcome> {
-  await wb.restyle();
+  await wb.settle();
   return { ok: true, message, changed };
 }
 
 const SAMPLES: Record<string, unknown> = { budget: SAMPLE_BUDGET, test: TEST_SHEET, formatted: FORMATTED };
 
-// A sheet file: the workbook emptied, its language, its setup script run,
-// its cells set, its notes kept; where undo stops.
+// A sheet file: the workbook emptied (one sheet), its language, its setup
+// script run, its cells set, its notes kept; where undo stops.
 async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
   const before = wb.sheet.keys();
-  await wb.sheet.setMany(before.map((k) => [k, ""] as const));
+  wb.reset();
   const failed = file.language === "RexxJS" ? await wb.rexx.setup(file.setupScript) : null;
-  await wb.sheet.setLanguage(wb.language(file.language));
+  await wb.setLanguage(wb.language(file.language));
   const changed = await wb.sheet.setMany(file.entries);
   wb.sheet.forget();
   wb.notes.clear();
   for (const [key, note] of file.notes) wb.notes.set(key, note);
   wb.name = file.name;
   wb.setupScript = file.setupScript;
-  await wb.restyle();
+  await wb.settle();
   const message = `opened ${file.name}: ${file.entries.length} cells, ${file.language} formulas`;
   return { ok: true, message: failed ? `${message}; its setup script failed: ${failed.split("\n").pop()}` : message, changed: [...new Set([...before, ...changed])] };
 }
 
 // Rows or columns inserted or deleted: every cell and formula moved, as one
-// change (one undo); notes and conditional styles follow.
+// change (one undo); notes and conditional styles follow, and so do other
+// sheets' references to this one (each sheet's own change).
 function restructure(how: "insert" | "delete", axis: "row" | "col") {
   return async (wb: Workbook, p: Params): Promise<Outcome> => {
     const at = axis === "row" ? Number(p.at) - 1 : columnOf(p.at);
     if (!Number.isInteger(at) || at < 0 || at >= (axis === "row" ? ROWS : COLS)) refuse(`${p.at} is not a ${axis === "row" ? "row" : "column"} on the sheet`);
     const n = countOf(p.count);
-    const edit = how === "insert" ? inserted(axis, at, n) : deleted(axis, at, n);
+    const here = wb.active.toUpperCase();
+    const editOf = (moves: Scope) => (how === "insert" ? inserted(axis, at, n, moves) : deleted(axis, at, n, moves));
+    const edit = editOf((sheet) => sheet === null || sheet === here);
     const entries = restructured(wb.sheet.keys().map((k) => [k, wb.sheet.input(k)]), edit, wb.sheet.language);
+    const there = editOf((sheet) => sheet === here);
+    for (const page of wb.pages()) {
+      if (page.sheet === wb.sheet) continue;
+      const rewritten = page.sheet.keys().map((k): [string, string] => [k, page.sheet.language.rewrite(page.sheet.input(k), there)])
+        .filter(([k, input]) => input !== page.sheet.input(k));
+      if (rewritten.length) await page.sheet.setMany(rewritten);
+    }
     wb.notes.remap((a) => edit.cell(a, { col: false, row: false }), (e) => wb.sheet.language.rewrite(`=${e}`, edit).slice(1));
     const thing = `${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"}`;
     return setting(wb, entries, `${how === "insert" ? "inserted" : "deleted"} ${thing} at ${axis === "row" ? at + 1 : colName(at)}`);
@@ -155,6 +166,17 @@ const nameOf = (s: string): string => {
   if (!/^[A-Za-z_]\w*$/.test(s) || /^(TRUE|FALSE)$/i.test(s)) refuse(`${s} is not a name: a letter first, then letters, digits or _`);
   return s.toUpperCase();
 };
+
+// A sheet's name: letters, digits, spaces or _ (Excel's quotes take the
+// spaces: 'My Costs'!B2).
+const sheetNameOf = (s: string): string => {
+  const t = String(s).trim();
+  return /^[A-Za-z0-9_ ]+$/.test(t) ? t : refuse(`${s} is not a sheet name: letters, digits, spaces or _`);
+};
+const pageOf = (wb: Workbook, name: string) => wb.page(name) ?? refuse(`no sheet ${name}`);
+
+// What the grid shows changes wholesale when the active sheet does.
+const shownKeys = (wb: Workbook, before: readonly string[]) => [...new Set([...before, ...wb.sheet.keys()])];
 
 const findOptions = (p: Params) => ({ matchCase: flag(p.matchCase), wholeCell: flag(p.wholeCell), inFormulas: flag(p.inFormulas) });
 const FIND_OPTIONS = ["matchCase", "wholeCell", "inFormulas"];
@@ -223,7 +245,7 @@ const SPECS: readonly Spec[] = [
     run: async (wb, p) => {
       wb.circling = !flag(p.off);
       const invalid = wb.invalid();
-      await wb.restyle();
+      await wb.settle();
       return { ok: true, message: wb.circling ? `${invalid.length} invalid: ${invalid.join(" ") || "none"}` : "circles cleared", changed: invalid, output: invalid };
     },
   },
@@ -429,8 +451,38 @@ const SPECS: readonly Spec[] = [
     run: async (wb, p) => {
       const name = ({ excel: "Excel", rexxjs: "RexxJS" } as Record<string, LanguageName>)[p.language.toLowerCase()]
         ?? refuse(`${p.language} is not a formula language (Excel, RexxJS)`);
-      const changed = await wb.sheet.setLanguage(wb.language(name));
+      const changed = await wb.setLanguage(wb.language(name));
       return changedBy(wb, changed, `${name} formulas`);
+    },
+  },
+  {
+    id: "sheet.add", label: "Insert Sheet", params: [], optional: ["name"], journaled: true,
+    run: async (wb, p) => {
+      let name = p.name;
+      if (name === undefined) for (let i = wb.pages().length + 1; !name || wb.page(name); i++) name = `Sheet${i}`;
+      name = sheetNameOf(name);
+      if (wb.page(name)) refuse(`${name} is a sheet already`);
+      const before = wb.sheet.keys();
+      await wb.add(name);
+      return changedBy(wb, shownKeys(wb, before), `added ${name}`);
+    },
+  },
+  {
+    id: "sheet.activate", label: "Go to a sheet", params: ["name"], journaled: true,
+    run: async (wb, p) => {
+      const page = pageOf(wb, p.name), before = wb.sheet.keys();
+      wb.activate(page.name);
+      return changedBy(wb, shownKeys(wb, before), page.name);
+    },
+  },
+  {
+    id: "sheet.delete", label: "Delete Sheet", params: ["name"], journaled: true,
+    run: async (wb, p) => {
+      const page = pageOf(wb, p.name);
+      if (wb.pages().length === 1) refuse(`${page.name} is the only sheet`);
+      const before = wb.sheet.keys();
+      await wb.remove(page.name);
+      return changedBy(wb, shownKeys(wb, before), `deleted ${page.name}`);
     },
   },
   {
@@ -440,7 +492,7 @@ const SPECS: readonly Spec[] = [
   {
     id: "example.paste", label: "Paste the Excel example", params: [], journaled: true,
     run: async (wb) => {
-      if (wb.sheet.language.name !== "Excel") await wb.sheet.setLanguage(wb.language("Excel"));
+      if (wb.sheet.language.name !== "Excel") await wb.setLanguage(wb.language("Excel"));
       return setting(wb, pasted(EXAMPLE, { col: 0, row: 0 }), "pasted the example");
     },
   },

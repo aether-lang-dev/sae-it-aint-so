@@ -1,9 +1,13 @@
-// The workbook: everything a spreadsheet holds, with no ui. The Sheet (inputs,
-// values, the graph, undo), what cells carry besides their inputs (notes),
-// the two formula languages (the major setting), the file's name and setup
-// script, the clipboard, and each conditional style as last worked out. It
-// answers what a cell shows, its style and its status line. Commands
-// (commands.ts) change it; the page's panels read it.
+// The workbook: everything a spreadsheet holds, with no ui. Its sheets, in
+// order, each a Sheet (inputs, values, the graph, undo) and what its cells
+// carry besides their inputs (notes), one of them the active one; the two
+// formula languages (the major setting, the same for every sheet), the
+// file's name and setup script, the clipboard, and each conditional style
+// of the active sheet as last worked out. A formula on one sheet can read
+// another's cells (Costs!B2); after a change, settle() works out what reads
+// them. It answers what a cell shows, its style and its status line.
+// Commands (commands.ts) change it; the page's panels read it.
+import { splitKey } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { EXCEL } from "./excel.ts";
 import { describe, show } from "./format.ts";
@@ -12,8 +16,10 @@ import type { Language } from "./language.ts";
 import { CellNotes } from "./notes.ts";
 import type { Note } from "./notes.ts";
 import { RexxLanguage } from "./rexx.ts";
-import { Sheet } from "./sheet.ts";
+import { Sheet, Turns } from "./sheet.ts";
+import type { Context } from "./sheet.ts";
 import { CellError } from "./values.ts";
+import type { Value } from "./values.ts";
 import { check } from "./validation.ts";
 
 export type LanguageName = "Excel" | "RexxJS";
@@ -30,10 +36,25 @@ export interface Clip {
   readonly notes: readonly (readonly Note[])[];
 }
 
+// A sheet of the workbook: its name as given, its cells and their notes.
+export interface Page {
+  readonly name: string;
+  readonly sheet: Sheet;
+  readonly notes: CellNotes;
+}
+
+// How many times settle() passes changes between sheets before it stops (a
+// cycle through two sheets would go on for ever).
+const ROUNDS = 20;
+
 export class Workbook {
-  readonly sheet = new Sheet();
-  readonly notes = new CellNotes();
   readonly rexx = new RexxLanguage();
+  readonly #turns = new Turns();
+  #pages: Page[] = [];
+  #active: Page;
+  // Each sheet's cells (by its name in upper case) whose value changed
+  // since the last settle().
+  #pending = new Map<string, Set<string>>();
   name = "Untitled";
   setupScript = "";
   clip: Clip | null = null;
@@ -42,13 +63,109 @@ export class Workbook {
   circling = false;
   #circled = new Set<string>();
 
+  constructor() {
+    this.#active = this.#make("Sheet1", EXCEL);
+    this.#pages.push(this.#active);
+  }
+
+  // The active sheet, and its notes.
+  get sheet(): Sheet { return this.#active.sheet; }
+  get notes(): CellNotes { return this.#active.notes; }
+  get active(): string { return this.#active.name; }
+
+  sheetNames(): string[] { return this.#pages.map((p) => p.name); }
+  pages(): readonly Page[] { return this.#pages; }
+
+  // A sheet by its name, any case.
+  page(name: string): Page | undefined {
+    return this.#pages.find((p) => p.name.toUpperCase() === name.toUpperCase());
+  }
+
+  #make(name: string, language: Language): Page {
+    const upper = name.toUpperCase();
+    const context: Context = { name: upper, turns: this.#turns, value: (key) => this.#valueOf(key) };
+    const changed = (key: string) => {
+      let keys = this.#pending.get(upper);
+      if (!keys) this.#pending.set(upper, (keys = new Set()));
+      keys.add(key);
+    };
+    return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes() };
+  }
+
+  // A cell on another sheet ("COSTS!B2"), or #REF! when there is no such sheet.
+  #valueOf(key: string): Value {
+    const { sheet, cell } = splitKey(key);
+    const p = this.page(sheet ?? "");
+    return p ? p.sheet.value(cell) : new CellError("#REF!", `no sheet ${sheet}`);
+  }
+
+  // A sheet added after the others, and made the active one; what read a
+  // sheet of its name is worked out again.
+  async add(name: string): Promise<void> {
+    this.#active = this.#make(name, this.sheet.language);
+    this.#pages.push(this.#active);
+    await this.#recalculate();
+  }
+
+  activate(name: string): void {
+    this.#active = this.page(name) ?? this.#active;
+  }
+
+  // A sheet deleted (the one before it active, if it was); what read it
+  // reads #REF!.
+  async remove(name: string): Promise<void> {
+    const at = this.#pages.findIndex((p) => p.name.toUpperCase() === name.toUpperCase());
+    if (at < 0) return;
+    const [gone] = this.#pages.splice(at, 1);
+    if (gone === this.#active) this.#active = this.#pages[Math.max(0, at - 1)];
+    this.#pending.delete(gone.name.toUpperCase());
+    await this.#recalculate();
+  }
+
+  // One empty sheet, Sheet1, as a file opened starts.
+  reset(): void {
+    this.#active = this.#make("Sheet1", this.sheet.language);
+    this.#pages = [this.#active];
+    this.#pending.clear();
+  }
+
+  // The major setting, for every sheet.
+  async setLanguage(language: Language): Promise<string[]> {
+    let changed: string[] = [];
+    for (const p of this.#pages) {
+      const c = await p.sheet.setLanguage(language);
+      if (p === this.#active) changed = c;
+    }
+    return changed;
+  }
+
+  async #recalculate(): Promise<void> {
+    for (const p of this.#pages) await p.sheet.recalculate();
+  }
+
   language(name: LanguageName): Language {
     return name === "Excel" ? EXCEL : this.rexx;
   }
 
-  // Every conditional style worked out again, in the sheet's language, after
-  // a change (it may read any cell).
-  async restyle(): Promise<void> {
+  // After a change: what reads, on other sheets, the cells that changed
+  // worked out again (and what reads those, in turn), then the active
+  // sheet's styles.
+  async settle(): Promise<void> {
+    for (let round = 0; round < ROUNDS && this.#pending.size; round++) {
+      const pending = this.#pending;
+      this.#pending = new Map();
+      for (const [from, keys] of pending) {
+        const touched = [...keys].map((k) => `${from}!${k}`);
+        for (const p of this.#pages) if (p.name.toUpperCase() !== from) await p.sheet.touch(touched);
+      }
+    }
+    this.#pending.clear();
+    await this.#restyle();
+  }
+
+  // Every conditional style worked out again, in the sheet's language (it
+  // may read any cell).
+  async #restyle(): Promise<void> {
     const next = new Map<string, string>();
     for (const [key, expr] of this.notes.conditional()) next.set(key, toStyle(await this.sheet.evaluate(expr)));
     this.#conditional = next;

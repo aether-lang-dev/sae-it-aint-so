@@ -3,7 +3,7 @@
 // references and ranges name; it is rewritten token by token, so only
 // references change ($ fixes a column or row in a copy, and a reference
 // moved off the sheet, or into what was deleted, is #REF!).
-import { addrOf, colName, range } from "./address.ts";
+import { cellAddr, colName, span, splitKey } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { movedBy } from "./shift.ts";
 import type { Edit, Fixed } from "./shift.ts";
@@ -21,13 +21,11 @@ import { CellError } from "./values.ts";
 export function* refsOf(e: Expr): Generator<string, void, undefined> {
   switch (e.kind) {
     case "ref":
-      if (addrOf(e.name)) yield e.name;
+      if (cellAddr(e.name)) yield e.name;
       return;
-    case "range": {
-      const a = addrOf(e.from), b = addrOf(e.to);
-      if (a && b) yield* range(a, b);
+    case "range":
+      yield* span(e.from, e.to)?.keys ?? [];
       return;
-    }
     case "neg": return yield* refsOf(e.arg);
     case "binary":
       yield* refsOf(e.left);
@@ -46,10 +44,11 @@ const fixedOf = (t: Ref): Fixed => ({ col: t.fixCol, row: t.fixRow });
 
 // A reference at its new place, written as it was ($ and all), or as typed
 // when it has not moved.
+// (Its sheet, if it names one, as typed.)
 function written(t: Ref, to: Addr): string {
-  const a = addrOf(t.name)!;
+  const a = cellAddr(t.name)!;
   if (to.col === a.col && to.row === a.row) return t.text;
-  return `${t.fixCol ? "$" : ""}${colName(to.col)}${t.fixRow ? "$" : ""}${to.row + 1}`;
+  return `${t.text.slice(0, t.text.lastIndexOf("!") + 1)}${t.fixCol ? "$" : ""}${colName(to.col)}${t.fixRow ? "$" : ""}${to.row + 1}`;
 }
 
 // A cell's input with its references moved by `edit` (a constant, or a
@@ -70,7 +69,11 @@ function rewrite(input: string, edit: Edit): string {
     if (t.kind !== "ref") continue;
     const end = toks[i + 2];
     const other = toks[i + 1]?.kind === ":" && end?.kind === "ref" ? end : null;
-    const a = addrOf(t.name), b = other ? addrOf(other.name) : null;
+    if (!edit.moves(splitKey(t.name).sheet)) {
+      if (other) i += 2;
+      continue;
+    }
+    const a = cellAddr(t.name), b = other ? cellAddr(other.name) : null;
     out += input.slice(from, t.at);
     if (other) {
       const r = a && b ? edit.range(a, b, fixedOf(t), fixedOf(other)) : null;
