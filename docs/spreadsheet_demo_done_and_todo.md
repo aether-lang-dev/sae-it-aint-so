@@ -245,6 +245,10 @@ line.
 
 Roughly in order of value for effort.
 
+`docs/gridcraft-audit.md` sets this list against GridCraft (an Excel
+reimplementation in Rust) and recommends an order: a command layer first,
+with RexxJS's `ADDRESS SHEET` over it, then the features below and more.
+
 **From the Tauri spreadsheet** (RexxJS/example-app-spreadsheet; its model
 is `src/spreadsheet-model.js`, its control functions
 `src/spreadsheet-control-functions.js`). Each lands in the model with no
