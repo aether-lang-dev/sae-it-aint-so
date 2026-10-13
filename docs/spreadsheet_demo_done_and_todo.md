@@ -330,6 +330,7 @@ in `site/sheet/` (and the generated RexxJS bundle):
 | `workbook.ts` | The sheets (each a Sheet and its notes), the active one, both languages, the file's name and setup script, the clipboard, conditional styles; `settle()` passes changes between sheets; what a cell shows, its style, its status line |
 | `script.ts` | RexxJS scripts over the commands: ADDRESS SHEET, SETCELL, GETCELL, the app's control functions, and ADDRESS SPREADSHEET (each string REXX, as the app's control bus runs it) |
 | `control.ts` | The Tauri app's control functions by its names (INSERTROW, SETFORMAT, GETSHEETNAMES ...), each over an `exec` of demo 18's commands; `MISSING`, those with no command yet and what each needs; LISTCOMMANDS |
+| `editors.ts` | A cell's editor (checkbox, dropdown, date): what it takes, how a checkbox is drawn and toggled, the app's shape |
 | `audit.ts` | The formula printer, and Evaluate Formula's steps |
 | `copy.ts` | A formula moved (its references rewritten token by token, so the rest stays as typed); copy as tab-separated text; paste, moving formulas when the text came from the sheet; fill down and right. Gives `[key, input]` pairs for `Sheet.setMany` |
 
@@ -445,7 +446,7 @@ summary.
     (by a header row or named columns), read by TABLE in any case,
     refused, moved with an inserted row, saved and read back, deleted; and
     a script's GROUP_BY the sheet's.
-  - `sheet_control_more` (33 so far): the functions brought in after the
+  - `sheet_control_more` (35 so far): the functions brought in after the
     first 64, stubbed then through a Workbook: the file's JSON out and in,
     EVALUATE and RECALCULATE, the setup script kept, run and failing, the
     two batches; fills up and left, AUTOFILL each way with its source
@@ -454,7 +455,12 @@ summary.
     moved with their notes and widths, and not off either end; table
     metadata in and out, TABLE over a header row and named columns, the
     sort cycle with formulas and comments following, auto IDs given,
-    found, updated, saved and turned off.
+    found, updated, saved and turned off; cell editors set, read, held
+    to and removed.
+  - `sheet_editors` (12): each editor and what it takes, a checkbox drawn
+    and toggled, the app's shape and a file's read back; then through the
+    commands: drawn, toggled, held to, refused, moved with a row, saved,
+    taken away.
   - `sheet_control` (17): each control function against a stubbed `exec`
     (the command it tells and its parameters, what it gives from the
     answer, arguments as the app takes them, refusals); every name in the
@@ -475,7 +481,7 @@ summary.
   - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 48 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 49 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -528,7 +534,9 @@ summary.
     source;
   - Rename sheet, a RexxJS formula on another sheet following it, and a
     column moved right with what reads it;
-  - auto IDs on an inserted row, and a table's sort cycle, from a script.
+  - auto IDs on an inserted row, and a table's sort cycle, from a script;
+  - cell editors: a checkbox drawn and toggled from the editor bar, a
+    dropdown's option chosen, and what is typed held to its options.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -759,8 +767,16 @@ each with checks in `sheet_control_more`:
   and is saved as the sheet's `autoId`). The app's SET_TABLE_METADATA
   also defines a named range of the table's name; here TABLE("name") is
   how a formula reaches it;
+- done: the cell-editor three (`cell.editor cell= kind= [options]
+  [format]`, kind=none to remove; `cell.toggle`; `editors.ts`, pure): a
+  checkbox is drawn ☐/☑ and toggled, a dropdown takes only its options,
+  a date only YYYY-MM-DD, and `cell.set` holds what is typed to them; an
+  editor is a note, so it moves with its cell and is saved. The editor
+  bar (`view/editorbar.ts`) shows the selected cell's choices as buttons
+  (Toggle, the options, Today). The app keeps editors but never draws
+  them;
 - still `MISSING` (each refusing with what it needs, listed by
-  `LISTCOMMANDS('missing')`): cell editors, pivots.
+  `LISTCOMMANDS('missing')`): pivots.
 
 The app's `src/spreadsheet-control-functions.js` has about 100 control
 functions (SETCELL, INSERTROW, SORTRANGE, MERGECELLS, FREEZEPANES, ...).

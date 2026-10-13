@@ -8,6 +8,7 @@ import { addrOf, keyOf } from "./address.ts";
 import type { Addr } from "./address.ts";
 import type { Rule } from "./validation.ts";
 import type { Look } from "./formats.ts";
+import type { CellEditor } from "./editors.ts";
 
 export interface Note {
   readonly validation?: Rule;
@@ -16,6 +17,7 @@ export interface Note {
   readonly style?: unknown;
   readonly styleExpression?: string;
   readonly look?: Look;
+  readonly editor?: CellEditor;
 }
 
 export class CellNotes {

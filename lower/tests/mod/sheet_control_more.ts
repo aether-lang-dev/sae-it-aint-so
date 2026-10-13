@@ -160,6 +160,22 @@ eq("saved: a table's types and descriptions, the auto-ID column and the next ID"
   [{ amount: "number" }, { double: "twice" }, { column: "D", next: 1003, prefix: "ID-" }, { column: 3, next: 1003, prefix: "ID-" }]);
 eq("DELETE_TABLE_METADATA, LIST_TABLES, and auto IDs off", [await fns4.DELETE_TABLE_METADATA("Sales"), await fns4.LIST_TABLES(), await fns4.CONFIGURE_AUTO_ID(""), await failed(() => fns4.FIND_ROW_BY_ID("ID-1001"))],
   ["Table metadata deleted for 'Sales'", "[]", "Auto-ID disabled", "no auto-ID column on this sheet"]);
+
+// Cell editors.
+eq("SETCELLEDITOR, GETCELLEDITOR and REMOVECELLEDITOR tell their commands", [
+  await told("SETCELLEDITOR", ["A1", "dropdown", '{"options":["Red","Green"]}']), await told("SETCELLEDITOR", ["A2", "date", { format: "YYYY-MM-DD" }]),
+  (await told("GETCELLEDITOR", ["A1"], { "cell.about": { editor: { type: "checkbox", config: {} } } }))[0], (await told("GETCELLEDITOR", ["A1"], { "cell.about": { editor: null } }))[0],
+  await told("REMOVECELLEDITOR", ["A1"], { "cell.about": { editor: null } }),
+], [
+  ["A1", [["cell.editor", { cell: "A1", kind: "dropdown", options: "Red,Green" }]]], ["A2", [["cell.editor", { cell: "A2", kind: "date", format: "YYYY-MM-DD" }]]],
+  '{"type":"checkbox","config":{}}', "", ["A1", [["cell.about", { cell: "A1" }]]],
+]);
+const wb6 = new Workbook();
+const fns6 = controlFunctions((id, params) => new Commands(wb6).execute(id, params), {});
+await fns6.SETCELLEDITOR("B1", "checkbox");
+eq("through a workbook: set, read, held to, removed", [await fns6.GETCELLEDITOR("B1"), await failed(() => fns6.SETCELLS("B1:B1", ["maybe"])), await fns6.REMOVECELLEDITOR("B1"), await fns6.GETCELLEDITOR("B1"),
+  await failed(() => fns6.SETCELLEDITOR("B1", "dropdown", "{}"))],
+  ['{"type":"checkbox","config":{}}', "B1 is a checkbox: TRUE or FALSE", "B1", "", "a dropdown needs options"]);
 // expect: ok EXPORT, IMPORT, EVALUATE, RECALCULATE and the setup script's three tell their commands
 // expect: ok EVALUATE: a formula worked out against the sheet, no cell set; an error says why
 // expect: ok RECALCULATE: how many formulas it worked out
@@ -193,3 +209,5 @@ eq("DELETE_TABLE_METADATA, LIST_TABLES, and auto IDs off", [await fns4.DELETE_TA
 // expect: ok FIND_ROW_BY_ID and UPDATE_ROW_BY_ID
 // expect: ok saved: a table's types and descriptions, the auto-ID column and the next ID
 // expect: ok DELETE_TABLE_METADATA, LIST_TABLES, and auto IDs off
+// expect: ok SETCELLEDITOR, GETCELLEDITOR and REMOVECELLEDITOR tell their commands
+// expect: ok through a workbook: set, read, held to, removed

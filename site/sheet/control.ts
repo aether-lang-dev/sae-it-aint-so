@@ -28,6 +28,7 @@ interface About {
   readonly wrap: number;
   readonly merged: string;
   readonly validation: Rule | null;
+  readonly editor: { readonly type: string; readonly config: object } | null;
 }
 interface State {
   readonly name: string;
@@ -180,6 +181,20 @@ export const CONTROL: Readonly<Record<string, Control>> = {
   // The app's SETSHEETNAME names its document, which it never shows; here
   // it renames the active sheet, as GETSHEETNAME reads it.
   SETSHEETNAME: async (exec, to) => (await must(exec, "sheet.rename", { name: (await state(exec)).name, to: text(to) }), text(to)),
+  // A cell's editor (editors.ts): type checkbox, dropdown or date, and the
+  // app's config ({"options": [...]}, {"format": ...}) as JSON.
+  SETCELLEDITOR: async (exec, c, type, config) => {
+    const conf = (typeof config === "string" && config ? JSON.parse(config) : config ?? {}) as { options?: unknown; format?: unknown };
+    await must(exec, "cell.editor", {
+      cell: text(c), kind: text(type), ...(Array.isArray(conf.options) ? { options: conf.options.map(text).join(",") } : {}), ...(conf.format ? { format: text(conf.format) } : {}),
+    });
+    return text(c);
+  },
+  GETCELLEDITOR: async (exec, c) => {
+    const e = (await about(exec, c)).editor;
+    return e ? JSON.stringify(e) : "";
+  },
+  REMOVECELLEDITOR: async (exec, c) => ((await about(exec, c)).editor ? (await must(exec, "cell.editor", { cell: text(c), kind: "none" }), text(c)) : text(c)),
   HIDEROW: async (exec, n) => (await must(exec, "rows.hide", { range: rowsOf(row(n, "HIDEROW")) }), "OK"),
   UNHIDEROW: async (exec, n) => (await must(exec, "rows.unhide", { range: rowsOf(row(n, "UNHIDEROW")) }), "OK"),
   HIDECOLUMN: async (exec, c) => (await must(exec, "columns.hide", { range: `${col(c, "HIDECOLUMN")}1` }), "OK"),
@@ -343,9 +358,6 @@ const tableNames = async (exec: Exec) => ((await must(exec, "table.list")).outpu
 
 // The app's names with no command here yet, and what each would need.
 export const MISSING: Readonly<Record<string, string>> = {
-  SETCELLEDITOR: "cell editors (a dropdown, a checkbox, a date in a cell)",
-  GETCELLEDITOR: "cell editors",
-  REMOVECELLEDITOR: "cell editors",
   CREATEPIVOT: "pivot tables",
   UPDATEPIVOT: "pivot tables",
   DELETEPIVOT: "pivot tables",

@@ -10,6 +10,7 @@
 // Formulas, and the watched cells. It answers what a cell shows, its style
 // and its status line.
 // Commands (commands.ts) change it; the page's panels read it.
+import { drawn } from "./editors.ts";
 import { cellAddr, keyOf, order, parseRange, splitKey } from "./address.ts";
 import { REFERENCE_COLOURS } from "./typing.ts";
 import type { Addr } from "./address.ts";
@@ -383,8 +384,9 @@ export class Workbook {
   }
 
   #shown(page: Page, key: string): string {
-    const v = page.sheet.value(key);
-    return formatted(v, page.notes.get(key).format ?? "") ?? show(v);
+    const v = page.sheet.value(key), note = page.notes.get(key);
+    const shown = formatted(v, note.format ?? "") ?? show(v);
+    return note.editor ? drawn(note.editor, v, shown) : shown;
   }
 
   // Its style, each layer over the last: numbers to the right, its own

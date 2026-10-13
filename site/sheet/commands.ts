@@ -21,6 +21,7 @@ import { EXAMPLE, FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./samples.ts";
 import { runScript } from "./script.ts";
 import { continued } from "./series.ts";
 import { check, describeRule, ruleOf } from "./validation.ts";
+import { asApp, editorOf, refusal, toggled } from "./editors.ts";
 import { ICONS, describeRule as describeCf, rangeName } from "./rules.ts";
 import type { CfRule, Comparison, IconSet } from "./rules.ts";
 import { toStyle } from "./formats.ts";
@@ -485,6 +486,9 @@ const SPECS: readonly Spec[] = [
       const rule = wb.notes.get(key).validation;
       const broken = rule ? check(rule, p.input, wb.sheet.input(key) === "") : null;
       if (broken && rule!.mode === "stop") refuse(`${key} ${broken}`);
+      // Its editor, if it has one, takes only what it offers.
+      const editor = wb.notes.get(key).editor, unsuited = editor ? refusal(editor, p.input) : null;
+      if (unsuited) refuse(`${key} ${unsuited}`);
       const changed = await wb.sheet.set(key, p.input);
       return changedBy(wb, changed, `${key} = ${show(wb.sheet.value(key))}${broken ? ` (${key} ${broken})` : ""}`);
     },
@@ -505,9 +509,35 @@ const SPECS: readonly Spec[] = [
       const merge = wb.page(wb.active)!.merges.find((m) => overlap(m, [at, at]));
       const about = {
         cell: key, value: scripted(wb.sheet.value(key)), input: wb.sheet.input(key), format: note.format ?? "", comment: note.comment ?? "",
-        wrap: note.look?.wrap ? 1 : 0, merged: merge ? rangeName(merge) : "", validation: note.validation ?? null,
+        wrap: note.look?.wrap ? 1 : 0, merged: merge ? rangeName(merge) : "", validation: note.validation ?? null, editor: note.editor ? asApp(note.editor) : null,
       };
       return { ok: true, message: `${key}: ${JSON.stringify(about)}`, changed: [], output: about };
+    },
+  },
+  {
+    // A cell's editor (editors.ts): a checkbox, a dropdown of options, a
+    // date; kind=none takes it away.
+    id: "cell.editor", label: "Cell Editor", params: ["cell", "kind"], optional: ["options", "format"], journaled: true,
+    run: async (wb, p) => {
+      const key = cellOf(p.cell);
+      if (p.kind.toLowerCase() === "none") {
+        if (!wb.notes.get(key).editor) refuse(`${key} has no editor`);
+        wb.notes.set(key, { editor: undefined });
+        return changedBy(wb, [key], `${key} has no editor`);
+      }
+      const editor = editorOf(p.kind, p.options, p.format);
+      wb.notes.set(key, { editor });
+      return changedBy(wb, [key], `${key} is a ${editor.kind}${editor.options ? ` of ${editor.options.join(", ")}` : ""}`);
+    },
+  },
+  {
+    // A checkbox ticked, or not.
+    id: "cell.toggle", label: "Toggle", params: ["cell"], journaled: true,
+    run: async (wb, p) => {
+      const key = cellOf(p.cell);
+      if (wb.notes.get(key).editor?.kind !== "checkbox") refuse(`${key} is not a checkbox`);
+      const changed = await wb.sheet.set(key, toggled(wb.sheet.value(key)));
+      return changedBy(wb, changed, `${key} = ${show(wb.sheet.value(key))}`);
     },
   },
   {

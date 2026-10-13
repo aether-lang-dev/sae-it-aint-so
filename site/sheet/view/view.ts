@@ -11,6 +11,7 @@ import type { Problem } from "../sheet.ts";
 import { Workbook } from "../workbook.ts";
 import { COLUMN_WIDTH } from "./grid.ts";
 import type { ChartView, Watch } from "../workbook.ts";
+import type { CellEditor } from "../editors.ts";
 
 export class SheetView {
   readonly wb = new Workbook();
@@ -21,6 +22,8 @@ export class SheetView {
   readonly status = state("");
   readonly comment = state("");
   readonly format = state("");
+  // The selected cell's editor (editors.ts), or null.
+  readonly editor = state<CellEditor | null>(null);
   readonly formulas = state<string>("Excel");
   readonly setup = state("");
   readonly problems = state<Problem[]>([]);
@@ -80,6 +83,7 @@ export class SheetView {
       this.status.set(this.wb.describe(key));
       this.comment.set(note.comment ?? "");
       this.format.set(note.format ?? "");
+      this.editor.set(note.editor ?? null);
     });
   }
 

@@ -732,6 +732,21 @@ main() {
             spec.assert_true(b.wait_for_console("sheet: say desc original"), "then descending, then as it was")
             spec.assert_true(g.wait_cell("A", 3, "b"), "as it was")
         }
+        spec.it("cell editors: a checkbox drawn and toggled, a dropdown's options offered as buttons") callback {
+            g.command("cell.editor cell=E2 kind=checkbox")
+            spec.assert_true(g.wait_cell("E", 2, "☐"), "drawn as an empty box")
+            g.pick("E", 2)
+            spec.assert_true(b.wait_for_text("E2 is a checkbox:"), "the editor bar names it")
+            b.click("Toggle")
+            spec.assert_true(g.wait_cell("E", 2, "☑"), "ticked")
+            g.command("cell.editor cell=E3 kind=dropdown options=Amber,Teal")
+            g.pick("E", 3)
+            spec.assert_true(b.wait_for_text("E3 is a dropdown:"), "a dropdown")
+            b.click("Teal")
+            spec.assert_true(g.wait_cell("E", 3, "Teal"), "an option chosen sets the cell")
+            g.enter("E3", "Mauve")
+            spec.assert_true(b.wait_for_console("sheet: refused: E3 is one of Amber, Teal"), "what is typed is held to its options")
+        }
     }
     return spec.run_summary(fw)
 }

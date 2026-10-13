@@ -88,7 +88,7 @@ const script = async (text: string) => {
   return (await cmds.script(text, (line) => said.push(line))).message;
 };
 eq("cell.about and sheet.state, the getters' commands", [(await cmds.run("cell.comment cell=B2 text=hi")) && (await cmds.run("cell.about cell=B2")).output, (await cmds.run("sheet.state")).output],
-  [{ cell: "B2", value: "", input: "", format: "", comment: "hi", wrap: 0, merged: "", validation: null },
+  [{ cell: "B2", value: "", input: "", format: "", comment: "hi", wrap: 0, merged: "", validation: null, editor: null },
     { name: "Sheet1", sheets: ["Sheet1"], hiddenRows: [], hiddenCols: [], frozenRows: 0, rowHeights: [], colWidths: [], filter: null, canUndo: 0, canRedo: 0, autoId: null }]);
 eq("a script calls them by the app's names", [await script(`LET r = SETCELL("A1", 10); LET r = SETCELL("A2", 20); LET r = INSERTROW(2); LET r = HIDEROW(2)
 SAY GETCELL("A3") ISROWHIDDEN(2) ISROWHIDDEN(3); LET r = UNDO(); SAY CANUNDO() CANREDO(); LET n = GETSHEETNAMES(); SAY n.0 n.1`), said, wb.sheet.input("A3")],

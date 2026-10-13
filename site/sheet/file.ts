@@ -27,6 +27,7 @@ import type { ChartSpec } from "./workbook.ts";
 import { show } from "./format.ts";
 import type { Note } from "./notes.ts";
 import { ruleOf } from "./validation.ts";
+import { editorIn } from "./editors.ts";
 import type { AutoId, Filter, Page, Workbook } from "./workbook.ts";
 
 export interface FileSheet {
@@ -63,6 +64,7 @@ interface FileCell {
   readonly styleExpression?: string | null;
   readonly validation?: Record<string, unknown> | null;
   readonly look?: Record<string, unknown> | null;
+  readonly editor?: unknown;
 }
 
 type Cells = Record<string, string | FileCell>;
@@ -91,6 +93,8 @@ function noteOf(c: string | FileCell): Note {
   const rule = c.validation ? ruleIn(c.validation) : undefined;
   if (rule) note.validation = rule;
   if (c.look && typeof c.look === "object") note.look = c.look;
+  const editor = editorIn(c.editor);
+  if (editor) note.editor = editor;
   return note;
 }
 
