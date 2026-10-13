@@ -176,6 +176,25 @@ await fns6.SETCELLEDITOR("B1", "checkbox");
 eq("through a workbook: set, read, held to, removed", [await fns6.GETCELLEDITOR("B1"), await failed(() => fns6.SETCELLS("B1:B1", ["maybe"])), await fns6.REMOVECELLEDITOR("B1"), await fns6.GETCELLEDITOR("B1"),
   await failed(() => fns6.SETCELLEDITOR("B1", "dropdown", "{}"))],
   ['{"type":"checkbox","config":{}}', "B1 is a checkbox: TRUE or FALSE", "B1", "", "a dropdown needs options"]);
+
+// Pivots.
+eq("the pivot functions tell their commands; PIVOTCONFIG writes a configuration", [
+  (await told("CREATEPIVOT", ["p", '{"sourceRange":"A1:C6","rowFields":["region"],"valueField":"amount","aggFunction":"sum","outputCell":"E1"}']))[1],
+  await told("UPDATEPIVOT", ["p"]), await told("DELETEPIVOT", ["p"]), (await told("GETPIVOT", ["p"], { "pivot.get": { sourceRange: "A1:C6" } }))[0],
+  (await told("LISTPIVOTS", [], { "pivot.list": [] }))[0], (await told("PIVOTCONFIG", ["A1:C6", "amount", "sum", "E1", '["region"]']))[0],
+], [
+  [["pivot.create", { id: "p", source: "A1:C6", value: "amount", agg: "sum", output: "E1", rows: "region", cols: "", filters: "{}" }]],
+  ["p", [["pivot.update", { id: "p" }]]], ["p", [["pivot.delete", { id: "p" }]]], '{"sourceRange":"A1:C6"}', "[]",
+  '{"sourceRange":"A1:C6","valueField":"amount","aggFunction":"SUM","outputCell":"E1","rowFields":["region"],"colFields":[]}',
+]);
+const wb7 = new Workbook();
+const cmds7 = new Commands(wb7);
+const fns7 = controlFunctions((id, params) => cmds7.execute(id, params), {});
+for (const [k, v] of [["A1", "region"], ["B1", "amount"], ["A2", "North"], ["B2", "3"], ["A3", "South"], ["B3", "4"], ["A4", "North"], ["B4", "5"]]) await cmds7.run(`cell.set cell=${k} input=${v}`);
+const config = await fns7.PIVOTCONFIG("A1:B4", "amount", "sum", "D1", '["region"]');
+eq("through a workbook: CREATEPIVOT from PIVOTCONFIG, GETPIVOT, a pivot not there", [await fns7.CREATEPIVOT("byRegion", config), ["D1", "E1", "D2", "E2", "D3", "E3"].map((k) => show(wb7.sheet.value(k))),
+  JSON.parse(await fns7.GETPIVOT("byRegion") as string).aggFunction, await fns7.GETPIVOT("nope"), await failed(() => fns7.UPDATEPIVOT("nope"))],
+  ["byRegion", ["region", "SUM of amount", "North", "8", "South", "4"], "SUM", "", "no pivot nope"]);
 // expect: ok EXPORT, IMPORT, EVALUATE, RECALCULATE and the setup script's three tell their commands
 // expect: ok EVALUATE: a formula worked out against the sheet, no cell set; an error says why
 // expect: ok RECALCULATE: how many formulas it worked out
@@ -211,3 +230,5 @@ eq("through a workbook: set, read, held to, removed", [await fns6.GETCELLEDITOR(
 // expect: ok DELETE_TABLE_METADATA, LIST_TABLES, and auto IDs off
 // expect: ok SETCELLEDITOR, GETCELLEDITOR and REMOVECELLEDITOR tell their commands
 // expect: ok through a workbook: set, read, held to, removed
+// expect: ok the pivot functions tell their commands; PIVOTCONFIG writes a configuration
+// expect: ok through a workbook: CREATEPIVOT from PIVOTCONFIG, GETPIVOT, a pivot not there

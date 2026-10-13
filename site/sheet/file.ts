@@ -17,7 +17,7 @@
 // other sheets (sheets: [{ name, cells, names, rules, charts, view, merges,
 // tables }]).
 // writeSheetFile writes it all.
-import { addrOf, colName, order, parseRange } from "./address.ts";
+import { addrOf, colName, keyOf, order, parseRange } from "./address.ts";
 import { ICONS, rangeName } from "./rules.ts";
 import type { CfRule } from "./rules.ts";
 import { CHART_KINDS } from "./charts.ts";
@@ -28,7 +28,9 @@ import { show } from "./format.ts";
 import type { Note } from "./notes.ts";
 import { ruleOf } from "./validation.ts";
 import { editorIn } from "./editors.ts";
-import type { AutoId, Filter, Page, Workbook } from "./workbook.ts";
+import type { AutoId, Filter, Page, Pivot, Workbook } from "./workbook.ts";
+import { AGGREGATES } from "./pivot.ts";
+import type { Aggregate } from "./pivot.ts";
 
 export interface FileSheet {
   readonly name: string;
@@ -45,6 +47,7 @@ export interface FileSheet {
   readonly merges: readonly string[];
   readonly tables: readonly TableDef[];
   readonly autoId: AutoId | null;
+  readonly pivots: readonly [string, Pivot][];
 }
 
 export interface SheetFile {
@@ -152,7 +155,21 @@ function sheetOf(name: string, s: any): FileSheet {
     merges: Array.isArray(s?.merges) ? s.merges.map(String).filter((m: string) => parseRange(m)) : [],
     tables: tablesOf(s?.tables),
     autoId: autoIdOf(s?.autoId),
+    pivots: pivotsOf(s?.pivots),
   };
+}
+
+// Pivots as written (the app's configuration, its id and what it covered),
+// read back; one that is not a pivot is left out.
+function pivotsOf(pivots: unknown): [string, Pivot][] {
+  if (!Array.isArray(pivots)) return [];
+  const names = (xs: unknown) => (Array.isArray(xs) ? xs.map(String) : []);
+  return pivots.flatMap((p: any): [string, Pivot][] => {
+    const source = parseRange(String(p?.sourceRange ?? "")), output = addrOf(String(p?.outputCell ?? "")), agg = String(p?.aggFunction ?? "").toUpperCase() as Aggregate;
+    if (!p?.id || !source || !output || !AGGREGATES.includes(agg)) return [];
+    const filters = p.filters && typeof p.filters === "object" ? Object.fromEntries(Object.entries(p.filters).map(([k, v]) => [k, String(v)])) : {};
+    return [[String(p.id), { source, output, rows: names(p.rowFields), cols: names(p.colFields), value: String(p.valueField ?? ""), agg, filters, written: parseRange(String(p.written ?? "")) }]];
+  });
 }
 
 // Auto IDs ({ column: "A", next: 1001, prefix: "ID-" }), or null.
@@ -211,6 +228,12 @@ const viewIn = (page: Page) => ({
 const sheetIn = (p: Page) => ({
   cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p), view: viewIn(p), merges: p.merges.map(rangeName), tables: tablesIn(p),
   ...(p.autoId ? { autoId: { column: colName(p.autoId.column), next: p.autoId.next, prefix: p.autoId.prefix } } : {}),
+  ...(p.pivots.size ? {
+    pivots: [...p.pivots].map(([id, pv]) => ({
+      id, sourceRange: rangeName(pv.source), rowFields: pv.rows, colFields: pv.cols, valueField: pv.value, aggFunction: pv.agg, outputCell: keyOf(pv.output), filters: pv.filters,
+      ...(pv.written ? { written: rangeName(pv.written) } : {}),
+    })),
+  } : {}),
 });
 
 // The workbook as a file: JSON-ready.

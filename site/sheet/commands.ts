@@ -39,7 +39,9 @@ import { criterion } from "./functions.ts";
 const NUMERIC_TEXT = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)\s*$/;
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
-import type { Direction, Filter, LanguageName, Page, Workbook } from "./workbook.ts";
+import type { Direction, Filter, LanguageName, Page, Pivot, Workbook } from "./workbook.ts";
+import { AGGREGATES, pivoted } from "./pivot.ts";
+import type { Aggregate } from "./pivot.ts";
 import { FormulaError } from "./lexer.ts";
 
 export type Params = Readonly<Record<string, string>>;
@@ -171,6 +173,7 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     page.heights = new Map(s.view.rowHeights);
     page.widths = new Map(s.view.colWidths);
     page.autoId = s.autoId;
+    page.pivots = new Map(s.pivots);
     page.merges = s.merges.map((m) => parseRange(m)!);
     for (const t of s.tables) await wb.sheet.defineTable(t.name, t);
   }
@@ -280,6 +283,11 @@ async function reshaped(wb: Workbook, axis: "row" | "col", editOf: (moves: Scope
       return to ? [[to.col, w]] : [];
     }));
   }
+  page.pivots = new Map([...page.pivots].flatMap(([id, pv]): [string, Pivot][] => {
+    const source = edit.range(pv.source[0], pv.source[1], still, still), output = edit.cell(pv.output, still);
+    const written = pv.written && edit.range(pv.written[0], pv.written[1], still, still);
+    return source && output ? [[id, { ...pv, source, output, written }]] : [];
+  }));
   if (page.autoId) {
     const to = edit.cell({ col: page.autoId.column, row: 0 }, still);
     page.autoId = to ? { ...page.autoId, column: to.col } : null;
@@ -432,6 +440,30 @@ function hiding(rows: boolean, hide: boolean) {
 }
 
 // A table's columns' names: given, or its first row's, or its letters.
+// A pivot written from its output cell: what it covered before cleared,
+// its cells set (one undo), and it kept with what it now covers.
+async function writePivot(wb: Workbook, id: string, pivot: Pivot): Promise<Outcome> {
+  const page = wb.page(wb.active)!, [a, b] = pivot.source, rows: Value[][] = [];
+  for (let row = Math.min(a.row, b.row); row <= Math.max(a.row, b.row); row++) {
+    const line: Value[] = [];
+    for (let col = Math.min(a.col, b.col); col <= Math.max(a.col, b.col); col++) line.push(wb.sheet.value(keyOf({ col, row })));
+    rows.push(line);
+  }
+  const grid = pivoted(rows, pivot), o = pivot.output;
+  const end = { col: o.col + Math.max(...grid.map((r) => r.length)) - 1, row: o.row + grid.length - 1 };
+  if (end.col >= COLS || end.row >= ROWS) refuse(`pivot ${id} is ${grid.length} rows by ${end.col - o.col + 1} columns: it does not fit from ${keyOf(o)}`);
+  const sets = new Map<string, string>();
+  grid.forEach((line, r) => line.forEach((v, c) => sets.set(keyOf({ col: o.col + c, row: o.row + r }), v)));
+  const clears = pivot.written ? [...range(pivot.written[0], pivot.written[1])].filter((k) => !sets.has(k)).map((k): [string, string] => [k, ""]) : [];
+  page.pivots.set(id, { ...pivot, written: [o, end] });
+  return setting(wb, [...clears, ...sets], `pivot ${id} at ${rangeName([o, end])}`);
+}
+
+// A pivot as the app's GETPIVOT gives its configuration.
+const pivotConfig = (pv: Pivot) => ({
+  sourceRange: rangeName(pv.source), rowFields: [...pv.rows], colFields: [...pv.cols], valueField: pv.value, aggFunction: pv.agg, outputCell: keyOf(pv.output), filters: { ...pv.filters },
+});
+
 // A table's types or descriptions, as JSON: {"amount": "number"}.
 function byName(json: string | undefined, what: string): Record<string, string> | undefined {
   if (json === undefined) return undefined;
@@ -1104,6 +1136,50 @@ const SPECS: readonly Spec[] = [
       const entries = rearranging(wb, [a, b], rows);
       await wb.sheet.defineTable(t.name, { ...t, sort: next === "original" ? undefined : { column: col, direction: next, origin: rows.map((from) => origin[from - top]) } });
       return { ...await setting(wb, entries, `${t.name} by ${colName(col)}: ${next}`), output: next };
+    },
+  },
+  {
+    // A pivot table (pivot.ts) written from a cell: rows= and cols= name
+    // the fields grouped down and across (comma-separated), value= the one
+    // aggregated by agg=, filters= a JSON object of a field's value a row
+    // must have. The same id again replaces it.
+    id: "pivot.create", label: "PivotTable", params: ["id", "source", "value", "agg", "output"], optional: ["rows", "cols", "filters"], journaled: true,
+    run: async (wb, p) => {
+      const page = wb.page(wb.active)!, agg = p.agg.toUpperCase() as Aggregate;
+      if (!AGGREGATES.includes(agg)) refuse(`${p.agg} is not ${AGGREGATES.join(", ")}`);
+      const list = (s?: string) => (s ?? "").split(",").map((x) => x.trim()).filter((x) => x);
+      const pivot: Pivot = {
+        source: rangeOf(p.source), output: cellAddr(cellOf(p.output))!, rows: list(p.rows), cols: list(p.cols), value: p.value, agg,
+        filters: byName(p.filters, "filters") ?? {}, written: page.pivots.get(p.id)?.written ?? null,
+      };
+      return writePivot(wb, p.id, pivot);
+    },
+  },
+  {
+    // Written again from its source (the app's UPDATEPIVOT).
+    id: "pivot.update", label: "Refresh PivotTable", params: ["id"], journaled: true,
+    run: async (wb, p) => writePivot(wb, p.id, wb.page(wb.active)!.pivots.get(p.id) ?? refuse(`no pivot ${p.id}`)),
+  },
+  {
+    // Forgotten; the cells it wrote stay, as the app leaves them.
+    id: "pivot.delete", label: "Delete PivotTable", params: ["id"], journaled: true,
+    run: async (wb, p) => {
+      if (!wb.page(wb.active)!.pivots.delete(p.id)) refuse(`no pivot ${p.id}`);
+      return { ok: true, message: `deleted pivot ${p.id}`, changed: [] };
+    },
+  },
+  {
+    id: "pivot.get", label: "About a PivotTable", params: ["id"], journaled: false,
+    run: async (wb, p) => {
+      const config = pivotConfig(wb.page(wb.active)!.pivots.get(p.id) ?? refuse(`no pivot ${p.id}`));
+      return { ok: true, message: JSON.stringify(config), changed: [], output: config };
+    },
+  },
+  {
+    id: "pivot.list", label: "PivotTables", params: [], journaled: false,
+    run: async (wb) => {
+      const all = [...wb.page(wb.active)!.pivots].map(([id, pv]) => ({ id, config: pivotConfig(pv) }));
+      return { ok: true, message: all.length ? all.map((x) => x.id).join(", ") : "no pivots", changed: [], output: all };
     },
   },
   {

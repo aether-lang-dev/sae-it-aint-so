@@ -2,7 +2,7 @@
 // each against a stubbed exec (what command it tells, with what, and what it
 // makes of the answer), then in scripts through a Workbook, and last the
 // app's own ARexx-style demonstration script, unchanged but for its ADDRESS.
-import { CONTROL, MISSING, controlFunctions } from "./sheet/control.ts";
+import { CONTROL, controlFunctions } from "./sheet/control.ts";
 import { Commands } from "./sheet/commands.ts";
 import { Workbook } from "./sheet/workbook.ts";
 import { show } from "./sheet/format.ts";
@@ -71,13 +71,11 @@ const APP = ["SETCELL", "GETCELL", "GETEXPRESSION", "CLEARCELL", "SUM_RANGE", "A
   "UPDATEPIVOT", "DELETEPIVOT", "GETPIVOT", "LISTPIVOTS", "PIVOTCONFIG", "DEFINETABLE", "DELETETABLE", "GETTABLE", "LISTTABLES", "SORTTABLEBYCOLUMN", "LISTCOMMANDS"];
 const OWN = ["SETCELL", "GETCELL", "SUM_RANGE", "AVERAGE_RANGE", "COUNT_RANGE", "MIN_RANGE", "MAX_RANGE", "SUMIF_RANGE", "COUNTIF_RANGE"];
 const fns = controlFunctions(stub().exec, Object.fromEntries(OWN.map((n) => [n, () => n])));
-eq("every name the app lists is here, missing, or a script's own; none both", [APP.filter((n) => !(n in fns) && !OWN.includes(n)), Object.keys(CONTROL).filter((n) => n in MISSING)], [[], []]);
+eq("every name the app lists is here, or one a script has of its own", APP.filter((n) => !(n in fns) && !OWN.includes(n)), []);
 const listed = fns.LISTCOMMANDS() as Record<string, unknown>;
 const names = Object.entries(listed).filter(([k]) => k !== "0").map(([, n]) => n as string);
-eq("LISTCOMMANDS: a stem of what a script may call, the app's list among them; LISTCOMMANDS('missing'), what it may not yet and why", [
-  APP.filter((n) => !(n in MISSING) && !names.includes(n)), names.filter((n) => !(n in fns) && !OWN.includes(n)), listed[0] === names.length,
-  (fns.LISTCOMMANDS("missing") as Record<string, unknown>)[0], await failed(() => fns.CREATEPIVOT("p", "{}")),
-], [[], [], true, Object.keys(MISSING).length, "CREATEPIVOT is not in demo 18 yet: it needs pivot tables"]);
+eq("LISTCOMMANDS: a stem of what a script may call, the app's list among them", [APP.filter((n) => !names.includes(n)), names.filter((n) => !(n in fns) && !OWN.includes(n)), listed[0] === names.length],
+  [[], [], true]);
 
 // Through a workbook.
 const wb = new Workbook();
@@ -93,7 +91,7 @@ eq("cell.about and sheet.state, the getters' commands", [(await cmds.run("cell.c
 eq("a script calls them by the app's names", [await script(`LET r = SETCELL("A1", 10); LET r = SETCELL("A2", 20); LET r = INSERTROW(2); LET r = HIDEROW(2)
 SAY GETCELL("A3") ISROWHIDDEN(2) ISROWHIDDEN(3); LET r = UNDO(); SAY CANUNDO() CANREDO(); LET n = GETSHEETNAMES(); SAY n.0 n.1`), said, wb.sheet.input("A3")],
   ["ran", ["20 1 0", "1 1", "1 Sheet1"], ""]);
-eq("a missing one stops the script, saying what it needs", await script(`LET r = CREATEPIVOT("p", "{}")`), "CREATEPIVOT is not in demo 18 yet: it needs pivot tables");
+eq("a function the script has not got stops it, saying so", (await script(`LET r = NOPE("x")`)).includes("NOPE"), true);
 eq("ADDRESS SPREADSHEET: each string REXX, RC and RESULT set; a failure RC 1", [await script(`ADDRESS SPREADSHEET
 'SETCELL("C1", "=A1*3")'
 SAY RC RESULT
@@ -120,11 +118,11 @@ eq("its formats as the grid draws them", ["D1", "D2", "D3", "F1"].map((k) => dem
 // expect: ok names and tables from their lists
 // expect: ok references worked out without the sheet
 // expect: ok refusals: a bad argument, a refused command, what demo 18 cannot do
-// expect: ok every name the app lists is here, missing, or a script's own; none both
-// expect: ok LISTCOMMANDS: a stem of what a script may call, the app's list among them; LISTCOMMANDS('missing'), what it may not yet and why
+// expect: ok every name the app lists is here, or one a script has of its own
+// expect: ok LISTCOMMANDS: a stem of what a script may call, the app's list among them
 // expect: ok cell.about and sheet.state, the getters' commands
 // expect: ok a script calls them by the app's names
-// expect: ok a missing one stops the script, saying what it needs
+// expect: ok a function the script has not got stops it, saying so
 // expect: ok ADDRESS SPREADSHEET: each string REXX, RC and RESULT set; a failure RC 1
 // expect: ok the app's ARexx-style demonstration runs unchanged, every command RC 0
 // expect: ok and leaves the sheet as it says it does

@@ -329,7 +329,8 @@ in `site/sheet/` (and the generated RexxJS bundle):
 | `commands.ts` | The seam: the catalogue of commands, the command line, the journal, scripts |
 | `workbook.ts` | The sheets (each a Sheet and its notes), the active one, both languages, the file's name and setup script, the clipboard, conditional styles; `settle()` passes changes between sheets; what a cell shows, its style, its status line |
 | `script.ts` | RexxJS scripts over the commands: ADDRESS SHEET, SETCELL, GETCELL, the app's control functions, and ADDRESS SPREADSHEET (each string REXX, as the app's control bus runs it) |
-| `control.ts` | The Tauri app's control functions by its names (INSERTROW, SETFORMAT, GETSHEETNAMES ...), each over an `exec` of demo 18's commands; `MISSING`, those with no command yet and what each needs; LISTCOMMANDS |
+| `control.ts` | The Tauri app's control functions by its names, all of them (INSERTROW, SETFORMAT, CREATEPIVOT ...), each over an `exec` of demo 18's commands; LISTCOMMANDS, BATCH_EXECUTE |
+| `pivot.ts` | Pivot tables: a source's rows grouped down and across, a field aggregated where they meet |
 | `editors.ts` | A cell's editor (checkbox, dropdown, date): what it takes, how a checkbox is drawn and toggled, the app's shape |
 | `audit.ts` | The formula printer, and Evaluate Formula's steps |
 | `copy.ts` | A formula moved (its references rewritten token by token, so the rest stays as typed); copy as tab-separated text; paste, moving formulas when the text came from the sheet; fill down and right. Gives `[key, input]` pairs for `Sheet.setMany` |
@@ -446,7 +447,7 @@ summary.
     (by a header row or named columns), read by TABLE in any case,
     refused, moved with an inserted row, saved and read back, deleted; and
     a script's GROUP_BY the sheet's.
-  - `sheet_control_more` (35 so far): the functions brought in after the
+  - `sheet_control_more` (37): the functions brought in after the
     first 64, stubbed then through a Workbook: the file's JSON out and in,
     EVALUATE and RECALCULATE, the setup script kept, run and failing, the
     two batches; fills up and left, AUTOFILL each way with its source
@@ -456,7 +457,12 @@ summary.
     metadata in and out, TABLE over a header row and named columns, the
     sort cycle with formulas and comments following, auto IDs given,
     found, updated, saved and turned off; cell editors set, read, held
-    to and removed.
+    to and removed; pivots made from PIVOTCONFIG, read, refused.
+  - `sheet_pivot` (13): grouping down and across, each aggregate,
+    filters, an unknown field; then through the commands: written,
+    written again, replaced (what it no longer covers cleared), read as
+    the app's GETPIVOT and LISTPIVOTS, refused, moved with rows, saved,
+    forgotten.
   - `sheet_editors` (12): each editor and what it takes, a checkbox drawn
     and toggled, the app's shape and a file's read back; then through the
     commands: drawn, toggled, held to, refused, moved with a row, saved,
@@ -464,9 +470,9 @@ summary.
   - `sheet_control` (17): each control function against a stubbed `exec`
     (the command it tells and its parameters, what it gives from the
     answer, arguments as the app takes them, refusals); every name in the
-    app's LISTCOMMANDS here, missing or a script's own; LISTCOMMANDS; then
+    app's LISTCOMMANDS here or a script's own; LISTCOMMANDS; then
     through a Workbook (`cell.about`, `sheet.state`, a script by the app's
-    names, a missing one, ADDRESS SPREADSHEET's RC and RESULT); and the
+    names, a name it has not got, ADDRESS SPREADSHEET's RC and RESULT); and the
     app's `test-spreadsheet-address.rexx` (in `lower/tests/mod/lib/`),
     unchanged but for its ADDRESS line, every command RC 0, its cells and
     formats as it says.
@@ -529,7 +535,7 @@ summary.
     SUM` spilled and `WHERE |> COUNT`, both following an edit;
   - the app's control functions in a script: ADDRESS SPREADSHEET strings
     with RC and RESULT, HIDECOLUMN and the getters by name, a currency
-    format drawn, and a missing one's message;
+    format drawn, and a pivot table written by CREATEPIVOT;
   - SETCOLWIDTH drawn on the grid, and AUTOFILL repeating a two-cell
     source;
   - Rename sheet, a RexxJS formula on another sheet following it, and a
@@ -702,11 +708,12 @@ Still to do here:
 - A panel for tables (today they are made from the command bar or a
   script), and outlining a table's range on the grid.
 
-### 2. The control-function name table (done, but for the missing names)
+### 2. The control-function name table (done: every name the app has)
 
 What landed (`sheet_control`, and the last `it` in `spec_sheet`):
 
-- `site/sheet/control.ts`: 64 of the app's names over demo 18's commands,
+- `site/sheet/control.ts`: every one of the app's names (64 at first, the
+  other 37 after, below) over demo 18's commands,
   reached only through `exec(id, params)` (as a panel reaches them); what
   each gives back is what the app's gives ('OK', the content set, 1 or 0,
   a stem).
@@ -728,10 +735,15 @@ Differences from the app worth knowing: APPLYROWFILTER is demo 18's
 AutoFilter over the whole sheet (the first row kept as headers, the
 criterion read as COUNTIF reads one, where the app matches a substring in
 every row); FREEZEPANES refuses columns; GETROWHEIGHT is 0 for the grid's
-own height; SETCELLVALIDATION's text pattern is refused.
+own height (and GETCOLWIDTH for its width); SETCELLVALIDATION's text
+pattern is refused; pivots with no column fields head their one column
+"SUM of amount" where the app writes "(blank)"; DELETEPIVOT leaves the
+pivot's cells, as the app does, and pivot.update clears what a pivot no
+longer covers, which the app does not; SET_TABLE_METADATA defines no
+named range.
 
-Being filled in (2026-10-13, Paul asked for all 37), a group to a commit,
-each with checks in `sheet_control_more`:
+The other 37 (2026-10-13, Paul asked for all of them), a group to a
+commit, each with checks in `sheet_control_more`:
 
 - done: BATCH_SET_CELLS and BATCH_EXECUTE (in `control.ts`, over the
   other functions), EXPORT and IMPORT (`file.export`, `file.import
@@ -775,8 +787,14 @@ each with checks in `sheet_control_more`:
   bar (`view/editorbar.ts`) shows the selected cell's choices as buttons
   (Toggle, the options, Today). The app keeps editors but never draws
   them;
-- still `MISSING` (each refusing with what it needs, listed by
-  `LISTCOMMANDS('missing')`): pivots.
+- done: the pivot six (`pivot.create id= source= value= agg= output=
+  [rows] [cols] [filters]`, `pivot.update`, `pivot.delete`, `pivot.get`,
+  `pivot.list`; `pivot.ts`, pure; per sheet, saved as `pivots`, moved
+  with rows and columns; PIVOTCONFIG in `control.ts`).
+
+With that `MISSING` and `LISTCOMMANDS('missing')` went: every name in the
+app's LISTCOMMANDS is a function a script has (`sheet_control` checks it),
+and a name a script has not got stops it with RexxJS's own error.
 
 The app's `src/spreadsheet-control-functions.js` has about 100 control
 functions (SETCELL, INSERTROW, SORTRANGE, MERGECELLS, FREEZEPANES, ...).
@@ -876,7 +894,7 @@ is `src/spreadsheet-model.js`, its control functions
     needs aether-ui). Still to come: validation by pattern, and **auto
     IDs**.
 5. ~~The control functions~~ by the app's names in scripts, and ADDRESS
-    SPREADSHEET (done; the missing ones are listed above). Still to come:
+    SPREADSHEET (done, every one of them). Still to come:
     a **control bus** for other apps (the app's is HTTP or postMessage;
     sae's would be a page service): the To do's 3.
 6. ~~Charts~~ of a range in `vg` (done: bar, line, pie, sparklines). Still

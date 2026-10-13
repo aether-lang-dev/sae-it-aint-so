@@ -680,13 +680,15 @@ main() {
             spec.assert_true(g.wait_cell("E", 2, "10"), "a query follows its cells")
             spec.assert_true(g.wait_cell("D", 4, "1"), "and so does the count")
         }
-        spec.it("the Tauri app's control functions by its names, and its ADDRESS SPREADSHEET strings, in a script") callback {
+        spec.it("the Tauri app's control functions by its names, its ADDRESS SPREADSHEET strings, and a pivot table, in a script") callback {
             g.script("ADDRESS SPREADSHEET\n'SETCELL(\"G1\", \"=B2*2\")'\n'SETFORMAT(\"G1\", \"currency:USD\")'\nSAY RC RESULT\nLET r = HIDECOLUMN(\"F\"); SAY ISCOLUMNHIDDEN(6) GETCOLNAME(\"F1\") GETFORMAT(\"G1\")")
             spec.assert_true(b.wait_for_console("sheet: say 0 currency:USD"), "RC and RESULT, as the app's control bus sets them")
             spec.assert_true(b.wait_for_console("sheet: say 1 F currency:USD"), "a control function by name")
             spec.assert_true(g.wait_cell("G", 1, "$240.00"), "SETCELL then SETFORMAT, drawn")
-            g.script("LET r = CREATEPIVOT('p', '{}')")
-            spec.assert_true(b.wait_for_text("script failed: CREATEPIVOT is not in demo 18 yet: it needs pivot tables"), "a missing one says what it needs")
+            g.script("LET r = CREATEPIVOT('byRegion', PIVOTCONFIG('A1:B4', 'amount', 'sum', 'D8', '[\"region\"]'))")
+            spec.assert_true(g.wait_cell("E", 8, "SUM of amount"), "a pivot table written from D8")
+            spec.assert_true(g.wait_cell("D", 9, "North"), "a row a region")
+            spec.assert_true(g.wait_cell("E", 9, "160"), "its sum")
         }
         spec.it("more of the app's control functions: a column's width drawn, AUTOFILL repeating its source") callback {
             g.script("LET r = SETCOLWIDTH('H', 160); LET r = SETCELL('H3', 5); LET r = SETCELL('H4', 6); LET r = AUTOFILL('H3:H4', 'H5:H8'); SAY 'H is' GETCOLWIDTH('H')")

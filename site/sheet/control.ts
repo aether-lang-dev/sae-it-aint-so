@@ -2,9 +2,8 @@
 // functions.js, at RexxJS/example-app-spreadsheet 45b0993) by name, each as
 // demo 18's commands: SETFORMAT("A1", "bold") runs cell.format cell=A1
 // format=bold, and gives back what the app's gives. A script (script.ts)
-// has them all, so the app's REXX scripts run against demo 18 as they are;
-// a name with no command yet is in MISSING, saying what it would need, and
-// calling one says so. The functions see the sheet only through `exec`, a
+// has them all, so the app's REXX scripts run against demo 18 as they are.
+// The functions see the sheet only through `exec`, a
 // command and its parameters in and its outcome out, as a panel does.
 import { COLS, ROWS, addrOf, colName, keyOf, parseRange, range } from "./address.ts";
 import { check } from "./validation.ts";
@@ -195,6 +194,29 @@ export const CONTROL: Readonly<Record<string, Control>> = {
     return e ? JSON.stringify(e) : "";
   },
   REMOVECELLEDITOR: async (exec, c) => ((await about(exec, c)).editor ? (await must(exec, "cell.editor", { cell: text(c), kind: "none" }), text(c)) : text(c)),
+  // Pivot tables (pivot.ts): the app's configuration as JSON, {sourceRange,
+  // rowFields, colFields, valueField, aggFunction, outputCell, filters}.
+  CREATEPIVOT: async (exec, id, json) => {
+    const c = (typeof json === "string" ? JSON.parse(json) : json ?? {}) as Record<string, unknown>;
+    const list = (xs: unknown) => (Array.isArray(xs) ? xs.map(text).join(",") : "");
+    await must(exec, "pivot.create", {
+      id: text(id), source: text(c.sourceRange), value: text(c.valueField), agg: text(c.aggFunction), output: text(c.outputCell),
+      rows: list(c.rowFields), cols: list(c.colFields), filters: JSON.stringify(c.filters ?? {}),
+    });
+    return text(id);
+  },
+  UPDATEPIVOT: async (exec, id) => (await must(exec, "pivot.update", { id: text(id) }), text(id)),
+  DELETEPIVOT: async (exec, id) => (await must(exec, "pivot.delete", { id: text(id) }), text(id)),
+  GETPIVOT: async (exec, id) => {
+    const o = await exec("pivot.get", { id: text(id) });
+    return o.ok ? JSON.stringify(o.output) : "";
+  },
+  LISTPIVOTS: async (exec) => JSON.stringify((await must(exec, "pivot.list")).output),
+  // A configuration for CREATEPIVOT, its field lists as JSON arrays.
+  PIVOTCONFIG: (_, source, value, agg, output, rows, cols) => JSON.stringify({
+    sourceRange: text(source), valueField: text(value), aggFunction: text(agg).toUpperCase(), outputCell: text(output),
+    rowFields: rows ? JSON.parse(text(rows)) : [], colFields: cols ? JSON.parse(text(cols)) : [],
+  }),
   HIDEROW: async (exec, n) => (await must(exec, "rows.hide", { range: rowsOf(row(n, "HIDEROW")) }), "OK"),
   UNHIDEROW: async (exec, n) => (await must(exec, "rows.unhide", { range: rowsOf(row(n, "UNHIDEROW")) }), "OK"),
   HIDECOLUMN: async (exec, c) => (await must(exec, "columns.hide", { range: `${col(c, "HIDECOLUMN")}1` }), "OK"),
@@ -356,33 +378,19 @@ async function table(exec: Exec, name: string): Promise<Table | null> {
 }
 const tableNames = async (exec: Exec) => ((await must(exec, "table.list")).output as string[]).map((l) => l.split(" ")[0]);
 
-// The app's names with no command here yet, and what each would need.
-export const MISSING: Readonly<Record<string, string>> = {
-  CREATEPIVOT: "pivot tables",
-  UPDATEPIVOT: "pivot tables",
-  DELETEPIVOT: "pivot tables",
-  GETPIVOT: "pivot tables",
-  LISTPIVOTS: "pivot tables",
-  PIVOTCONFIG: "pivot tables",
-};
 
 type Fn = (...args: any[]) => unknown;
 
-// Every control function, for a script: those above, the missing ones
-// saying so, LISTCOMMANDS and BATCH_EXECUTE. `others` are the functions a
+// Every control function, for a script: those above, LISTCOMMANDS and
+// BATCH_EXECUTE. `others` are the functions a
 // script has besides (SETCELL, GETCELL, the range functions), which
 // LISTCOMMANDS lists and BATCH_EXECUTE calls too.
 export function controlFunctions(exec: Exec, others: Readonly<Record<string, Fn>>): Record<string, Fn> {
   const fns: Record<string, Fn> = {};
   for (const [name, fn] of Object.entries(CONTROL)) fns[name] = (...args: any[]) => fn(exec, ...args);
-  for (const [name, why] of Object.entries(MISSING)) fns[name] = () => {
-    throw new Error(`${name} is not in demo 18 yet: it needs ${why}`);
-  };
   const listed = [...new Set([...Object.keys(others), ...Object.keys(CONTROL), "LISTCOMMANDS", "BATCH_EXECUTE"])];
-  // LISTCOMMANDS() as the app's: a stem of the names a script may call;
-  // LISTCOMMANDS("missing"): those it may not yet, each with what it needs.
-  fns.LISTCOMMANDS = (which?: unknown) =>
-    text(which).toLowerCase() === "missing" ? stem(Object.entries(MISSING).map(([n, why]) => `${n}: ${why}`)) : stem(listed);
+  // LISTCOMMANDS() as the app's: a stem of the names a script may call.
+  fns.LISTCOMMANDS = () => stem(listed);
   // [{command, args}, ...]: each run in turn, by any of these names; what
   // each gave or why it failed, as the app's.
   fns.BATCH_EXECUTE = async (commands: unknown) => {
