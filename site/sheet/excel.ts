@@ -3,7 +3,7 @@
 // references and ranges name; it is rewritten token by token, so only
 // references change ($ fixes a column or row in a copy, and a reference
 // moved off the sheet, or into what was deleted, is #REF!).
-import { cellAddr, colName, span, splitKey } from "./address.ts";
+import { cellAddr, colName, sheetPrefix, span, splitKey } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { movedBy } from "./shift.ts";
 import type { Edit, Fixed } from "./shift.ts";
@@ -98,6 +98,26 @@ function rewrite(input: string, edit: Edit): string {
   return out + input.slice(from);
 }
 
+// A cell's input with its references to sheet `from` naming `to`. Token by
+// token, so text in strings stays as written.
+function renamed(input: string, from: string, to: string): string {
+  if (!input.startsWith("=")) return input;
+  let toks: Token[];
+  try {
+    toks = [...tokens(input.slice(1), 1)];
+  } catch (e) {
+    if (e instanceof FormulaError) return input;
+    throw e;
+  }
+  let out = "", at = 0;
+  for (const t of toks) {
+    if (t.kind !== "ref" || splitKey(t.name).sheet !== from) continue;
+    out += input.slice(at, t.at) + sheetPrefix(to) + t.text.slice(t.text.lastIndexOf("!") + 1);
+    at = t.at + t.text.length;
+  }
+  return out + input.slice(at);
+}
+
 // A cell's input as it reads copied `by` cells.
 export const moved = (input: string, by: Offset): string => movedBy(EXCEL, input, by);
 
@@ -135,6 +155,7 @@ export const EXCEL: Language = {
     }
   },
   rewrite,
+  renamed,
   functions: () => [...names(), ...SPECIAL_FORMS].sort(),
   references,
 };

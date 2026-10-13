@@ -85,6 +85,31 @@ eq("saved, the filter worked out again when opened: its rows not hidden by hand"
   [{ hiddenRows: [], hiddenCols: [], frozenRows: 0, rowHeights: [], colWidths: [[3, 120]], filter: { range: "A11:B13", column: "B", criterion: ">150" } }, [11], [[3, 120]]]);
 await new Commands(reopened).run("data.clearFilter");
 eq("and cleared", [reopened.hidden().rows, reopened.page(reopened.active)!.filter], [[], null]);
+
+// Sheets renamed, columns moved.
+eq("RENAMESHEET, SETSHEETNAME (the active sheet), MOVECOLUMNLEFT and RIGHT tell their commands", [
+  await told("RENAMESHEET", ["Costs", "Spend"]), await told("SETSHEETNAME", ["Main"], { "sheet.state": { name: "Sheet1" } }),
+  (await told("MOVECOLUMNLEFT", [2]))[1], (await told("MOVECOLUMNRIGHT", ["b"]))[1],
+], [
+  ["Spend", [["sheet.rename", { name: "Costs", to: "Spend" }]]], ["Main", [["sheet.state", {}], ["sheet.rename", { name: "Sheet1", to: "Main" }]]],
+  [["columns.move", { at: "B", way: "left" }]], [["columns.move", { at: "B", way: "right" }]],
+]);
+const wb3 = new Workbook();
+const cmds3 = new Commands(wb3);
+const fns3 = controlFunctions((id, params) => cmds3.execute(id, params), {});
+for (const [k, v] of [["A1", "1"], ["B1", "2"], ["C1", "=A1*10+B1"], ["C2", "=SUM(A1:B1)"]]) await cmds3.run(`cell.set cell=${k} input=${v}`);
+await cmds3.run("cell.comment cell=A1 text=first");
+await cmds3.run("columns.width range=A1 width=150");
+await fns3.MOVECOLUMNRIGHT("A");
+eq("MOVECOLUMNRIGHT: the column and the one beside it swap, what reads them follows, its comment and width go with it",
+  [["A1", "B1", "C1", "C2"].map((k) => wb3.sheet.input(k)), show(wb3.sheet.value("C1")), wb3.notes.get("B1").comment, wb3.colWidths()],
+  [["2", "1", "=B1*10+A1", "=SUM(A1:B1)"], "12", "first", [[1, 150]]]);
+await fns3.MOVECOLUMNLEFT(2);
+eq("MOVECOLUMNLEFT puts it back", ["A1", "B1", "C1"].map((k) => wb3.sheet.input(k)), ["1", "2", "=A1*10+B1"]);
+eq("not off either end", [await failed(() => fns3.MOVECOLUMNLEFT("A")), await failed(() => fns3.MOVECOLUMNRIGHT(10))],
+  ["A is the first column: it cannot move left", "J is the last column: it cannot move right"]);
+eq("SETSHEETNAME renames the active sheet, GETSHEETNAME reads it", [await fns3.SETSHEETNAME("Main"), await fns3.GETSHEETNAME(), await fns3.RENAMESHEET("main", "Data"), wb3.sheetNames()],
+  ["Main", "Main", "Data", ["Data"]]);
 // expect: ok EXPORT, IMPORT, EVALUATE, RECALCULATE and the setup script's three tell their commands
 // expect: ok EVALUATE: a formula worked out against the sheet, no cell set; an error says why
 // expect: ok RECALCULATE: how many formulas it worked out
@@ -103,3 +128,8 @@ eq("and cleared", [reopened.hidden().rows, reopened.page(reopened.active)!.filte
 // expect: ok the filter moves with an inserted row
 // expect: ok saved, the filter worked out again when opened: its rows not hidden by hand
 // expect: ok and cleared
+// expect: ok RENAMESHEET, SETSHEETNAME (the active sheet), MOVECOLUMNLEFT and RIGHT tell their commands
+// expect: ok MOVECOLUMNRIGHT: the column and the one beside it swap, what reads them follows, its comment and width go with it
+// expect: ok MOVECOLUMNLEFT puts it back
+// expect: ok not off either end
+// expect: ok SETSHEETNAME renames the active sheet, GETSHEETNAME reads it

@@ -702,6 +702,24 @@ main() {
             spec.assert_true(g.wait_cell("H", 7, "5"), "AUTOFILL down, H3:H4 repeated")
             spec.assert_true(g.wait_cell("H", 8, "6"), "to H8")
         }
+        spec.it("Rename sheet: what read it by its old name follows it; a column moved right with what reads it") callback {
+            g.command("sheet.add name=Costs")
+            g.command("cell.set cell=B2 input=5")
+            g.command("sheet.activate name=Sales")
+            g.enter("I1", "=Costs_B2 * 2")
+            spec.assert_true(g.wait_cell("I", 1, "10"), "Costs_B2 read")
+            g.command("sheet.activate name=Costs")
+            b.set_field_by("sheet", "Spend")
+            b.click("Rename sheet")
+            spec.assert_true(b.wait_for_console("sheet: Costs is now Spend"), "renamed")
+            spec.assert_true(b.wait_for_text("On Spend:"), "the active sheet named so")
+            g.command("cell.set cell=B2 input=6")
+            g.command("sheet.activate name=Sales")
+            spec.assert_true(g.wait_cell("I", 1, "12"), "Sales!I1 reads Spend_B2 now, and follows it")
+            g.script("LET r = MOVECOLUMNRIGHT('H'); SAY 'moved'")
+            spec.assert_true(g.wait_cell("I", 8, "6"), "H's cells now in I")
+            spec.assert_true(g.wait_cell("H", 1, "12"), "and I's in H, still reading Spend_B2")
+        }
     }
     return spec.run_summary(fw)
 }

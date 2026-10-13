@@ -29,8 +29,8 @@ import { CHART_KINDS } from "./charts.ts";
 import type { ChartKind } from "./charts.ts";
 import type { ChartSpec } from "./workbook.ts";
 import type { TableDef } from "./language.ts";
-import { deleted, inserted, movedBy, restructured } from "./shift.ts";
-import type { Scope } from "./shift.ts";
+import { deleted, inserted, movedBy, restructured, swapped } from "./shift.ts";
+import type { Edit, Scope } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
 import { distinctRows, secant, splitText } from "./whatif.ts";
 import { criterion } from "./functions.ts";
@@ -213,61 +213,69 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
     const at = axis === "row" ? Number(p.at) - 1 : columnOf(p.at);
     if (!Number.isInteger(at) || at < 0 || at >= (axis === "row" ? ROWS : COLS)) refuse(`${p.at} is not a ${axis === "row" ? "row" : "column"} on the sheet`);
     const n = countOf(p.count);
-    const here = wb.active.toUpperCase();
-    const editOf = (moves: Scope) => (how === "insert" ? inserted(axis, at, n, moves) : deleted(axis, at, n, moves));
-    const edit = editOf((sheet) => sheet === null || sheet === here);
-    const entries = restructured(wb.sheet.keys().map((k) => [k, wb.sheet.input(k)]), edit, wb.sheet.language);
-    const there = editOf((sheet) => sheet === here);
-    for (const page of wb.pages()) {
-      if (page.sheet === wb.sheet) continue;
-      const rewritten = page.sheet.keys().map((k): [string, string] => [k, page.sheet.language.rewrite(page.sheet.input(k), there)])
-        .filter(([k, input]) => input !== page.sheet.input(k));
-      if (rewritten.length) await page.sheet.setMany(rewritten);
-    }
-    wb.notes.remap((a) => edit.cell(a, { col: false, row: false }), (e) => wb.sheet.language.rewrite(`=${e}`, edit).slice(1));
-    const page = wb.page(wb.active)!, still = { col: false, row: false };
-    page.rules = page.rules.flatMap((r): CfRule[] => {
-      const to = edit.range(r.range[0], r.range[1], still, still);
-      return to ? [{ ...r, range: to }] : [];
-    });
-    page.charts = page.charts.flatMap((c): ChartSpec[] => {
-      const to = edit.range(c.range[0], c.range[1], still, still);
-      return to ? [{ ...c, range: to }] : [];
-    });
-    // Hidden rows (columns) move with the rest, and go with deleted ones.
-    const moved = (set: Set<number>, row: boolean) => new Set([...set].flatMap((i) => {
-      const to = edit.cell(row ? { col: 0, row: i } : { col: i, row: 0 }, still);
-      return to ? [row ? to.row : to.col] : [];
-    }));
-    if (axis === "row") page.hiddenRows = moved(page.hiddenRows, true); else page.hiddenCols = moved(page.hiddenCols, false);
-    if (page.filtered && axis === "row") page.filtered = moved(page.filtered, true);
-    page.merges = page.merges.flatMap((m): [Addr, Addr][] => {
-      const to = edit.range(m[0], m[1], still, still);
-      return to && keyOf(to[0]) !== keyOf(to[1]) ? [to] : [];
-    });
-    for (const t of wb.sheet.tables()) {
-      const to = edit.range(t.range[0], t.range[1], still, still);
-      await wb.sheet.defineTable(t.name, to ? { ...t, range: to } : null);
-    }
-    if (axis === "row") {
-      page.heights = new Map([...page.heights].flatMap(([row, h]): [number, number][] => {
-        const to = edit.cell({ col: 0, row }, still);
-        return to ? [[to.row, h]] : [];
-      }));
-    } else {
-      page.widths = new Map([...page.widths].flatMap(([col, w]): [number, number][] => {
-        const to = edit.cell({ col, row: 0 }, still);
-        return to ? [[to.col, w]] : [];
-      }));
-    }
-    if (page.filter) {
-      const r = edit.range(page.filter.range[0], page.filter.range[1], still, still), col = edit.cell({ col: page.filter.column, row: 0 }, still);
-      page.filter = r && col ? { ...page.filter, range: r, column: col.col } : null;
-      if (!page.filter) page.filtered = null;
-    }
+    const entries = await reshaped(wb, axis, (moves) => (how === "insert" ? inserted(axis, at, n, moves) : deleted(axis, at, n, moves)));
     const thing = `${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"}`;
     return setting(wb, entries, `${how === "insert" ? "inserted" : "deleted"} ${thing} at ${axis === "row" ? at + 1 : colName(at)}`);
   };
+}
+
+// The active sheet reshaped by a structural edit (rows or columns inserted,
+// deleted or swapped): the references to it on other sheets rewritten, and
+// its notes, rules, charts, hidden lines, merges, tables, heights or widths
+// and filter moved with its cells. Gives its cells' entries, for setting().
+async function reshaped(wb: Workbook, axis: "row" | "col", editOf: (moves: Scope) => Edit): Promise<[string, string][]> {
+  const here = wb.active.toUpperCase();
+  const edit = editOf((sheet) => sheet === null || sheet === here);
+  const entries = restructured(wb.sheet.keys().map((k) => [k, wb.sheet.input(k)]), edit, wb.sheet.language);
+  const there = editOf((sheet) => sheet === here);
+  for (const page of wb.pages()) {
+    if (page.sheet === wb.sheet) continue;
+    const rewritten = page.sheet.keys().map((k): [string, string] => [k, page.sheet.language.rewrite(page.sheet.input(k), there)])
+      .filter(([k, input]) => input !== page.sheet.input(k));
+    if (rewritten.length) await page.sheet.setMany(rewritten);
+  }
+  wb.notes.remap((a) => edit.cell(a, { col: false, row: false }), (e) => wb.sheet.language.rewrite(`=${e}`, edit).slice(1));
+  const page = wb.page(wb.active)!, still = { col: false, row: false };
+  page.rules = page.rules.flatMap((r): CfRule[] => {
+    const to = edit.range(r.range[0], r.range[1], still, still);
+    return to ? [{ ...r, range: to }] : [];
+  });
+  page.charts = page.charts.flatMap((c): ChartSpec[] => {
+    const to = edit.range(c.range[0], c.range[1], still, still);
+    return to ? [{ ...c, range: to }] : [];
+  });
+  // Hidden rows (columns) move with the rest, and go with deleted ones.
+  const moved = (set: Set<number>, row: boolean) => new Set([...set].flatMap((i) => {
+    const to = edit.cell(row ? { col: 0, row: i } : { col: i, row: 0 }, still);
+    return to ? [row ? to.row : to.col] : [];
+  }));
+  if (axis === "row") page.hiddenRows = moved(page.hiddenRows, true); else page.hiddenCols = moved(page.hiddenCols, false);
+  if (page.filtered && axis === "row") page.filtered = moved(page.filtered, true);
+  page.merges = page.merges.flatMap((m): [Addr, Addr][] => {
+    const to = edit.range(m[0], m[1], still, still);
+    return to && keyOf(to[0]) !== keyOf(to[1]) ? [to] : [];
+  });
+  for (const t of wb.sheet.tables()) {
+    const to = edit.range(t.range[0], t.range[1], still, still);
+    await wb.sheet.defineTable(t.name, to ? { ...t, range: to } : null);
+  }
+  if (axis === "row") {
+    page.heights = new Map([...page.heights].flatMap(([row, h]): [number, number][] => {
+      const to = edit.cell({ col: 0, row }, still);
+      return to ? [[to.row, h]] : [];
+    }));
+  } else {
+    page.widths = new Map([...page.widths].flatMap(([col, w]): [number, number][] => {
+      const to = edit.cell({ col, row: 0 }, still);
+      return to ? [[to.col, w]] : [];
+    }));
+  }
+  if (page.filter) {
+    const r = edit.range(page.filter.range[0], page.filter.range[1], still, still), col = edit.cell({ col: page.filter.column, row: 0 }, still);
+    page.filter = r && col ? { ...page.filter, range: r, column: col.col } : null;
+    if (!page.filter) page.filtered = null;
+  }
+  return entries;
 }
 
 // Fill down, right, up or left over a range (copy.ts), from its first
@@ -680,6 +688,19 @@ const SPECS: readonly Spec[] = [
   { id: "rows.delete", label: "Delete Sheet Rows", params: ["at"], optional: ["count"], journaled: true, run: restructure("delete", "row") },
   { id: "columns.insert", label: "Insert Sheet Columns", params: ["at"], optional: ["count"], journaled: true, run: restructure("insert", "col") },
   { id: "columns.delete", label: "Delete Sheet Columns", params: ["at"], optional: ["count"], journaled: true, run: restructure("delete", "col") },
+  {
+    // A column swapped with the one beside it, as the Tauri app moves one:
+    // its cells, what reads them, and its notes, width and the rest go too.
+    id: "columns.move", label: "Move Column", params: ["at", "way"], journaled: true,
+    run: async (wb, p) => {
+      const at = columnOf(p.at), way = p.way.toLowerCase();
+      if (way !== "left" && way !== "right") refuse(`${p.way} is not left or right`);
+      const to = way === "left" ? at - 1 : at + 1;
+      if (to < 0 || to >= COLS) refuse(`${colName(at)} is the ${way === "left" ? "first" : "last"} column: it cannot move ${way}`);
+      const entries = await reshaped(wb, "col", (moves) => swapped("col", at, to, moves));
+      return setting(wb, entries, `moved column ${colName(at)} ${way}`);
+    },
+  },
   { id: "data.sortAscending", label: "Sort A to Z", params: ["range", "by"], journaled: true, run: sort(true) },
   { id: "data.sortDescending", label: "Sort Z to A", params: ["range", "by"], journaled: true, run: sort(false) },
   {
@@ -1193,6 +1214,17 @@ const SPECS: readonly Spec[] = [
       const page = pageOf(wb, p.name), before = wb.sheet.keys();
       wb.activate(page.name);
       return changedBy(wb, shownKeys(wb, before), page.name);
+    },
+  },
+  {
+    // What read the sheet by its old name reads it by the new one.
+    id: "sheet.rename", label: "Rename Sheet", params: ["name", "to"], journaled: true,
+    run: async (wb, p) => {
+      const page = pageOf(wb, p.name), to = sheetNameOf(p.to);
+      if (wb.page(to) && wb.page(to) !== page) refuse(`${to} is a sheet already`);
+      const was = page.name, before = wb.sheet.keys();
+      await wb.rename(was, to);
+      return changedBy(wb, shownKeys(wb, before), `${was} is now ${to}`);
     },
   },
   {

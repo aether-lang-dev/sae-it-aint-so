@@ -93,7 +93,7 @@ eq("cell.about and sheet.state, the getters' commands", [(await cmds.run("cell.c
 eq("a script calls them by the app's names", [await script(`LET r = SETCELL("A1", 10); LET r = SETCELL("A2", 20); LET r = INSERTROW(2); LET r = HIDEROW(2)
 SAY GETCELL("A3") ISROWHIDDEN(2) ISROWHIDDEN(3); LET r = UNDO(); SAY CANUNDO() CANREDO(); LET n = GETSHEETNAMES(); SAY n.0 n.1`), said, wb.sheet.input("A3")],
   ["ran", ["20 1 0", "1 1", "1 Sheet1"], ""]);
-eq("a missing one stops the script, saying what it needs", await script(`LET r = RENAMESHEET("Sheet1", "Main")`), "RENAMESHEET is not in demo 18 yet: it needs sheet renaming (the plan's 8)");
+eq("a missing one stops the script, saying what it needs", await script(`LET r = CREATEPIVOT("p", "{}")`), "CREATEPIVOT is not in demo 18 yet: it needs pivot tables");
 eq("ADDRESS SPREADSHEET: each string REXX, RC and RESULT set; a failure RC 1", [await script(`ADDRESS SPREADSHEET
 'SETCELL("C1", "=A1*3")'
 SAY RC RESULT

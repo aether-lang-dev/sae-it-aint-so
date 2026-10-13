@@ -8,7 +8,7 @@
 // Another sheet's cell is a variable, Costs_B2 (the app's Sheet.A1 is a
 // RexxJS compound variable, so sae takes _), and its ranges are strings,
 // SUM_RANGE("Costs!B1:B3").
-import { addrOf, keyOf, parseRange, qualified, range } from "./address.ts";
+import { addrOf, keyOf, parseRange, qualified, range, sheetPrefix } from "./address.ts";
 import type { Env, Formula, Language, Names, Tables } from "./language.ts";
 import { aggregate, groupBy, pluck, queryOf, result, where } from "./query.ts";
 import type { Query } from "./query.ts";
@@ -391,6 +391,22 @@ export class RexxLanguage implements Language {
       const r = a && b ? edit.range(a, b, { col: !!fc1, row: !!fr1 }, { col: !!fc2, row: !!fr2 }) : null;
       return r ? `${p}${name(r[0], fc1, fr1)}:${name(r[1], fc2!, fr2!)}` : "#REF!";
     });
+  }
+
+  // References to sheet `from` naming `to`: Costs!B2 and 'Costs'!B2, in
+  // strings too, and the variable form Costs_B2, which cannot name a sheet
+  // with a space (null).
+  renamed(input: string, from: string, to: string): string | null {
+    if (!input.startsWith("=")) return input;
+    let impossible = false;
+    const out = input.replace(REWRITE, (text, prefix: string | undefined, bare: string | undefined, quoted: string | undefined) =>
+      prefix && (bare ?? quoted)!.toUpperCase() === from ? sheetPrefix(to) + text.slice(prefix.length) : text,
+    ).replace(/\b([A-Za-z]\w*)_([A-Za-z]+\d+)\b/g, (text, sheet: string, cell: string) => {
+      if (sheet.toUpperCase() !== from) return text;
+      if (!/^[A-Za-z]\w*$/.test(to)) impossible = true;
+      return `${to}_${cell}`;
+    });
+    return impossible ? null : out;
   }
 
   functions(): readonly string[] {

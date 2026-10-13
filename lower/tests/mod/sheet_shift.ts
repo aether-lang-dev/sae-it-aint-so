@@ -4,7 +4,7 @@
 // language; a range grows over an insertion and shrinks over a deletion; a
 // reference into what was deleted is #REF!.
 import { addrOf } from "./sheet/address.ts";
-import { deleted, inserted, restructured } from "./sheet/shift.ts";
+import { deleted, inserted, restructured, swapped } from "./sheet/shift.ts";
 import { EXCEL } from "./sheet/excel.ts";
 import { RexxLanguage } from "./sheet/rexx.ts";
 import { CellNotes } from "./sheet/notes.ts";
@@ -27,6 +27,9 @@ eq("pushed off the end of the sheet is #REF!", ex("=A20", inserted("row", 0, 1))
 eq("a constant is untouched", ex("A3", inserted("row", 0, 1)), "A3");
 eq("RexxJS formulas too, in strings as well", rexx.rewrite('=A3 + SUM_RANGE("A1:A5")', inserted("row", 2, 1)), '=A4 + SUM_RANGE("A1:A6")');
 eq("and a deletion there", rexx.rewrite('=A3 + SUM_RANGE("A1:A5")', deleted("row", 2, 1)), '=#REF! + SUM_RANGE("A1:A4")');
+eq("two columns swapped: references to each go to the other; a range over both stays; one over one end follows it",
+  [ex("=A1+B2+$C$1", swapped("col", 0, 1)), ex("=SUM(A1:B5)", swapped("col", 0, 1)), ex("=SUM(B1:C5)", swapped("col", 1, 2)), ex("=SUM(C1:D1)", swapped("col", 1, 2))],
+  ["=B1+A2+$C$1", "=SUM(A1:B5)", "=SUM(B1:C5)", "=SUM(B1:D1)"]);
 
 const inputs: [string, string][] = [["A1", "1"], ["A2", "2"], ["A3", "=A1+A2"], ["B3", "=SUM(A1:A2)"], ["A5", "=A3*10"]];
 eq("the cells move, their formulas rewritten; what moved away is cleared", restructured(inputs, inserted("row", 1, 1), EXCEL),
@@ -68,6 +71,7 @@ eq("rows and columns are counted from 0, as Addr is", addrOf("B3"), { col: 1, ro
 // expect: ok a constant is untouched
 // expect: ok RexxJS formulas too, in strings as well
 // expect: ok and a deletion there
+// expect: ok two columns swapped: references to each go to the other; a range over both stays; one over one end follows it
 // expect: ok the cells move, their formulas rewritten; what moved away is cleared
 // expect: ok a deleted row's cells go
 // expect: ok nothing is pushed off the sheet

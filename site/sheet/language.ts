@@ -49,6 +49,10 @@ export interface Language {
   // an edit (a copy, rows or columns inserted or deleted: shift.ts); one
   // whose cell is gone is #REF!.
   rewrite(input: string, edit: Edit): string;
+  // A cell's input with its references to sheet `from` (upper case, as a
+  // key has it) naming sheet `to` instead; null when one cannot be written
+  // so (RexxJS's Costs_B2 for a name with a space).
+  renamed(input: string, from: string, to: string): string | null;
   // The names of the functions a formula can call, for the page to list.
   functions(): readonly string[];
   // The cells and ranges a formula (what follows its '=') names, as written

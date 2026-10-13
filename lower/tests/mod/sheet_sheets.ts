@@ -5,6 +5,8 @@
 import { Commands } from "./sheet/commands.ts";
 import { Workbook } from "./sheet/workbook.ts";
 import { show } from "./sheet/format.ts";
+import { EXCEL } from "./sheet/excel.ts";
+import { RexxLanguage } from "./sheet/rexx.ts";
 import { eq } from "./lib/check.ts";
 
 const wb = new Workbook();
@@ -63,6 +65,35 @@ eq("the last sheet stays", await message("sheet.delete name=Sheet1"), "Sheet1 is
   for (const line of cmds.journal()) await replay.run(line);
   eq("the journal replays to the same workbook", [again.sheetNames(), show(again.sheet.value("A1")), show(again.sheet.value("A5"))], [["Sheet1"], "#REF!", "#REF!"]);
 }
+
+// Renaming a sheet: each language rewrites what names it, and only that.
+eq("Excel: references to the sheet, quoted or not, in ranges too, renamed; text and other sheets stay",
+  EXCEL.renamed(`=Costs!B2*2+'costs'!$B$3+SUM(Costs!B1:B3)&"Costs!B2"+Other!A1`, "COSTS", "My Costs"),
+  `='My Costs'!B2*2+'My Costs'!$B$3+SUM('My Costs'!B1:B3)&"Costs!B2"+Other!A1`);
+const rx = new RexxLanguage();
+eq("RexxJS: Costs_B2 and \"Costs!B1:B3\" renamed; a name with a space cannot be a variable's",
+  [rx.renamed('=Costs_B2 + SUM_RANGE("Costs!B1:B3") + costs_B1 + Other_A1', "COSTS", "Spend"), rx.renamed('=SUM_RANGE("Costs!B1:B3")', "COSTS", "My Costs"), rx.renamed("=Costs_B2", "COSTS", "My Costs")],
+  ['=Spend_B2 + SUM_RANGE("Spend!B1:B3") + Spend_B1 + Other_A1', `=SUM_RANGE("'My Costs'!B1:B3")`, null]);
+{
+  const w = new Workbook();
+  const c = new Commands(w);
+  await c.run("sheet.add name=Costs");
+  await c.run("cell.set cell=B2 input=5");
+  await c.run("sheet.activate name=Sheet1");
+  await c.run(`cell.set cell=A1 input="=Costs!B2*2"`);
+  eq("sheet.rename: what read the sheet reads it by its new name", [(await c.run("sheet.rename name=costs to=Spend")).message, w.sheetNames(), w.sheet.input("A1"), show(w.sheet.value("A1"))],
+    ["Costs is now Spend", ["Sheet1", "Spend"], "=Spend!B2*2", "10"]);
+  await c.run("sheet.activate name=Spend");
+  await c.run("cell.set cell=B2 input=7");
+  await c.run("sheet.activate name=Sheet1");
+  eq("and follows it", show(w.sheet.value("A1")), "14");
+  await c.run("formulas.use language=RexxJS");
+  await c.run(`cell.set cell=A2 input="=Spend_B2 + 1"`);
+  eq("refusals: a name taken, not a name, a RexxJS variable that cannot be written; nothing changed", [
+    (await c.run("sheet.rename name=Spend to=sheet1")).message, (await c.run("sheet.rename name=Spend to=a!b")).message,
+    (await c.run("sheet.rename name=Spend to=\"My Spend\"")).message, w.sheetNames(), w.sheet.input("A1"),
+  ], ["sheet1 is a sheet already", "a!b is not a sheet name: letters, digits, spaces or _", "Sheet1!A2 reads Spend as RexxJS writes it, and My Spend cannot be written so", ["Sheet1", "Spend"], "=Spend!B2*2"]);
+}
 // expect: ok a workbook starts with one sheet
 // expect: ok sheet.add adds one and makes it the active one
 // expect: ok sheet.activate
@@ -79,3 +110,8 @@ eq("the last sheet stays", await message("sheet.delete name=Sheet1"), "Sheet1 is
 // expect: ok sheet.delete: what read it is #REF!
 // expect: ok the last sheet stays
 // expect: ok the journal replays to the same workbook
+// expect: ok Excel: references to the sheet, quoted or not, in ranges too, renamed; text and other sheets stay
+// expect: ok RexxJS: Costs_B2 and "Costs!B1:B3" renamed; a name with a space cannot be a variable's
+// expect: ok sheet.rename: what read the sheet reads it by its new name
+// expect: ok and follows it
+// expect: ok refusals: a name taken, not a name, a RexxJS variable that cannot be written; nothing changed

@@ -70,7 +70,7 @@ export const CHART_W = 400, CHART_H = 240;
 // merged cells, rows set to a height (0-based row to px) and columns set to
 // a width (0-based column to px).
 export interface Page {
-  readonly name: string;
+  name: string;
   readonly sheet: Sheet;
   readonly notes: CellNotes;
   rules: CfRule[];
@@ -160,15 +160,18 @@ export class Workbook {
   }
 
   #make(name: string, language: Language): Page {
-    const upper = name.toUpperCase();
-    const context: Context = { name: upper, turns: this.#turns, value: (key) => this.#valueOf(key) };
+    // The page's name as it is now: a sheet can be renamed.
+    let page: Page | null = null;
+    const upper = () => (page?.name ?? name).toUpperCase();
+    const context: Context = { get name() { return upper(); }, turns: this.#turns, value: (key) => this.#valueOf(key) };
     const changed = (key: string) => {
-      let keys = this.#pending.get(upper);
-      if (!keys) this.#pending.set(upper, (keys = new Set()));
+      let keys = this.#pending.get(upper());
+      if (!keys) this.#pending.set(upper(), (keys = new Set()));
       keys.add(key);
     };
-    return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [], charts: [],
+    page = { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [], charts: [],
       hiddenRows: new Set(), hiddenCols: new Set(), filtered: null, filter: null, frozen: 0, merges: [], heights: new Map(), widths: new Map() };
+    return page;
   }
 
   // A cell on another sheet ("COSTS!B2"), or #REF! when there is no such sheet.
@@ -192,6 +195,22 @@ export class Workbook {
 
   // A sheet deleted (the one before it active, if it was); what read it
   // reads #REF!.
+  // A sheet renamed, and every formula that read it by its old name made
+  // to read it by the new one (in either language); what read a sheet of
+  // the new name is worked out again. Refused, changing nothing, when a
+  // reference cannot be written with the new name (RangeError).
+  async rename(from: string, to: string): Promise<void> {
+    const page = this.page(from)!, old = page.name.toUpperCase();
+    const plan: [Page, [string, string][]][] = this.#pages.map((p) => [p, p.sheet.keys().flatMap((k): [string, string][] => {
+      const input = p.sheet.input(k), out = p.sheet.language.renamed(input, old, to);
+      if (out === null) throw new RangeError(`${p.name}!${k} reads ${page.name} as ${p.sheet.language.name} writes it, and ${to} cannot be written so`);
+      return out === input ? [] : [[k, out]];
+    })]);
+    page.name = to;
+    for (const [p, entries] of plan) if (entries.length) await p.sheet.setMany(entries);
+    await this.#recalculate();
+  }
+
   async remove(name: string): Promise<void> {
     const at = this.#pages.findIndex((p) => p.name.toUpperCase() === name.toUpperCase());
     if (at < 0) return;

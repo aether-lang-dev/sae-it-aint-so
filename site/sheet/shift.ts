@@ -90,6 +90,24 @@ export function deleted(axis: Axis, at: number, n: number, moves: Scope = LOCAL)
   };
 }
 
+// Rows (or columns) `i` and `j` swapped: what was in each is in the other.
+// A range that holds both stays as it is; one that holds one of them goes
+// where that one goes, stretched or shrunk to keep its other end.
+export function swapped(axis: Axis, i: number, j: number, moves: Scope = LOCAL): Edit {
+  const swap = (k: number) => (k === i ? j : k === j ? i : k);
+  return {
+    cell: (a) => moved(a, axis, swap(along(a, axis))),
+    range: (a, b) => {
+      const lo = Math.min(along(a, axis), along(b, axis)), hi = Math.max(along(a, axis), along(b, axis));
+      if (lo <= Math.min(i, j) && hi >= Math.max(i, j)) return [a, b];
+      const x = swap(along(a, axis)), y = swap(along(b, axis)), first = along(a, axis) <= along(b, axis);
+      return [moved(a, axis, first ? Math.min(x, y) : Math.max(x, y)), moved(b, axis, first ? Math.max(x, y) : Math.min(x, y))];
+    },
+    deletes: () => false,
+    moves,
+  };
+}
+
 // A copy's rewrite of one input, in a language.
 export const movedBy = (language: Language, input: string, by: Offset): string =>
   by.cols === 0 && by.rows === 0 ? input : language.rewrite(input, byOffset(by));

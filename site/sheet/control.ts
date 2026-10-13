@@ -173,6 +173,12 @@ export const CONTROL: Readonly<Record<string, Control>> = {
     stem((await must(exec, "edit.find", { text: text(t), ...options(matchCase, wholeCell, inFormulas) })).output as string[]),
   REPLACE: async (exec, t, by, matchCase, wholeCell, inFormulas) =>
     (await must(exec, "edit.replace", { text: text(t), with: text(by), ...options(matchCase, wholeCell, inFormulas) })).output,
+  MOVECOLUMNLEFT: async (exec, c) => (await must(exec, "columns.move", { at: col(c, "MOVECOLUMNLEFT"), way: "left" }), ""),
+  MOVECOLUMNRIGHT: async (exec, c) => (await must(exec, "columns.move", { at: col(c, "MOVECOLUMNRIGHT"), way: "right" }), ""),
+  RENAMESHEET: async (exec, from, to) => (await must(exec, "sheet.rename", { name: text(from), to: text(to) }), text(to)),
+  // The app's SETSHEETNAME names its document, which it never shows; here
+  // it renames the active sheet, as GETSHEETNAME reads it.
+  SETSHEETNAME: async (exec, to) => (await must(exec, "sheet.rename", { name: (await state(exec)).name, to: text(to) }), text(to)),
   HIDEROW: async (exec, n) => (await must(exec, "rows.hide", { range: rowsOf(row(n, "HIDEROW")) }), "OK"),
   UNHIDEROW: async (exec, n) => (await must(exec, "rows.unhide", { range: rowsOf(row(n, "UNHIDEROW")) }), "OK"),
   HIDECOLUMN: async (exec, c) => (await must(exec, "columns.hide", { range: `${col(c, "HIDECOLUMN")}1` }), "OK"),
@@ -290,10 +296,6 @@ const table = (ts: readonly Table[], name: string) => {
 
 // The app's names with no command here yet, and what each would need.
 export const MISSING: Readonly<Record<string, string>> = {
-  SETSHEETNAME: "sheet renaming (the plan's 8)",
-  RENAMESHEET: "sheet renaming (the plan's 8)",
-  MOVECOLUMNLEFT: "moving columns",
-  MOVECOLUMNRIGHT: "moving columns",
   SETCELLEDITOR: "cell editors (a dropdown, a checkbox, a date in a cell)",
   GETCELLEDITOR: "cell editors",
   REMOVECELLEDITOR: "cell editors",

@@ -33,6 +33,9 @@ export function splitKey(key: string): { sheet: string | null; cell: string } {
 export const qualified = (sheet: string, cell: string): string => `${sheet.toUpperCase()}!${cell}`;
 
 // A key's cell, wherever its sheet: "COSTS!B2" and "B2" are both B2.
+// A sheet's name as a reference written in a formula starts with it:
+// Costs!, 'My Costs'!.
+export const sheetPrefix = (name: string): string => (/^[A-Za-z_]\w*$/.test(name) ? `${name}!` : `'${name}'!`);
 export const cellAddr = (key: string): Addr | null => addrOf(splitKey(key).cell);
 
 // The keys from one corner to another (`to` on `from`'s sheet), and how

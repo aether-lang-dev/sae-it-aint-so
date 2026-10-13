@@ -358,7 +358,7 @@ summary.
   - `sheet_notes` (18): number formats and styles in each dialect, notes,
     the formatted sample read, its ledger worked out, and its conditional
     styles evaluated in RexxJS by the app's style functions.
-  - `sheet_shift` (19): references under each edit in both languages
+  - `sheet_shift` (20): references under each edit in both languages
     (ranges growing and shrinking, `#REF!`), a sheet's cells restructured,
     notes and conditional styles following, and one undo through a Sheet.
   - `sheet_sortfind` (14): sort order (numbers, text, empty; stable), rows
@@ -374,7 +374,7 @@ summary.
   - `sheet_validation` (16): each kind of rule and its limits, stop and
     warn, on create and on update, refusals, a paste got past and
     circled, rules moving with rows, cleared.
-  - `sheet_sheets` (16): sheets added, activated and deleted by command,
+  - `sheet_sheets` (21): sheets added, activated and deleted by command,
     and refused; Excel and RexxJS formulas reading another sheet and
     following it; `#REF!` for a sheet not there; copies, and rows inserted
     here and there; the journal replayed.
@@ -445,12 +445,13 @@ summary.
     (by a header row or named columns), read by TABLE in any case,
     refused, moved with an inserted row, saved and read back, deleted; and
     a script's GROUP_BY the sheet's.
-  - `sheet_control_more` (18 so far): the functions brought in after the
+  - `sheet_control_more` (23 so far): the functions brought in after the
     first 64, stubbed then through a Workbook: the file's JSON out and in,
     EVALUATE and RECALCULATE, the setup script kept, run and failing, the
     two batches; fills up and left, AUTOFILL each way with its source
     repeated; column widths kept, moved and saved; the filter kept, moved,
-    saved, worked out again on opening, cleared.
+    saved, worked out again on opening, cleared; sheets renamed; columns
+    moved with their notes and widths, and not off either end.
   - `sheet_control` (17): each control function against a stubbed `exec`
     (the command it tells and its parameters, what it gives from the
     answer, arguments as the app takes them, refusals); every name in the
@@ -471,7 +472,7 @@ summary.
   - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 46 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 47 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -521,7 +522,9 @@ summary.
     with RC and RESULT, HIDECOLUMN and the getters by name, a currency
     format drawn, and a missing one's message;
   - SETCOLWIDTH drawn on the grid, and AUTOFILL repeating a two-cell
-    source.
+    source;
+  - Rename sheet, a RexxJS formula on another sheet following it, and a
+    column moved right with what reads it.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -731,9 +734,18 @@ each with checks in `sheet_control_more`:
   it, so widths are saved and journaled), GETFILTERCRITERIA (the page
   keeps its `filter`, saved as `view.filter` and worked out again when
   the file opens, moved with rows and columns);
+- done: RENAMESHEET and SETSHEETNAME (`sheet.rename name= to=`, and a
+  Rename sheet button: every formula in either language that named the
+  sheet names it anew, which the app's own rename leaves as a TODO;
+  refused, changing nothing, when a RexxJS `Costs_B2` would need a name
+  with a space; SETSHEETNAME renames the active sheet, since the app's
+  names a document it never shows), MOVECOLUMNLEFT and MOVECOLUMNRIGHT
+  (`columns.move at= way=`, a swap as the app's, through the same
+  reshaping as inserting and deleting: references, notes, widths, rules,
+  merges, tables and the filter go with the cells);
 - still `MISSING` (each refusing with what it needs, listed by
-  `LISTCOMMANDS('missing')`): sheet renaming, moving columns, cell
-  editors, auto IDs, table metadata, the table sort cycle, pivots.
+  `LISTCOMMANDS('missing')`): cell editors, auto IDs, table metadata, the
+  table sort cycle, pivots.
 
 The app's `src/spreadsheet-control-functions.js` has about 100 control
 functions (SETCELL, INSERTROW, SORTRANGE, MERGECELLS, FREEZEPANES, ...).
@@ -797,11 +809,11 @@ for a LAMBDA in the Name Manager, and so recursion), TAKE, DROP,
 CHOOSECOLS, VSTACK, HSTACK, and a text batch (TEXT, TEXTBEFORE, TEXTAFTER,
 TEXTSPLIT).
 
-### 8. Sheets renamed and moved, names for the workbook
+### 8. Sheets moved, names for the workbook
 
-A rename rewrites what reads the sheet (`Costs!B2` in either language);
-moving a sheet reorders the tabs; named ranges scoped to the workbook as
-well as to a sheet.
+Renaming is done (`sheet.rename`, above). Still to come: moving a sheet
+reorders the tabs; named ranges scoped to the workbook as well as to a
+sheet.
 
 ### 9. Real files in app mode, and the system clipboard
 
