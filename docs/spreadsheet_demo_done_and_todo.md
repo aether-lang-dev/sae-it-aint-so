@@ -328,7 +328,8 @@ in `site/sheet/` (and the generated RexxJS bundle):
 | `sortfind.ts` | Sorting a range by a column (and where each cell went, for notes), find and replace |
 | `commands.ts` | The seam: the catalogue of commands, the command line, the journal, scripts |
 | `workbook.ts` | The sheets (each a Sheet and its notes), the active one, both languages, the file's name and setup script, the clipboard, conditional styles; `settle()` passes changes between sheets; what a cell shows, its style, its status line |
-| `script.ts` | RexxJS scripts over the commands: ADDRESS SHEET, SETCELL, GETCELL |
+| `script.ts` | RexxJS scripts over the commands: ADDRESS SHEET, SETCELL, GETCELL, the app's control functions, and ADDRESS SPREADSHEET (each string REXX, as the app's control bus runs it) |
+| `control.ts` | The Tauri app's control functions by its names (INSERTROW, SETFORMAT, GETSHEETNAMES ...), each over an `exec` of demo 18's commands; `MISSING`, those with no command yet and what each needs; LISTCOMMANDS |
 | `audit.ts` | The formula printer, and Evaluate Formula's steps |
 | `copy.ts` | A formula moved (its references rewritten token by token, so the rest stays as typed); copy as tab-separated text; paste, moving formulas when the text came from the sheet; fill down and right. Gives `[key, input]` pairs for `Sheet.setMany` |
 
@@ -444,6 +445,15 @@ summary.
     (by a header row or named columns), read by TABLE in any case,
     refused, moved with an inserted row, saved and read back, deleted; and
     a script's GROUP_BY the sheet's.
+  - `sheet_control` (17): each control function against a stubbed `exec`
+    (the command it tells and its parameters, what it gives from the
+    answer, arguments as the app takes them, refusals); every name in the
+    app's LISTCOMMANDS here, missing or a script's own; LISTCOMMANDS; then
+    through a Workbook (`cell.about`, `sheet.state`, a script by the app's
+    names, a missing one, ADDRESS SPREADSHEET's RC and RESULT); and the
+    app's `test-spreadsheet-address.rexx` (in `lower/tests/mod/lib/`),
+    unchanged but for its ADDRESS line, every command RC 0, its cells and
+    formats as it says.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
@@ -455,7 +465,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 44 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 45 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -500,7 +510,10 @@ summary.
     the focus back in the editor, entered;
   - the query functions: a sheet added, RexxJS formulas, data set by a
     script, a table defined from the command bar, `TABLE |> GROUP_BY |>
-    SUM` spilled and `WHERE |> COUNT`, both following an edit.
+    SUM` spilled and `WHERE |> COUNT`, both following an edit;
+  - the app's control functions in a script: ADDRESS SPREADSHEET strings
+    with RC and RESULT, HIDECOLUMN and the getters by name, a currency
+    format drawn, LISTCOMMANDS('missing'), and a missing one's message.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -666,7 +679,40 @@ Still to do here:
 - A panel for tables (today they are made from the command bar or a
   script), and outlining a table's range on the grid.
 
-### 2. The control-function name table (in progress)
+### 2. The control-function name table (done, but for the missing names)
+
+What landed (`sheet_control`, and the last `it` in `spec_sheet`):
+
+- `site/sheet/control.ts`: 64 of the app's names over demo 18's commands,
+  reached only through `exec(id, params)` (as a panel reaches them); what
+  each gives back is what the app's gives ('OK', the content set, 1 or 0,
+  a stem).
+- Two read-only commands for the getters: `cell.about cell=` (value,
+  input, format, comment, wrap, merged range, validation rule) and
+  `sheet.state` (name, sheets, hidden rows and columns, frozen rows, row
+  heights, can undo or redo). `edit.replace` now outputs its count.
+- `script.ts`: every script has the control functions, and
+  `ADDRESS SPREADSHEET` runs each string it is sent as REXX on an
+  interpreter of its own, setting RC and RESULT, as the app's control bus
+  does. SETCELL gives back what it set, as the app's does.
+- The app's own `test-spreadsheet-address.rexx` runs unchanged but for its
+  `ADDRESS "http://..." AUTH ... AS SPREADSHEET` line (an outside process
+  is step 3), on a sheet set to RexxJS formulas. Paul, sole copyright
+  holder of the app (AGPL), relicensed that script to MIT for sae
+  (2026-10-13); its header says so.
+
+Differences from the app worth knowing: APPLYROWFILTER is demo 18's
+AutoFilter over the whole sheet (the first row kept as headers, the
+criterion read as COUNTIF reads one, where the app matches a substring in
+every row); FREEZEPANES refuses columns; GETROWHEIGHT is 0 for the grid's
+own height; SETCELLVALIDATION's text pattern is refused.
+
+Still missing (`MISSING` in `control.ts`, listed by
+`LISTCOMMANDS('missing')`, each refusing with what it needs): BATCH_*,
+EXPORT and IMPORT, sheet renaming, EVALUATE and RECALCULATE, the setup
+script's three, column widths, GETFILTERCRITERIA, moving columns, FILLUP,
+FILLLEFT, AUTOFILL, cell editors, auto IDs, table metadata, the table sort
+cycle, pivots.
 
 The app's `src/spreadsheet-control-functions.js` has about 100 control
 functions (SETCELL, INSERTROW, SORTRANGE, MERGECELLS, FREEZEPANES, ...).
@@ -757,17 +803,17 @@ is `src/spreadsheet-model.js`, its control functions
 2. ~~Saving and opening~~ (done, through `storage`; CSV in a textarea).
    Still to come: `files` in app mode (a `.json` or `.rexxsheet` the app
    can open too, and a `.csv`).
-3. **The query functions**: `RANGE("A1:C9") |> WHERE("price > 10") |>
-   GROUP_BY("region")`, PLUCK, SUM, AVG, COUNT, RESULT and TABLE over a
-   table's metadata (the app evaluates WHERE's condition with JavaScript's
-   `eval`; here it would be the sheet's own language).
+3. ~~The query functions~~ (done: RANGE, TABLE, WHERE in RexxJS, PLUCK,
+   GROUP_BY, SUM, AVG, COUNT, RESULT). Still to come: structured
+   references in Excel formulas, table metadata.
 4. ~~Hide rows and columns, freeze panes, text wrapping, conditional
     formatting, data validation~~ (done; freezing columns at run time
     needs aether-ui). Still to come: validation by pattern, and **auto
     IDs**.
-5. **The control functions** (SETCELL, GETCELL and the rest) in RexxJS
-    formulas and the setup script, and a **control bus** for other apps
-    (the app's is HTTP or postMessage; sae's would be a page service).
+5. ~~The control functions~~ by the app's names in scripts, and ADDRESS
+    SPREADSHEET (done; the missing ones are listed above). Still to come:
+    a **control bus** for other apps (the app's is HTTP or postMessage;
+    sae's would be a page service): the To do's 3.
 6. ~~Charts~~ of a range in `vg` (done: bar, line, pie, sparklines). Still
    to come: the app's chart scripts (they drive Chart.js), more kinds
    (area, scatter, stacked), and axis titles.

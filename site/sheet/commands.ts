@@ -8,7 +8,7 @@
 // script.ts), and the specs, headless and in the browser (the page's
 // command bar). The commands that change the workbook are journaled as
 // command lines, which replay.
-import { COLS, ROWS, colName, keyOf, parseRange, range, splitKey } from "./address.ts";
+import { COLS, ROWS, cellAddr, colName, keyOf, parseRange, range, splitKey } from "./address.ts";
 import { evaluationSteps } from "./audit.ts";
 import type { Addr } from "./address.ts";
 import { copied, filled, pasted } from "./copy.ts";
@@ -406,6 +406,20 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
+    // All a script may ask of a cell (control.ts's GETFORMAT, GETCOMMENT,
+    // GETMERGEDRANGE and the rest read it).
+    id: "cell.about", label: "About a cell", params: ["cell"], journaled: false,
+    run: async (wb, p) => {
+      const key = cellOf(p.cell), note = wb.notes.get(key), at = cellAddr(key)!;
+      const merge = wb.page(wb.active)!.merges.find((m) => overlap(m, [at, at]));
+      const about = {
+        cell: key, value: scripted(wb.sheet.value(key)), input: wb.sheet.input(key), format: note.format ?? "", comment: note.comment ?? "",
+        wrap: note.look?.wrap ? 1 : 0, merged: merge ? rangeName(merge) : "", validation: note.validation ?? null,
+      };
+      return { ok: true, message: `${key}: ${JSON.stringify(about)}`, changed: [], output: about };
+    },
+  },
+  {
     id: "cell.comment", label: "Comment", params: ["cell", "text"], journaled: true,
     run: async (wb, p) => {
       const key = cellOf(p.cell);
@@ -618,7 +632,10 @@ const SPECS: readonly Spec[] = [
   },
   {
     id: "edit.replace", label: "Replace All", params: ["text", "with"], optional: FIND_OPTIONS, journaled: true,
-    run: (wb, p) => setting(wb, replaced(wb.sheet, p.text, p.with, findOptions(p)), `replaced ${p.text}`),
+    run: async (wb, p) => {
+      const entries = replaced(wb.sheet, p.text, p.with, findOptions(p));
+      return { ...await setting(wb, entries, `replaced ${p.text}`), output: entries.length };
+    },
   },
   { id: "rows.insert", label: "Insert Sheet Rows", params: ["at"], optional: ["count"], journaled: true, run: restructure("insert", "row") },
   { id: "rows.delete", label: "Delete Sheet Rows", params: ["at"], optional: ["count"], journaled: true, run: restructure("delete", "row") },
@@ -1070,6 +1087,20 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
+    // All a script may ask of the active sheet, rows counted from 1 and
+    // columns by letter (control.ts's ISROWHIDDEN, GETSHEETNAMES, CANUNDO ...).
+    id: "sheet.state", label: "About the sheet", params: [], journaled: false,
+    run: async (wb) => {
+      const hidden = wb.hidden();
+      const state = {
+        name: wb.active, sheets: wb.sheetNames(), hiddenRows: hidden.rows.map((r) => r + 1), hiddenCols: hidden.cols.map(colName),
+        frozenRows: wb.frozenRows(), rowHeights: wb.rowHeights().map(([r, h]) => [r + 1, h]),
+        canUndo: wb.sheet.canUndo ? 1 : 0, canRedo: wb.sheet.canRedo ? 1 : 0,
+      };
+      return { ok: true, message: JSON.stringify(state), changed: [], output: state };
+    },
+  },
+  {
     id: "sheet.activate", label: "Go to a sheet", params: ["name"], journaled: true,
     run: async (wb, p) => {
       const page = pageOf(wb, p.name), before = wb.sheet.keys();
@@ -1217,6 +1248,7 @@ export class Commands {
     const sheet = this.#wb.sheet;
     return runScript(text, {
       run: (line) => this.run(line),
+      execute: (id, params) => this.execute(id, params),
       set: (cell, input) => this.execute("cell.set", { cell, input }),
       get: (cell) => scripted(sheet.value(cell)),
     }, say);
