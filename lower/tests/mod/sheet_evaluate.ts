@@ -19,7 +19,7 @@ const why = (src: string): string => {
 };
 
 eq("arithmetic", [ev("1+2*3"), ev("2^10"), ev("7/2"), ev("-A1"), ev("10-A2-A1")], ["7", "1024", "3.5", "-2", "5"]);
-eq("an empty cell is 0, or ''", [ev("Z1"), ev("C9+1"), ev(`C9&"x"`)], ["#REF!", "1", "x"]);
+eq("an empty cell is 0, or ''", [ev("AA1"), ev("C9+1"), ev(`C9&"x"`)], ["#REF!", "1", "x"]);
 eq("numeric text and TRUE count as numbers", [ev("A3*2"), ev("A5+1")], ["8", "2"]);
 eq("& joins, numbers as they read", [ev(`A1&"-"&A4`), ev(`1/4&""`)], ["2-pears", "0.25"]);
 eq("comparisons give TRUE or FALSE", [ev("A1<A2"), ev("A1=2"), ev(`A4="PEARS"`), ev(`"a"<"b"`), ev("A1<>2")], ["TRUE", "TRUE", "TRUE", "TRUE", "FALSE"]);
@@ -37,7 +37,7 @@ eq("text where a number goes", why("A4*2"), "#VALUE! 'pears' is not a number");
 eq("an error flows through what reads it", [why("B1+1"), why("SUM(A1:B1)"), why("B1")], [
   "#DIV/0! divide by zero", "#DIV/0! divide by zero", "#DIV/0! divide by zero",
 ]);
-eq("off the sheet", [why("K1"), why("SUM(A1:K2)")], ["#REF! K1 is not on the sheet", "#REF! K2 is not on the sheet"]);
+eq("off the sheet", [why("AA1"), why("SUM(A1:AA2)")], ["#REF! AA1 is not on the sheet", "#REF! AA2 is not on the sheet"]);
 eq("an error written in a formula is that error", [why("#REF!+1"), ev("IFERROR(#N/A, 0)")], ["#REF! a reference moved off the sheet", "0"]);
 eq("no such function", why("NOPE(1)"), "#NAME? no function NOPE");
 eq("a range in arithmetic is worked out cell by cell (a dynamic array: sheet_arrays)", (() => {
@@ -48,7 +48,13 @@ eq("wrong argument counts", [why("ABS(1, 2)"), why("ROUND(1, 2, 3)"), why("IF(1)
   "#VALUE! ABS takes 1 value", "#VALUE! ROUND takes 1 or 2 values", "#VALUE! IF takes 2 or 3 values",
   "#VALUE! SUM takes at least 1 value", "#VALUE! PI takes 0 values",
 ]);
-eq("a range where one value goes, by argument", why("ROUND(A1:A2, 1)"), "#VALUE! argument 1 is a range where one value goes");
+const lifted = (src: string) => {
+  const v = evaluate(parse(src), env);
+  return isArray(v) ? [v.rows, v.cols, v.values.map((x) => show(x))] : show(v);
+};
+eq("a range where one value goes is worked out a cell at a time; ranges for two are paired; an error stays in its cell",
+  [lifted("ROUND(A1:A2/3, 1)"), lifted("LEFT(A4, SEQUENCE(1, 3))"), lifted("REPT(\"x\", A1:A2)"), lifted("ABS(A1:B1)")],
+  [[2, 1, ["0.7", "1"]], [1, 3, ["p", "pe", "pea"]], [2, 1, ["xx", "xxx"]], [1, 2, ["2", "#DIV/0!"]]]);
 eq("an overflow is not a number", why("10^400"), "#VALUE! the result is not a finite number");
 eq("AVERAGE of nothing", why("AVERAGE(C1:C2)"), "#DIV/0! AVERAGE of no numbers");
 
@@ -80,7 +86,7 @@ eq("describe an error says why", describe("C1", "=1/0", new CellError("#DIV/0!",
 // expect: ok no such function
 // expect: ok a range in arithmetic is worked out cell by cell (a dynamic array: sheet_arrays)
 // expect: ok wrong argument counts
-// expect: ok a range where one value goes, by argument
+// expect: ok a range where one value goes is worked out a cell at a time; ranges for two are paired; an error stays in its cell
 // expect: ok an overflow is not a number
 // expect: ok AVERAGE of nothing
 // expect: ok coercions

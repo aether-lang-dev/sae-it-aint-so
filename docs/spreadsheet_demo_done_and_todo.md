@@ -10,7 +10,8 @@ features are coming over one by one ("From the Tauri spreadsheet", below).
 
 ## What it is
 
-A 10 x 20 sheet (A1 to J20) on `ui.datagrid`. You type into a cell, or into
+A 26 x 100 sheet (A1 to Z100, as the Tauri app's) on `ui.datagrid`, 25
+rows by 10 columns on screen at once. You type into a cell, or into
 the formula bar above it; formulas start with `=`; edits ripple to every
 cell that reads the changed one.
 
@@ -38,10 +39,20 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
 - Ctrl+D fills down: each column's top cell into the cells below it. Ctrl+R
   fills right. A selection one row tall (one column wide) fills from the
   row above (the column to its left), as a spreadsheet's does.
-- Ctrl+C copies the selection and Ctrl+V pastes it at the selected cell.
+- Ctrl+C copies the selection and Ctrl+V pastes it at the selected cell,
+  or into each part of a selection that is a multiple of it (a cell copied
+  into every cell of a range).
   Relative references move by the distance (`=B2*2` copied one down is
   `=B3*2`), `$` fixes a column, a row or both (`=SUM($A$1:A1)` is a
   running total), and a reference moved off the sheet becomes `#REF!`.
+- Ctrl+X cuts: the next paste on that sheet moves the cells, as a
+  spreadsheet's does. Their formulas keep reading what they read (a
+  reference into what moved goes with it, `$` or not), what reads them
+  follows, here and on other sheets, their formats and comments go with
+  them, and what read a cell they landed on is `#REF!`. One undo.
+- Ctrl+arrows go to the edge of the data: the last cell of a run of cells
+  showing something, or the next one that does, or the sheet's edge
+  (Ctrl+Shift extends the selection). The datagrid's own keys.
   Only references change; the rest of a formula is kept as typed. The
   clipboard is the page's own: there is no system clipboard for pages yet.
 - Delete or BackSpace clears it. In the formula bar they are the field's.
@@ -236,8 +247,24 @@ fields under the formula bar:
   LET's values sees the names before it, an inner name hides an outer
   one, a LAMBDA's body sees the names where it was written, and it is
   called at once (`LAMBDA(x, x*2)(5)`) or through a name. A formula that
-  comes to a LAMBDA is `#CALC!`. (Named LAMBDAs in the Name Manager, and
-  so recursion, are still to come.)
+  comes to a LAMBDA is `#CALC!`. A name can be a formula's (the names
+  bar's "refers to", `names.define formula=`): a named LAMBDA,
+  `=DOUBLE(A1)`, passed as a function too (`=MAP(A1:A3, DOUBLE)`), and
+  one can call itself (`FACT = LAMBDA(n, IF(n<2, 1, n*FACT(n-1)))`),
+  `#NUM!` past 200 calls deep. It is parsed when first worked out, reads
+  what its body reads, and is saved and undone with the rest.
+- A function given a range where it takes one value is worked out once
+  for each of the range's cells, as Excel's are: `=UPPER(A1:A3)` spills
+  three values, `=LEFT(A1:A3, B1:B3)` pairs them (a row and a column
+  make a grid), an error stays in its cell. Which arguments take one
+  value is each function's own to say; SUM, INDEX and the rest that take
+  a range are untouched.
+- Shaping arrays: TAKE, DROP, CHOOSEROWS, CHOOSECOLS, VSTACK, HSTACK
+  (`#N/A` where one runs short), TOCOL, TOROW, WRAPROWS, WRAPCOLS,
+  EXPAND. Text: TEXT (Excel's number formats), TEXTBEFORE, TEXTAFTER
+  (any of several delimiters, from the end, any case, the end as one,
+  if_not_found) and TEXTSPLIT (columns and rows, empty pieces dropped,
+  padded).
 - Dynamic arrays, as Excel 365 has them. A formula may come to an array:
   a range, an operator over ranges cell by cell (`=A1:A3*2`; a row or a
   column broadcast across the other, `#N/A` where one runs out), IF over
@@ -497,7 +524,15 @@ summary.
   - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 50 tests, on GTK4
+  - `sheet_more` (26): functions over a range, paired and broadcast;
+    each new array and text function, its edges and refusals; named
+    LAMBDAs: called, passed to MAP, redefined, recursive and too deep,
+    reading cells, listed, refused, deleted, undone, saved and opened.
+  - `sheet_cut` (14): paste into a range (each part of it, or once); cut
+    and paste: the cells and what reads them moved, here and on another
+    sheet, `#REF!` for what was landed on, notes with them, one undo, and
+    the refusals.
+- **In the browser** (`tests/run_all.sh spec_sheet`, 52 tests, on GTK4
   under Xvfb and on macOS):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -506,7 +541,9 @@ summary.
   - Ctrl+D and Ctrl+R; Ctrl+C and Ctrl+V moving `=$B$2+C2` to
     `=$B$2+D4`; Delete over a selection, and not while the formula field
     has the focus; Ctrl+Z, Undo and Redo, and Ctrl+Z taking back a merge
-    and a hidden column; and Clear all;
+    and a hidden column; Ctrl+X and Ctrl+V moving cells and what reads
+    them, Ctrl+V into a selection, Ctrl+Down and Ctrl+Up; a named LAMBDA
+    from the names bar, TEXTSPLIT spilled and UPPER over it; and Clear all;
   - the app's budget in RexxJS formulas (its setup script's TAX_RATE, a
     comment), RexxJS's `||`, `|>` and `>`, an error's reason, and the
     setting switched to Excel and back;
@@ -871,26 +908,32 @@ a sheet, Circle Invalid, running the setup script, and opening a file
 Still to come: a script as one step (each command it runs is one now), and
 undo labels ("Undo Merge Cells").
 
-### 5. A bigger sheet
+### 5. A bigger sheet (done, 2026-10-13)
 
-The app's sheets are 26 x 100. `address.ts` allows columns A to J and two
-digit rows: AA-style columns and larger `COLS`/`ROWS` are its regexes and
-constants, then the datagrid's size in `view/grid.ts` (it is virtualised,
-at most 4,000 cells shown) and anything that loops over every cell.
+26 x 100, as the Tauri app's (`address.ts`'s `COLS` and `ROWS`).
+Addresses take up to three letters and any row (`colName`, `colOf`), so
+a larger sheet is those two numbers alone; the grid shows 20 x 10 at a
+time and scrolls over the rest. Ctrl+arrows go to the edge of the data:
+aether-ui's datagrid does it for every grid, from the text its cells show.
 
-### 6. Cut, and paste over a larger selection
+### 6. Cut, and paste over a larger selection (done, 2026-10-13)
 
-Ctrl+X (a copy, then a clear of the source on paste) and one copied cell
-pasted into each cell of a selection: both small, in `copy.ts` and
-`commands.ts`.
+`edit.cut` marks the copy as cut; the next `edit.paste` on that sheet is a
+structural edit (`shift.ts`'s `blockMoved`, through `reshaped`, as rows
+inserted are): Excel's move, not a copy and a clear. A cut pasted on
+another sheet is refused for now. `edit.paste`'s `at` can be a range: a
+multiple of the copy's size each way is filled part by part. Still to
+come: the same for Paste Special, and a marquee round what was cut.
 
-### 7. More functions
+### 7. More functions (done, 2026-10-13)
 
-Scalar functions lifted over arrays (`UPPER(A1:A3)` is `#VALUE!` today: a
-lift in `evaluate.ts`'s call, as operators have), named LAMBDAs (a name
-for a LAMBDA in the Name Manager, and so recursion), TAKE, DROP,
-CHOOSECOLS, VSTACK, HSTACK, and a text batch (TEXT, TEXTBEFORE, TEXTAFTER,
-TEXTSPLIT).
+Functions lifted over ranges (`functions.ts`'s `lifted`: `val()` says
+which argument wanted one value), named LAMBDAs (`Sheet`'s named formulas,
+a `named` Expr parsed when first worked out), TAKE, DROP, CHOOSEROWS,
+CHOOSECOLS, VSTACK, HSTACK, TOCOL, TOROW, WRAPROWS, WRAPCOLS, EXPAND, TEXT,
+TEXTBEFORE, TEXTAFTER and TEXTSPLIT. Still to come: array constants
+(`{1,2;3,4}`, which the lexer does not read yet), and named LAMBDAs in
+RexxJS formulas (they are Excel's).
 
 ### 8. Sheets moved, names for the workbook
 
@@ -951,20 +994,16 @@ fields for CSV and RexxJS scripts.
    API for pages: a page service with a permission, like `files`. Text
    pasted from elsewhere would go through `pasted()` with no `from`, so its
    formulas are taken as written.
-2. **Cut, and paste over a larger selection.** Ctrl+X (a copy, then a
-   clear of the source on paste) and a one-cell copy pasted over a range
-   (repeated into each cell) are both small, in `copy.ts`.
-3. **A bigger sheet.** The app's sheets are 26 x 100. The grid is
-   virtualised (4,000 cells shown at once), but `address.ts` allows only columns A to J and two-digit rows. AA-style
-   columns and larger limits are the address regexes plus `COLS`/`ROWS`.
-   Recompute already touches only what is downstream of a change.
+2. ~~**Cut, and paste over a larger selection.**~~ (done: To do 6.)
+3. ~~**A bigger sheet.**~~ (done: To do 5.)
 4. **More functions.**
    - Done: lookups, conditionals, order statistics, dates, money.
    - Done too: LET and LAMBDA; dynamic arrays and spilling; MAP, REDUCE,
      SCAN, BYROW, BYCOL, MAKEARRAY.
-   - Next: scalar functions lifted over arrays; named LAMBDAs; TAKE, DROP,
-     CHOOSECOLS, VSTACK, HSTACK; a text batch (TEXT, TEXTBEFORE,
-     TEXTAFTER, TEXTSPLIT).
+   - Done too: functions lifted over ranges; named LAMBDAs; TAKE, DROP,
+     CHOOSEROWS, CHOOSECOLS, VSTACK, HSTACK, TOCOL, TOROW, WRAPROWS,
+     WRAPCOLS, EXPAND; TEXT, TEXTBEFORE, TEXTAFTER, TEXTSPLIT (To do 7).
+   - Next: array constants (`{1,2;3,4}`).
 5. ~~Highlighting what a formula reads while it is typed~~ (done: coloured
    references and point mode). Still to come: Evaluate Formula for RexxJS
    formulas, which needs RexxJS's own expression tree.

@@ -21,7 +21,7 @@ const run = async (formula: string, cells: Record<string, Value> = {}): Promise<
 
 eq("what a formula reads: its cells, any case, and a range's, even in a string", rexx.compile('A1 + SUM_RANGE("B1:B3") * c2 + a1').kind === "formula" && rexx.compile('A1 + SUM_RANGE("B1:B3") * c2 + a1').reads,
   ["A1", "B1", "B2", "B3", "C2"]);
-eq("but not a function's name, nor a cell off the sheet", rexx.compile("LOG10(K1) + MD5(A2)").kind === "formula" && (rexx.compile("LOG10(K1) + MD5(A2)") as any).reads, ["A2"]);
+eq("but not a function's name, nor a cell off the sheet", rexx.compile("LOG10(AA1) + MD5(A2)").kind === "formula" && (rexx.compile("LOG10(AA1) + MD5(A2)") as any).reads, ["A2"]);
 
 eq("arithmetic on cells", await run("A1 + B1 * 2", { A1: 2, B1: 3 }), "8");
 eq("Rexx's own: || and |>", [await run("UPPER(A2) || '!'", { A2: "pears" }), await run("A2 |> LOWER", { A2: "PEARS" })], ["PEARS!", "pears"]);
@@ -48,7 +48,7 @@ eq("CELL by name; a range across columns", [await run('CELL("B1")', cells), awai
 eq("a condition the app does not read", await run('SUMIF_RANGE("A1:A5", "big")', cells), '#ERROR! Invalid condition format. Use: ">5", "=10", "<100", etc.');
 
 eq("a copy moves its references, in strings too", movedBy(rexx, '=A1 + SUM_RANGE("B1:B3")', { cols: 1, rows: 1 }), '=B2 + SUM_RANGE("C2:C4")');
-eq("$ fixes; off the sheet is #REF!", [movedBy(rexx, "=$A1 + A$1", { cols: 1, rows: 1 }), movedBy(rexx, "=J1 * 2", { cols: 1, rows: 0 })], ["=$A2 + B$1", "=#REF! * 2"]);
+eq("$ fixes; off the sheet is #REF!", [movedBy(rexx, "=$A1 + A$1", { cols: 1, rows: 1 }), movedBy(rexx, "=Z1 * 2", { cols: 1, rows: 0 })], ["=$A2 + B$1", "=#REF! * 2"]);
 eq("a constant is not moved", movedBy(rexx, "A1", { cols: 1, rows: 1 }), "A1");
 
 for (const data of [TEST_SHEET, SAMPLE_BUDGET] as any[]) {

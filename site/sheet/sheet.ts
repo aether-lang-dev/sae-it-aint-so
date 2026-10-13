@@ -19,7 +19,7 @@ import { COLS, ROWS, addrOf, cellAddr, keyOf, order, splitKey } from "./address.
 import { CellError, isArray } from "./values.ts";
 import type { ArrayValue, Result, Value } from "./values.ts";
 import { EXCEL } from "./excel.ts";
-import type { Formula, Language, Names, TableDef, Tables } from "./language.ts";
+import type { Formula, Formulas, Language, Names, TableDef, Tables } from "./language.ts";
 import type { Addr } from "./address.ts";
 import { show } from "./format.ts";
 
@@ -38,8 +38,8 @@ export type Compiled = Formula | { readonly kind: "constant"; readonly value: Va
 
 const NUMERIC = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?\s*$/;
 
-export function compile(input: string, language: Language = EXCEL, names?: Names, tables?: Tables): Compiled {
-  if (input.startsWith("=")) return language.compile(input.slice(1), names, tables);
+export function compile(input: string, language: Language = EXCEL, names?: Names, tables?: Tables, formulas?: Formulas): Compiled {
+  if (input.startsWith("=")) return language.compile(input.slice(1), names, tables, formulas);
   if (input === "") return { kind: "constant", value: null };
   return { kind: "constant", value: NUMERIC.test(input) ? Number(input) : input };
 }
@@ -89,6 +89,7 @@ export interface SavedSheet {
   readonly language: Language;
   readonly inputs: ReadonlyMap<string, string>;
   readonly names: ReadonlyMap<string, [Addr, Addr]>;
+  readonly formulas: ReadonlyMap<string, string>;
   readonly tables: ReadonlyMap<string, TableDef>;
 }
 
@@ -114,6 +115,8 @@ export class Sheet {
   #language: Language;
   readonly #context: Context;
   readonly #names = new Map<string, [Addr, Addr]>();
+  // Named formulas (a named LAMBDA), by name: what follows the '='.
+  readonly #formulas = new Map<string, string>();
   readonly #tables = new Map<string, TableDef>();
   readonly #areas = new Map<string, string[]>();          // a formula -> the cells its array covers (or would)
   readonly #spills = new Map<string, ArrayValue>();       // a formula -> the array it spills
@@ -187,7 +190,7 @@ export class Sheet {
   // What the sheet holds, to be put back (the workbook's undo): its
   // language, inputs, names and tables. Values are worked out again.
   saved(): SavedSheet {
-    return { language: this.#language, inputs: new Map(this.#inputs), names: new Map(this.#names), tables: new Map(this.#tables) };
+    return { language: this.#language, inputs: new Map(this.#inputs), names: new Map(this.#names), formulas: new Map(this.#formulas), tables: new Map(this.#tables) };
   }
 
   // The sheet put back as it was saved: the cells whose input differs set
@@ -198,10 +201,12 @@ export class Sheet {
       const keys = new Set([...this.#inputs.keys(), ...saved.inputs.keys()]);
       const list = [...keys].filter((k) => this.input(k) !== (saved.inputs.get(k) ?? "")).map((k): [string, string] => [k, saved.inputs.get(k) ?? ""]);
       const same = <V>(a: Map<string, V>, b: ReadonlyMap<string, V>) => a.size === b.size && [...b].every(([k, v]) => a.get(k) === v);
-      const relink = this.#language !== saved.language || !same(this.#names, saved.names) || !same(this.#tables, saved.tables);
+      const relink = this.#language !== saved.language || !same(this.#names, saved.names) || !same(this.#formulas, saved.formulas) || !same(this.#tables, saved.tables);
       this.#language = saved.language;
       this.#names.clear();
       for (const [n, r] of saved.names) this.#names.set(n, r);
+      this.#formulas.clear();
+      for (const [n, f] of saved.formulas) this.#formulas.set(n, f);
       this.#tables.clear();
       for (const [n, t] of saved.tables) this.#tables.set(n, t);
       const changed = await this.#apply(list);
@@ -230,26 +235,37 @@ export class Sheet {
   // (a conditional style): its value, or the error it came to.
   evaluate(formula: string): Promise<Value> {
     return this.#inTurn(async () => {
-      const f = this.#language.compile(formula, (n) => this.#names.get(n) ?? null, (n) => this.#tables.get(n.toUpperCase()) ?? null);
+      const f = this.#language.compile(formula, (n) => this.#names.get(n) ?? null, (n) => this.#tables.get(n.toUpperCase()) ?? null, this.#formula);
       const r = f.kind === "broken" ? f.error : (await f.run(this.#env())) ?? null;
       return isArray(r) ? r.values[0] ?? null : r;
     });
   }
 
-  // The named ranges, by name: [NAME, "B2:B4"].
+  // The names, by name: a range's as [NAME, "B2:B4"], a formula's as
+  // [NAME, "=LAMBDA(x, x*2)"].
   names(): [string, string][] {
-    return [...this.#names].sort(([x], [y]) => (x < y ? -1 : 1)).map(([n, [a, b]]) => [n, keyOf(a) === keyOf(b) ? keyOf(a) : `${keyOf(a)}:${keyOf(b)}`]);
+    const ranges = [...this.#names].map(([n, [a, b]]): [string, string] => [n, keyOf(a) === keyOf(b) ? keyOf(a) : `${keyOf(a)}:${keyOf(b)}`]);
+    const formulas = [...this.#formulas].map(([n, f]): [string, string] => [n, `=${f}`]);
+    return [...ranges, ...formulas].sort(([x], [y]) => (x < y ? -1 : 1));
   }
 
   name(n: string): [Addr, Addr] | null {
     return this.#names.get(n.toUpperCase()) ?? null;
   }
 
-  // A name for a range defined (or redefined), or deleted (null): every
-  // formula compiled again, as any may read it.
-  define(n: string, r: [Addr, Addr] | null): Promise<string[]> {
+  // A named formula's text (what follows the '='), or null.
+  readonly #formula = (n: string): string | null => this.#formulas.get(n.toUpperCase()) ?? null;
+  formula(n: string): string | null { return this.#formula(n); }
+
+  // A name for a range defined (or redefined), or deleted (null), or (a
+  // string: what follows the '=') for a formula; a name is one or the
+  // other. Every formula compiled again, as any may read it.
+  define(n: string, r: [Addr, Addr] | string | null): Promise<string[]> {
     return this.#inTurn(() => {
-      if (r) this.#names.set(n.toUpperCase(), r); else this.#names.delete(n.toUpperCase());
+      const key = n.toUpperCase();
+      this.#names.delete(key);
+      this.#formulas.delete(key);
+      if (typeof r === "string") this.#formulas.set(key, r); else if (r) this.#names.set(key, r);
       return this.#recomputeAll();
     });
   }
@@ -291,7 +307,7 @@ export class Sheet {
   }
 
   #compile(key: string): void {
-    const c = compile(this.input(key), this.#language, (n) => this.#names.get(n) ?? null, (n) => this.#tables.get(n.toUpperCase()) ?? null);
+    const c = compile(this.input(key), this.#language, (n) => this.#names.get(n) ?? null, (n) => this.#tables.get(n.toUpperCase()) ?? null, this.#formula);
     this.#compiled.set(key, c);
     this.#link(key, new Set(c.kind === "formula" ? c.reads.map((k) => this.#local(k) ?? k) : []));
   }

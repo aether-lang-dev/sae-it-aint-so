@@ -4,12 +4,13 @@
 // each left-associative; a unary minus binds tighter than all of them
 // (-2^2 is 4). A parse error is a FormulaError at the token it stopped on.
 // LET and LAMBDA bind names: the parser keeps their scopes, so a bound name
-// is a local, and anything else bare a named range (or #NAME?).
+// is a local, and anything else bare a named range, a named formula (or
+// #NAME?); a call of a named formula's name calls what it comes to.
 import { FormulaError, tokens } from "./lexer.ts";
 import type { Op, Token } from "./lexer.ts";
 import type { ErrorCode } from "./values.ts";
 import { keyOf, splitKey } from "./address.ts";
-import type { Names } from "./language.ts";
+import type { Formulas, Names } from "./language.ts";
 
 export type Expr =
   | { readonly kind: "num"; readonly value: number }
@@ -29,7 +30,10 @@ export type Expr =
   | { readonly kind: "local"; readonly name: string }
   | { readonly kind: "let"; readonly bindings: readonly (readonly [string, Expr])[]; readonly body: Expr }
   | { readonly kind: "lambda"; readonly params: readonly string[]; readonly body: Expr }
-  | { readonly kind: "apply"; readonly fn: Expr; readonly args: readonly Expr[] };
+  | { readonly kind: "apply"; readonly fn: Expr; readonly args: readonly Expr[] }
+  // A named formula (a named LAMBDA): parsed when it is first worked out,
+  // so one that calls itself is not parsed for ever.
+  | { readonly kind: "named"; readonly name: string; readonly expr: () => Expr };
 
 const LEVELS: readonly (readonly Op[])[] = [
   ["=", "<>", "<", ">", "<=", ">="],
@@ -48,10 +52,12 @@ class Parser {
   readonly #scopes: Set<string>[] = [];
 
   readonly #names: Names | undefined;
+  readonly #formulas: Formulas;
 
-  constructor(formula: string, names?: Names) {
+  constructor(formula: string, names?: Names, formulas: Formulas = () => null) {
     this.#tokens = tokens(formula);
     this.#names = names;
+    this.#formulas = formulas;
     this.#next();
   }
 
@@ -183,6 +189,27 @@ class Parser {
     return this.#primary();
   }
 
+  // A named formula by its name, or null when there is none.
+  #named(name: string): Expr | null {
+    const text = this.#formulas(name);
+    if (text === null) return null;
+    const names = this.#names, formulas = this.#formulas;
+    let expr: Expr | null = null;
+    return {
+      kind: "named", name, expr: () => {
+        if (!expr) {
+          try {
+            expr = new Parser(text, names, formulas).whole();
+          } catch (e) {
+            if (!(e instanceof FormulaError)) throw e;
+            expr = { kind: "error", code: "#ERROR!", why: `${name}: parse error at ${e.at}: ${e.message}` };
+          }
+        }
+        return expr;
+      },
+    };
+  }
+
   #primary(): Expr {
     const t = this.#next();
     switch (t.kind) {
@@ -210,13 +237,15 @@ class Parser {
           // name does not parse.
           if (!this.#names) throw new FormulaError(t.at, `unknown name '${t.text}'`);
           const r = this.#names(t.name);
-          if (!r) return { kind: "error", code: "#NAME?", why: `no name ${t.name}` };
+          if (!r) return this.#named(t.name) ?? { kind: "error", code: "#NAME?", why: `no name ${t.name}` };
           const [a, b] = [keyOf(r[0]), keyOf(r[1])];
           return a === b ? { kind: "ref", name: a } : { kind: "range", from: a, to: b };
         }
         if (local) return this.#applied({ kind: "local", name: t.name });
         if (t.name === "LET") return this.#applied(this.#let(t.at));
         if (t.name === "LAMBDA") return this.#applied(this.#lambda());
+        const named = this.#named(t.name);
+        if (named) return this.#applied(named);
         return { kind: "call", name: t.name, args: this.#args() };
       }
       case "(": {
@@ -230,5 +259,6 @@ class Parser {
   }
 }
 
-// `formula` is what follows the '='; `names`, the sheet's named ranges.
-export const parse = (formula: string, names?: Names): Expr => new Parser(formula, names).whole();
+// `formula` is what follows the '='; `names`, the sheet's named ranges;
+// `formulas`, its named formulas.
+export const parse = (formula: string, names?: Names, formulas?: Formulas): Expr => new Parser(formula, names, formulas).whole();

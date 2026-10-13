@@ -18,7 +18,7 @@ import { CellError } from "./values.ts";
 
 // The cells an expression reads, ranges spelled out; off-sheet ones are left
 // to the evaluator (#REF!).
-export function* refsOf(e: Expr): Generator<string, void, undefined> {
+export function* refsOf(e: Expr, seen: Set<string> = new Set()): Generator<string, void, undefined> {
   switch (e.kind) {
     case "ref":
     case "spill":
@@ -27,21 +27,27 @@ export function* refsOf(e: Expr): Generator<string, void, undefined> {
     case "range":
       yield* span(e.from, e.to)?.keys ?? [];
       return;
-    case "neg": return yield* refsOf(e.arg);
+    case "neg": return yield* refsOf(e.arg, seen);
     case "binary":
-      yield* refsOf(e.left);
-      return yield* refsOf(e.right);
+      yield* refsOf(e.left, seen);
+      return yield* refsOf(e.right, seen);
     case "call":
-      for (const a of e.args) yield* refsOf(a);
+      for (const a of e.args) yield* refsOf(a, seen);
       return;
     case "let":
-      for (const [, v] of e.bindings) yield* refsOf(v);
-      return yield* refsOf(e.body);
-    case "lambda": return yield* refsOf(e.body);
+      for (const [, v] of e.bindings) yield* refsOf(v, seen);
+      return yield* refsOf(e.body, seen);
+    case "lambda": return yield* refsOf(e.body, seen);
     case "apply":
-      yield* refsOf(e.fn);
-      for (const a of e.args) yield* refsOf(a);
+      yield* refsOf(e.fn, seen);
+      for (const a of e.args) yield* refsOf(a, seen);
       return;
+    // What a named formula reads, once however often it is named (or calls
+    // itself).
+    case "named":
+      if (seen.has(e.name)) return;
+      seen.add(e.name);
+      return yield* refsOf(e.expr(), seen);
     default:
       return;
   }
@@ -145,9 +151,9 @@ function references(formula: string): string[] {
 
 export const EXCEL: Language = {
   name: "Excel",
-  compile(formula, names) {
+  compile(formula, names, _tables, formulas) {
     try {
-      const expr = parse(formula, names ?? (() => null));
+      const expr = parse(formula, names ?? (() => null), formulas);
       return { kind: "formula", reads: [...refsOf(expr)], run: (env) => evaluate(expr, env) };
     } catch (e) {
       if (!(e instanceof FormulaError)) throw e;

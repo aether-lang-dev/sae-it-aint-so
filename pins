@@ -72,4 +72,7 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # borders, data bars, corner markers and tooltips in cell_style, merges, row
 # heights and wrapped text, the editor's text as it is typed, and
 # ui.textarea_bound. Verified: spec_sheet, spec_grid, spec_keys.
-AETHER_UI_REF=08e3193d207569ce864a5503b0baa140950e2288
+# 63b3b9ed (2026-10-13): Ctrl+arrows go to the edge of the data, which
+# demo 18's spec_sheet now drives (Ctrl+Down, Ctrl+Up). Verified: spec_sheet
+# on macOS and aether-linux (GTK 4.6).
+AETHER_UI_REF=63b3b9ed6a5ad03a36f9c3e97bdc07d4cd16514a

@@ -45,8 +45,8 @@ eq("EXPORT gives the file's JSON; IMPORT opens it, setup script and all", [await
   ["OK", ["2", "20", "14"], "LET RATE = 7"]);
 eq("IMPORT of what is not a sheet file", await failed(() => into.IMPORT("{nope")), "not a sheet file: " + (() => { try { JSON.parse("{nope"); } catch (e) { return (e as Error).message; } })());
 
-eq("BATCH_SET_CELLS: each set that can be, and a summary", [JSON.parse(await fns.BATCH_SET_CELLS('[{"address":"D1","value":"5"},{"address":"Z99","value":"1"},{"address":"D2","value":"=D1+1"}]') as string), show(wb.sheet.value("D2"))],
-  [{ total: 3, success: 2, errors: 1, errorDetails: [{ address: "Z99", error: "Z99 is not a cell on the sheet" }] }, "6"]);
+eq("BATCH_SET_CELLS: each set that can be, and a summary", [JSON.parse(await fns.BATCH_SET_CELLS('[{"address":"D1","value":"5"},{"address":"AA99","value":"1"},{"address":"D2","value":"=D1+1"}]') as string), show(wb.sheet.value("D2"))],
+  [{ total: 3, success: 2, errors: 1, errorDetails: [{ address: "AA99", error: "AA99 is not a cell on the sheet" }] }, "6"]);
 const said: string[] = [];
 await cmds.script(`LET r = BATCH_EXECUTE('[{"command":"setcell","args":["E1","9"]},{"command":"INSERTROW","args":[1]},{"command":"NOPE","args":[]},{"command":"INSERTROW","args":[0]}]'); SAY r`, (l) => said.push(l));
 eq("BATCH_EXECUTE: each by any name a script has, SETCELL too; what each gave or why not", [JSON.parse(said[0]), show(wb.sheet.value("E2"))], [[
@@ -106,8 +106,8 @@ eq("MOVECOLUMNRIGHT: the column and the one beside it swap, what reads them foll
   [["2", "1", "=B1*10+A1", "=SUM(A1:B1)"], "12", "first", [[1, 150]]]);
 await fns3.MOVECOLUMNLEFT(2);
 eq("MOVECOLUMNLEFT puts it back", ["A1", "B1", "C1"].map((k) => wb3.sheet.input(k)), ["1", "2", "=A1*10+B1"]);
-eq("not off either end", [await failed(() => fns3.MOVECOLUMNLEFT("A")), await failed(() => fns3.MOVECOLUMNRIGHT(10))],
-  ["A is the first column: it cannot move left", "J is the last column: it cannot move right"]);
+eq("not off either end", [await failed(() => fns3.MOVECOLUMNLEFT("A")), await failed(() => fns3.MOVECOLUMNRIGHT(26))],
+  ["A is the first column: it cannot move left", "Z is the last column: it cannot move right"]);
 eq("SETSHEETNAME renames the active sheet, GETSHEETNAME reads it", [await fns3.SETSHEETNAME("Main"), await fns3.GETSHEETNAME(), await fns3.RENAMESHEET("main", "Data"), wb3.sheetNames()],
   ["Main", "Main", "Data", ["Data"]]);
 

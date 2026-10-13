@@ -13,8 +13,8 @@ const message = async (line: string) => (await cmds.run(line)).message;
 
 eq("rows.hide and rows.unhide, by the rows a range covers", [await message("rows.hide range=A2:C3"), wb.hidden(), await message("rows.unhide range=A3"), wb.hidden()],
   ["hid rows 2 to 3", { rows: [1, 2], cols: [] }, "showed row 3", { rows: [1], cols: [] }]);
-eq("columns too", [await message("columns.hide range=B1:C1"), wb.hidden().cols, await message("columns.unhide range=A1:J1"), wb.hidden().cols],
-  ["hid columns B to C", [1, 2], "showed columns A to J", []]);
+eq("columns too", [await message("columns.hide range=B1:C1"), wb.hidden().cols, await message("columns.unhide range=A1:Z1"), wb.hidden().cols],
+  ["hid columns B to C", [1, 2], "showed columns A to Z", []]);
 await cmds.run("rows.insert at=1");
 eq("hidden rows move with inserted ones", wb.hidden().rows, [2]);
 await cmds.run("rows.delete at=3");
@@ -25,8 +25,8 @@ eq("AutoFilter: a table's rows whose column fails the criterion hidden; its head
   ["filtered A1:B5 by B >100: 2 rows hidden", [1, 3]]);
 eq("a text criterion, any case", [await message("data.filter range=A1:B5 column=A criterion=north"), wb.hidden().rows], ["filtered A1:B5 by A north: 3 rows hidden", [2, 3, 4]]);
 eq("a filter's rows are its own: hiding by hand stays", [(await cmds.run("rows.hide range=A7")) && await message("data.clearFilter"), wb.hidden().rows], ["filter cleared: 3 rows shown", [6]]);
-eq("refusals", [await message("data.filter range=A1:B5 column=D criterion=1"), await message("data.clearFilter"), await message("rows.hide range=Z9")],
-  ["D is not a column of A1:B5", "no filter", "Z9 is not a range on the sheet"]);
+eq("refusals", [await message("data.filter range=A1:B5 column=D criterion=1"), await message("data.clearFilter"), await message("rows.hide range=AA9")],
+  ["D is not a column of A1:B5", "no filter", "AA9 is not a range on the sheet"]);
 
 eq("view.freezeRows", [await message("view.freezeRows count=1"), wb.frozenRows(), await message("view.freezeRows count=0"), wb.frozenRows()], ["froze 1 row", 1, "unfroze rows", 0]);
 await cmds.run("view.freezeRows count=2");

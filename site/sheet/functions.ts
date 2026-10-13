@@ -3,7 +3,8 @@
 // range's width (VLOOKUP and INDEX need its shape), or one value. An
 // argument that is an error arrives as that error, so IFERROR and ISERROR
 // can look at it; everything else rethrows it as soon as it reads it.
-import { CellError, array, compare, fail, finite, scalar, toNumber, toText } from "./values.ts";
+import { CellError, array, compare, fail, finite, isArray, scalar, toNumber, toText } from "./values.ts";
+import { numberFormat } from "./numfmt.ts";
 import type { ArrayValue, Comparison, Result, Value } from "./values.ts";
 import { sortOrder } from "./sortfind.ts";
 import { sparkline } from "./charts.ts";
@@ -42,7 +43,54 @@ export function call(name: string, args: readonly Arg[]): Result {
   const spec = library.get(name);
   if (!spec) return fail("#NAME?", `no function ${name}`);
   if (args.length < spec.min || args.length > spec.max) return fail("#VALUE!", `${name} takes ${takes(spec.min, spec.max)}`);
-  return spec.fn(args);
+  return lifted(spec.fn, args, new Set());
+}
+
+// An argument that is a range where the function takes one value (val()).
+class ScalarWanted extends CellError {
+  readonly index: number;
+  constructor(index: number) {
+    super("#VALUE!", `argument ${index + 1} is a range where one value goes`);
+    this.index = index;
+  }
+}
+
+// A function given a range where it takes one value is worked out once for
+// each of the range's cells, as a spreadsheet's are: UPPER(A1:A3) is three
+// values, LEFT(A1:A3, B1:B3) three pairs. Which arguments take one value
+// is the function's own to say (val() refuses a range); the ranges given
+// for them (`over`) are taken cell by cell, a one-row or one-column one
+// broadcast, #N/A past an end. An error in one cell is that cell's.
+function lifted(fn: Fn, args: readonly Arg[], over: ReadonlySet<number>): Result {
+  if (over.size === 0) {
+    try {
+      return fn(args);
+    } catch (e) {
+      if (!(e instanceof ScalarWanted)) throw e;
+      return lifted(fn, args, new Set([e.index]));
+    }
+  }
+  const shapes = [...over].map((i) => ({ i, rows: args[i].values.length / args[i].cols, cols: args[i].cols }));
+  const rows = Math.max(...shapes.map((x) => x.rows)), cols = Math.max(...shapes.map((x) => x.cols));
+  const cell = (x: { i: number; rows: number; cols: number }, r: number, c: number): Value => {
+    const rr = x.rows === 1 ? 0 : r, cc = x.cols === 1 ? 0 : c;
+    return rr < x.rows && cc < x.cols ? args[x.i].values[rr * x.cols + cc] : new CellError("#N/A", "past the end of an array");
+  };
+  const values: Value[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const at = args.map((a, i) => (over.has(i) ? single(cell(shapes.find((x) => x.i === i)!, r, c)) : a));
+      try {
+        const v = fn(at);
+        values.push(isArray(v) ? (v.values.length === 1 ? v.values[0] : new CellError("#CALC!", "an array in a cell of an array")) : v);
+      } catch (e) {
+        if (e instanceof ScalarWanted && !over.has(e.index)) return lifted(fn, args, new Set([...over, e.index]));
+        if (!(e instanceof CellError)) throw e;
+        values.push(e);
+      }
+    }
+  }
+  return array(rows, cols, values);
 }
 
 export const names = (): string[] => [...library.keys(), "IF"].sort();
@@ -56,7 +104,8 @@ const absent = (args: readonly Arg[], i: number): boolean => !args[i] || args[i]
 function val(args: readonly Arg[], i: number): Value {
   const a = args[i];
   if (absent(args, i)) return null;
-  return a.values.length === 1 ? a.values[0] : fail("#VALUE!", `argument ${i + 1} is a range where one value goes`);
+  if (a.values.length !== 1) throw new ScalarWanted(i);
+  return a.values[0];
 }
 
 const num = (args: readonly Arg[], i: number, otherwise?: number): number =>
@@ -235,6 +284,72 @@ def("REPT", 2, 2, (args) => {
 });
 def("EXACT", 2, 2, (args) => str(args, 0) === str(args, 1));
 def("VALUE", 1, 1, (args) => num(args, 0));
+
+// TEXT: a value in an Excel number format ("0.00", "#,##0", "0%",
+// "yyyy-mm-dd"); text that reads as a number is formatted as one.
+def("TEXT", 2, 2, (args) => {
+  const v = scalar(val(args, 0)), n = typeof v === "string" && v.trim() !== "" && !isNaN(Number(v)) ? Number(v) : v;
+  return numberFormat(n, str(args, 1))?.text ?? toText(v);
+});
+
+// Where the delimiters (any of them; an array is several) are in `text`,
+// left to right, none overlapping: [start, end] each.
+function delimited(text: string, delims: readonly string[], anyCase: boolean): [number, number][] {
+  const t = anyCase ? text.toLowerCase() : text, ds = delims.filter((d) => d !== "").map((d) => (anyCase ? d.toLowerCase() : d)).sort((x, y) => y.length - x.length);
+  const out: [number, number][] = [];
+  for (let i = 0; i < t.length;) {
+    const d = ds.find((x) => t.startsWith(x, i));
+    if (d === undefined) i++; else {
+      out.push([i, i + d.length]);
+      i += d.length;
+    }
+  }
+  return out;
+}
+const delimiters = (a: Arg): string[] => a.values.map(toText);
+
+// TEXTBEFORE and TEXTAFTER: the text before (after) the instance_num-th
+// delimiter, counted from the end when negative; match_mode 1 ignores
+// case; match_end 1 counts the text's end (start, from the end) as one;
+// if_not_found, or #N/A.
+const around = (before: boolean): Fn => (args) => {
+  const text = str(args, 0), ds = delimiters(args[1]), n = whole(args, 2, 1);
+  const anyCase = !absent(args, 3) && num(args, 3) !== 0, atEnd = !absent(args, 4) && num(args, 4) !== 0;
+  if (n === 0 || Math.abs(n) > text.length + 1) return fail("#VALUE!", `${before ? "TEXTBEFORE" : "TEXTAFTER"}'s instance_num is ${n}`);
+  if (ds.every((d) => d === "")) return (n > 0) === before ? "" : text;
+  const found = delimited(text, ds, anyCase);
+  if (atEnd) n > 0 ? found.push([text.length, text.length]) : found.unshift([0, 0]);
+  const m = n > 0 ? found[n - 1] : found[found.length + n];
+  if (!m) return absent(args, 5) ? fail("#N/A", `${before ? "TEXTBEFORE" : "TEXTAFTER"} found no delimiter ${n}`) : val(args, 5);
+  return before ? text.slice(0, m[0]) : text.slice(m[1]);
+};
+def("TEXTBEFORE", 2, 6, around(true));
+def("TEXTAFTER", 2, 6, around(false));
+
+// TEXTSPLIT: text into columns at col_delimiter and rows at row_delimiter
+// (either can be several, either left out); ignore_empty 1 drops empty
+// pieces; match_mode 1 ignores case; short rows padded with pad_with, or
+// #N/A.
+def("TEXTSPLIT", 2, 6, (args) => {
+  const text = str(args, 0), anyCase = !absent(args, 4) && num(args, 4) !== 0, skip = !absent(args, 3) && num(args, 3) !== 0;
+  const split = (s: string, ds: readonly string[]): string[] => {
+    if (!ds.some((d) => d !== "")) return [s];
+    const at = delimited(s, ds, anyCase), pieces: string[] = [];
+    let from = 0;
+    for (const [a, b] of at) {
+      pieces.push(s.slice(from, a));
+      from = b;
+    }
+    pieces.push(s.slice(from));
+    return skip ? pieces.filter((p) => p !== "") : pieces;
+  };
+  const cols = absent(args, 1) ? [] : delimiters(args[1]), rowDs = absent(args, 2) ? [] : delimiters(args[2]);
+  if (!cols.some((d) => d !== "") && !rowDs.some((d) => d !== "")) return fail("#VALUE!", "TEXTSPLIT needs a delimiter");
+  const lines = split(text, rowDs).map((line) => split(line, cols)).filter((l) => l.length);
+  if (!lines.length) return fail("#CALC!", "TEXTSPLIT found nothing");
+  const w = Math.max(...lines.map((l) => l.length)), pad = absent(args, 5) ? NA() : val(args, 5);
+  return fromRows(lines.map((l) => [...l, ...Array.from({ length: w - l.length }, () => pad)]));
+});
 
 // --- conditionals ---
 
@@ -472,6 +587,81 @@ def("UNIQUE", 1, 3, (args) => {
   return byCol ? turned(fromRows(kept)) : fromRows(kept);
 });
 def("TRANSPOSE", 1, 1, (args) => turned(array(args[0].values.length / args[0].cols, args[0].cols, args[0].values)));
+
+// --- shaping arrays ---
+
+const NA = (): CellError => new CellError("#N/A", "past the end of an array");
+// A count argument: a whole number.
+const whole = (args: readonly Arg[], i: number, otherwise: number): number => Math.trunc(num(args, i, otherwise));
+// TAKE keeps the first rows and columns (the last, when negative); DROP
+// keeps all but them.
+const cut = (take: boolean): Fn => (args) => {
+  const a = args[0], rows = a.values.length / a.cols;
+  const part = (n: number, len: number): [number, number] =>
+    take ? (n >= 0 ? [0, Math.min(n, len)] : [Math.max(0, len + n), len]) : n >= 0 ? [Math.min(n, len), len] : [0, Math.max(0, len + n)];
+  const [r0, r1] = part(whole(args, 1, take ? rows : 0), rows), [c0, c1] = part(whole(args, 2, take ? a.cols : 0), a.cols);
+  if (r1 <= r0 || c1 <= c0) return fail("#CALC!", `${take ? "TAKE" : "DROP"} leaves nothing`);
+  return fromRows(rowsOf(a).slice(r0, r1).map((row) => row.slice(c0, c1)));
+};
+def("TAKE", 2, 3, cut(true));
+def("DROP", 2, 3, cut(false));
+// CHOOSEROWS and CHOOSECOLS: the rows (columns) by number, from the end
+// when negative, in the order asked, as often as asked.
+const choose = (byCol: boolean): Fn => (args) => {
+  const lines = rowsOf(byCol ? transposed(args[0]) : args[0]);
+  const picked = args.slice(1).flatMap((a) => a.values).map((v) => {
+    const n = Math.trunc(toNumber(v)), i = n < 0 ? lines.length + n : n - 1;
+    return i >= 0 && i < lines.length ? lines[i] : fail("#VALUE!", `${byCol ? "CHOOSECOLS" : "CHOOSEROWS"} has no ${byCol ? "column" : "row"} ${n}`);
+  });
+  return byCol ? turned(fromRows(picked)) : fromRows(picked);
+};
+def("CHOOSEROWS", 2, Infinity, choose(false));
+def("CHOOSECOLS", 2, Infinity, choose(true));
+// VSTACK: the arrays one under another, as wide as the widest, #N/A where
+// one is narrower; HSTACK, side by side.
+const stacked = (args: readonly Arg[]): ArrayValue => {
+  const lines = args.filter((a) => a.values.length).flatMap(rowsOf), w = Math.max(...lines.map((l) => l.length));
+  return fromRows(lines.map((l) => [...l, ...Array.from({ length: w - l.length }, NA)]));
+};
+def("VSTACK", 1, Infinity, stacked);
+def("HSTACK", 1, Infinity, (args) => turned(stacked(args.filter((a) => a.values.length).map(transposed))));
+// TOCOL and TOROW: an array as one column (row), by rows or (scan_by_column)
+// by columns; ignore 1 skips blanks, 2 errors, 3 both.
+const flattened = (args: readonly Arg[]): Value[] => {
+  const ignore = whole(args, 1, 0), byCol = !absent(args, 2) && num(args, 2) !== 0;
+  const a = byCol ? transposed(args[0]) : args[0];
+  return a.values.filter((v) => !((ignore & 1 && blank(v)) || (ignore & 2 && v instanceof CellError)));
+};
+def("TOCOL", 1, 3, (args) => {
+  const vs = flattened(args);
+  return vs.length ? array(vs.length, 1, vs) : fail("#CALC!", "TOCOL found nothing");
+});
+def("TOROW", 1, 3, (args) => {
+  const vs = flattened(args);
+  return vs.length ? array(1, vs.length, vs) : fail("#CALC!", "TOROW found nothing");
+});
+// WRAPROWS and WRAPCOLS: a row or column of values in rows (columns) of
+// `count`, the last padded with pad_with or #N/A.
+const wrapped = (byCol: boolean): Fn => (args) => {
+  const vs = args[0].values, n = whole(args, 1, 0);
+  if (args[0].cols !== 1 && args[0].cols !== vs.length) return fail("#VALUE!", "only a row or a column can be wrapped");
+  if (n < 1) return fail("#NUM!", "wrapping in fewer than 1");
+  const pad = absent(args, 2) ? NA() : val(args, 2);
+  const lines = Array.from({ length: Math.ceil(vs.length / n) }, (_, i) => Array.from({ length: n }, (_, j) => (i * n + j < vs.length ? vs[i * n + j] : pad)));
+  return byCol ? turned(fromRows(lines)) : fromRows(lines);
+};
+def("WRAPROWS", 2, 3, wrapped(false));
+def("WRAPCOLS", 2, 3, wrapped(true));
+// EXPAND: an array made as big as rows by cols, padded with pad_with or #N/A.
+def("EXPAND", 2, 4, (args) => {
+  const a = args[0], rows = a.values.length / a.cols;
+  const r = whole(args, 1, rows), c = whole(args, 2, a.cols), pad = absent(args, 3) ? NA() : val(args, 3);
+  if (r < rows || c < a.cols) return fail("#VALUE!", "EXPAND cannot make an array smaller");
+  return array(r, c, Array.from({ length: r * c }, (_, k) => {
+    const i = Math.floor(k / c), j = k % c;
+    return i < rows && j < a.cols ? a.values[i * a.cols + j] : pad;
+  }));
+});
 
 // --- lookup ---
 

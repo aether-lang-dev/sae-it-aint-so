@@ -11,6 +11,10 @@ import type { Addr } from "./address.ts";
 
 // The sheet's named ranges: a name (upper case) to its two corners, or null.
 export type Names = (name: string) => [Addr, Addr] | null;
+// The sheet's named formulas (the Name Manager's "refers to" a formula, not
+// a range): a named LAMBDA, =LAMBDA(n, IF(n<2, 1, n*FACT(n-1))), by its
+// name; null for none. Its text is what follows the '='.
+export type Formulas = (name: string) => string | null;
 
 // A table on a sheet (the Tauri app's table metadata): its name as given, its
 // range, whether its first row names its columns, or the names it was given.
@@ -57,7 +61,7 @@ export interface Language {
   // `names` reads the sheet's named ranges; a name it does not know is
   // #NAME?. A read of a cell on another sheet is its key qualified:
   // "COSTS!B2".
-  compile(formula: string, names?: Names, tables?: Tables): Formula;
+  compile(formula: string, names?: Names, tables?: Tables, formulas?: Formulas): Formula;
   // A cell's input (a formula or a constant) with its references moved by
   // an edit (a copy, rows or columns inserted or deleted: shift.ts); one
   // whose cell is gone is #REF!.

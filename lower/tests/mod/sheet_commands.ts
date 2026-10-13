@@ -26,8 +26,8 @@ eq("the catalogue: every command, with its label and parameters", cmds.catalogue
 eq("cell.set", [await outcome("cell.set cell=A1 input=2"), await outcome('cell.set cell=B1 input="=A1*10"'), value("B1")], ["ok: A1 = 2", "ok: B1 = 20", "20"]);
 eq("what changed comes back, for the view to redraw", (await cmds.run("cell.set cell=A1 input=3")).changed, ["A1", "B1"]);
 eq("cell.get reads, and is not journaled", [await outcome("cell.get cell=B1"), (await cmds.run("cell.get cell=B1")).output], ["ok: B1 = 30", "30"]);
-eq("refusals: no such command, a parameter missing, a cell off the sheet", [await outcome("cell.paint cell=A1"), await outcome("cell.set cell=A1"), await outcome("cell.set cell=Z99 input=1")],
-  ["refused: no command cell.paint", "refused: cell.set needs input", "refused: Z99 is not a cell on the sheet"]);
+eq("refusals: no such command, a parameter missing, a cell off the sheet", [await outcome("cell.paint cell=A1"), await outcome("cell.set cell=A1"), await outcome("cell.set cell=AA99 input=1")],
+  ["refused: no command cell.paint", "refused: cell.set needs input", "refused: AA99 is not a cell on the sheet"]);
 eq("the journal: what changed the sheet, as command lines", cmds.journal(), ["cell.set cell=A1 input=2", 'cell.set cell=B1 input="=A1*10"', "cell.set cell=A1 input=3"]);
 
 await cmds.run("range.clear range=A1:B1");
@@ -75,7 +75,7 @@ eq("file.open a sample", [(await cmds.run("file.open sample=budget")).message, v
     SAY "set E1, rc" RC
     LET r = SETCELL("E2", "=E1 * 6")
     SAY "E2 is" GETCELL("E2")
-    ADDRESS SHEET "rows.delete at=99"
+    ADDRESS SHEET "rows.delete at=101"
     SAY "off the sheet, rc" RC
     ADDRESS SHEET "cell.get cell=D6"
     SAY "D6 is" RESULT

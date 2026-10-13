@@ -61,8 +61,8 @@ eq("cleared: it spills again", shown("A1", "A3", "B1", "C1"), ["1", "3", "10", "
 await cmds.run("edit.undo");
 eq("undo puts the blocker back", shown("A1", "A3"), ["#SPILL!", "x"]);
 await cmds.run("edit.redo");
-await set("J19", "=SEQUENCE(3)");
-eq("the sheet's edge", [shown("J19"), String((wb.sheet.value("J19") as CellError).why)], [["#SPILL!"], "the result does not fit on the sheet"]);
+await set("Z99", "=SEQUENCE(3)");
+eq("the sheet's edge", [shown("Z99"), String((wb.sheet.value("Z99") as CellError).why)], [["#SPILL!"], "the result does not fit on the sheet"]);
 await set("A1", "=SEQUENCE(2)");
 eq("a smaller spill leaves what it left empty", shown("A3", "A4", "B1", "C1"), ["", "", "3", "1"]);
 await cmds.run("edit.copy range=B1");

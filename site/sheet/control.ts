@@ -66,7 +66,7 @@ function col(a: unknown, fn: string): string {
   const t = text(a).trim();
   const n = /^\d+$/.test(t) ? parseInt(t, 10) : NaN;
   if (n >= 1) return colName(n - 1);
-  if (/^[A-Za-z]$/.test(t)) return t.toUpperCase();
+  if (/^[A-Za-z]{1,3}$/.test(t)) return t.toUpperCase();
   throw new Error(`${fn} needs a column, a letter or a number (e.g. "B" or 2)`);
 }
 function cell(a: unknown, fn: string) {

@@ -8,7 +8,7 @@
 // script.ts), and the specs, headless and in the browser (the page's
 // command bar). The commands that change the workbook are journaled as
 // command lines, which replay.
-import { COLS, ROWS, cellAddr, colName, keyOf, parseRange, range, splitKey } from "./address.ts";
+import { COLS, ROWS, cellAddr, colName, colOf, keyOf, parseRange, range, splitKey } from "./address.ts";
 import { evaluationSteps } from "./audit.ts";
 import type { Addr } from "./address.ts";
 import { copied, filled, pasted } from "./copy.ts";
@@ -28,9 +28,9 @@ import { toStyle } from "./formats.ts";
 import type { Look } from "./formats.ts";
 import { CHART_KINDS } from "./charts.ts";
 import type { ChartKind } from "./charts.ts";
-import type { ChartSpec } from "./workbook.ts";
+import type { ChartSpec, Clip } from "./workbook.ts";
 import type { TableDef } from "./language.ts";
-import { deleted, inserted, movedBy, restructured, swapped } from "./shift.ts";
+import { blockMoved, deleted, inserted, movedBy, restructured, swapped } from "./shift.ts";
 import type { Edit, Scope } from "./shift.ts";
 import { found, rearranged, rearrangedMoves, replaced, sortedRows } from "./sortfind.ts";
 import { distinctRows, secant, splitText } from "./whatif.ts";
@@ -113,10 +113,7 @@ const rangeOf = (s: string): [Addr, Addr] => parseRange(s) ?? refuse(`${s} is no
 const named = ([a, b]: [Addr, Addr]) => `${keyOf(a)}:${keyOf(b)}`;
 const flag = (s: string | undefined) => /^(1|true|yes|on)$/i.test(s ?? "");
 const topLeft = ([a, b]: [Addr, Addr]): Addr => ({ col: Math.min(a.col, b.col), row: Math.min(a.row, b.row) });
-const columnOf = (s: string): number => {
-  const c = String(s).trim().toUpperCase().charCodeAt(0) - 65;
-  return s.trim().length === 1 && c >= 0 && c < COLS ? c : refuse(`${s} is not a column on the sheet`);
-};
+const columnOf = (s: string): number => colOf(String(s)) ?? refuse(`${s} is not a column on the sheet`);
 const countOf = (s: string | undefined): number => {
   const n = Number(s ?? "1");
   return Number.isInteger(n) && n >= 1 ? n : refuse(`${s} is not a count`);
@@ -163,7 +160,7 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     if (i > 0) await wb.add(s.name);
     for (const [n, r] of s.names) {
       const corners = parseRange(r);
-      if (corners) await wb.sheet.define(n, corners);
+      if (corners || r.startsWith("=")) await wb.sheet.define(n, corners ?? r.slice(1));
     }
     await wb.sheet.setMany(s.entries);
     for (const [key, note] of s.notes) wb.notes.set(key, note);
@@ -236,10 +233,12 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
 }
 
 // The active sheet reshaped by a structural edit (rows or columns inserted,
-// deleted or swapped): the references to it on other sheets rewritten, and
-// its notes, rules, charts, hidden lines, merges, tables, heights or widths
-// and filter moved with its cells. Gives its cells' entries, for setting().
-async function reshaped(wb: Workbook, axis: "row" | "col", editOf: (moves: Scope) => Edit): Promise<[string, string][]> {
+// deleted or swapped, or cells moved: axis null): the references to it on
+// other sheets rewritten, and its notes, rules, charts, merges, tables and
+// filter moved with its cells, and for rows or columns its hidden lines,
+// heights or widths and auto IDs too. Gives its cells' entries, for
+// setting().
+async function reshaped(wb: Workbook, axis: "row" | "col" | null, editOf: (moves: Scope) => Edit): Promise<[string, string][]> {
   const here = wb.active.toUpperCase();
   const edit = editOf((sheet) => sheet === null || sheet === here);
   const entries = restructured(wb.sheet.keys().map((k) => [k, wb.sheet.input(k)]), edit, wb.sheet.language);
@@ -265,7 +264,8 @@ async function reshaped(wb: Workbook, axis: "row" | "col", editOf: (moves: Scope
     const to = edit.cell(row ? { col: 0, row: i } : { col: i, row: 0 }, still);
     return to ? [row ? to.row : to.col] : [];
   }));
-  if (axis === "row") page.hiddenRows = moved(page.hiddenRows, true); else page.hiddenCols = moved(page.hiddenCols, false);
+  if (axis === "row") page.hiddenRows = moved(page.hiddenRows, true);
+  if (axis === "col") page.hiddenCols = moved(page.hiddenCols, false);
   if (page.filtered && axis === "row") page.filtered = moved(page.filtered, true);
   page.merges = page.merges.flatMap((m): [Addr, Addr][] => {
     const to = edit.range(m[0], m[1], still, still);
@@ -273,14 +273,14 @@ async function reshaped(wb: Workbook, axis: "row" | "col", editOf: (moves: Scope
   });
   for (const t of wb.sheet.tables()) {
     const to = edit.range(t.range[0], t.range[1], still, still);
-    await wb.sheet.defineTable(t.name, to ? { ...t, range: to, sort: undefined } : null);
+    if (!to || rangeName(to) !== rangeName(t.range) || axis) await wb.sheet.defineTable(t.name, to ? { ...t, range: to, sort: undefined } : null);
   }
   if (axis === "row") {
     page.heights = new Map([...page.heights].flatMap(([row, h]): [number, number][] => {
       const to = edit.cell({ col: 0, row }, still);
       return to ? [[to.row, h]] : [];
     }));
-  } else {
+  } else if (axis === "col") {
     page.widths = new Map([...page.widths].flatMap(([col, w]): [number, number][] => {
       const to = edit.cell({ col, row: 0 }, still);
       return to ? [[to.col, w]] : [];
@@ -291,16 +291,43 @@ async function reshaped(wb: Workbook, axis: "row" | "col", editOf: (moves: Scope
     const written = pv.written && edit.range(pv.written[0], pv.written[1], still, still);
     return source && output ? [[id, { ...pv, source, output, written }]] : [];
   }));
-  if (page.autoId) {
+  if (page.autoId && axis) {
     const to = edit.cell({ col: page.autoId.column, row: 0 }, still);
     page.autoId = to ? { ...page.autoId, column: to.col } : null;
   }
   if (page.filter) {
-    const r = edit.range(page.filter.range[0], page.filter.range[1], still, still), col = edit.cell({ col: page.filter.column, row: 0 }, still);
+    const r = edit.range(page.filter.range[0], page.filter.range[1], still, still);
+    const col = axis ? edit.cell({ col: page.filter.column, row: 0 }, still) : r && { col: page.filter.column + r[0].col - page.filter.range[0].col, row: 0 };
     page.filter = r && col ? { ...page.filter, range: r, column: col.col } : null;
     if (!page.filter) page.filtered = null;
   }
   return entries;
+}
+
+// The clipboard for a range of the active sheet: as text, and cell by cell.
+function clipOf(wb: Workbook, r: [Addr, Addr]): Clip {
+  const from = topLeft(r);
+  const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
+  const grid = <T>(f: (key: string) => T): T[][] =>
+    Array.from({ length: rows }, (_, i) => Array.from({ length: cols }, (_, j) => f(keyOf({ col: from.col + j, row: from.row + i }))));
+  return {
+    tsv: copied(inputs(wb), r[0], r[1]), from, language: wb.sheet.language,
+    inputs: grid((k) => wb.sheet.input(k)), shown: grid((k) => show(wb.sheet.value(k))), notes: grid((k) => wb.notes.get(k)),
+  };
+}
+
+// Cut cells moved to `at` (their top-left), on the sheet they were cut
+// from: one structural edit (shift.ts's blockMoved), so one undo.
+async function moving(wb: Workbook, cut: NonNullable<Clip["cut"]>, at: Addr): Promise<Outcome> {
+  if (!wb.pages().includes(cut.page)) refuse("the sheet the cells were cut from is gone");
+  if (cut.page !== wb.page(wb.active)) refuse(`cut cells are pasted on the sheet they were cut from, ${cut.page.name}`);
+  const from = topLeft(cut.range), by = { cols: at.col - from.col, rows: at.row - from.row };
+  const rows = Math.abs(cut.range[0].row - cut.range[1].row), cols = Math.abs(cut.range[0].col - cut.range[1].col);
+  if (at.col + cols >= COLS || at.row + rows >= ROWS) refuse(`${named(cut.range)} moved to ${keyOf(at)} does not fit on the sheet`);
+  wb.clip = null;
+  if (by.cols === 0 && by.rows === 0) return { ok: true, message: `moved ${named(cut.range)} to where it was`, changed: [] };
+  const entries = await reshaped(wb, null, (moves) => blockMoved(cut.range, by, moves));
+  return setting(wb, entries, `moved ${named(cut.range)} to ${keyOf(at)}`);
 }
 
 // Fill down, right, up or left over a range (copy.ts), from its first
@@ -334,6 +361,16 @@ function rearranging(wb: Workbook, r: [Addr, Addr], rows: readonly number[]): [s
 
 // A name for a range: a letter first, then letters, digits or _; not a
 // cell, nor TRUE or FALSE.
+// A named formula's text, what follows its '=': refused when it does not
+// parse (in Excel formulas), or would hide a function of the same name.
+function formulaOf(wb: Workbook, name: string, text: string): string {
+  if (!text.startsWith("=")) refuse(`a named formula starts with =: ${text}`);
+  if (wb.sheet.language.functions().includes(name)) refuse(`${name} is a function already`);
+  const c = wb.sheet.language.name === "Excel" ? wb.sheet.language.compile(text.slice(1)) : null;
+  if (c?.kind === "broken") refuse(c.error.why);
+  return text.slice(1);
+}
+
 const nameOf = (s: string): string => {
   if (/^[A-Za-z]+\d+$/.test(s)) refuse(`${s} is a cell, not a name`);
   if (!/^[A-Za-z_]\w*$/.test(s) || /^(TRUE|FALSE)$/i.test(s)) refuse(`${s} is not a name: a letter first, then letters, digits or _`);
@@ -657,23 +694,38 @@ const SPECS: readonly Spec[] = [
   {
     id: "edit.copy", label: "Copy", params: ["range"], journaled: true, unstepped: true,
     run: async (wb, p) => {
-      const r = rangeOf(p.range), from = topLeft(r);
-      const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
-      const grid = <T>(f: (key: string) => T): T[][] =>
-        Array.from({ length: rows }, (_, i) => Array.from({ length: cols }, (_, j) => f(keyOf({ col: from.col + j, row: from.row + i }))));
-      wb.clip = {
-        tsv: copied(inputs(wb), r[0], r[1]), from, language: wb.sheet.language,
-        inputs: grid((k) => wb.sheet.input(k)), shown: grid((k) => show(wb.sheet.value(k))), notes: grid((k) => wb.notes.get(k)),
-      };
+      const r = rangeOf(p.range);
+      wb.clip = clipOf(wb, r);
       return { ok: true, message: `copied ${named(r)}`, changed: [] };
     },
   },
   {
+    // Cut: copied, and marked to be moved by the next paste (on the same
+    // sheet), as a spreadsheet's cut is.
+    id: "edit.cut", label: "Cut", params: ["range"], journaled: true, unstepped: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range);
+      wb.clip = { ...clipOf(wb, r), cut: { page: wb.page(wb.active)!, range: r } };
+      return { ok: true, message: `cut ${named(r)}`, changed: [] };
+    },
+  },
+  {
+    // What was copied pasted with its first cell at `at`; when `at` is a
+    // range as many times the copy's size each way, into each part of it (a
+    // cell copied into every cell). What was cut is moved instead: its
+    // cells, notes and what reads them (here or on another sheet) go to
+    // `at`'s first cell, what was under them is gone, and the cut is used up.
     id: "edit.paste", label: "Paste", params: ["at"], journaled: true,
     run: (wb, p) => {
-      const at = rangeOf(p.at)[0];
+      const r = rangeOf(p.at), at = topLeft(r);
       const clip = wb.clip ?? refuse("nothing copied");
-      return setting(wb, pasted(clip.tsv, at, { from: clip.from, language: clip.language }), `pasted at ${keyOf(at)}`);
+      if (clip.cut) return moving(wb, clip.cut, at);
+      const h = clip.inputs.length, w = clip.inputs[0]?.length ?? 1;
+      const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
+      const tiled = rows % h === 0 && cols % w === 0 && rows * cols > h * w;
+      const origins = tiled ? Array.from({ length: (rows / h) * (cols / w) }, (_, i) => ({ col: at.col + (i % (cols / w)) * w, row: at.row + Math.floor(i / (cols / w)) * h })) : [at];
+      const entries = origins.flatMap((o) => pasted(clip.tsv, o, { from: clip.from, language: clip.language }));
+      return setting(wb, entries, tiled ? `pasted into ${named(r)}` : `pasted at ${keyOf(at)}`);
     },
   },
   {
@@ -830,9 +882,13 @@ const SPECS: readonly Spec[] = [
   { id: "data.sortAscending", label: "Sort A to Z", params: ["range", "by"], journaled: true, run: sort(true) },
   { id: "data.sortDescending", label: "Sort Z to A", params: ["range", "by"], journaled: true, run: sort(false) },
   {
-    id: "names.define", label: "Define Name", params: ["name", "range"], journaled: true,
+    // A name for a range, or for a formula (a named LAMBDA:
+    // formula="=LAMBDA(x, x*2)", then =DOUBLE(4) anywhere on the sheet).
+    id: "names.define", label: "Define Name", params: ["name"], optional: ["range", "formula"], journaled: true,
     run: async (wb, p) => {
-      const n = nameOf(p.name), r = rangeOf(p.range);
+      const n = nameOf(p.name);
+      if ((p.range === undefined) === (p.formula === undefined)) refuse("names.define needs a range or a formula");
+      const r = p.range !== undefined ? rangeOf(p.range) : formulaOf(wb, n, p.formula!);
       const changed = await wb.sheet.define(n, r);
       return changedBy(wb, changed, `${n} is ${wb.sheet.names().find(([x]) => x === n)![1]}`);
     },
@@ -841,7 +897,7 @@ const SPECS: readonly Spec[] = [
     id: "names.delete", label: "Delete Name", params: ["name"], journaled: true,
     run: async (wb, p) => {
       const n = p.name.toUpperCase();
-      if (!wb.sheet.name(n)) refuse(`no name ${n}`);
+      if (!wb.sheet.name(n) && wb.sheet.formula(n) === null) refuse(`no name ${n}`);
       const changed = await wb.sheet.define(n, null);
       return changedBy(wb, changed, `${n} deleted`);
     },
@@ -877,7 +933,7 @@ const SPECS: readonly Spec[] = [
       if (wb.sheet.language.name !== "Excel") refuse("Evaluate Formula steps through Excel formulas");
       let steps: string[] = [];
       try {
-        steps = evaluationSteps(input.slice(1), { get: (k) => wb.sheet.value(k) }, (n) => wb.sheet.name(n));
+        steps = evaluationSteps(input.slice(1), { get: (k) => wb.sheet.value(k) }, (n) => wb.sheet.name(n), (n) => wb.sheet.formula(n));
       } catch (e) {
         if (!(e instanceof FormulaError)) throw e;
         refuse(`${key}: parse error at ${e.at}: ${e.message}`);

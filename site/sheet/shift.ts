@@ -45,6 +45,30 @@ export function byOffset(by: Offset): Edit {
   };
 }
 
+// Cells cut from a rectangle and pasted `by` away (a move): a reference to
+// a cell in it, $ or not, goes with it, and a range wholly in it too; a
+// reference to a cell it lands on (and did not come from) is #REF!, as
+// what was there is gone. Everything else stays.
+export function blockMoved(from: readonly [Addr, Addr], by: Offset, moves: Scope = LOCAL): Edit {
+  const top = Math.min(from[0].row, from[1].row), bottom = Math.max(from[0].row, from[1].row);
+  const left = Math.min(from[0].col, from[1].col), right = Math.max(from[0].col, from[1].col);
+  const inside = (a: Addr, dr = 0, dc = 0) => a.row >= top + dr && a.row <= bottom + dr && a.col >= left + dc && a.col <= right + dc;
+  const covered = (a: Addr) => inside(a, by.rows, by.cols) && !inside(a);
+  const cell = (a: Addr) => (inside(a) ? onSheet({ col: a.col + by.cols, row: a.row + by.rows }) : covered(a) ? null : a);
+  return {
+    cell,
+    range: (a, b) => {
+      if (inside(a) && inside(b)) {
+        const x = cell(a), y = cell(b);
+        return x && y ? [x, y] : null;
+      }
+      return [a, b];
+    },
+    deletes: covered,
+    moves,
+  };
+}
+
 type Axis = "row" | "col";
 const along = (a: Addr, axis: Axis) => (axis === "row" ? a.row : a.col);
 const moved = (a: Addr, axis: Axis, to: number): Addr => (axis === "row" ? { col: a.col, row: to } : { col: to, row: a.row });

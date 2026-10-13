@@ -19,7 +19,7 @@ const reads = (lang: { compile: typeof EXCEL.compile }, formula: string) => {
   return f.kind === "formula" ? f.reads : f.error.why;
 };
 
-eq("span: a range's keys on its sheet, and its width", [span("COSTS!B1", "C2"), span("A1", "A2"), span("A1", "K1")],
+eq("span: a range's keys on its sheet, and its width", [span("COSTS!B1", "C2"), span("A1", "A2"), span("A1", "AA1")],
   [{ keys: ["COSTS!B1", "COSTS!C1", "COSTS!B2", "COSTS!C2"], cols: 2 }, { keys: ["A1", "A2"], cols: 1 }, null]);
 eq("Excel: a cell, a range and a quoted name on another sheet, any case", reads(EXCEL, "Costs!B2 + SUM(costs!B1:B2) + 'My Costs'!$A$1"),
   ["COSTS!B2", "COSTS!B1", "COSTS!B2", "MY COSTS!A1"]);

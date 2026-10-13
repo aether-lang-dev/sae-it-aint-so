@@ -38,8 +38,8 @@ eq("pivot.get and pivot.list, as the app's GETPIVOT and LISTPIVOTS", [(await cmd
     [{ id: "bySide", config: { sourceRange: "A1:C6", rowFields: ["region"], colFields: [], valueField: "amount", aggFunction: "COUNT", outputCell: "E1", filters: {} } }]]);
 eq("refusals: an aggregate, a field, the edge of the sheet, a pivot not there", [
   (await cmds.run("pivot.create id=x source=A1:C6 value=amount agg=median output=E1")).message, (await cmds.run("pivot.create id=x source=A1:C6 value=price agg=sum output=E1")).message,
-  (await cmds.run("pivot.create id=x source=A1:C6 value=amount agg=sum output=J20 rows=region")).message, (await cmds.run("pivot.update id=nope")).message,
-], ["median is not SUM, COUNT, AVERAGE, MIN, MAX", "no field price (region, product, amount)", "pivot x is 3 rows by 2 columns: it does not fit from J20", "no pivot nope"]);
+  (await cmds.run("pivot.create id=x source=A1:C6 value=amount agg=sum output=Z100 rows=region")).message, (await cmds.run("pivot.update id=nope")).message,
+], ["median is not SUM, COUNT, AVERAGE, MIN, MAX", "no field price (region, product, amount)", "pivot x is 3 rows by 2 columns: it does not fit from Z100", "no pivot nope"]);
 await cmds.run("rows.insert at=1");
 eq("it moves with inserted rows", (await cmds.run("pivot.get id=bySide")).output!.sourceRange, "A2:C7");
 const read = readSheetFile(JSON.parse(JSON.stringify(writeSheetFile(wb))));

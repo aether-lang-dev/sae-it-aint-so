@@ -12,7 +12,7 @@ claims 274 of Excel's 290 ribbon commands and 513 of 523 worksheet functions
 50% readiness "weighted by what Excel users rely on".
 
 Demo 18 (`docs/spreadsheet_demo_done_and_todo.md`) is far smaller: a
-10 x 20 sheet on `ui.datagrid`, Excel or RexxJS formulas, the Tauri
+26 x 100 sheet on `ui.datagrid`, Excel or RexxJS formulas, the Tauri
 spreadsheet's features coming over. This audit sorts GridCraft's features by
 what they would take here: ideas worth having first, then features the page
 can do today, then ones that need aether-ui, then ones that do not fit.

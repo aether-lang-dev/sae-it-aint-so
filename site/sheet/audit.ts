@@ -11,7 +11,7 @@
 import { evaluate } from "./evaluate.ts";
 import type { Env } from "./evaluate.ts";
 import { show } from "./format.ts";
-import type { Names } from "./language.ts";
+import type { Formulas, Names } from "./language.ts";
 import { parse } from "./parser.ts";
 import type { Expr } from "./parser.ts";
 import { CellError, isArray, toNumber } from "./values.ts";
@@ -81,6 +81,7 @@ function printed(n: Node): string {
     case "let": return `LET(${e.bindings.map(([name], i) => `${name},${printed(n.kids[i])}`).join(",")},${printed(n.kids[n.kids.length - 1])})`;
     case "lambda": return `LAMBDA(${[...e.params, printed(n.kids[0])].join(",")})`;
     case "apply": return `${printed(n.kids[0])}(${n.kids.slice(1).map(printed).join(",")})`;
+    case "named": return e.name;
     default: return "";
   }
 }
@@ -102,8 +103,8 @@ function next(n: Node): Node | null {
 
 // `formula` (what follows its '=') printed, then after each step. A parse
 // error is thrown, as parse() throws it.
-export function evaluationSteps(formula: string, env: Env, names: Names = () => null): string[] {
-  const root = nodeOf(parse(formula, names));
+export function evaluationSteps(formula: string, env: Env, names: Names = () => null, formulas?: Formulas): string[] {
+  const root = nodeOf(parse(formula, names, formulas));
   const steps = [printed(root)];
   for (let n = next(root); n; n = next(root)) {
     if (isIf(n)) {

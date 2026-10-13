@@ -1,7 +1,9 @@
-// Cell addresses on a 10 x 20 sheet: columns A to J, rows 1 to 20. A key is
-// the address as written ("B12"); an Addr is where it is (0-based).
-export const COLS = 10;
-export const ROWS = 20;
+// Cell addresses on a 26 x 100 sheet, as the Tauri app's: columns A to Z,
+// rows 1 to 100. A key is the address as written ("B12"); an Addr is where
+// it is (0-based). Columns past Z are AA, AB and on, as a spreadsheet's, so
+// the sheet grows by these two numbers alone.
+export const COLS = 26;
+export const ROWS = 100;
 
 export type Key = `${Uppercase<string>}${number}`;
 
@@ -10,16 +12,31 @@ export interface Addr {
   readonly row: number;
 }
 
-export const colName = (col: number): string => String.fromCharCode(65 + col);
+// A column's letters: 0 is A, 25 Z, 26 AA.
+export function colName(col: number): string {
+  let name = "";
+  for (let n = col + 1; n > 0; n = Math.floor((n - 1) / 26)) name = String.fromCharCode(65 + ((n - 1) % 26)) + name;
+  return name;
+}
+
+// A column by its letters (any case), or null when there are none or it is
+// off the sheet.
+export function colOf(letters: string): number | null {
+  const t = letters.trim().toUpperCase();
+  if (!/^[A-Z]{1,3}$/.test(t)) return null;
+  let n = 0;
+  for (const ch of t) n = n * 26 + ch.charCodeAt(0) - 64;
+  return n - 1 < COLS ? n - 1 : null;
+}
 
 export const keyOf = ({ col, row }: Addr): Key => `${colName(col)}${row + 1}` as Key;
 
 // "b12" or " B12 " is B12; anything else, or off the sheet, is null.
 export function addrOf(s: string): Addr | null {
-  const m = /^\s*([A-Za-z])([1-9][0-9]?)\s*$/.exec(s);
+  const m = /^\s*([A-Za-z]{1,3})([1-9][0-9]{0,6})\s*$/.exec(s);
   if (!m) return null;
-  const col = m[1].toUpperCase().charCodeAt(0) - 65, row = Number(m[2]) - 1;
-  return col < COLS && row < ROWS ? { col, row } : null;
+  const col = colOf(m[1]), row = Number(m[2]) - 1;
+  return col !== null && row < ROWS ? { col, row } : null;
 }
 
 // A key can name a cell on another sheet: "COSTS!B2" (the sheet's name in

@@ -72,7 +72,7 @@ eq("file.exportCsv: what the cells show, of a range", (await cmds.run("file.expo
 eq("or of everything used", (await cmds.run("file.exportCsv")).output, "Item,2.00\n,42");
 eq("file.importCsv: fields as inputs, at a cell", [await message('file.importCsv at=D1 text="x,1\n""a,b"",=E1*2"'), show(wb.sheet.value("E2")), wb.sheet.input("D2")],
   ["imported 2 rows at D1: 4 cells set, 4 changed", "2", "a,b"]);
-eq("one that does not fit is refused", await message('file.importCsv at=J20 text="1,2"'), "2 columns from J20 do not fit on the sheet");
+eq("one that does not fit is refused", await message('file.importCsv at=Z100 text="1,2"'), "2 columns from Z100 do not fit on the sheet");
 eq("file.new: one empty sheet, Untitled", [await message("file.new"), wb.sheetNames(), wb.sheet.keys(), wb.name], ["a new workbook", ["Sheet1"], [], "Untitled"]);
 // expect: ok written in the Tauri app's shapes: text as itself, a formula as value and expression, notes beside them
 // expect: ok with its language, its names, and the other sheets

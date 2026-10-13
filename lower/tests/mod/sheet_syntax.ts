@@ -6,11 +6,11 @@ import { FormulaError, tokens } from "./sheet/lexer.ts";
 import { parse } from "./sheet/parser.ts";
 import { eq, throws } from "./lib/check.ts";
 
-eq("addresses read either case, with spaces", [addrOf("b12"), addrOf(" J20 ")], [{ col: 1, row: 11 }, { col: 9, row: 19 }]);
-eq("off the sheet is null", [addrOf("K1"), addrOf("A21"), addrOf("A0"), addrOf("AA1"), addrOf("1A")], [null, null, null, null, null]);
+eq("addresses read either case, with spaces", [addrOf("b12"), addrOf(" Z100 ")], [{ col: 1, row: 11 }, { col: 25, row: 99 }]);
+eq("off the sheet is null", [addrOf("AA1"), addrOf("A101"), addrOf("A0"), addrOf("ZZZ1"), addrOf("1A")], [null, null, null, null, null]);
 eq("keyOf writes them back", keyOf({ col: 2, row: 4 }), "C5");
 eq("a range is a rectangle, row by row, either corner first", [...range(addrOf("B2")!, addrOf("A1")!)], ["A1", "B1", "A2", "B2"]);
-eq("the sheet is 10 x 20", [...allKeys()].length, 200);
+eq("the sheet is 26 x 100", [...allKeys()].length, 2600);
 
 const toks = (src: string) => [...tokens(src)].map((t) => `${t.kind}@${t.at}:${t.text}`);
 eq("tokens and where they start (after the '=')", toks(`SUM(a1:B2) >= 1.5e2 & "x""y"`), [
@@ -70,7 +70,7 @@ eq("each error's position, counting the '='", [at("SUM(A1"), at("1+"), at("1 2")
 // expect: ok off the sheet is null
 // expect: ok keyOf writes them back
 // expect: ok a range is a rectangle, row by row, either corner first
-// expect: ok the sheet is 10 x 20
+// expect: ok the sheet is 26 x 100
 // expect: ok tokens and where they start (after the '=')
 // expect: ok a string's doubled quote is one quote
 // expect: ok refs and names are upper-cased

@@ -36,7 +36,7 @@ export interface FileSheet {
   readonly name: string;
   readonly entries: readonly [string, string][];   // [key, input] for Sheet.setMany
   readonly notes: ReadonlyMap<string, Note>;
-  readonly names: readonly [string, string][];     // [NAME, "B2:B4"]
+  readonly names: readonly [string, string][];     // [NAME, "B2:B4"], or a formula [NAME, "=LAMBDA(x, x*2)"]
   readonly rules: readonly CfRule[];
   readonly charts: readonly ChartSpec[];
   readonly view: {

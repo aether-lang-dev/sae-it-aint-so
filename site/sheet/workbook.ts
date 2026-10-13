@@ -37,8 +37,10 @@ export type LanguageName = "Excel" | "RexxJS";
 
 // What was copied, from where, in which language (so a paste moves its
 // formulas): as tab-separated text, and cell by cell (inputs, what they
-// showed, their notes) for Paste Special. Pages have no system clipboard yet.
+// showed, their notes) for Paste Special; and, when it was cut, the sheet
+// and range it is to be moved from. Pages have no system clipboard yet.
 export interface Clip {
+  readonly cut?: { readonly page: Page; readonly range: [Addr, Addr] };
   readonly tsv: string;
   readonly from: Addr;
   readonly language: Language;

@@ -79,9 +79,14 @@ function lift(inputs: readonly Result[], f: (vs: Value[]) => Value): Result {
 
 const truth = (v: Value): boolean => toNumber(v) !== 0;
 
+// How deep LAMBDAs may call LAMBDAs (a named one calling itself) before
+// the formula is #NUM!.
+const DEPTH = 200;
+
 class Evaluator {
   readonly #env: Env;
   #scope: Scope = new Map();
+  #depth = 0;
 
   constructor(env: Env) {
     this.#env = env;
@@ -114,6 +119,10 @@ class Evaluator {
       }
       case "lambda":
         return { kind: "lambda", params: e.params, body: e.body, scope: this.#scope };
+      // A named formula is worked out in no scope but its own: what it
+      // names is the sheet's, not the caller's.
+      case "named":
+        return this.#within(new Map(), () => this.any(e.expr()));
       case "apply": {
         const fn = this.any(e.fn);
         if (!isClosure(fn)) return fail("#VALUE!", "only a LAMBDA can be called");
@@ -126,9 +135,15 @@ class Evaluator {
 
   #invoke(fn: Closure, args: readonly Bound[]): Bound {
     if (args.length !== fn.params.length) return fail("#VALUE!", `LAMBDA takes ${fn.params.length} values, given ${args.length}`);
+    if (this.#depth >= DEPTH) return fail("#NUM!", `LAMBDAs call LAMBDAs more than ${DEPTH} deep`);
     const scope = new Map(fn.scope);
     fn.params.forEach((p, i) => scope.set(p, args[i]));
-    return this.#within(scope, () => this.any(fn.body));
+    this.#depth++;
+    try {
+      return this.#within(scope, () => this.any(fn.body));
+    } finally {
+      this.#depth--;
+    }
   }
 
   // A value or an array: not a closure.
@@ -156,7 +171,8 @@ class Evaluator {
       case "local":
       case "let":
       case "lambda":
-      case "apply": {
+      case "apply":
+      case "named": {
         const v = this.any(e);
         return isClosure(v) ? fail("#VALUE!", "a LAMBDA where a value goes") : v;
       }

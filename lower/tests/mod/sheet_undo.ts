@@ -69,7 +69,7 @@ const before = await steps();
 await cmds.run("edit.copy range=A1:A3");
 await cmds.run("sheet.activate name=Sheet1");
 await cmds.run("validation.circle");
-await cmds.run("cell.set cell=Z99 input=1");
+await cmds.run("cell.set cell=AA99 input=1");
 eq("a copy, going to a sheet, circles and a refusal add no step", await steps(), before);
 
 await cmds.run("cell.set cell=E1 input=7");

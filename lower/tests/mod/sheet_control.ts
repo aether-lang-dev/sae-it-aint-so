@@ -51,7 +51,7 @@ eq("names and tables from their lists", [
 eq("references worked out without the sheet", [await told("GETROW", ["C5"]), await told("GETCOL", ["C5"]), await told("GETCOLNAME", ["c5"]), await told("MAKECELLREF", [3, 5]), await told("MAKECELLREF", ["c", "5"])],
   [[5, []], [3, []], ["C", []], ["C5", []], ["C5", []]]);
 eq("refusals: a bad argument, a refused command, what demo 18 cannot do", [
-  await failed(() => told("INSERTROW", [0])), await failed(() => told("HIDECOLUMN", ["AB"])), await failed(() => CONTROL.MERGECELLS(stub({}, ["cells.merge"]).exec, "A1:B2")),
+  await failed(() => told("INSERTROW", [0])), await failed(() => told("HIDECOLUMN", ["ABCD"])), await failed(() => CONTROL.MERGECELLS(stub({}, ["cells.merge"]).exec, "A1:B2")),
   await failed(() => told("FREEZEPANES", [1, 2])), await failed(() => told("SETCELLVALIDATION", ["A1", "text", 1, 5, "^a"])),
 ], [
   "INSERTROW needs a row number (e.g. 2)", 'HIDECOLUMN needs a column, a letter or a number (e.g. "B" or 2)', "cells.merge refused",

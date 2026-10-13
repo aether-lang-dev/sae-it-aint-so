@@ -23,7 +23,7 @@ eq("a deleted row: references into it are #REF!, below it move up", ex("=A1+A3+A
 eq("a range shrinks over a deletion, or is #REF! when all of it went", [ex("=SUM(A1:A5)", deleted("row", 1, 2)), ex("=SUM(A2:A3)", deleted("row", 1, 2)), ex("=SUM(A3:A6)", deleted("row", 0, 4))],
   ["=SUM(A1:A3)", "=SUM(#REF!)", "=SUM(A1:A2)"]);
 eq("a deleted column", ex("=A1+B1+C1", deleted("col", 1, 1)), "=A1+#REF!+B1");
-eq("pushed off the end of the sheet is #REF!", ex("=A20", inserted("row", 0, 1)), "=#REF!");
+eq("pushed off the end of the sheet is #REF!", ex("=A100", inserted("row", 0, 1)), "=#REF!");
 eq("a constant is untouched", ex("A3", inserted("row", 0, 1)), "A3");
 eq("RexxJS formulas too, in strings as well", rexx.rewrite('=A3 + SUM_RANGE("A1:A5")', inserted("row", 2, 1)), '=A4 + SUM_RANGE("A1:A6")');
 eq("and a deletion there", rexx.rewrite('=A3 + SUM_RANGE("A1:A5")', deleted("row", 2, 1)), '=#REF! + SUM_RANGE("A1:A4")');
@@ -36,7 +36,7 @@ eq("the cells move, their formulas rewritten; what moved away is cleared", restr
   [["A2", ""], ["A3", ""], ["B3", ""], ["A5", ""], ["A3", "2"], ["A4", "=A1+A3"], ["B4", "=SUM(A1:A3)"], ["A6", "=A4*10"]]);
 eq("a deleted row's cells go", restructured(inputs, deleted("row", 1, 1), EXCEL),
   [["A2", ""], ["A3", ""], ["B3", ""], ["A5", ""], ["A2", "=A1+#REF!"], ["B2", "=SUM(A1:A1)"], ["A4", "=A2*10"]]);
-throws("nothing is pushed off the sheet", () => restructured([["A20", "1"]], inserted("row", 3, 1), EXCEL), RangeError, "A20 is not empty: inserting would push it off the sheet");
+throws("nothing is pushed off the sheet", () => restructured([["A100", "1"]], inserted("row", 3, 1), EXCEL), RangeError, "A100 is not empty: inserting would push it off the sheet");
 
 {
   const notes = new CellNotes();

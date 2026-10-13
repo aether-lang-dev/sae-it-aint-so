@@ -38,8 +38,8 @@ eq("formulas.autoSum: the numbers above", [(await cmds.run("formulas.autoSum cel
 await cmds.run("cell.set cell=H2 input=Total");
 await cmds.run("cell.set cell=I2 input=3");
 eq("or, with none just above, the numbers to the left", [(await cmds.run("formulas.autoSum cell=J2")).message, inputs("J2")], ["J2 = 3", ["=SUM(I2:I2)"]]);
-eq("none at all, or off the sheet: refused", [(await cmds.run("formulas.autoSum cell=A10")).message, (await cmds.run("formulas.autoSum cell=K2")).message],
-  ["no numbers above or to the left of A10", "K2 is not a cell on the sheet"]);
+eq("none at all, or off the sheet: refused", [(await cmds.run("formulas.autoSum cell=A10")).message, (await cmds.run("formulas.autoSum cell=AA2")).message],
+  ["no numbers above or to the left of A10", "AA2 is not a cell on the sheet"]);
 await cmds.run("formulas.use language=RexxJS");
 await cmds.run("cell.set cell=I3 input=4");
 await cmds.run("formulas.autoSum cell=I4");

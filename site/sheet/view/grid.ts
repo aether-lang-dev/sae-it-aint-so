@@ -2,9 +2,11 @@
 // numbers; column c + 1 is sheet column c. The cell, edit_text and
 // cell_style functions and on_cell_edit get model columns; on_cell_select a
 // column on screen (columns move). Keys over the selection run commands:
-// Delete clears it, Ctrl+C and Ctrl+V copy and paste, Ctrl+D and Ctrl+R
+// Delete clears it, Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste (over
+// the selection: a cell copied fills each of its cells), Ctrl+D and Ctrl+R
 // fill, Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) undo and redo, Ctrl+B, Ctrl+I and
-// Ctrl+U the look; while an editor is open, or a field has the focus, keys
+// Ctrl+U the look (Ctrl+arrows, to the edge of the data, are the grid's
+// own); while an editor is open, or a field has the focus, keys
 // are theirs. A cell's comment shows when the pointer rests on it.
 //
 // While a formula is typed in a cell, the references it names are outlined
@@ -20,6 +22,8 @@ import { pointable } from "../typing.ts";
 const SHIFT = 1, CTRL = 2, SUPER = 8;
 // A column's width until one is set (columns.width).
 export const COLUMN_WIDTH = 80;
+// The window of cells on screen at once: the grid scrolls over the rest.
+const SHOWN_ROWS = 25, SHOWN_COLS = 10;
 
 export function sheetGrid(v: SheetView): void {
   const { cells, headers, edit_text, cell_style, on_cell_select, on_cell_edit, on_col_resize, column_width } = ui;
@@ -34,7 +38,7 @@ export function sheetGrid(v: SheetView): void {
     ui.datagrid_refresh(v.grid);
   };
 
-  v.grid = ui.datagrid(ROWS, COLS + 1, ROWS, COLS, 1, () => {
+  v.grid = ui.datagrid(ROWS, COLS + 1, SHOWN_ROWS, SHOWN_COLS, 1, () => {
     column_width(COLUMN_WIDTH);
     cells((r: number, c: number) => {
       const key = keyAt(r, c);
@@ -127,7 +131,8 @@ export function sheetGrid(v: SheetView): void {
     if ((mods & (CTRL | SUPER)) === 0) return;
     switch (key.toLowerCase()) {
       case "c": v.run("edit.copy", { range }); return;
-      case "v": v.run("edit.paste", { at: topLeftOf(range) }); return;
+      case "x": v.run("edit.cut", { range }); return;
+      case "v": v.run("edit.paste", { at: range }); return;
       case "d": v.run("edit.fillDown", { range }); return;
       case "r": v.run("edit.fillRight", { range }); return;
       case "z": v.run((mods & SHIFT) !== 0 ? "edit.redo" : "edit.undo"); return;
@@ -137,10 +142,4 @@ export function sheetGrid(v: SheetView): void {
       case "u": toggleFont(v, "underline"); return;
     }
   });
-}
-
-// The top-left cell of "B4:A2" (A2), or of "B4" (B4).
-function topLeftOf(range: string): string {
-  const [a, b = a] = range.split(":").map((k) => addrOf(k)!);
-  return keyOf({ col: Math.min(a.col, b.col), row: Math.min(a.row, b.row) });
 }

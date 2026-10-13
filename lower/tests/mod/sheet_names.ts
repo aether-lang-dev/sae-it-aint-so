@@ -23,8 +23,8 @@ eq("and follows its cells", value("F1"), "19");
 await cmds.run("names.define name=qty range=B2:B3");
 eq("a name redefined: what reads it follows", value("F1"), "17");
 eq("refusals: a cell's name, a function's, TRUE, a bad range", [
-  await message("names.define name=A1 range=B2"), await message("names.define name=2x range=B2"), await message("names.define name=TRUE range=B2"), await message("names.define name=x range=Q99"),
-], ["A1 is a cell, not a name", "2x is not a name: a letter first, then letters, digits or _", "TRUE is not a name: a letter first, then letters, digits or _", "Q99 is not a range on the sheet"]);
+  await message("names.define name=A1 range=B2"), await message("names.define name=2x range=B2"), await message("names.define name=TRUE range=B2"), await message("names.define name=x range=AA99"),
+], ["A1 is a cell, not a name", "2x is not a name: a letter first, then letters, digits or _", "TRUE is not a name: a letter first, then letters, digits or _", "AA99 is not a range on the sheet"]);
 await cmds.run("names.delete name=rate");
 eq("names.delete: what read it is #NAME?", [value("F2"), String((wb.sheet.value("F2") as any).why)], ["#NAME?", "no name RATE"]);
 await cmds.run("names.define name=rate range=C3");
