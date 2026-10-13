@@ -10,13 +10,14 @@
 // sheet's name (sheetName), named
 // ranges (names: { QTY: "B2:B4" }), conditional-format rules (rules.ts's,
 // their ranges as text), charts ({ kind, range, title }) and how it is viewed
-// (view: { hiddenRows, hiddenCols, frozenRows, rowHeights }, 0-based), its
+// (view: { hiddenRows, hiddenCols, frozenRows, rowHeights, colWidths,
+// filter: { range, column, criterion } }, 0-based), its
 // merged cells (merges: ["A1:C1"]), its tables (tables: [{ name, range,
 // headers, columns }], the Tauri app's table metadata), and the workbook's
 // other sheets (sheets: [{ name, cells, names, rules, charts, view, merges,
 // tables }]).
 // writeSheetFile writes it all.
-import { addrOf, order, parseRange } from "./address.ts";
+import { addrOf, colName, order, parseRange } from "./address.ts";
 import { ICONS, rangeName } from "./rules.ts";
 import type { CfRule } from "./rules.ts";
 import { CHART_KINDS } from "./charts.ts";
@@ -26,7 +27,7 @@ import type { ChartSpec } from "./workbook.ts";
 import { show } from "./format.ts";
 import type { Note } from "./notes.ts";
 import { ruleOf } from "./validation.ts";
-import type { Page, Workbook } from "./workbook.ts";
+import type { Filter, Page, Workbook } from "./workbook.ts";
 
 export interface FileSheet {
   readonly name: string;
@@ -37,7 +38,8 @@ export interface FileSheet {
   readonly charts: readonly ChartSpec[];
   readonly view: {
     readonly hiddenRows: readonly number[]; readonly hiddenCols: readonly number[]; readonly frozenRows: number;
-    readonly rowHeights: readonly [number, number][];
+    readonly rowHeights: readonly [number, number][]; readonly colWidths: readonly [number, number][];
+    readonly filter: Filter | null;
   };
   readonly merges: readonly string[];
   readonly tables: readonly TableDef[];
@@ -113,8 +115,11 @@ function chartsOf(charts: unknown): ChartSpec[] {
 // How a sheet was viewed: rows and columns hidden, rows frozen.
 function viewOf(v: any): FileSheet["view"] {
   const indexes = (xs: unknown) => (Array.isArray(xs) ? xs.map(Number).filter((n) => Number.isInteger(n) && n >= 0) : []);
-  const heights = Array.isArray(v?.rowHeights) ? v.rowHeights.filter((p: unknown) => Array.isArray(p) && Number.isInteger(p[0]) && p[1] > 0).map((p: number[]): [number, number] => [p[0], p[1]]) : [];
-  return { hiddenRows: indexes(v?.hiddenRows), hiddenCols: indexes(v?.hiddenCols), frozenRows: Number.isInteger(v?.frozenRows) && v.frozenRows > 0 ? v.frozenRows : 0, rowHeights: heights };
+  const sizes = (xs: unknown) => (Array.isArray(xs) ? xs.filter((p: unknown) => Array.isArray(p) && Number.isInteger(p[0]) && p[1] > 0).map((p: number[]): [number, number] => [p[0], p[1]]) : []);
+  const r = parseRange(String(v?.filter?.range ?? "")), column = addrOf(`${v?.filter?.column ?? ""}1`);
+  const filter = r && column ? { range: r, column: column.col, criterion: String(v.filter.criterion ?? "") } : null;
+  return { hiddenRows: indexes(v?.hiddenRows), hiddenCols: indexes(v?.hiddenCols), frozenRows: Number.isInteger(v?.frozenRows) && v.frozenRows > 0 ? v.frozenRows : 0,
+    rowHeights: sizes(v?.rowHeights), colWidths: sizes(v?.colWidths), filter };
 }
 
 // Tables as written ({ name, range, headers, columns }), read back.
@@ -179,8 +184,10 @@ const tablesIn = (page: Page) => page.sheet.tables().map((t) => ({ name: t.name,
 const chartsIn = (page: Page) => page.charts.map((c) => ({ kind: c.kind, range: rangeName(c.range), title: c.title }));
 const up = (a: number, b: number) => a - b;
 const viewIn = (page: Page) => ({
-  hiddenRows: [...new Set([...page.hiddenRows, ...(page.filtered ?? [])])].sort(up), hiddenCols: [...page.hiddenCols].sort(up), frozenRows: page.frozen,
-  rowHeights: [...page.heights].sort(([a], [b]) => a - b),
+  hiddenRows: [...page.hiddenRows].sort(up), hiddenCols: [...page.hiddenCols].sort(up), frozenRows: page.frozen,
+  rowHeights: [...page.heights].sort(([a], [b]) => a - b), colWidths: [...page.widths].sort(([a], [b]) => a - b),
+  // The filter's rows are worked out again when the file is opened.
+  ...(page.filter ? { filter: { range: rangeName(page.filter.range), column: colName(page.filter.column), criterion: page.filter.criterion } } : {}),
 });
 
 // The workbook as a file: JSON-ready.

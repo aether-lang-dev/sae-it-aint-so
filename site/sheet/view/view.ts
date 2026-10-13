@@ -9,6 +9,7 @@ import { Commands } from "../commands.ts";
 import type { Outcome, Params } from "../commands.ts";
 import type { Problem } from "../sheet.ts";
 import { Workbook } from "../workbook.ts";
+import { COLUMN_WIDTH } from "./grid.ts";
 import type { ChartView, Watch } from "../workbook.ts";
 
 export class SheetView {
@@ -34,6 +35,7 @@ export class SheetView {
   #shownHidden = { rows: new Set<number>(), cols: new Set<number>() };
   #frozen = 0;
   #merged: string[] = [];
+  #sized = new Map<number, number>();
 
   // The selected cell's key (A1 when the address field names none).
   here(): string {
@@ -124,7 +126,16 @@ export class SheetView {
       this.#showView();
       ui.datagrid_refresh(this.grid);
       this.#fitRows();
+      this.#sizeCols();
     }
+  }
+
+  // Columns set to a width that width; columns no longer set the grid's.
+  #sizeCols(): void {
+    const set = new Map(this.wb.colWidths());
+    for (const [c] of this.#sized) if (!set.has(c)) ui.datagrid_set_col_width(this.grid, this.viewCol(c + 1), COLUMN_WIDTH);
+    for (const [c, w] of set) if (this.#sized.get(c) !== w) ui.datagrid_set_col_width(this.grid, this.viewCol(c + 1), w);
+    this.#sized = set;
   }
 
   // The active sheet's hidden rows and columns and frozen rows, given to the

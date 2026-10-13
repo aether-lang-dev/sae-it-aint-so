@@ -2,7 +2,7 @@
 // and right. What a formula becomes in another cell is its language's
 // rewrite by the distance (shift.ts's movedBy). Nothing here touches a Sheet: these take inputs and give
 // back [key, input] pairs for Sheet.setMany.
-import { addrOf, keyOf } from "./address.ts";
+import { COLS, ROWS, addrOf, keyOf } from "./address.ts";
 import type { Addr } from "./address.ts";
 import type { Language } from "./language.ts";
 import { movedBy } from "./shift.ts";
@@ -37,19 +37,27 @@ export function pasted(tsv: string, at: Addr, source?: { readonly from: Addr; re
     .map(([a, input]) => [keyOf(a), source ? movedBy(source.language, input, by) : input]);
 }
 
-// Fill down: each column's top cell copied into the cells below it in the
-// rectangle; fill right, each row's left cell across. A rectangle one row
-// tall (one column wide, for right) fills from the row above (the column to
-// its left), as a spreadsheet's Ctrl+D (Ctrl+R) does.
-export function filled(input: (key: string) => string, a: Addr, b: Addr, way: "down" | "right", language: Language): [string, string][] {
+// Fill down copies the top row of a rectangle into the rest of it, each
+// formula moved; fill right, the left column across; fill up, the bottom
+// row; fill left, the right column. A rectangle one line thick fills from
+// the line beyond it (the row above, for down), as a spreadsheet's Ctrl+D
+// (Ctrl+R) does. With `lines` > 1 the source is that many lines, repeated
+// (the Tauri app's FILLDOWN of "A1:A2" into "A3:A10").
+export type FillWay = "down" | "right" | "up" | "left";
+export function filled(input: (key: string) => string, a: Addr, b: Addr, way: FillWay, language: Language, lines = 1): [string, string][] {
   const { top, bottom, left, right } = corners(a, b);
-  const down = way === "down";
-  const first = down ? (top === bottom ? top - 1 : top) : (left === right ? left - 1 : left);
-  if (first < 0) return [];
+  const rows = way === "down" || way === "up", back = way === "up" || way === "left";
+  const [lo, hi, limit] = rows ? [top, bottom, ROWS] : [left, right, COLS];
+  const n = Math.max(1, Math.min(lines, hi - lo + 1));
+  const beyond = lo === hi && n === 1;
+  const source = (line: number) => (back ? (beyond ? hi + 1 : hi - ((hi - line) % n)) : (beyond ? lo - 1 : lo + ((line - lo) % n)));
+  if (source(back ? lo : hi) < 0 || source(back ? lo : hi) >= limit) return [];
   const out: [string, string][] = [];
-  for (let row = down ? first + 1 : top; row <= bottom; row++) {
-    for (let col = down ? left : first + 1; col <= right; col++) {
-      const src = down ? { col, row: first } : { col: first, row };
+  for (let row = top; row <= bottom; row++) {
+    for (let col = left; col <= right; col++) {
+      const line = rows ? row : col, from = source(line);
+      if (from === line) continue;
+      const src = rows ? { col, row: from } : { col: from, row };
       out.push([keyOf({ col, row }), movedBy(language, input(keyOf(src)), { cols: col - src.col, rows: row - src.row })]);
     }
   }

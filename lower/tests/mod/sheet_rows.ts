@@ -34,7 +34,7 @@ await cmds.run("sheet.add name=Other");
 eq("each sheet its own", [wb.hidden(), wb.frozenRows()], [{ rows: [], cols: [] }, 0]);
 await cmds.run("sheet.activate name=Sheet1");
 const read = readSheetFile(JSON.parse(JSON.stringify(writeSheetFile(wb))));
-eq("saved with the sheet", [read.sheets[0].view], [{ hiddenRows: [6], hiddenCols: [], frozenRows: 2, rowHeights: [] }]);
+eq("saved with the sheet", [read.sheets[0].view], [{ hiddenRows: [6], hiddenCols: [], frozenRows: 2, rowHeights: [], colWidths: [], filter: null }]);
 // expect: ok rows.hide and rows.unhide, by the rows a range covers
 // expect: ok columns too
 // expect: ok hidden rows move with inserted ones

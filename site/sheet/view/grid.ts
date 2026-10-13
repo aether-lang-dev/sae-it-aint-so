@@ -18,6 +18,8 @@ import { toggleFont } from "./lookbar.ts";
 import { pointable } from "../typing.ts";
 
 const SHIFT = 1, CTRL = 2, SUPER = 8;
+// A column's width until one is set (columns.width).
+export const COLUMN_WIDTH = 80;
 
 export function sheetGrid(v: SheetView): void {
   const { cells, headers, edit_text, cell_style, on_cell_select, on_cell_edit, on_col_resize, column_width } = ui;
@@ -33,7 +35,7 @@ export function sheetGrid(v: SheetView): void {
   };
 
   v.grid = ui.datagrid(ROWS, COLS + 1, ROWS, COLS, 1, () => {
-    column_width(80);
+    column_width(COLUMN_WIDTH);
     cells((r: number, c: number) => {
       const key = keyAt(r, c);
       return key ? v.wb.textOf(key) : String(r + 1);
@@ -84,7 +86,10 @@ export function sheetGrid(v: SheetView): void {
     });
     on_col_resize((c: number, w: number) => {
       const m = ui.datagrid_col_model(v.grid, c);
-      if (m >= 1) print(`sheet: column ${colName(m - 1)} is ${w} wide`);
+      if (m < 1) return;
+      print(`sheet: column ${colName(m - 1)} is ${w} wide`);
+      // Kept in the model, so it is saved and undone with the rest.
+      if (v.wb.colWidths().find(([col]) => col === m - 1)?.[1] !== w) v.run("columns.width", { range: `${colName(m - 1)}1`, width: String(w) });
     });
   });
   ui.datagrid_set_col_width(v.grid, 0, 34);     // the row numbers

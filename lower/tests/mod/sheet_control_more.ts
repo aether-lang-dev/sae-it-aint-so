@@ -53,6 +53,38 @@ eq("BATCH_EXECUTE: each by any name a script has, SETCELL too; what each gave or
   { index: 0, command: "SETCELL", success: true, result: "9" }, { index: 1, command: "INSERTROW", success: true, result: "OK" },
   { index: 2, command: "NOPE", success: false, error: "Unknown command: NOPE" }, { index: 3, command: "INSERTROW", success: false, error: "INSERTROW needs a row number (e.g. 2)" },
 ], "9"]);
+
+// Fills, widths, the filter.
+const wb2 = new Workbook();
+const cmds2 = new Commands(wb2);
+const fns2 = controlFunctions((id, params) => cmds2.execute(id, params), {});
+for (const [k, v] of [["B5", "=A5+1"], ["E1", "7"], ["E2", "=E1*2"]]) await cmds2.run(`cell.set cell=${k} input=${v}`);
+await fns2.FILLUP("B5", "B3:B4");
+await fns2.FILLLEFT("E2", "C2:D2");
+eq("FILLUP and FILLLEFT: the source copied back, each formula moved", ["B3", "B4", "C2", "D2"].map((k) => wb2.sheet.input(k)), ["=A3+1", "=A4+1", "=C1*2", "=D1*2"]);
+await fns2.AUTOFILL("E1:E2", "E3:E4");
+await fns2.AUTOFILL("E1:E2", "F1:G2");
+await fns2.AUTOFILL("B3", "B1:B2");
+eq("AUTOFILL goes the way the target lies, its source repeated: down, right, up", ["E3", "E4", "F1", "G2", "B1"].map((k) => wb2.sheet.input(k)), ["7", "=E3*2", "7", "=G1*2", "=A1+1"]);
+eq("AUTOFILL refuses a target over the source", await failed(() => fns2.AUTOFILL("A1:B2", "B2:C3")), "AUTOFILL: the target must lie beside the source");
+
+eq("SETCOLWIDTH and GETCOLWIDTH, 0 for the grid's own", [await fns2.SETCOLWIDTH("C", 120), await fns2.GETCOLWIDTH(3), await fns2.GETCOLWIDTH("D"), await failed(() => fns2.SETCOLWIDTH("C", -1))],
+  ["OK", 120, 0, "-1 is not a width (0 for the grid's)"]);
+await cmds2.run("columns.insert at=A");
+eq("a width moves with an inserted column", [await fns2.GETCOLWIDTH("D"), wb2.colWidths()], [120, [[3, 120]]]);
+
+for (const [k, v] of [["A10", "region"], ["B10", "sales"], ["A11", "North"], ["B11", "100"], ["A12", "South"], ["B12", "250"]]) await cmds2.run(`cell.set cell=${k} input=${v}`);
+eq("GETFILTERCRITERIA: none, then the filter's range, column and criterion", [await fns2.GETFILTERCRITERIA(), (await cmds2.run('data.filter range=A10:B12 column=B criterion=">150"')).ok, JSON.parse(await fns2.GETFILTERCRITERIA() as string)],
+  ["", true, { range: "A10:B12", column: "B", criterion: ">150" }]);
+await cmds2.run("rows.insert at=1");
+eq("the filter moves with an inserted row", [JSON.parse(await fns2.GETFILTERCRITERIA() as string).range, wb2.hidden().rows], ["A11:B13", [11]]);
+const saved = JSON.parse(await fns2.EXPORT() as string);
+const reopened = new Workbook();
+await new Commands(reopened).execute("file.import", { text: JSON.stringify(saved) });
+eq("saved, the filter worked out again when opened: its rows not hidden by hand", [saved.view, reopened.hidden().rows, reopened.colWidths()],
+  [{ hiddenRows: [], hiddenCols: [], frozenRows: 0, rowHeights: [], colWidths: [[3, 120]], filter: { range: "A11:B13", column: "B", criterion: ">150" } }, [11], [[3, 120]]]);
+await new Commands(reopened).run("data.clearFilter");
+eq("and cleared", [reopened.hidden().rows, reopened.page(reopened.active)!.filter], [[], null]);
 // expect: ok EXPORT, IMPORT, EVALUATE, RECALCULATE and the setup script's three tell their commands
 // expect: ok EVALUATE: a formula worked out against the sheet, no cell set; an error says why
 // expect: ok RECALCULATE: how many formulas it worked out
@@ -62,3 +94,12 @@ eq("BATCH_EXECUTE: each by any name a script has, SETCELL too; what each gave or
 // expect: ok IMPORT of what is not a sheet file
 // expect: ok BATCH_SET_CELLS: each set that can be, and a summary
 // expect: ok BATCH_EXECUTE: each by any name a script has, SETCELL too; what each gave or why not
+// expect: ok FILLUP and FILLLEFT: the source copied back, each formula moved
+// expect: ok AUTOFILL goes the way the target lies, its source repeated: down, right, up
+// expect: ok AUTOFILL refuses a target over the source
+// expect: ok SETCOLWIDTH and GETCOLWIDTH, 0 for the grid's own
+// expect: ok a width moves with an inserted column
+// expect: ok GETFILTERCRITERIA: none, then the filter's range, column and criterion
+// expect: ok the filter moves with an inserted row
+// expect: ok saved, the filter worked out again when opened: its rows not hidden by hand
+// expect: ok and cleared

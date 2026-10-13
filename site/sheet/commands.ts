@@ -12,6 +12,7 @@ import { COLS, ROWS, cellAddr, colName, keyOf, parseRange, range, splitKey } fro
 import { evaluationSteps } from "./audit.ts";
 import type { Addr } from "./address.ts";
 import { copied, filled, pasted } from "./copy.ts";
+import type { FillWay } from "./copy.ts";
 import { fromCsv, toCsv } from "./csv.ts";
 import { readSheetFile, writeSheetFile } from "./file.ts";
 import type { SheetFile } from "./file.ts";
@@ -37,7 +38,7 @@ import { criterion } from "./functions.ts";
 const NUMERIC_TEXT = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)\s*$/;
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
-import type { Direction, LanguageName, Page, Workbook } from "./workbook.ts";
+import type { Direction, Filter, LanguageName, Page, Workbook } from "./workbook.ts";
 import { FormulaError } from "./lexer.ts";
 
 export type Params = Readonly<Record<string, string>>;
@@ -167,6 +168,7 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     page.hiddenCols = new Set(s.view.hiddenCols);
     page.frozen = s.view.frozenRows;
     page.heights = new Map(s.view.rowHeights);
+    page.widths = new Map(s.view.colWidths);
     page.merges = s.merges.map((m) => parseRange(m)!);
     for (const t of s.tables) await wb.sheet.defineTable(t.name, t);
   }
@@ -174,6 +176,8 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
   wb.name = file.name;
   wb.setupScript = file.setupScript;
   await wb.settle();
+  // A filter is worked out once every sheet's cells are.
+  for (const s of file.sheets) if (s.view.filter) filtering(wb.page(s.name)!, s.view.filter);
   const cells = file.sheets.reduce((n, s) => n + s.entries.length, 0);
   const message = `opened ${file.name}: ${cells} cells, ${file.language} formulas`;
   return { ok: true, message: failed ? `${message}; its setup script failed: ${failed.split("\n").pop()}` : message, changed: [...new Set([...before, ...wb.sheet.keys()])] };
@@ -250,9 +254,28 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
         const to = edit.cell({ col: 0, row }, still);
         return to ? [[to.row, h]] : [];
       }));
+    } else {
+      page.widths = new Map([...page.widths].flatMap(([col, w]): [number, number][] => {
+        const to = edit.cell({ col, row: 0 }, still);
+        return to ? [[to.col, w]] : [];
+      }));
+    }
+    if (page.filter) {
+      const r = edit.range(page.filter.range[0], page.filter.range[1], still, still), col = edit.cell({ col: page.filter.column, row: 0 }, still);
+      page.filter = r && col ? { ...page.filter, range: r, column: col.col } : null;
+      if (!page.filter) page.filtered = null;
     }
     const thing = `${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"}`;
     return setting(wb, entries, `${how === "insert" ? "inserted" : "deleted"} ${thing} at ${axis === "row" ? at + 1 : colName(at)}`);
+  };
+}
+
+// Fill down, right, up or left over a range (copy.ts), from its first
+// `source` lines (1: Ctrl+D's first row).
+function fill(way: FillWay) {
+  return (wb: Workbook, p: Params): Promise<Outcome> => {
+    const r = rangeOf(p.range), lines = countOf(p.source);
+    return setting(wb, filled(inputs(wb), r[0], r[1], way, wb.sheet.language, lines), `filled ${named(r)} ${way}`);
   };
 }
 
@@ -353,6 +376,20 @@ function spanOf(r: [Addr, Addr], rows: boolean): { at: number[]; said: string } 
   const name = (i: number) => (rows ? String(i + 1) : colName(i));
   const at = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
   return { at, said: `${rows ? "row" : "column"}${at.length > 1 ? `s ${name(lo)} to ${name(hi)}` : ` ${name(lo)}`}` };
+}
+
+// A page's AutoFilter set, and the rows it hides worked out: under the
+// range's first row (its headers), those whose value in the column fails
+// the criterion, read as COUNTIF reads one (5, ">100", "<>x", "north").
+function filtering(page: Page, filter: Filter): Set<number> {
+  const [a, b] = filter.range, keep = criterion(NUMERIC_TEXT.test(filter.criterion) ? Number(filter.criterion) : filter.criterion);
+  const hidden = new Set<number>();
+  for (let row = Math.min(a.row, b.row) + 1; row <= Math.max(a.row, b.row); row++) {
+    if (!keep(page.sheet.value(keyOf({ col: filter.column, row })))) hidden.add(row);
+  }
+  page.filter = filter;
+  page.filtered = hidden;
+  return hidden;
 }
 
 function hiding(rows: boolean, hide: boolean) {
@@ -607,20 +644,10 @@ const SPECS: readonly Spec[] = [
       return changedBy(wb, changed, `${key} = ${show(wb.sheet.value(key))}`);
     },
   },
-  {
-    id: "edit.fillDown", label: "Fill Down", params: ["range"], journaled: true,
-    run: (wb, p) => {
-      const r = rangeOf(p.range);
-      return setting(wb, filled(inputs(wb), r[0], r[1], "down", wb.sheet.language), `filled ${named(r)} down`);
-    },
-  },
-  {
-    id: "edit.fillRight", label: "Fill Right", params: ["range"], journaled: true,
-    run: (wb, p) => {
-      const r = rangeOf(p.range);
-      return setting(wb, filled(inputs(wb), r[0], r[1], "right", wb.sheet.language), `filled ${named(r)} right`);
-    },
-  },
+  { id: "edit.fillDown", label: "Fill Down", params: ["range"], optional: ["source"], journaled: true, run: fill("down") },
+  { id: "edit.fillRight", label: "Fill Right", params: ["range"], optional: ["source"], journaled: true, run: fill("right") },
+  { id: "edit.fillUp", label: "Fill Up", params: ["range"], optional: ["source"], journaled: true, run: fill("up") },
+  { id: "edit.fillLeft", label: "Fill Left", params: ["range"], optional: ["source"], journaled: true, run: fill("left") },
   {
     id: "edit.undo", label: "Undo", params: [], journaled: true,
     run: async (wb) => {
@@ -844,14 +871,9 @@ const SPECS: readonly Spec[] = [
   {
     id: "data.filter", label: "AutoFilter", params: ["range", "column", "criterion"], journaled: true,
     run: async (wb, p) => {
-      const r = rangeOf(p.range), col = columnOf(p.column), tl = topLeft(r);
-      const bottom = Math.max(r[0].row, r[1].row), right = Math.max(r[0].col, r[1].col);
-      if (col < tl.col || col > right) refuse(`${p.column} is not a column of ${named(r)}`);
-      // The criterion as COUNTIF reads one: 5, ">100", "<>x", "north".
-      const keep = criterion(NUMERIC_TEXT.test(p.criterion) ? Number(p.criterion) : p.criterion);
-      const hidden = new Set<number>();
-      for (let row = tl.row + 1; row <= bottom; row++) if (!keep(wb.sheet.value(keyOf({ col, row })))) hidden.add(row);
-      wb.page(wb.active)!.filtered = hidden;
+      const r = rangeOf(p.range), col = columnOf(p.column);
+      if (col < Math.min(r[0].col, r[1].col) || col > Math.max(r[0].col, r[1].col)) refuse(`${p.column} is not a column of ${named(r)}`);
+      const hidden = filtering(wb.page(wb.active)!, { range: r, column: col, criterion: p.criterion });
       return changedBy(wb, wb.sheet.keys(), `filtered ${named(r)} by ${colName(col)} ${p.criterion}: ${hidden.size} row${hidden.size === 1 ? "" : "s"} hidden`);
     },
   },
@@ -862,6 +884,7 @@ const SPECS: readonly Spec[] = [
       if (!page.filtered) refuse("no filter");
       const n = [...page.filtered!].filter((r) => !page.hiddenRows.has(r)).length;
       page.filtered = null;
+      page.filter = null;
       return changedBy(wb, wb.sheet.keys(), `filter cleared: ${n} row${n === 1 ? "" : "s"} shown`);
     },
   },
@@ -906,6 +929,16 @@ const SPECS: readonly Spec[] = [
       const page = wb.page(wb.active)!, { at, said } = spanOf(rangeOf(p.range), true);
       for (const row of at) if (h) page.heights.set(row, h); else page.heights.delete(row);
       return changedBy(wb, [], h ? `${said} ${at.length > 1 ? "are" : "is"} ${h} high` : `${said} ${at.length > 1 ? "are" : "is"} as tall as the grid's`);
+    },
+  },
+  {
+    id: "columns.width", label: "Column Width", params: ["range", "width"], journaled: true,
+    run: async (wb, p) => {
+      const w = Number(p.width);
+      if (!Number.isInteger(w) || w < 0) refuse(`${p.width} is not a width (0 for the grid's)`);
+      const page = wb.page(wb.active)!, { at, said } = spanOf(rangeOf(p.range), false);
+      for (const col of at) if (w) page.widths.set(col, w); else page.widths.delete(col);
+      return changedBy(wb, [], w ? `${said} ${at.length > 1 ? "are" : "is"} ${w} wide` : `${said} ${at.length > 1 ? "are" : "is"} as wide as the grid's`);
     },
   },
   {
@@ -1144,10 +1177,11 @@ const SPECS: readonly Spec[] = [
     // columns by letter (control.ts's ISROWHIDDEN, GETSHEETNAMES, CANUNDO ...).
     id: "sheet.state", label: "About the sheet", params: [], journaled: false,
     run: async (wb) => {
-      const hidden = wb.hidden();
+      const hidden = wb.hidden(), page = wb.page(wb.active)!;
       const state = {
         name: wb.active, sheets: wb.sheetNames(), hiddenRows: hidden.rows.map((r) => r + 1), hiddenCols: hidden.cols.map(colName),
-        frozenRows: wb.frozenRows(), rowHeights: wb.rowHeights().map(([r, h]) => [r + 1, h]),
+        frozenRows: wb.frozenRows(), rowHeights: wb.rowHeights().map(([r, h]) => [r + 1, h]), colWidths: wb.colWidths().map(([c, w]) => [colName(c), w]),
+        filter: page.filter && { range: rangeName(page.filter.range), column: colName(page.filter.column), criterion: page.filter.criterion },
         canUndo: wb.sheet.canUndo ? 1 : 0, canRedo: wb.sheet.canRedo ? 1 : 0,
       };
       return { ok: true, message: JSON.stringify(state), changed: [], output: state };

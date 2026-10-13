@@ -9,6 +9,7 @@
 import { COLS, ROWS, addrOf, colName, keyOf, parseRange, range } from "./address.ts";
 import { check } from "./validation.ts";
 import type { Rule } from "./validation.ts";
+import type { Addr } from "./address.ts";
 
 export interface Done {
   readonly ok: boolean;
@@ -35,6 +36,8 @@ interface State {
   readonly hiddenCols: readonly string[];
   readonly frozenRows: number;
   readonly rowHeights: readonly (readonly [number, number])[];
+  readonly colWidths: readonly (readonly [string, number])[];
+  readonly filter: { readonly range: string; readonly column: string; readonly criterion: string } | null;
   readonly canUndo: number;
   readonly canRedo: number;
 }
@@ -78,13 +81,15 @@ const unstem = (v: unknown): unknown[] => {
   const s = v as Record<string, unknown>;
   return Array.from({ length: Number(s?.[0] ?? 0) }, (_, i) => s[i + 1]);
 };
-// The range two corners span, as the app's FILLDOWN takes its source and
-// target apart: "A1" and "A2:A5" is A1:A5.
-function spanned(a: string, b: string, fn: string): string {
+// The range a source and a target span, as the app's FILLDOWN takes them
+// apart ("A1" and "A2:A5" is A1:A5), and how many lines of it are the
+// source, repeated into the rest.
+function spanned(a: string, b: string, fn: string, across: boolean): { range: string; source: string } {
   const r = [parseRange(a), parseRange(b)];
   if (!r[0] || !r[1]) throw new Error(`${fn} needs a source and a target range (e.g. "A1", "A2:A10")`);
   const all = [...r[0], ...r[1]], cols = all.map((x) => x.col), rows = all.map((x) => x.row);
-  return `${keyOf({ col: Math.min(...cols), row: Math.min(...rows) })}:${keyOf({ col: Math.max(...cols), row: Math.max(...rows) })}`;
+  const lines = across ? Math.abs(r[0][0].col - r[0][1].col) + 1 : Math.abs(r[0][0].row - r[0][1].row) + 1;
+  return { range: `${keyOf({ col: Math.min(...cols), row: Math.min(...rows) })}:${keyOf({ col: Math.max(...cols), row: Math.max(...rows) })}`, source: String(lines) };
 }
 const rowsOf = (n: number) => `A${n}`;
 const VERSION = "sae demo 18";
@@ -145,8 +150,19 @@ export const CONTROL: Readonly<Record<string, Control>> = {
   DELETEROW: async (exec, n) => (await must(exec, "rows.delete", { at: String(row(n, "DELETEROW")) }), "OK"),
   INSERTCOLUMN: async (exec, c) => (await must(exec, "columns.insert", { at: col(c, "INSERTCOLUMN") }), "OK"),
   DELETECOLUMN: async (exec, c) => (await must(exec, "columns.delete", { at: col(c, "DELETECOLUMN") }), "OK"),
-  FILLDOWN: async (exec, s, t) => (await must(exec, "edit.fillDown", { range: spanned(text(s), text(t), "FILLDOWN") }), "OK"),
-  FILLRIGHT: async (exec, s, t) => (await must(exec, "edit.fillRight", { range: spanned(text(s), text(t), "FILLRIGHT") }), "OK"),
+  FILLDOWN: async (exec, s, t) => (await must(exec, "edit.fillDown", spanned(text(s), text(t), "FILLDOWN", false)), "OK"),
+  FILLRIGHT: async (exec, s, t) => (await must(exec, "edit.fillRight", spanned(text(s), text(t), "FILLRIGHT", true)), "OK"),
+  FILLUP: async (exec, s, t) => (await must(exec, "edit.fillUp", spanned(text(s), text(t), "FILLUP", false)), "OK"),
+  FILLLEFT: async (exec, s, t) => (await must(exec, "edit.fillLeft", spanned(text(s), text(t), "FILLLEFT", true)), "OK"),
+  // The way the target lies from the source, as the app's: below it, down.
+  AUTOFILL: async (exec, s, t) => {
+    const [src, to] = [parseRange(text(s)), parseRange(text(t))];
+    if (!src || !to) throw new Error('AUTOFILL needs a source and a target range (e.g. "A1:A3", "A4:A10")');
+    const lo = (r: [Addr, Addr], k: "row" | "col") => Math.min(r[0][k], r[1][k]), hi = (r: [Addr, Addr], k: "row" | "col") => Math.max(r[0][k], r[1][k]);
+    const way = lo(to, "row") > hi(src, "row") ? "Down" : hi(to, "row") < lo(src, "row") ? "Up" : lo(to, "col") > hi(src, "col") ? "Right" : hi(to, "col") < lo(src, "col") ? "Left" : null;
+    if (!way) throw new Error("AUTOFILL: the target must lie beside the source");
+    return (await must(exec, `edit.fill${way}`, spanned(text(s), text(t), "AUTOFILL", way === "Right" || way === "Left")), "");
+  },
   SORTRANGE: async (exec, r, by, ascending) => {
     const id = ascending === undefined || yes(ascending) ? "data.sortAscending" : "data.sortDescending";
     return (await must(exec, id, { range: text(r), by: col(by, "SORTRANGE") }), "OK");
@@ -165,7 +181,16 @@ export const CONTROL: Readonly<Record<string, Control>> = {
   ISCOLUMNHIDDEN: async (exec, c) => ((await state(exec)).hiddenCols.includes(col(c, "ISCOLUMNHIDDEN")) ? 1 : 0),
   ISROWVISIBLE: async (exec, n) => ((await state(exec)).hiddenRows.includes(row(n, "ISROWVISIBLE")) ? "0" : "1"),
   SETROWHEIGHT: async (exec, n, h) => (await must(exec, "rows.height", { range: rowsOf(row(n, "SETROWHEIGHT")), height: text(h) }), "OK"),
-  // 0: the grid's own height.
+  SETCOLWIDTH: async (exec, c, w) => (await must(exec, "columns.width", { range: `${col(c, "SETCOLWIDTH")}1`, width: text(w) }), "OK"),
+  // 0: the grid's own width (and height, below).
+  GETCOLWIDTH: async (exec, c) => {
+    const letter = col(c, "GETCOLWIDTH");
+    return (await state(exec)).colWidths.find(([at]) => at === letter)?.[1] ?? 0;
+  },
+  GETFILTERCRITERIA: async (exec) => {
+    const filter = (await state(exec)).filter;
+    return filter ? JSON.stringify(filter) : "";
+  },
   GETROWHEIGHT: async (exec, n) => {
     const r = row(n, "GETROWHEIGHT");
     return (await state(exec)).rowHeights.find(([at]) => at === r)?.[1] ?? 0;
@@ -267,14 +292,8 @@ const table = (ts: readonly Table[], name: string) => {
 export const MISSING: Readonly<Record<string, string>> = {
   SETSHEETNAME: "sheet renaming (the plan's 8)",
   RENAMESHEET: "sheet renaming (the plan's 8)",
-  SETCOLWIDTH: "column widths in the model (the grid keeps them)",
-  GETCOLWIDTH: "column widths in the model (the grid keeps them)",
-  GETFILTERCRITERIA: "the filter's criterion kept (demo 18 keeps the rows it hid)",
   MOVECOLUMNLEFT: "moving columns",
   MOVECOLUMNRIGHT: "moving columns",
-  FILLUP: "fill up",
-  FILLLEFT: "fill left",
-  AUTOFILL: "AutoFill from a source to a target (edit.fillSeries fills a range)",
   SETCELLEDITOR: "cell editors (a dropdown, a checkbox, a date in a cell)",
   GETCELLEDITOR: "cell editors",
   REMOVECELLEDITOR: "cell editors",

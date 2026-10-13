@@ -44,6 +44,11 @@ eq("a one-column selection from the column left", filled(input, at("B2"), at("B2
 eq("either corner first", filled(input, at("B3"), at("A1"), "down", EXCEL), filled(input, at("A1"), at("B3"), "down", EXCEL));
 eq("nothing above the first row to fill from", filled(input, at("A1"), at("B1"), "down", EXCEL), []);
 eq("an empty source empties the rest", filled(input, at("C1"), at("C2"), "down", EXCEL), [["C2", ""]]);
+eq("fill up repeats the bottom row, moved; fill left the right column", [filled(input, at("B1"), at("B2"), "up", EXCEL), filled(input, at("A1"), at("B1"), "left", EXCEL)],
+  [[["B1", "=$A$1+A1"]], [["A1", "=#REF!*2"]]]);
+eq("one line thick, from the line beyond it; nothing beyond the last row", [filled(input, at("A1"), at("A1"), "up", EXCEL), filled(input, at("A20"), at("B20"), "up", EXCEL)],
+  [[["A1", "x"]], []]);
+eq("a source of two lines, repeated", filled(input, at("A1"), at("A4"), "down", EXCEL, 2), [["A3", "1"], ["A4", "x"]]);
 // expect: ok a relative reference moves with the cell
 // expect: ok $ fixes a column, a row, or both
 // expect: ok a range moves both its corners
@@ -70,3 +75,6 @@ eq("an empty source empties the rest", filled(input, at("C1"), at("C2"), "down",
 // expect: ok either corner first
 // expect: ok nothing above the first row to fill from
 // expect: ok an empty source empties the rest
+// expect: ok fill up repeats the bottom row, moved; fill left the right column
+// expect: ok one line thick, from the line beyond it; nothing beyond the last row
+// expect: ok a source of two lines, repeated

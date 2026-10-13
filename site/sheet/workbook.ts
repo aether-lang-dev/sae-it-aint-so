@@ -66,8 +66,9 @@ export const CHART_W = 400, CHART_H = 240;
 // A sheet of the workbook: its name as given, its cells and their notes, its
 // conditional-format rules (rules.ts), in priority order, its charts, and
 // how it is viewed: rows and columns hidden by hand (0-based), rows hidden
-// by its AutoFilter, how many rows are frozen, its merged cells, and rows
-// set to a height (0-based row to px).
+// by its AutoFilter (and the filter itself), how many rows are frozen, its
+// merged cells, rows set to a height (0-based row to px) and columns set to
+// a width (0-based column to px).
 export interface Page {
   readonly name: string;
   readonly sheet: Sheet;
@@ -77,9 +78,19 @@ export interface Page {
   hiddenRows: Set<number>;
   hiddenCols: Set<number>;
   filtered: Set<number> | null;
+  filter: Filter | null;
   frozen: number;
   merges: [Addr, Addr][];
   heights: Map<number, number>;
+  widths: Map<number, number>;
+}
+
+// An AutoFilter: its range (headers in the first row), the column it
+// tests, and the criterion, as COUNTIF reads one.
+export interface Filter {
+  readonly range: [Addr, Addr];
+  readonly column: number;
+  readonly criterion: string;
 }
 
 export type Direction = "precedents" | "dependents";
@@ -157,7 +168,7 @@ export class Workbook {
       keys.add(key);
     };
     return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [], charts: [],
-      hiddenRows: new Set(), hiddenCols: new Set(), filtered: null, frozen: 0, merges: [], heights: new Map() };
+      hiddenRows: new Set(), hiddenCols: new Set(), filtered: null, filter: null, frozen: 0, merges: [], heights: new Map(), widths: new Map() };
   }
 
   // A cell on another sheet ("COSTS!B2"), or #REF! when there is no such sheet.
@@ -378,6 +389,11 @@ export class Workbook {
 
   rowHeights(): [number, number][] {
     return [...this.#active.heights].sort(([a], [b]) => a - b);
+  }
+
+  // Its columns set to a width ([column, px], 0-based, in order).
+  colWidths(): [number, number][] {
+    return [...this.#active.widths].sort(([a], [b]) => a - b);
   }
 
   // A formula being typed in the active sheet (null once it is entered or

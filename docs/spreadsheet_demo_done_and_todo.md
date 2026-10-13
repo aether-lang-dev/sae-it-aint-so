@@ -445,10 +445,12 @@ summary.
     (by a header row or named columns), read by TABLE in any case,
     refused, moved with an inserted row, saved and read back, deleted; and
     a script's GROUP_BY the sheet's.
-  - `sheet_control_more` (9 so far): the functions brought in after the
+  - `sheet_control_more` (18 so far): the functions brought in after the
     first 64, stubbed then through a Workbook: the file's JSON out and in,
     EVALUATE and RECALCULATE, the setup script kept, run and failing, the
-    two batches.
+    two batches; fills up and left, AUTOFILL each way with its source
+    repeated; column widths kept, moved and saved; the filter kept, moved,
+    saved, worked out again on opening, cleared.
   - `sheet_control` (17): each control function against a stubbed `exec`
     (the command it tells and its parameters, what it gives from the
     answer, arguments as the app takes them, refusals); every name in the
@@ -466,10 +468,10 @@ summary.
     formula reads, Rexx's operators and functions, errors, the setup
     script, every range function, the copy rule), then the Tauri app's two
     sample sheets through a Sheet, each cell at the value the file stored.
-  - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
+  - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 45 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 46 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -517,7 +519,9 @@ summary.
     SUM` spilled and `WHERE |> COUNT`, both following an edit;
   - the app's control functions in a script: ADDRESS SPREADSHEET strings
     with RC and RESULT, HIDECOLUMN and the getters by name, a currency
-    format drawn, LISTCOMMANDS('missing'), and a missing one's message.
+    format drawn, and a missing one's message;
+  - SETCOLWIDTH drawn on the grid, and AUTOFILL repeating a two-cell
+    source.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -719,9 +723,16 @@ each with checks in `sheet_control_more`:
   text=`), EVALUATE (`formulas.calculate formula=`), RECALCULATE
   (`formulas.recalculate`), the setup script's three (`setup.get`,
   `setup.set text=`, `setup.run`);
+- done: FILLUP and FILLLEFT (`edit.fillUp`, `edit.fillLeft`; every fill
+  takes `source=n`, the lines repeated, as the app's FILLDOWN of "A1:A2"
+  repeats both), AUTOFILL (the way the target lies, in `control.ts`),
+  SETCOLWIDTH and GETCOLWIDTH (`columns.width range= width=`, kept per
+  sheet, saved as `view.colWidths`, moved with columns; a grip drag runs
+  it, so widths are saved and journaled), GETFILTERCRITERIA (the page
+  keeps its `filter`, saved as `view.filter` and worked out again when
+  the file opens, moved with rows and columns);
 - still `MISSING` (each refusing with what it needs, listed by
-  `LISTCOMMANDS('missing')`): sheet renaming, column widths,
-  GETFILTERCRITERIA, moving columns, FILLUP, FILLLEFT, AUTOFILL, cell
+  `LISTCOMMANDS('missing')`): sheet renaming, moving columns, cell
   editors, auto IDs, table metadata, the table sort cycle, pivots.
 
 The app's `src/spreadsheet-control-functions.js` has about 100 control
