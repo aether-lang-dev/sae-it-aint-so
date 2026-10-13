@@ -517,11 +517,25 @@ line.
 
 ## To do
 
-Roughly in order of value for effort.
+This section is the plan; keep it current as things land.
+`docs/gridcraft-audit.md`'s recommended order (twelve steps, set against
+GridCraft, an Excel reimplementation in Rust) is all done. What comes next,
+in order of value for effort:
 
-`docs/gridcraft-audit.md` sets this list against GridCraft (an Excel
-reimplementation in Rust) and recommends an order: a command layer first,
-with RexxJS's `ADDRESS SHEET` over it, then the features below and more.
+1. **Undo for everything.** Undo takes back cell contents only; notes,
+   looks, rules, charts, merges, hidden rows, names and sheets added or
+   deleted are not undone. A workbook-wide undo of command snapshots
+   (GridCraft's idea 4) would cover them all, and undo across sheets.
+2. **A bigger sheet** (Demo 18's own, 3 below): 26 x 100 at least.
+3. **Cut, and paste over a larger selection** (Demo 18's own, 2).
+4. **Functions:** scalar functions lifted over arrays, then named
+   LAMBDAs, TAKE/DROP/CHOOSECOLS/VSTACK/HSTACK, and a text batch.
+5. **The Tauri app's query functions and control bus** (3 and 5 below).
+6. **Sheets renamed and moved**, names scoped to the workbook.
+7. **`files` in app mode**, the system clipboard: each needs a page
+   service.
+
+The lists below are where these come from.
 
 **From the Tauri spreadsheet** (RexxJS/example-app-spreadsheet; its model
 is `src/spreadsheet-model.js`, its control functions
@@ -533,17 +547,17 @@ is `src/spreadsheet-model.js`, its control functions
    undo is its own, and adding or deleting a sheet is not undone), names
    scoped to the workbook, and a cycle through two sheets found as one
    (settle() passes changes between sheets twenty times, then stops).
-2. ~~Saving and opening~~ (done, through `storage`). Still to come:
-   `files` in app mode (a `.json` or `.rexxsheet` the app can open too,
-   and a `.csv`), and a multi-line field for CSV.
+2. ~~Saving and opening~~ (done, through `storage`; CSV in a textarea).
+   Still to come: `files` in app mode (a `.json` or `.rexxsheet` the app
+   can open too, and a `.csv`).
 3. **The query functions**: `RANGE("A1:C9") |> WHERE("price > 10") |>
    GROUP_BY("region")`, PLUCK, SUM, AVG, COUNT, RESULT and TABLE over a
    table's metadata (the app evaluates WHERE's condition with JavaScript's
    `eval`; here it would be the sheet's own language).
-4. **Hide rows and columns, freeze panes** (the datagrid freezes leading
-    columns already), **text wrapping**, **conditional formatting** (a
-    RexxJS or Excel expression giving a style), **data validation**
-    (lists, number ranges, patterns; on create, on update), **auto IDs**.
+4. ~~Hide rows and columns, freeze panes, text wrapping, conditional
+    formatting, data validation~~ (done; freezing columns at run time
+    needs aether-ui). Still to come: validation by pattern, and **auto
+    IDs**.
 5. **The control functions** (SETCELL, GETCELL and the rest) in RexxJS
     formulas and the setup script, and a **control bus** for other apps
     (the app's is HTTP or postMessage; sae's would be a page service).
@@ -581,10 +595,9 @@ fields for CSV and RexxJS scripts.
    - Next: scalar functions lifted over arrays; named LAMBDAs; TAKE, DROP,
      CHOOSECOLS, VSTACK, HSTACK; a text batch (TEXT, TEXTBEFORE,
      TEXTAFTER, TEXTSPLIT).
-5. **Highlighting what a formula reads while it is typed.** Trace
-   precedents marks them once it is entered; while it is being typed needs
-   the editor's text as it changes (an aether-ui ask). Evaluate Formula
-   for RexxJS formulas would need RexxJS's own expression tree.
+5. ~~Highlighting what a formula reads while it is typed~~ (done: coloured
+   references and point mode). Still to come: Evaluate Formula for RexxJS
+   formulas, which needs RexxJS's own expression tree.
 
 **Correctness edges, known and accepted:**
 

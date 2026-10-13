@@ -135,7 +135,7 @@ These need more of it (asked for in
    formula printer, the Watch Window).
 8. ~~The number-format language; conditional-format rules (colour
    scales, icon sets)~~ (done: `numfmt.ts`, `rules.ts`, the `format.*`
-   commands; data bars wait on aether-ui).
+   commands; data bars too, once aether-ui drew them).
 9. ~~Charts and sparklines in `vg`~~ (done: `charts.ts`, the chart panel,
    SPARKLINE).
 10. ~~Functions in batches (lookup and conditional, date, financial), then
@@ -143,8 +143,8 @@ These need more of it (asked for in
     forms, spilling).
 11. ~~Goal Seek, Data Table, Remove Duplicates, Text to Columns~~ (done:
     `whatif.ts`, the `data.*` commands, the data bar).
-12. The aether-ui asks, as the features that need them come up: hidden
-    rows and frozen rows first. Written up as one ask, in order:
-    `asks/aether-ui-datagrid-rows-and-cells.md`, landed in aether-ui
-    `08e3193d`; demo 18 has the looks, data bars, comment markers, hidden
-    and frozen rows and AutoFilter.
+12. ~~The aether-ui asks~~ (done: `asks/aether-ui-datagrid-rows-and-cells.md`,
+    landed in aether-ui `08e3193d`; demo 18 has all seven).
+
+All twelve are done. What follows is kept in
+`docs/spreadsheet_demo_done_and_todo.md`'s "To do".
