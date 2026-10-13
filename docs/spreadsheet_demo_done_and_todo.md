@@ -646,6 +646,19 @@ it by merge when Paul or Nic say so). The aether-ui pin is `08e3193d`
 - In the dialect, `x! / y` (a non-null assertion, then a division) lexed
   as a regular expression until `1088eee`; an older lowerer still does.
 
+**Specs that fail in a Claude Code cloud container, and not because of
+the code** (bisected 2026-10-13): `tests/run_all.sh` there gives 41 of
+46. `spec_nav` fails its scoped-seeks test (known before this work).
+`spec_app_httplist` cannot resolve `api.localhost` (the container's DNS).
+`spec_raster`, `spec_aevg` and `spec_camera` fail on drawing and timing
+(a quadrant's colour, a rotated bar, a tween's position, then a Home
+click that does not land in time), and fail the same way on sae
+`8d34455` built against aether-ui `0cfbf942`, before the pin moved to
+`08e3193d`; run alone with a pause, their first checks pass. Xvfb draws
+with software GL there ("DRI3 error"), so the likely cause is a slow
+machine against the specs' waits. Run all four on the Mac before
+believing them.
+
 **On a Mac:** `spec_sheet` has only run on GTK4 under Xvfb. The first
 thing to do on the Mac mini is `./build.sh`, `AETHER_UI_WITH_DRIVER=1
 ./build.sh`, `lower/run-tests.sh`, `tests/run_all.sh spec_sheet` and
