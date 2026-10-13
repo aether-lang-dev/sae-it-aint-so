@@ -257,23 +257,32 @@ punct_len_(x: *Lx, i: int) -> int {
     return 1
 }
 
+// Does token p end a value (so a / after it divides)?
+ends_value_(x: *Lx, p: int) -> int {
+    k = tk_kind_(x, p)
+    if k == T_NUM || k == T_STR || k == T_REGEX || k == T_TPL_FULL || k == T_TPL_TAIL { return 1 }
+    if k == T_IDENT {
+        if tk_is_(x, p, "return") == 1 || tk_is_(x, p, "typeof") == 1 { return 0 }
+        if tk_is_(x, p, "case") == 1 || tk_is_(x, p, "do") == 1 || tk_is_(x, p, "else") == 1 { return 0 }
+        if tk_is_(x, p, "in") == 1 || tk_is_(x, p, "of") == 1 || tk_is_(x, p, "new") == 1 { return 0 }
+        if tk_is_(x, p, "delete") == 1 || tk_is_(x, p, "void") == 1 || tk_is_(x, p, "throw") == 1 { return 0 }
+        if tk_is_(x, p, "instanceof") == 1 { return 0 }
+        return 1
+    }
+    if tk_is_(x, p, ")") == 1 || tk_is_(x, p, "]") == 1 || tk_is_(x, p, "}") == 1 { return 1 }
+    if tk_is_(x, p, "++") == 1 || tk_is_(x, p, "--") == 1 { return 1 }
+    // TypeScript's non-null assertion: a ! after a value (x!, a[i]!) is
+    // postfix, so x! / y divides; a ! anywhere else is not, and a regular
+    // expression may follow it (!/re/.test(s)).
+    if tk_is_(x, p, "!") == 1 && p > 0 { return ends_value_(x, p - 1) }
+    return 0
+}
+
 // Can a regular expression start here, given the previous token?
 regex_allowed_(x: *Lx) -> int {
     nt = ntok_(x)
     if nt == 0 { return 1 }
-    p = nt - 1
-    k = tk_kind_(x, p)
-    if k == T_NUM || k == T_STR || k == T_REGEX || k == T_TPL_FULL || k == T_TPL_TAIL { return 0 }
-    if k == T_IDENT {
-        if tk_is_(x, p, "return") == 1 || tk_is_(x, p, "typeof") == 1 { return 1 }
-        if tk_is_(x, p, "case") == 1 || tk_is_(x, p, "do") == 1 || tk_is_(x, p, "else") == 1 { return 1 }
-        if tk_is_(x, p, "in") == 1 || tk_is_(x, p, "of") == 1 || tk_is_(x, p, "new") == 1 { return 1 }
-        if tk_is_(x, p, "delete") == 1 || tk_is_(x, p, "void") == 1 || tk_is_(x, p, "throw") == 1 { return 1 }
-        if tk_is_(x, p, "instanceof") == 1 { return 1 }
-        return 0
-    }
-    if tk_is_(x, p, ")") == 1 || tk_is_(x, p, "]") == 1 || tk_is_(x, p, "}") == 1 { return 0 }
-    if tk_is_(x, p, "++") == 1 || tk_is_(x, p, "--") == 1 { return 0 }
+    if ends_value_(x, nt - 1) == 1 { return 0 }
     return 1
 }
 
