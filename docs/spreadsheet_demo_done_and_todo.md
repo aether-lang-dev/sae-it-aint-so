@@ -21,6 +21,12 @@ cell that reads the changed one.
 - In-cell editing: F2, a double click or typing opens an editor. The editor
   opens on the formula (`edit_text`), not the value it came to. Return and
   Tab commit, and Escape cancels.
+- While a formula is typed, the references it names are outlined in
+  colour, one colour each in order, as Excel draws them; with the caret
+  after `=`, an operator, `(`, `,` or `:`, a click on a cell puts its
+  reference in (point mode): the click commits the editor first, so the
+  page holds that commit back and opens the editor again with the
+  reference added, the caret after it and the focus in it.
 - Columns: drag a header's grip to resize, double-click it to fit the
   column to its text, and drag a header to move its column.
 - Styles (`cell_style`): numbers right-aligned, errors red, row numbers
@@ -143,8 +149,7 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   beside), with sae's additions the app passes over: validation rules,
   named ranges, and the other sheets. Export CSV gives what the selection
   (or everything used) shows; Import CSV puts the CSV field's rows at the
-  selected cell. (The field is one line: aether-ui has no multi-line
-  field yet; the command bar's `file.importCsv` takes several.)
+  selected cell, as many lines as the CSV field (a textarea) holds.
 
 **Around the grid** (the page's own `state`, `computed`, `bind`, `each` and
 `batch`):
@@ -426,6 +431,9 @@ summary.
   - `sheet_merge` (10): merges (the others cleared, centred, replacing
     what they overlap, unmerged, refused), moving with rows; row heights;
     saved.
+  - `sheet_typing` (8): the references a formula names in each language
+    (as far as it lexes), where the caret may take one, the outlines
+    drawn and cleared.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
@@ -437,7 +445,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 43 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 44 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -477,7 +485,9 @@ summary.
     tooltip, and data bars, read back from the grid;
   - a filter, a column hidden and unhidden, a row frozen;
   - Merge & center drawn as one centred cell two columns wide, Unmerge, a
-    row set to a height.
+    row set to a height;
+  - point mode: `=` typed, a click on H10 putting `=H10` in, H10 outlined,
+    the focus back in the editor, entered.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -545,10 +555,10 @@ Not coming over: the DOM itself (React, the DOM functions RexxJS has for
 web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).
 
 **From aether-ui `08e3193d`** (`asks/aether-ui-datagrid-rows-and-cells.md`,
-landed): in demo 18 now, the looks, data bars, comment markers, hidden
-and frozen rows, AutoFilter, merged cells and row heights. Still to wire
-in: the editor's text as it is typed (point mode, coloured references),
-and multi-line fields for CSV and scripts.
+landed): in demo 18 now, all of it: the looks, data bars, comment
+markers, hidden and frozen rows, AutoFilter, merged cells, row heights,
+coloured references and point mode as a formula is typed, and multi-line
+fields for CSV and RexxJS scripts.
 
 **Demo 18's own:**
 

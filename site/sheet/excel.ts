@@ -101,6 +101,28 @@ function rewrite(input: string, edit: Edit): string {
 // A cell's input as it reads copied `by` cells.
 export const moved = (input: string, by: Offset): string => movedBy(EXCEL, input, by);
 
+// The references a formula's tokens name, in order, once each; tokens up
+// to where it stops lexing, for a formula still being typed.
+function references(formula: string): string[] {
+  const toks: Token[] = [];
+  try {
+    for (const t of tokens(formula)) toks.push(t);
+  } catch (e) {
+    if (!(e instanceof FormulaError)) throw e;
+  }
+  const out: string[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t.kind !== "ref") continue;
+    const end = toks[i + 2];
+    if (toks[i + 1]?.kind === ":" && end?.kind === "ref") {
+      out.push(`${t.name}:${splitKey(end.name).cell}`);
+      i += 2;
+    } else out.push(t.name);
+  }
+  return [...new Set(out)];
+}
+
 export const EXCEL: Language = {
   name: "Excel",
   compile(formula, names) {
@@ -114,4 +136,5 @@ export const EXCEL: Language = {
   },
   rewrite,
   functions: () => [...names(), ...SPECIAL_FORMS].sort(),
+  references,
 };

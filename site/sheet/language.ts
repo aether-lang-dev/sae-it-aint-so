@@ -39,4 +39,8 @@ export interface Language {
   rewrite(input: string, edit: Edit): string;
   // The names of the functions a formula can call, for the page to list.
   functions(): readonly string[];
+  // The cells and ranges a formula (what follows its '=') names, as written
+  // ("B1:B3", "C2", "COSTS!A1"), in order, once each: what a formula being
+  // typed colours. One not yet whole gives what it has so far.
+  references(formula: string): string[];
 }

@@ -6,9 +6,16 @@
 // fill, Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) undo and redo, Ctrl+B, Ctrl+I and
 // Ctrl+U the look; while an editor is open, or a field has the focus, keys
 // are theirs. A cell's comment shows when the pointer rests on it.
+//
+// While a formula is typed in a cell, the references it names are outlined
+// in their colours, and a click on a cell with the caret after '=', an
+// operator, '(', ',' or ':' puts that cell's reference in (point mode): the
+// click commits the editor first, so that commit is held back, and the
+// editor opens again on the cell with the reference added.
 import { COLS, ROWS, addrOf, colName, keyOf } from "../address.ts";
 import type { SheetView } from "./view.ts";
 import { toggleFont } from "./lookbar.ts";
+import { pointable } from "../typing.ts";
 
 const SHIFT = 1, CTRL = 2, SUPER = 8;
 
@@ -16,6 +23,14 @@ export function sheetGrid(v: SheetView): void {
   const { cells, headers, edit_text, cell_style, on_cell_select, on_cell_edit, on_col_resize, column_width } = ui;
   const keyAt = (row: number, modelCol: number): string | null =>
     modelCol >= 1 && modelCol <= COLS && row >= 0 && row < ROWS ? keyOf({ col: modelCol - 1, row }) : null;
+  // Whether a click puts a reference in the open editor (point mode), and
+  // a formula held back for it: its cell (row, model column) and text.
+  let pointing = false;
+  let held: { r: number; c: number; text: string } | null = null;
+  const typed = (text: string | null) => {
+    v.wb.typing(text);
+    ui.datagrid_refresh(v.grid);
+  };
 
   v.grid = ui.datagrid(ROWS, COLS + 1, ROWS, COLS, 1, () => {
     column_width(80);
@@ -26,6 +41,7 @@ export function sheetGrid(v: SheetView): void {
     headers((c: number) => (c === 0 ? "" : colName(c - 1)));
     // An editor opens on what was typed, not what it came to.
     edit_text((r: number, c: number) => {
+      if (held && held.r === r && held.c === c) return held.text;
       const key = keyAt(r, c);
       return key ? v.wb.sheet.input(key) : "";
     });
@@ -35,10 +51,32 @@ export function sheetGrid(v: SheetView): void {
     });
     on_cell_select((r: number, c: number) => {
       const key = keyAt(r, ui.datagrid_col_model(v.grid, c));
+      if (key && held) {
+        const { r: hr, c: hc } = held;
+        held = { ...held, text: held.text + key };
+        ui.datagrid_edit(v.grid, hr, v.viewCol(hc));
+        held = null;
+        return;
+      }
       if (key && key !== v.address.value) v.address.set(key);
     });
     on_cell_edit((r: number, c: number, t: string) => {
       const key = keyAt(r, c);
+      if (pointing && key) {
+        // A click to point: wait for the cell it selects (or, if none does,
+        // store the formula as it was).
+        held = { r, c, text: t };
+        setTimeout(() => {
+          if (held && held.r === r && held.c === c) {
+            held = null;
+            v.wb.typing(null);
+            v.run("cell.set", { cell: key, input: t.trim() });
+          }
+        }, 0);
+        return;
+      }
+      pointing = false;
+      v.wb.typing(null);
       if (key) {
         v.address.set(key);
         v.run("cell.set", { cell: key, input: t.trim() });
@@ -50,6 +88,10 @@ export function sheetGrid(v: SheetView): void {
     });
   });
   ui.datagrid_set_col_width(v.grid, 0, 34);     // the row numbers
+  ui.datagrid_on_edit_change(v.grid, (text: string, caret: number) => {
+    pointing = pointable(text, caret);
+    typed(text);
+  });
   ui.datagrid_cell_tooltip(v.grid, (r: number, c: number) => {
     const key = keyAt(r, c);
     return key ? v.wb.tooltipOf(key) : "";
@@ -65,6 +107,11 @@ export function sheetGrid(v: SheetView): void {
   });
 
   ui.on_key((key: string, mods: number) => {
+    // Escape closes the editor without a commit: the outlines go with it.
+    if (key === "Escape") {
+      pointing = false;
+      setTimeout(() => typed(null), 0);
+    }
     if (!ui.datagrid_has_focus(v.grid) || ui.datagrid_editor(v.grid) !== 0) return;
     if (!v.selection()) return;
     const range = v.range();

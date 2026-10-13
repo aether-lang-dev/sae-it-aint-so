@@ -26,7 +26,7 @@ export function fileBar(v: SheetView): void {
       const o = await v.run("file.exportCsv", many ? { range: v.range() } : {});
       shown.set(String(o.output ?? ""));
     });
-    bind(ui.textfield("CSV", () => {}), csv);
+    bind(ui.textarea("CSV"), csv);
     ui.btn("Import CSV", () => v.run("file.importCsv", { at: v.here(), text: csv.value }));
   });
   bind(ui.text_wrapped("", 720), shown);

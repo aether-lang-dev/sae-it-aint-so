@@ -292,4 +292,13 @@ export class RexxLanguage implements Language {
   functions(): readonly string[] {
     return Object.keys(this.#functions).sort();
   }
+
+  // Cell names and ranges anywhere in a formula (in strings too), in order.
+  references(formula: string): string[] {
+    const out = [...formula.matchAll(REFS)].map((m) => {
+      const sheet = m[1] ?? m[2], cell = `${m[3]}${m[4]}`.toUpperCase(), to = m[5] ? `:${m[5]}${m[6]}`.toUpperCase() : "";
+      return `${sheet ? `${sheet.toUpperCase()}!` : ""}${cell}${to}`;
+    });
+    return [...new Set(out)];
+  }
 }

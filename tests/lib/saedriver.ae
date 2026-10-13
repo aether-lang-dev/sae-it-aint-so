@@ -204,7 +204,8 @@ set_field_by(placeholder: string, text: string) {
         i = 0
         while i < cnt {
             w = json.json_array_get_raw(v, i)
-            if string.equals(uidriver.field_str(w, "type"), "textfield") == 1 {
+            ty = uidriver.field_str(w, "type")
+            if string.equals(ty, "textfield") == 1 || string.equals(ty, "textarea") == 1 {
                 if string.equals(uidriver.field_str(w, "placeholder"), placeholder) == 1 { id = uidriver.field_int(w, "id") }
             }
             i = i + 1

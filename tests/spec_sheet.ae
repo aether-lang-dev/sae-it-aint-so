@@ -334,7 +334,7 @@ main() {
             spec.assert_true(b.wait_for_text("G4 = 0.92 → \"0.92\""), "an output shows below the bar")
         }
         spec.it("a RexxJS script drives the sheet through ADDRESS SHEET, SETCELL and GETCELL") callback {
-            g.script("ADDRESS SHEET \"cell.set cell=J2 input=5\"; LET r = SETCELL(\"J3\", \"=J2 * 3\"); SAY \"J3 is\" GETCELL(\"J3\")")
+            g.script("ADDRESS SHEET \"cell.set cell=J2 input=5\"\nLET r = SETCELL(\"J3\", \"=J2 * 3\"); SAY \"J3 is\" GETCELL(\"J3\")")
             spec.assert_true(b.wait_for_console("sheet: say J3 is 15"), "SAY")
             spec.assert_true(g.wait_cell("J", 3, "15"), "J3 set by SETCELL")
             spec.assert_true(g.wait_cell("J", 2, "5"), "J2 by ADDRESS SHEET")
@@ -441,10 +441,10 @@ main() {
             spec.assert_eq(g.cell_has("C", 5, "\"fg\":\"#d32f2f\""), 1, "its conditional styles")
         }
         spec.it("CSV: imported at the selected cell, and exported from the selection") callback {
-            b.set_field_by("CSV", "x,\"y, z\"")
+            b.set_field_by("CSV", "x,\"y, z\"\n1,2")
             g.pick("H", 17)
             b.click("Import CSV")
-            spec.assert_true(b.wait_for_console("sheet: imported 1 rows at H17"), "imported")
+            spec.assert_true(b.wait_for_console("sheet: imported 2 rows at H17"), "imported, two lines from a textarea")
             spec.assert_true(g.wait_cell("I", 17, "y, z"), "a quoted field")
             g.key("Shift+Right")
             b.click("Export CSV")
@@ -647,6 +647,21 @@ main() {
             b.click("Row height")
             spec.assert_true(b.wait_for_console("sheet: row 13 is 40 high"), "a row 40 high")
             spec.assert_true(uidriver.widget_int_field_by_id(g.cell_id("A", 13), "h") >= 38, "drawn taller")
+        }
+        spec.it("a formula as it is typed: its references outlined in colour; a click puts a cell's reference in") callback {
+            g.enter("H10", "7")
+            g.goto("H11")
+            g.pick("H", 11)
+            g.key("equal")
+            spec.assert_true(g.editor() > 0, "typing = opened the editor")
+            g.pick("H", 10)
+            spec.assert_true(uidriver.wait_body_contains("/widget/${g.editor()}", "=H10", 40), "a click put H10 in")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${g.cell_id("H", 10)}", "1f6fd1", 40), "H10 outlined in the first colour")
+            sleep(200)
+            spec.assert_eq(uidriver.focused_widget(), g.editor(), "the editor has the focus again, to go on typing")
+            uidriver.post_ok("/widget/${g.editor()}/submit", "Return in the editor")
+            spec.assert_true(g.wait_cell("H", 11, "7"), "entered: =H10")
+            spec.assert_eq(g.cell_has("H", 10, "1f6fd1"), 0, "the outline gone")
         }
     }
     return spec.run_summary(fw)

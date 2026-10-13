@@ -10,7 +10,8 @@
 // Formulas, and the watched cells. It answers what a cell shows, its style
 // and its status line.
 // Commands (commands.ts) change it; the page's panels read it.
-import { cellAddr, order, parseRange, splitKey } from "./address.ts";
+import { cellAddr, keyOf, order, parseRange, splitKey } from "./address.ts";
+import { REFERENCE_COLOURS } from "./typing.ts";
 import type { Addr } from "./address.ts";
 import { EXCEL } from "./excel.ts";
 import { describe, show } from "./format.ts";
@@ -125,6 +126,8 @@ export class Workbook {
   #traces: Trace[] = [];
   #traced = new Map<string, string>();
   #marks = new Map<string, Mark>();
+  // A formula being typed: each cell its references cover, outlined.
+  #typed = new Map<string, string>();
   #watches: { readonly page: Page; readonly cell: string }[] = [];
 
   constructor() {
@@ -353,7 +356,7 @@ export class Workbook {
     const v = this.sheet.value(key), n = this.notes.get(key);
     return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), lookStyle(n.look), formatStyle(v, n.format ?? ""), this.#conditional.get(key) ?? "", this.#marks.get(key)?.style ?? "", this.#traced.get(key) ?? "",
       this.#circled.has(key) ? "background: #ffd6d6" : "", v instanceof CellError ? "color: #c0392b" : "",
-      n.comment ? "--corner: #d00000" : ""].filter((p) => p).join("; ");
+      n.comment ? "--corner: #d00000" : "", this.#typed.get(key) ?? ""].filter((p) => p).join("; ");
   }
 
   // The active sheet's rows (by hand or by its filter) and columns out of
@@ -375,6 +378,25 @@ export class Workbook {
 
   rowHeights(): [number, number][] {
     return [...this.#active.heights].sort(([a], [b]) => a - b);
+  }
+
+  // A formula being typed in the active sheet (null once it is entered or
+  // not): each reference it names outlined in its colour, as Excel does.
+  typing(text: string | null): void {
+    this.#typed = new Map();
+    if (!text?.startsWith("=")) return;
+    this.sheet.language.references(text.slice(1)).forEach((ref, i) => {
+      const r = parseRange(ref);
+      if (!r) return;   // on another sheet, or off this one
+      const colour = REFERENCE_COLOURS[i % REFERENCE_COLOURS.length];
+      const [a, b] = r, top = Math.min(a.row, b.row), bottom = Math.max(a.row, b.row), left = Math.min(a.col, b.col), right = Math.max(a.col, b.col);
+      for (let row = top; row <= bottom; row++) {
+        for (let col = left; col <= right; col++) {
+          const edges = [row === top ? "top" : "", col === right ? "right" : "", row === bottom ? "bottom" : "", col === left ? "left" : ""];
+          this.#typed.set(keyOf({ col, row }), edges.filter((e) => e).map((e) => `border-${e}: 2px solid ${colour}`).join("; "));
+        }
+      }
+    });
   }
 
   // What shows when the pointer rests on a cell: its comment.
