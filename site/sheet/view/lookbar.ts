@@ -1,7 +1,8 @@
 // A cell's look, over the selection, as Excel's Home tab has it: Bold,
 // Italic, Underline and Strikethrough (each on, or off when the selected
-// cell has it), outline, all or no borders, and Wrap text (its rows as tall
-// as their text). Ctrl+B, Ctrl+I and Ctrl+U on the grid do the first three.
+// cell has it), outline, all or no borders, Wrap text (its rows as tall as
+// their text), and Merge & center, Merge and Unmerge (a merge keeps its
+// top-left's value). Ctrl+B, Ctrl+I and Ctrl+U on the grid do the first three.
 import type { SheetView } from "./view.ts";
 
 export type FontPart = "bold" | "italic" | "underline" | "strike";
@@ -20,5 +21,8 @@ export function lookBar(v: SheetView): void {
     ui.btn("All borders", () => v.run("format.border", { range: v.range(), edge: "all" }));
     ui.btn("No borders", () => v.run("format.border", { range: v.range(), edge: "none" }));
     ui.btn("Wrap text", () => v.run("format.wrap", v.wb.notes.get(v.here()).look?.wrap ? { range: v.range(), off: "1" } : { range: v.range() }));
+    ui.btn("Merge & center", () => v.run("cells.merge", { range: v.range(), center: "1" }));
+    ui.btn("Merge", () => v.run("cells.merge", { range: v.range() }));
+    ui.btn("Unmerge", () => v.run("cells.unmerge", { range: v.range() }));
   });
 }

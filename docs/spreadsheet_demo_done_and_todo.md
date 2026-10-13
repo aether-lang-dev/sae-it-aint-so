@@ -203,6 +203,12 @@ fields under the formula bar:
   Special formats takes it, Clear formats clears it, a file keeps it.
 - A comment shows as a red corner, and its text when the pointer rests on
   the cell.
+- Merged cells (the look bar; `cells.merge`, `cells.unmerge`): Merge &
+  center, Merge, Unmerge. A merge keeps its top-left's value and clears
+  the rest, as Excel warns it will, and replaces merges it overlaps; one
+  cell is drawn over the range. Rows set to a height (the view bar's
+  `row height`; `rows.height`, 0 for the grid's). Both move with inserted
+  and deleted rows and are saved.
 - A conditional style: an expression in the sheet's language whose value
   is a style, worked out after every change. In RexxJS formulas the app's
   style functions give one (`STYLE_IF(C5 < 0, RED_TEXT(), GREEN_TEXT())`,
@@ -417,6 +423,9 @@ summary.
     inserted and deleted rows; AutoFilter by number and text, its rows
     apart from those hidden by hand; refusals; frozen rows; per sheet;
     saved.
+  - `sheet_merge` (10): merges (the others cleared, centred, replacing
+    what they overlap, unmerged, refused), moving with rows; row heights;
+    saved.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
@@ -428,7 +437,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 42 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 43 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -466,7 +475,9 @@ summary.
   - Goal seek, Text to columns and Remove duplicates from the data bar;
   - a look (Ctrl+I, underline, borders, wrapping), a comment's corner and
     tooltip, and data bars, read back from the grid;
-  - a filter, a column hidden and unhidden, a row frozen.
+  - a filter, a column hidden and unhidden, a row frozen;
+  - Merge & center drawn as one centred cell two columns wide, Unmerge, a
+    row set to a height.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -535,9 +546,9 @@ web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).
 
 **From aether-ui `08e3193d`** (`asks/aether-ui-datagrid-rows-and-cells.md`,
 landed): in demo 18 now, the looks, data bars, comment markers, hidden
-and frozen rows and AutoFilter. Still to wire in: merged cells (Merge &
-Center), row heights by hand, the editor's text as it is typed (point
-mode, coloured references), and multi-line fields for CSV and scripts.
+and frozen rows, AutoFilter, merged cells and row heights. Still to wire
+in: the editor's text as it is typed (point mode, coloured references),
+and multi-line fields for CSV and scripts.
 
 **Demo 18's own:**
 

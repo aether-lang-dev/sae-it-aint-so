@@ -3,7 +3,7 @@
 // bar, the status line, the problems, the sheets' names, the watched cells, the charts), the grid's handle and selection, and
 // run(), the one way a panel changes anything: it runs a command, prints
 // its outcome (what specs read), and shows the workbook again, in one batch.
-import { COLS, addrOf, keyOf } from "../address.ts";
+import { COLS, addrOf, keyOf, parseRange } from "../address.ts";
 import type { Addr } from "../address.ts";
 import { Commands } from "../commands.ts";
 import type { Outcome, Params } from "../commands.ts";
@@ -33,6 +33,7 @@ export class SheetView {
   #fitted = new Set<number>();
   #shownHidden = { rows: new Set<number>(), cols: new Set<number>() };
   #frozen = 0;
+  #merged: string[] = [];
 
   // The selected cell's key (A1 when the address field names none).
   here(): string {
@@ -135,14 +136,26 @@ export class SheetView {
     for (const c of new Set([...was.cols, ...want.cols])) if (was.cols.has(c) !== want.cols.has(c)) ui.datagrid_hide_col(this.grid, this.viewCol(c + 1), want.cols.has(c) ? 1 : 0);
     this.#shownHidden = want;
     if (this.wb.frozenRows() !== this.#frozen) ui.datagrid_freeze_rows(this.grid, (this.#frozen = this.wb.frozenRows()));
+    // Merges: those gone undone, those new made (at the columns on screen).
+    const merges = this.wb.merges();
+    for (const m of this.#merged) if (!merges.includes(m)) {
+      const [a] = parseRange(m)!;
+      ui.datagrid_unmerge(this.grid, a.row, this.viewCol(a.col + 1));
+    }
+    for (const m of merges) if (!this.#merged.includes(m)) {
+      const [a, b] = parseRange(m)!;
+      ui.datagrid_merge(this.grid, a.row, this.viewCol(a.col + 1), b.row - a.row + 1, b.col - a.col + 1);
+    }
+    this.#merged = merges;
   }
 
-  // Rows with wrapped text as tall as it; rows no longer wrapped as tall as
-  // the grid's.
+  // Rows set to a height that height; other rows with wrapped text as tall
+  // as it; rows no longer either as tall as the grid's.
   #fitRows(): void {
-    const wrapped = new Set(this.wb.wrapped());
-    for (const r of this.#fitted) if (!wrapped.has(r)) ui.datagrid_set_row_height(this.grid, r, 0);
+    const set = new Map(this.wb.rowHeights()), wrapped = new Set(this.wb.wrapped().filter((r) => !set.has(r)));
+    for (const r of this.#fitted) if (!set.has(r) && !wrapped.has(r)) ui.datagrid_set_row_height(this.grid, r, 0);
+    for (const [r, h] of set) ui.datagrid_set_row_height(this.grid, r, h);
     for (const r of wrapped) ui.datagrid_fit_row(this.grid, r);
-    this.#fitted = wrapped;
+    this.#fitted = new Set([...set.keys(), ...wrapped]);
   }
 }

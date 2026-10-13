@@ -10,8 +10,9 @@
 // sheet's name (sheetName), named
 // ranges (names: { QTY: "B2:B4" }), conditional-format rules (rules.ts's,
 // their ranges as text), charts ({ kind, range, title }) and how it is viewed
-// (view: { hiddenRows, hiddenCols, frozenRows }, 0-based), and the workbook's
-// other sheets (sheets: [{ name, cells, names, rules, charts, view }]).
+// (view: { hiddenRows, hiddenCols, frozenRows, rowHeights }, 0-based), its
+// merged cells (merges: ["A1:C1"]), and the workbook's other sheets
+// (sheets: [{ name, cells, names, rules, charts, view, merges }]).
 // writeSheetFile writes it all.
 import { addrOf, order, parseRange } from "./address.ts";
 import { ICONS, rangeName } from "./rules.ts";
@@ -31,7 +32,11 @@ export interface FileSheet {
   readonly names: readonly [string, string][];     // [NAME, "B2:B4"]
   readonly rules: readonly CfRule[];
   readonly charts: readonly ChartSpec[];
-  readonly view: { readonly hiddenRows: readonly number[]; readonly hiddenCols: readonly number[]; readonly frozenRows: number };
+  readonly view: {
+    readonly hiddenRows: readonly number[]; readonly hiddenCols: readonly number[]; readonly frozenRows: number;
+    readonly rowHeights: readonly [number, number][];
+  };
+  readonly merges: readonly string[];
 }
 
 export interface SheetFile {
@@ -104,10 +109,11 @@ function chartsOf(charts: unknown): ChartSpec[] {
 // How a sheet was viewed: rows and columns hidden, rows frozen.
 function viewOf(v: any): FileSheet["view"] {
   const indexes = (xs: unknown) => (Array.isArray(xs) ? xs.map(Number).filter((n) => Number.isInteger(n) && n >= 0) : []);
-  return { hiddenRows: indexes(v?.hiddenRows), hiddenCols: indexes(v?.hiddenCols), frozenRows: Number.isInteger(v?.frozenRows) && v.frozenRows > 0 ? v.frozenRows : 0 };
+  const heights = Array.isArray(v?.rowHeights) ? v.rowHeights.filter((p: unknown) => Array.isArray(p) && Number.isInteger(p[0]) && p[1] > 0).map((p: number[]): [number, number] => [p[0], p[1]]) : [];
+  return { hiddenRows: indexes(v?.hiddenRows), hiddenCols: indexes(v?.hiddenCols), frozenRows: Number.isInteger(v?.frozenRows) && v.frozenRows > 0 ? v.frozenRows : 0, rowHeights: heights };
 }
 
-function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown, charts: unknown, view: unknown): FileSheet {
+function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown, charts: unknown, view: unknown, merges: unknown): FileSheet {
   const list = Object.entries(cells ?? {}).map(([k, c]): [string, string | FileCell] => [k.toUpperCase(), c]);
   return {
     name,
@@ -117,6 +123,7 @@ function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: 
     rules: rulesOf(rules),
     charts: chartsOf(charts),
     view: viewOf(view),
+    merges: Array.isArray(merges) ? merges.map(String).filter((m) => parseRange(m)) : [],
   };
 }
 
@@ -127,8 +134,8 @@ export function readSheetFile(data: any): SheetFile {
     language: String(data?.formulas ?? "").toLowerCase() === "excel" ? "Excel" : "RexxJS",
     setupScript: String(data?.setupScript ?? ""),
     sheets: [
-      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules, data?.charts, data?.view),
-      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules, s?.charts, s?.view)),
+      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules, data?.charts, data?.view, data?.merges),
+      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules, s?.charts, s?.view, s?.merges)),
     ],
   };
 }
@@ -157,6 +164,7 @@ const chartsIn = (page: Page) => page.charts.map((c) => ({ kind: c.kind, range: 
 const up = (a: number, b: number) => a - b;
 const viewIn = (page: Page) => ({
   hiddenRows: [...new Set([...page.hiddenRows, ...(page.filtered ?? [])])].sort(up), hiddenCols: [...page.hiddenCols].sort(up), frozenRows: page.frozen,
+  rowHeights: [...page.heights].sort(([a], [b]) => a - b),
 });
 
 // The workbook as a file: JSON-ready.
@@ -172,6 +180,7 @@ export function writeSheetFile(wb: Workbook) {
     rules: rulesIn(first),
     charts: chartsIn(first),
     view: viewIn(first),
-    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p), view: viewIn(p) })),
+    merges: first.merges.map(rangeName),
+    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p), view: viewIn(p), merges: p.merges.map(rangeName) })),
   };
 }

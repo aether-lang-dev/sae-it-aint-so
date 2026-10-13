@@ -153,6 +153,8 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     page.hiddenRows = new Set(s.view.hiddenRows);
     page.hiddenCols = new Set(s.view.hiddenCols);
     page.frozen = s.view.frozenRows;
+    page.heights = new Map(s.view.rowHeights);
+    page.merges = s.merges.map((m) => parseRange(m)!);
   }
   wb.activate(file.sheets[0].name);
   wb.name = file.name;
@@ -221,6 +223,16 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
     }));
     if (axis === "row") page.hiddenRows = moved(page.hiddenRows, true); else page.hiddenCols = moved(page.hiddenCols, false);
     if (page.filtered && axis === "row") page.filtered = moved(page.filtered, true);
+    page.merges = page.merges.flatMap((m): [Addr, Addr][] => {
+      const to = edit.range(m[0], m[1], still, still);
+      return to && keyOf(to[0]) !== keyOf(to[1]) ? [to] : [];
+    });
+    if (axis === "row") {
+      page.heights = new Map([...page.heights].flatMap(([row, h]): [number, number][] => {
+        const to = edit.cell({ col: 0, row }, still);
+        return to ? [[to.row, h]] : [];
+      }));
+    }
     const thing = `${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"}`;
     return setting(wb, entries, `${how === "insert" ? "inserted" : "deleted"} ${thing} at ${axis === "row" ? at + 1 : colName(at)}`);
   };
@@ -333,6 +345,11 @@ function hiding(rows: boolean, hide: boolean) {
     return changedBy(wb, wb.sheet.keys(), `${hide ? "hid" : "showed"} ${said}`);
   };
 }
+
+// Two ranges that share a cell.
+const overlap = ([a, b]: [Addr, Addr], [c, d]: [Addr, Addr]): boolean =>
+  Math.max(Math.min(a.col, b.col), Math.min(c.col, d.col)) <= Math.min(Math.max(a.col, b.col), Math.max(c.col, d.col))
+  && Math.max(Math.min(a.row, b.row), Math.min(c.row, d.row)) <= Math.min(Math.max(a.row, b.row), Math.max(c.row, d.row));
 
 // Trace Precedents or Dependents: a level further each time.
 function trace(direction: Direction) {
@@ -812,6 +829,40 @@ const SPECS: readonly Spec[] = [
       if (!Number.isInteger(n) || n < 0 || n >= ROWS) refuse(`${p.count} is not a number of rows to freeze`);
       wb.page(wb.active)!.frozen = n;
       return changedBy(wb, [], n ? `froze ${n} row${n === 1 ? "" : "s"}` : "unfroze rows");
+    },
+  },
+  {
+    id: "cells.merge", label: "Merge Cells", params: ["range"], optional: ["center"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), tl = topLeft(r), page = wb.page(wb.active)!;
+      if (keyOf(r[0]) === keyOf(r[1])) refuse(`${keyOf(r[0])} is one cell: nothing to merge`);
+      const corners: [Addr, Addr] = [tl, { col: Math.max(r[0].col, r[1].col), row: Math.max(r[0].row, r[1].row) }];
+      page.merges = [...page.merges.filter((m) => !overlap(m, corners)), corners];
+      // As Excel does: the top-left's value is kept, the others' cleared.
+      const cleared = [...range(r[0], r[1])].filter((k) => k !== keyOf(tl) && wb.sheet.input(k) !== "");
+      if (cleared.length) await wb.sheet.setMany(cleared.map((k) => [k, ""] as const));
+      if (flag(p.center)) wb.notes.set(keyOf(tl), { look: { ...wb.notes.get(keyOf(tl)).look, align: "center" } });
+      return changedBy(wb, [...range(r[0], r[1])], `merged ${rangeName(corners)}${cleared.length ? ` (${cleared.length} cell${cleared.length === 1 ? "" : "s"} cleared)` : ""}`);
+    },
+  },
+  {
+    id: "cells.unmerge", label: "Unmerge Cells", params: ["range"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), page = wb.page(wb.active)!;
+      const gone = page.merges.filter((m) => overlap(m, r));
+      if (!gone.length) refuse(`no merge in ${rangeName(r)}`);
+      page.merges = page.merges.filter((m) => !overlap(m, r));
+      return changedBy(wb, gone.flatMap((m) => [...range(m[0], m[1])]), `unmerged ${gone.length}`);
+    },
+  },
+  {
+    id: "rows.height", label: "Row Height", params: ["range", "height"], journaled: true,
+    run: async (wb, p) => {
+      const h = Number(p.height);
+      if (!Number.isInteger(h) || h < 0) refuse(`${p.height} is not a height (0 for the grid's)`);
+      const page = wb.page(wb.active)!, { at, said } = spanOf(rangeOf(p.range), true);
+      for (const row of at) if (h) page.heights.set(row, h); else page.heights.delete(row);
+      return changedBy(wb, [], h ? `${said} ${at.length > 1 ? "are" : "is"} ${h} high` : `${said} ${at.length > 1 ? "are" : "is"} as tall as the grid's`);
     },
   },
   {

@@ -628,6 +628,26 @@ main() {
             b.click("Unfreeze")
             spec.assert_true(b.wait_for_console("sheet: unfroze rows"), "unfroze")
         }
+        spec.it("Merge & center one cell over a range, its value centred; Unmerge; a row's height") callback {
+            g.enter("E14", "merged")
+            g.pick("E", 14)
+            g.key("Shift+Right")
+            g.key("Shift+Down")
+            b.click("Merge & center")
+            spec.assert_true(b.wait_for_console("sheet: merged E14:F15"), "merged")
+            g.pick("A", 14)   // the selection blends into a cell's background
+            spec.assert_eq(g.cell_has("E", 14, "\"anchor\":\"middle\""), 1, "centred")
+            spec.assert_true(uidriver.widget_int_field_by_id(g.cell_id("E", 14), "w") > 120, "one cell two columns wide")
+            g.pick("E", 14)
+            b.click("Unmerge")
+            spec.assert_true(b.wait_for_console("sheet: unmerged 1"), "unmerged")
+            spec.assert_true(g.wait_cell("E", 14, "merged"), "its value where it was")
+            g.pick("A", 13)
+            b.set_field_by("row height", "40")
+            b.click("Row height")
+            spec.assert_true(b.wait_for_console("sheet: row 13 is 40 high"), "a row 40 high")
+            spec.assert_true(uidriver.widget_int_field_by_id(g.cell_id("A", 13), "h") >= 38, "drawn taller")
+        }
     }
     return spec.run_summary(fw)
 }

@@ -134,6 +134,7 @@ export interface Look {
   readonly strike?: boolean;
   readonly size?: number;
   readonly wrap?: boolean;
+  readonly align?: "start" | "center" | "end";
   readonly borders?: { readonly top?: string; readonly right?: string; readonly bottom?: string; readonly left?: string };
 }
 
@@ -143,7 +144,7 @@ export function lookStyle(look: Look | undefined): string {
   const b = look.borders ?? {};
   return [
     look.bold ? "font-weight: bold" : "", look.italic ? "font-style: italic" : "", lines ? `text-decoration: ${lines}` : "",
-    look.size ? `font-size: ${look.size}px` : "", look.wrap ? "white-space: normal" : "",
+    look.size ? `font-size: ${look.size}px` : "", look.wrap ? "white-space: normal" : "", look.align ? `text-align: ${look.align}` : "",
     ...(["top", "right", "bottom", "left"] as const).map((e) => (b[e] ? `border-${e}: 1px solid ${b[e]}` : "")),
   ].filter((p) => p).join("; ");
 }

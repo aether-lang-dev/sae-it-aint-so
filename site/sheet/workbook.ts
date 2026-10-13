@@ -10,7 +10,7 @@
 // Formulas, and the watched cells. It answers what a cell shows, its style
 // and its status line.
 // Commands (commands.ts) change it; the page's panels read it.
-import { cellAddr, splitKey } from "./address.ts";
+import { cellAddr, order, parseRange, splitKey } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { EXCEL } from "./excel.ts";
 import { describe, show } from "./format.ts";
@@ -65,7 +65,8 @@ export const CHART_W = 400, CHART_H = 240;
 // A sheet of the workbook: its name as given, its cells and their notes, its
 // conditional-format rules (rules.ts), in priority order, its charts, and
 // how it is viewed: rows and columns hidden by hand (0-based), rows hidden
-// by its AutoFilter, and how many rows are frozen.
+// by its AutoFilter, how many rows are frozen, its merged cells, and rows
+// set to a height (0-based row to px).
 export interface Page {
   readonly name: string;
   readonly sheet: Sheet;
@@ -76,6 +77,8 @@ export interface Page {
   hiddenCols: Set<number>;
   filtered: Set<number> | null;
   frozen: number;
+  merges: [Addr, Addr][];
+  heights: Map<number, number>;
 }
 
 export type Direction = "precedents" | "dependents";
@@ -151,7 +154,7 @@ export class Workbook {
       keys.add(key);
     };
     return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [], charts: [],
-      hiddenRows: new Set(), hiddenCols: new Set(), filtered: null, frozen: 0 };
+      hiddenRows: new Set(), hiddenCols: new Set(), filtered: null, frozen: 0, merges: [], heights: new Map() };
   }
 
   // A cell on another sheet ("COSTS!B2"), or #REF! when there is no such sheet.
@@ -362,6 +365,16 @@ export class Workbook {
 
   frozenRows(): number {
     return this.#active.frozen;
+  }
+
+  // The active sheet's merged ranges ("A1:C1"), in sheet order, and its
+  // rows set to a height ([row, px], 0-based, in order).
+  merges(): string[] {
+    return this.#active.merges.map(rangeName).sort((a, b) => order(parseRange(a)![0]) - order(parseRange(b)![0]));
+  }
+
+  rowHeights(): [number, number][] {
+    return [...this.#active.heights].sort(([a], [b]) => a - b);
   }
 
   // What shows when the pointer rests on a cell: its comment.
