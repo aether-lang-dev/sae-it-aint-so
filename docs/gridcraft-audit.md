@@ -45,10 +45,10 @@ can do today, then ones that need aether-ui, then ones that do not fit.
    positive, negative, zero and text (`#,##0;[Red](#,##0);"-"`), colours,
    literals, fractions, dates and times. Demo 18's `formats.ts` reads the
    simple cases; this is the whole of it, and is self-contained work.
-4. **Copy-on-write snapshots** make undo nearly free there. Demo 18's undo
-   keeps the inputs a change replaced (`Sheet.setMany`), which is already
-   cheap; notes and formats are not yet in it, and snapshots of the notes
-   would be the simple way to add them.
+4. **Copy-on-write snapshots** make undo nearly free there. Taken
+   (2026-10-13): demo 18 saves the workbook before each command, each
+   container copied and its contents shared, and undo covers everything
+   (`docs/spreadsheet_demo_done_and_todo.md`, To do 4).
 5. **Enforced layering** (`cargo xtask layers`): sae already does this for
    its services (`tests/check_layers.sh`); `site/sheet/`'s rule, that no
    module but the page touches `ui`, could be checked the same way.

@@ -72,6 +72,9 @@ interface Spec {
   readonly params: readonly string[];       // each required
   readonly optional?: readonly string[];
   readonly journaled: boolean;              // it changes the workbook (or the clipboard)
+  // Not a step to undo, though journaled: it changes only what is looked
+  // at or copied, is undo itself, or opens a file (where undo stops).
+  readonly unstepped?: true;
   run(wb: Workbook, p: Params, store: Store): Promise<Outcome>;
 }
 
@@ -149,7 +152,8 @@ async function changedBy(wb: Workbook, changed: readonly string[], message: stri
 const SAMPLES: Record<string, unknown> = { budget: SAMPLE_BUDGET, test: TEST_SHEET, formatted: FORMATTED };
 
 // A sheet file: the workbook emptied, its language, its setup script run,
-// each sheet's cells set, its notes and names kept; where undo stops.
+// each sheet's cells set, its notes and names kept; where undo stops
+// (reset()).
 async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
   const before = wb.sheet.keys();
   wb.reset(file.sheets[0].name);
@@ -162,7 +166,6 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
       if (corners) await wb.sheet.define(n, corners);
     }
     await wb.sheet.setMany(s.entries);
-    wb.sheet.forget();
     for (const [key, note] of s.notes) wb.notes.set(key, note);
     wb.page(s.name)!.rules = [...s.rules];
     const page = wb.page(s.name)!;
@@ -365,11 +368,11 @@ async function tried<T>(wb: Workbook, cells: readonly string[], trials: readonly
   const out: T[] = [];
   try {
     for (const t of trials) {
-      await wb.sheet.trial(cells.map((k, i) => [k, t[i]] as [string, string]));
+      await wb.sheet.setMany(cells.map((k, i) => [k, t[i]] as [string, string]));
       out.push(read());
     }
   } finally {
-    await wb.sheet.trial(was);
+    await wb.sheet.setMany(was);
   }
   return out;
 }
@@ -612,7 +615,7 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
-    id: "validation.circle", label: "Circle Invalid Data", params: [], optional: ["off"], journaled: true,
+    id: "validation.circle", label: "Circle Invalid Data", params: [], optional: ["off"], journaled: true, unstepped: true,
     run: async (wb, p) => {
       wb.circling = !flag(p.off);
       const invalid = wb.invalid();
@@ -652,7 +655,7 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
-    id: "edit.copy", label: "Copy", params: ["range"], journaled: true,
+    id: "edit.copy", label: "Copy", params: ["range"], journaled: true, unstepped: true,
     run: async (wb, p) => {
       const r = rangeOf(p.range), from = topLeft(r);
       const rows = Math.abs(r[0].row - r[1].row) + 1, cols = Math.abs(r[0].col - r[1].col) + 1;
@@ -753,16 +756,16 @@ const SPECS: readonly Spec[] = [
   { id: "edit.fillUp", label: "Fill Up", params: ["range"], optional: ["source"], journaled: true, run: fill("up") },
   { id: "edit.fillLeft", label: "Fill Left", params: ["range"], optional: ["source"], journaled: true, run: fill("left") },
   {
-    id: "edit.undo", label: "Undo", params: [], journaled: true,
+    id: "edit.undo", label: "Undo", params: [], journaled: true, unstepped: true,
     run: async (wb) => {
-      const changed = await wb.sheet.undo();
+      const changed = await wb.undo();
       return changedBy(wb, changed, `undo: ${changed.length} changed`);
     },
   },
   {
-    id: "edit.redo", label: "Redo", params: [], journaled: true,
+    id: "edit.redo", label: "Redo", params: [], journaled: true, unstepped: true,
     run: async (wb) => {
-      const changed = await wb.sheet.redo();
+      const changed = await wb.redo();
       return changedBy(wb, changed, `redo: ${changed.length} changed`);
     },
   },
@@ -1234,12 +1237,12 @@ const SPECS: readonly Spec[] = [
       let found: { x: number } | null = null;
       try {
         found = await secant(async (x) => {
-          await wb.sheet.trial([[by, String(x)]]);
+          await wb.sheet.setMany([[by, String(x)]]);
           const v = wb.sheet.value(target);
           return typeof v === "number" ? v - to : NaN;
         }, start);
       } finally {
-        await wb.sheet.trial([[by, was]]);
+        await wb.sheet.setMany([[by, was]]);
       }
       if (!found) return refuse(`${target} cannot reach ${p.to} by changing ${by}`);
       const changed = await wb.sheet.set(by, String(Number(found.x.toPrecision(12))));
@@ -1362,7 +1365,7 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
-    id: "setup.run", label: "Run the setup script", params: [], journaled: true,
+    id: "setup.run", label: "Run the setup script", params: [], journaled: true, unstepped: true,
     run: async (wb) => {
       const failed = await wb.rexx.setup(wb.setupScript);
       if (failed) refuse(`the setup script failed: ${failed.split("\n").pop()}`);
@@ -1401,14 +1404,14 @@ const SPECS: readonly Spec[] = [
         name: wb.active, sheets: wb.sheetNames(), hiddenRows: hidden.rows.map((r) => r + 1), hiddenCols: hidden.cols.map(colName),
         frozenRows: wb.frozenRows(), rowHeights: wb.rowHeights().map(([r, h]) => [r + 1, h]), colWidths: wb.colWidths().map(([c, w]) => [colName(c), w]),
         filter: page.filter && { range: rangeName(page.filter.range), column: colName(page.filter.column), criterion: page.filter.criterion },
-        canUndo: wb.sheet.canUndo ? 1 : 0, canRedo: wb.sheet.canRedo ? 1 : 0,
+        canUndo: wb.canUndo ? 1 : 0, canRedo: wb.canRedo ? 1 : 0,
         autoId: page.autoId && { column: colName(page.autoId.column), next: `${page.autoId.prefix}${page.autoId.next}` },
       };
       return { ok: true, message: JSON.stringify(state), changed: [], output: state };
     },
   },
   {
-    id: "sheet.activate", label: "Go to a sheet", params: ["name"], journaled: true,
+    id: "sheet.activate", label: "Go to a sheet", params: ["name"], journaled: true, unstepped: true,
     run: async (wb, p) => {
       const page = pageOf(wb, p.name), before = wb.sheet.keys();
       wb.activate(page.name);
@@ -1437,7 +1440,7 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
-    id: "file.open", label: "Open", params: [], optional: ["name", "sample"], journaled: true,
+    id: "file.open", label: "Open", params: [], optional: ["name", "sample"], journaled: true, unstepped: true,
     run: (wb, p, store) => {
       if (p.name !== undefined) return open(wb, readSheetFile(JSON.parse(store.get(fileKey(savedName(store, p.name)))!)));
       if (p.sample !== undefined) return open(wb, readSheetFile(SAMPLES[p.sample.toLowerCase()] ?? refuse(`no sample ${p.sample} (budget, test, formatted)`)));
@@ -1454,7 +1457,7 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
-    id: "file.import", label: "Import a file", params: ["text"], journaled: true,
+    id: "file.import", label: "Import a file", params: ["text"], journaled: true, unstepped: true,
     run: (wb, p) => {
       let data: unknown;
       try {
@@ -1495,7 +1498,7 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
-    id: "file.new", label: "New", params: [], journaled: true,
+    id: "file.new", label: "New", params: [], journaled: true, unstepped: true,
     run: async (wb) => {
       const before = wb.sheet.keys();
       wb.reset();
@@ -1562,7 +1565,11 @@ export class Commands {
     try {
       if (!spec) refuse(`no command ${id}`);
       for (const name of spec!.params) if (params[name] === undefined) refuse(`${id} needs ${name}`);
+      // The workbook as it was, kept as a step to undo once the command has
+      // changed it.
+      const before = spec!.journaled && !spec!.unstepped ? this.#wb.saved() : null;
       const outcome = await spec!.run(this.#wb, params, this.#store);
+      if (outcome.ok && before) this.#wb.changed(before);
       if (outcome.ok && spec!.journaled) this.#journal.push(lineOf(id, params));
       return outcome;
     } catch (e) {

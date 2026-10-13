@@ -55,10 +55,11 @@ throws("nothing is pushed off the sheet", () => restructured([["A20", "1"]], ins
 {
   const s = new Sheet();
   await s.setMany(inputs);
+  const saved = s.saved();
   await s.setMany(restructured(s.keys().map((k) => [k, s.input(k)]), inserted("row", 1, 1), EXCEL));
   eq("through a Sheet: the values follow", ["A1", "A3", "A4", "B4", "A6"].map((k) => show(s.value(k))), ["1", "2", "3", "3", "30"]);
-  await s.undo();
-  eq("and one undo puts it back", [s.input("A3"), show(s.value("A5"))], ["=A1+A2", "30"]);
+  await s.restore(saved);
+  eq("and putting it back restores it", [s.input("A3"), show(s.value("A5"))], ["=A1+A2", "30"]);
 }
 eq("rows and columns are counted from 0, as Addr is", addrOf("B3"), { col: 1, row: 2 });
 // expect: ok an inserted row moves what is at or below it, $ or not
@@ -79,5 +80,5 @@ eq("rows and columns are counted from 0, as Addr is", addrOf("B3"), { col: 1, ro
 // expect: ok and go with a deleted one
 // expect: ok a conditional style is rewritten with its cell
 // expect: ok through a Sheet: the values follow
-// expect: ok and one undo puts it back
+// expect: ok and putting it back restores it
 // expect: ok rows and columns are counted from 0, as Addr is

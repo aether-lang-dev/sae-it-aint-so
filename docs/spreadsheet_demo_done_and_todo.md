@@ -45,8 +45,13 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   Only references change; the rest of a formula is kept as typed. The
   clipboard is the page's own: there is no system clipboard for pages yet.
 - Delete or BackSpace clears it. In the formula bar they are the field's.
-- Ctrl+Z undoes the last change (a paste or a fill is one), with its
-  ripple, and Ctrl+Y or Ctrl+Shift+Z redoes it; Undo and Redo buttons too.
+- Ctrl+Z undoes the last change, whatever it was and on whichever sheet
+  (that sheet active again): cells with their ripple, and looks, notes,
+  rules, charts, merges, hidden rows, names, tables, and sheets added,
+  renamed or deleted. Each command is one step (a paste, a fill, a sort).
+  Ctrl+Y or Ctrl+Shift+Z redoes it; Undo and Redo buttons too. A copy,
+  going to another sheet and Circle Invalid are not steps, nor is what a
+  RexxJS setup script defined.
   A hundred steps are kept, as the Tauri app keeps; opening a file starts
   afresh.
 - Insert row and Insert column put as many empty rows (columns) before the
@@ -94,7 +99,7 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   moves a reference to another sheet as any other; rows or columns
   inserted on a sheet move every sheet's references to it, and no others.
   The language is the workbook's, for every sheet; each sheet has its own
-  named ranges and its own undo.
+  named ranges; undo is the workbook's.
 - Conditional formatting rules over the selection (the rules bar), as
   Excel's menu has them: Highlight Cells (greater than, less than, equal
   to, text that contains; between and the rest by command), Top 10 (or
@@ -119,7 +124,7 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   an earlier row's, any case, the rest moved up with their formulas);
   Text to Columns (split in place at a delimiter, quotes kept together,
   numbers as numbers; not over cells holding something unless told).
-  Trials set cells with no undo steps (`Sheet.trial`); each is one step.
+  Each is one undo step, however many trials it made.
 - Charts of the selection (the chart panel): bar, line and pie, each a
   `vg` scene under the sheet, redrawn as its cells change, with a title,
   round ticks, categories and a legend; Excel's reading of a range (text
@@ -351,18 +356,23 @@ summary.
     formatting, a status line with a comment.
   - `sheet_functions` (46): every function, its edge cases and its errors,
     against a fixed set of cells.
-  - `sheet_sheet` (39): the `Sheet` against a recording mock listener.
+  - `sheet_sheet` (36): the `Sheet` against a recording mock listener.
     Edits ripple in dependency order; a paste recomputes each cell once;
     cycles are found and mended; a formula forgets what it used to read.
     And against a stub language: compiled once, run in dependency order and
     awaited, everything compiled again in another, changes taking turns.
-    Undo and redo: a step per change, a paste as one, a hundred kept.
+    Saved and restored (what the workbook's undo is made of).
+  - `sheet_undo` (16): the workbook's undo through commands: cells; a
+    look, a comment, a merge, a hidden row, a chart, a rule, a name and a
+    table, one step each, and redone; a sheet renamed and deleted, and
+    what read it; undo going to the sheet changed; what is no step; redo
+    forgotten; a hundred kept; a file opened.
   - `sheet_notes` (18): number formats and styles in each dialect, notes,
     the formatted sample read, its ledger worked out, and its conditional
     styles evaluated in RexxJS by the app's style functions.
   - `sheet_shift` (20): references under each edit in both languages
     (ranges growing and shrinking, `#REF!`), a sheet's cells restructured,
-    notes and conditional styles following, and one undo through a Sheet.
+    notes and conditional styles following, and put back through a Sheet.
   - `sheet_sortfind` (14): sort order (numbers, text, empty; stable), rows
     moving whole with their formulas and notes, find and replace with each
     option.
@@ -487,15 +497,16 @@ summary.
   - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 49 tests, on GTK4
-  under Xvfb):
+- **In the browser** (`tests/run_all.sh spec_sheet`, 50 tests, on GTK4
+  under Xvfb and on macOS):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
   - an in-cell edit that opens on `=B2*C2` and ripples into D5;
   - the grid's keys, a grip drag, a grip double-click that fits;
   - Ctrl+D and Ctrl+R; Ctrl+C and Ctrl+V moving `=$B$2+C2` to
     `=$B$2+D4`; Delete over a selection, and not while the formula field
-    has the focus; Ctrl+Z, Undo and Redo; and Clear all;
+    has the focus; Ctrl+Z, Undo and Redo, and Ctrl+Z taking back a merge
+    and a hidden column; and Clear all;
   - the app's budget in RexxJS formulas (its setup script's TAX_RATE, a
     comment), RexxJS's `||`, `|>` and `>`, an error's reason, and the
     setting switched to Excel and back;
@@ -841,14 +852,24 @@ Either needs a page-API function, a service, an attempt in
 Paul and Nic to decide on before any code: its section 5 lists the five
 decisions. Nothing is built until they are made.
 
-### 4. Undo for everything
+### 4. Undo for everything (done, 2026-10-13)
 
-Undo takes back cell contents only (each `Sheet` keeps the inputs a change
-replaced). Notes, looks, rules, charts, merges, hidden rows, names, tables
-and sheets added or deleted are not undone, and each sheet's undo is its
-own. A workbook-wide undo of snapshots taken before each journaled command
-(GridCraft's idea 4: its copy-on-write snapshots) would cover all of them,
-and undo across sheets; the `Sheet`'s own undo would become one part of it.
+The workbook is saved before each command that changes it
+(`Workbook.saved`, kept by `Commands.execute` once the command succeeds),
+and undo puts it back (`Workbook.undo`, `redo`): every sheet in order (the
+`Page` objects themselves, so a deleted sheet comes back as it was), each
+one's cells, names and tables (`Sheet.saved`, `Sheet.restore`, which sets
+back only the cells that differ), notes, rules, charts and view, which
+sheet was active, and the file's name and setup script. Each container is
+copied and its contents shared, as rules, charts, merges and the rest are
+replaced and never changed in place: GridCraft's idea 4, its copy-on-write
+snapshots, the cheap way. The `Sheet`'s own undo is gone.
+
+Not steps (`unstepped` in `commands.ts`): undo and redo, a copy, going to
+a sheet, Circle Invalid, running the setup script, and opening a file
+(where undo stops). What a RexxJS setup script defined stays defined.
+Still to come: a script as one step (each command it runs is one now), and
+undo labels ("Undo Merge Cells").
 
 ### 5. A bigger sheet
 
@@ -891,9 +912,9 @@ is `src/spreadsheet-model.js`, its control functions
 `src/spreadsheet-control-functions.js`). Each lands in the model with no
 `ui` and its checks headless, then on the page with an `it`:
 
-1. ~~Several sheets~~ (done). Still to come: renaming and moving a sheet
-   (a rename rewrites what reads it), undo across sheets (each sheet's
-   undo is its own, and adding or deleting a sheet is not undone), names
+1. ~~Several sheets~~ (done). Still to come: ~~renaming~~ and moving a sheet
+   (a rename rewrites what reads it), ~~undo across sheets~~ (done: To do
+   4), names
    scoped to the workbook, and a cycle through two sheets found as one
    (settle() passes changes between sheets twenty times, then stops).
 2. ~~Saving and opening~~ (done, through `storage`; CSV in a textarea).
@@ -960,8 +981,8 @@ fields for CSV and RexxJS scripts.
 
 **Platform and tests:**
 
-- `spec_sheet` has run on GTK4 (Linux, Xvfb) only. `spec_grid` is green on
-  macOS and on both GTK lanes; `spec_sheet` should be run on a Mac too.
+- `spec_sheet` is green on macOS (50, 2026-10-13) and has run on GTK4
+  (Linux, Xvfb). `spec_grid` is green on macOS and on both GTK lanes.
 - On Linux, `spec_aevg`, `spec_camera`, `spec_raster`'s Home click and
   `spec_nav`'s scoped-seeks case fail on GTK4 (aether-ui bugs, open).
   `spec_app_httplist` needs `api.localhost` in a container's `/etc/hosts`

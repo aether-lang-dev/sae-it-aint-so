@@ -23,7 +23,7 @@ import { CellNotes } from "./notes.ts";
 import type { Note } from "./notes.ts";
 import { RexxLanguage } from "./rexx.ts";
 import { Sheet, Turns } from "./sheet.ts";
-import type { Context } from "./sheet.ts";
+import type { Context, SavedSheet } from "./sheet.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
 import { applied } from "./rules.ts";
@@ -134,6 +134,39 @@ export interface Watch {
   readonly shown: string;
 }
 
+// A workbook as it was, to go back to: its sheets in order (the Page
+// objects themselves, so a sheet deleted comes back as it was), each one's
+// name, cells, notes, rules, charts, view and the rest, which was active,
+// and the file's name and setup script. Not what is only looked at (the
+// clipboard, traces, watches, Show Formulas, Circle Invalid), and not
+// RexxJS's own state: what a setup script defined stays defined.
+interface Saved {
+  readonly pages: readonly SavedPage[];
+  readonly active: Page;
+  readonly name: string;
+  readonly setupScript: string;
+}
+
+interface SavedPage {
+  readonly page: Page;
+  readonly name: string;
+  readonly sheet: SavedSheet;
+  readonly notes: ReadonlyMap<string, Note>;
+  readonly view: Omit<Page, "name" | "sheet" | "notes">;
+}
+
+// A page's own state, copied: each container new, what is in them shared
+// (rules, charts, merges, filters and pivots are replaced, never changed
+// in place).
+const viewOf = (p: Omit<Page, "name" | "sheet" | "notes">): Omit<Page, "name" | "sheet" | "notes"> => ({
+  rules: [...p.rules], charts: [...p.charts], hiddenRows: new Set(p.hiddenRows), hiddenCols: new Set(p.hiddenCols),
+  filtered: p.filtered && new Set(p.filtered), filter: p.filter, frozen: p.frozen, merges: [...p.merges],
+  heights: new Map(p.heights), widths: new Map(p.widths), autoId: p.autoId, pivots: new Map(p.pivots),
+});
+
+// Undo steps kept, as the Tauri spreadsheet keeps.
+const HISTORY = 100;
+
 // How many times settle() passes changes between sheets before it stops (a
 // cycle through two sheets would go on for ever).
 const ROUNDS = 20;
@@ -161,6 +194,10 @@ export class Workbook {
   // A formula being typed: each cell its references cover, outlined.
   #typed = new Map<string, string>();
   #watches: { readonly page: Page; readonly cell: string }[] = [];
+  // Undo: the workbook as it was before each change, and as it was before
+  // each undo, to redo.
+  readonly #undo: Saved[] = [];
+  readonly #redo: Saved[] = [];
 
   constructor() {
     this.#active = this.#make("Sheet1", EXCEL);
@@ -241,11 +278,68 @@ export class Workbook {
     await this.#recalculate();
   }
 
-  // One empty sheet, as a file opened starts.
+  // One empty sheet, as a file opened starts; where undo stops.
   reset(name = "Sheet1"): void {
     this.#active = this.#make(name, this.sheet.language);
     this.#pages = [this.#active];
     this.#pending.clear();
+    this.#undo.length = 0;
+    this.#redo.length = 0;
+  }
+
+  // The workbook as it is now, for changed() once a change is made.
+  saved(): Saved {
+    return {
+      pages: this.#pages.map((p) => ({ page: p, name: p.name, sheet: p.sheet.saved(), notes: p.notes.saved(), view: viewOf(p) })),
+      active: this.#active, name: this.name, setupScript: this.setupScript,
+    };
+  }
+
+  // A change was made since `before` was saved: one step to undo, and
+  // nothing left to redo.
+  changed(before: Saved): void {
+    this.#undo.push(before);
+    if (this.#undo.length > HISTORY) this.#undo.shift();
+    this.#redo.length = 0;
+  }
+
+  get canUndo(): boolean { return this.#undo.length > 0; }
+  get canRedo(): boolean { return this.#redo.length > 0; }
+
+  // The last change taken back, whatever it was and on whichever sheet (that
+  // sheet active again), or done again. Each gives the active sheet's
+  // keys whose shown value changed (all of them, if it is another sheet).
+  undo(): Promise<string[]> { return this.#step(this.#undo, this.#redo); }
+  redo(): Promise<string[]> { return this.#step(this.#redo, this.#undo); }
+
+  async #step(from: Saved[], to: Saved[]): Promise<string[]> {
+    const step = from.pop();
+    if (!step) return [];
+    to.push(this.saved());
+    const was = this.#active, before = this.sheet.keys();
+    // Sheets added, deleted, moved or renamed: every sheet worked out again,
+    // as what reads one by name may read another now.
+    const moved = step.pages.length !== this.#pages.length || step.pages.some((s, i) => s.page !== this.#pages[i] || s.name !== s.page.name);
+    this.#pages = step.pages.map((s) => s.page);
+    this.#active = step.active;
+    this.name = step.name;
+    this.setupScript = step.setupScript;
+    let changed: string[] = [];
+    for (const s of step.pages) {
+      s.page.name = s.name;
+      Object.assign(s.page, viewOf(s.view));
+      s.page.notes.restore(s.notes);
+      const c = await s.page.sheet.restore(s.sheet);
+      if (s.page === this.#active) changed = c;
+    }
+    if (moved) {
+      for (const p of this.#pages) {
+        const c = await p.sheet.recalculate();
+        if (p === this.#active) changed = [...new Set([...changed, ...c])];
+      }
+    }
+    await this.settle();
+    return this.#active === was ? changed : [...new Set([...before, ...this.sheet.keys()])];
   }
 
   // The major setting, for every sheet.

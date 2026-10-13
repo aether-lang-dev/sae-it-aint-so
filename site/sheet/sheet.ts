@@ -50,8 +50,6 @@ const getOrAdd = <K, V>(m: Map<K, V>, k: K, make: () => V): V => {
   return v;
 };
 
-const HISTORY = 100;   // undo steps kept, as the Tauri spreadsheet keeps
-
 const byOrder = (a: string, b: string): number => order(cellAddr(a)!) - order(cellAddr(b)!);
 
 // This sheet's keys in sheet order, then other sheets' by name.
@@ -86,6 +84,14 @@ export class Turns {
 
 // Where a sheet is: its name (upper case, as keys have it), the turns it
 // shares, and the other sheets' cells' values.
+// A sheet's contents as saved for undo (Sheet.saved, Sheet.restore).
+export interface SavedSheet {
+  readonly language: Language;
+  readonly inputs: ReadonlyMap<string, string>;
+  readonly names: ReadonlyMap<string, [Addr, Addr]>;
+  readonly tables: ReadonlyMap<string, TableDef>;
+}
+
 export interface Context {
   readonly name: string;
   readonly turns: Turns;
@@ -113,9 +119,6 @@ export class Sheet {
   readonly #spills = new Map<string, ArrayValue>();       // a formula -> the array it spills
   readonly #spilledBy = new Map<string, string>();        // a cell -> the formula whose array it shows
   #spillChanged = new Set<string>();
-  // Each step is the inputs a change replaced, to put back.
-  readonly #undo: (readonly [string, string][])[] = [];
-  readonly #redo: (readonly [string, string][])[] = [];
 
   constructor(listener?: SheetListener, language: Language = EXCEL, context: Context = alone()) {
     this.#listener = listener;
@@ -169,17 +172,6 @@ export class Sheet {
   // sheet is refused before anything is set.
   setMany(entries: Iterable<readonly [string, string]>): Promise<string[]> {
     const list = this.#checked(entries);
-    return this.#inTurn(() => {
-      this.#remember(this.#undo, list);
-      this.#redo.length = 0;
-      return this.#apply(list);
-    });
-  }
-
-  // Cells set to try something (Goal Seek, a data table): worked out as
-  // any change, but no step to undo; the trier puts them back.
-  trial(entries: Iterable<readonly [string, string]>): Promise<string[]> {
-    const list = this.#checked(entries);
     return this.#inTurn(() => this.#apply(list));
   }
 
@@ -192,33 +184,29 @@ export class Sheet {
     });
   }
 
-  get canUndo(): boolean { return this.#undo.length > 0; }
-  get canRedo(): boolean { return this.#redo.length > 0; }
-
-  // The last change taken back (its inputs put back, and the sheet worked
-  // out), or done again. Each gives the keys whose shown value changed.
-  undo(): Promise<string[]> { return this.#inTurn(() => this.#step(this.#undo, this.#redo)); }
-  redo(): Promise<string[]> { return this.#inTurn(() => this.#step(this.#redo, this.#undo)); }
-
-  // No history: a file opened is where undo stops.
-  forget(): void {
-    this.#undo.length = 0;
-    this.#redo.length = 0;
+  // What the sheet holds, to be put back (the workbook's undo): its
+  // language, inputs, names and tables. Values are worked out again.
+  saved(): SavedSheet {
+    return { language: this.#language, inputs: new Map(this.#inputs), names: new Map(this.#names), tables: new Map(this.#tables) };
   }
 
-  async #step(from: (readonly [string, string][])[], to: (readonly [string, string][])[]): Promise<string[]> {
-    const step = from.pop();
-    if (!step) return [];
-    this.#remember(to, step);
-    return this.#apply(step);
-  }
-
-  // The inputs `list` is about to replace, once per key, as one step.
-  #remember(stack: (readonly [string, string][])[], list: readonly (readonly [string, string])[]): void {
-    const before = new Map<string, string>();
-    for (const [key] of list) if (!before.has(key)) before.set(key, this.input(key));
-    stack.push([...before]);
-    if (stack.length > HISTORY) stack.shift();
+  // The sheet put back as it was saved: the cells whose input differs set
+  // back, and everything compiled again if its language, names or tables
+  // differ. Gives the keys whose shown value changed, in sheet order.
+  restore(saved: SavedSheet): Promise<string[]> {
+    return this.#inTurn(async () => {
+      const keys = new Set([...this.#inputs.keys(), ...saved.inputs.keys()]);
+      const list = [...keys].filter((k) => this.input(k) !== (saved.inputs.get(k) ?? "")).map((k): [string, string] => [k, saved.inputs.get(k) ?? ""]);
+      const same = <V>(a: Map<string, V>, b: ReadonlyMap<string, V>) => a.size === b.size && [...b].every(([k, v]) => a.get(k) === v);
+      const relink = this.#language !== saved.language || !same(this.#names, saved.names) || !same(this.#tables, saved.tables);
+      this.#language = saved.language;
+      this.#names.clear();
+      for (const [n, r] of saved.names) this.#names.set(n, r);
+      this.#tables.clear();
+      for (const [n, t] of saved.tables) this.#tables.set(n, t);
+      const changed = await this.#apply(list);
+      return relink ? [...new Set([...changed, ...(await this.#recomputeAll())])] : changed;
+    });
   }
 
   #apply(list: readonly (readonly [string, string])[]): Promise<string[]> {

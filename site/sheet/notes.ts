@@ -59,4 +59,14 @@ export class CellNotes {
   clear(): void {
     this.#notes.clear();
   }
+
+  // Every note, to be put back (undo); a note is never changed in place.
+  saved(): ReadonlyMap<string, Note> {
+    return new Map(this.#notes);
+  }
+
+  restore(saved: ReadonlyMap<string, Note>): void {
+    this.#notes.clear();
+    for (const [k, n] of saved) this.#notes.set(k, n);
+  }
 }

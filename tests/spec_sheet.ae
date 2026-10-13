@@ -648,6 +648,26 @@ main() {
             spec.assert_true(b.wait_for_console("sheet: row 13 is 40 high"), "a row 40 high")
             spec.assert_true(uidriver.widget_int_field_by_id(g.cell_id("A", 13), "h") >= 38, "drawn taller")
         }
+        spec.it("Ctrl+Z takes back a merge and a hidden column, as it does a cell") callback {
+            g.enter("E18", "wide")
+            g.pick("E", 18)
+            g.key("Shift+Right")
+            b.click("Merge & center")
+            spec.assert_true(b.wait_for_console("sheet: merged E18:F18"), "merged")
+            spec.assert_true(uidriver.widget_int_field_by_id(g.cell_id("E", 18), "w") > 120, "one cell two columns wide")
+            g.pick("E", 18)
+            g.key("Ctrl+Z")
+            spec.assert_true(b.wait_for_console("sheet: undo:"), "undone")
+            spec.assert_true(uidriver.widget_int_field_by_id(g.cell_id("E", 18), "w") < 120, "one column wide again")
+            spec.assert_true(g.wait_cell("E", 18, "wide"), "its value kept")
+            g.goto("I2")
+            b.click("Hide columns")
+            spec.assert_true(b.wait_for_console("sheet: hid column I"), "hid I")
+            spec.assert_true(g.wait_cell("I", 2, ""), "I2 shows nothing")
+            g.pick("H", 2)
+            g.key("Ctrl+Z")
+            spec.assert_true(g.wait_cell("I", 2, "3"), "I2 again")
+        }
         spec.it("a formula as it is typed: its references outlined in colour; a click puts a cell's reference in") callback {
             g.enter("H10", "7")
             g.goto("H11")
