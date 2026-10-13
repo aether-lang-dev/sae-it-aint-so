@@ -931,6 +931,20 @@ call_iis_(ctx: ptr, ref: int, a: int, b: int, t: string, what: string) {
     quickjs.release(ctx, args)
 }
 
+// Call a held JS function with (string, number) and nothing back; what it
+// throws is reported.
+call_si_(ctx: ptr, ref: int, t: string, n: int, what: string) {
+    args = quickjs.new_array(ctx)
+    vt = quickjs.new_string(ctx, t)
+    _t = quickjs.set_index(ctx, args, 0, vt)
+    quickjs.release(ctx, vt)
+    vn = quickjs.new_int(ctx, n)
+    _n = quickjs.set_index(ctx, args, 1, vn)
+    quickjs.release(ctx, vn)
+    if calln_(ctx, ref, args) < 0 { report_exception_(ctx, what) }
+    quickjs.release(ctx, args)
+}
+
 // The page's grid with handle h (1-based), or null.
 dgrid_of_(p: *Page, h: int) -> ptr {
     if h < 1 || h > list.size(p.dgrids) { return null }
@@ -970,7 +984,7 @@ dg_cells_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
     return ""
 }
 
-// kind: 0 edit text, 1 cell style. Both (row, model col) -> string.
+// kind: 0 edit text, 1 cell style, 2 tooltip. Each (row, model col) -> string.
 dg_rc_str_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (row, col) => string" }
     ref = hold_arg_(ctx, argv, i)
@@ -979,6 +993,7 @@ dg_rc_str_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string 
     }
     if kind == 0 { _g = ui.datagrid_edit_text(g, f) }
     if kind == 1 { _g = ui.datagrid_cell_style(g, f) }
+    if kind == 2 { _g = ui.datagrid_cell_tooltip(g, f) }
     return ""
 }
 
@@ -1365,6 +1380,158 @@ sae_ui_datagrid_fit_col(ctx: ptr, this_val: int, argv: int) -> int {
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_fit_col(g, c): g is not a grid this page made") }
     _g = ui.datagrid_fit_col(g, arg_int_(ctx, argv, argc, 1, 0))
     return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ---- The grid's rows and cells (aether-ui 94fee594 .. 59d09672): hidden
+// rows and columns, frozen rows, merges, row heights, tooltips, and the
+// editor's text as it is typed. Rows are model rows; columns view columns.
+
+// ui.datagrid_hide_row(g, r, hidden): model row r out of the view, or back.
+sae_ui_datagrid_hide_row(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_hide_row: g is not a grid this page made") }
+    _g = ui.datagrid_hide_row(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 1))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_hide_col(g, c, hidden): view column c out of the view, or back.
+sae_ui_datagrid_hide_col(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_hide_col: g is not a grid this page made") }
+    _g = ui.datagrid_hide_col(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 1))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_row_model(g, v) -> the model row shown v-th (hidden rows not
+// counted), -1 past the end.
+sae_ui_datagrid_row_model(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_row_model: g is not a grid this page made") }
+    return quickjs.new_int(ctx, ui.datagrid_row_model(g, arg_int_(ctx, argv, argc, 1, 0)))
+}
+// ui.datagrid_freeze_rows(g, n): the leading n rows stay while the rest
+// scroll; 0 unfreezes.
+sae_ui_datagrid_freeze_rows(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_freeze_rows: g is not a grid this page made") }
+    _g = ui.datagrid_freeze_rows(g, arg_int_(ctx, argv, argc, 1, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_merge(g, r, c, rows, cols): the rectangle from model row r,
+// view column c drawn as one cell.
+sae_ui_datagrid_merge(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_merge: g is not a grid this page made") }
+    _g = ui.datagrid_merge(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0), arg_int_(ctx, argv, argc, 3, 1), arg_int_(ctx, argv, argc, 4, 1))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_unmerge(g, r, c): the merge covering (r, c) undone.
+sae_ui_datagrid_unmerge(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_unmerge: g is not a grid this page made") }
+    _g = ui.datagrid_unmerge(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_merge_of(g, r, c) -> "r,c,rows,cols" of the merge covering
+// (r, c), or "".
+sae_ui_datagrid_merge_of(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_merge_of: g is not a grid this page made") }
+    return quickjs.new_string(ctx, own_(ui.datagrid_merge_of(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))))
+}
+// ui.datagrid_set_row_height(g, r, h): model row r's height (the grid's
+// when h is 0).
+sae_ui_datagrid_set_row_height(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_set_row_height: g is not a grid this page made") }
+    _g = ui.datagrid_set_row_height(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_fit_row(g, r): model row r as tall as its tallest cell's
+// (wrapped) text needs.
+sae_ui_datagrid_fit_row(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_fit_row: g is not a grid this page made") }
+    _g = ui.datagrid_fit_row(g, arg_int_(ctx, argv, argc, 1, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_cell_tooltip(g, fn(r, c) -> string): what shows when the
+// pointer rests on a cell; "" for none.
+sae_ui_datagrid_cell_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_cell_tooltip: g is not a grid this page made") }
+    e = dg_rc_str_(ctx, g, argv, argc, 1, 2)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_cell_tooltip(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_on_edit_change(g, fn(text, caret)): the open editor's text as
+// it is typed (and as it opens), with its caret.
+sae_ui_datagrid_on_edit_change(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_edit_change: g is not a grid this page made") }
+    if argc <= 1 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.datagrid_on_edit_change(g, fn): fn must be a function (text, caret) => void") }
+    ref = hold_arg_(ctx, argv, 1)
+    _g = ui.datagrid_on_edit_change(g) callback |t: string, caret: int| {
+        call_si_(ctx, ref, t, caret, "a ui.datagrid edit-change handler")
+        settle_(ctx)
+    }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_edit_insert(g, text): text into the open editor at its caret,
+// as typing puts it; nothing when no editor is open.
+sae_ui_datagrid_edit_insert(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_edit_insert: g is not a grid this page made") }
+    _g = ui.datagrid_edit_insert(g, own_(arg_str_(ctx, argv, argc, 1)))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui._textarea(placeholder, onChange?): a multi-line field; onChange(text)
+// on every edit. The prelude's ui.textarea wraps it, so bind() knows it.
+sae_ui_textarea(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    placeholder = own_(arg_str_(ctx, argv, argc, 0))
+    has_fn = 0
+    ref = 0
+    if argc >= 2 && is_fn_arg_(ctx, argv, 1) != 0 {
+        has_fn = 1
+        ref = hold_arg_(ctx, argv, 1)
+    }
+    on_change = |s: string| {
+        if has_fn == 1 {
+            r = call1_str_(ctx, ref, s)
+            if r < 0 { report_exception_(ctx, "a textarea handler") }
+            settle_(ctx)
+        }
+    }
+    long t = now_ns_()
+    h = ui.textarea(mem.long_to_ptr(top_(p)), placeholder, on_change)
+    ui_done_(p, t)
+    return quickjs.new_int(ctx, h)
 }
 
 // ui.text_measure(h, text) -> how wide text would be in label h's font.
@@ -6653,6 +6820,19 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_edit_text", 2, sae_ui_datagrid_edit_text)
     reg_(q, u, "datagrid_cell_style", 2, sae_ui_datagrid_cell_style)
     reg_(q, u, "datagrid_fit_col", 2, sae_ui_datagrid_fit_col)
+    reg_(q, u, "datagrid_hide_row", 3, sae_ui_datagrid_hide_row)
+    reg_(q, u, "datagrid_hide_col", 3, sae_ui_datagrid_hide_col)
+    reg_(q, u, "datagrid_row_model", 2, sae_ui_datagrid_row_model)
+    reg_(q, u, "datagrid_freeze_rows", 2, sae_ui_datagrid_freeze_rows)
+    reg_(q, u, "datagrid_merge", 5, sae_ui_datagrid_merge)
+    reg_(q, u, "datagrid_unmerge", 3, sae_ui_datagrid_unmerge)
+    reg_(q, u, "datagrid_merge_of", 3, sae_ui_datagrid_merge_of)
+    reg_(q, u, "datagrid_set_row_height", 3, sae_ui_datagrid_set_row_height)
+    reg_(q, u, "datagrid_fit_row", 2, sae_ui_datagrid_fit_row)
+    reg_(q, u, "datagrid_cell_tooltip", 2, sae_ui_datagrid_cell_tooltip)
+    reg_(q, u, "datagrid_on_edit_change", 2, sae_ui_datagrid_on_edit_change)
+    reg_(q, u, "datagrid_edit_insert", 2, sae_ui_datagrid_edit_insert)
+    reg_(q, u, "_textarea", 2, sae_ui_textarea)
     reg_(q, u, "text_measure", 2, sae_ui_text_measure)
     reg_(q, u, "cells", 1, sae_ui_amb_cells)
     reg_(q, u, "headers", 1, sae_ui_amb_headers)

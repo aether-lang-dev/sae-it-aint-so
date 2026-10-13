@@ -65,12 +65,21 @@
     return s;
   };
 
+  // ui.textarea(placeholder, onChange?): a multi-line field, remembered so
+  // bind() binds it both ways (backends disagree on which widget is it).
+  const textareas = new Set();
+  const textarea = (...args) => {
+    const h = ui_._textarea(...args);
+    textareas.add(h);
+    return h;
+  };
+
   // bind(widget, state): the widget's text follows the state; a text field
   // and a string state are bound both ways. bind`...` is the tagged template.
   const bind = (widget, s) => {
     const h = cellOf(s);
     if (h === 0) throw new TypeError("bind(widget, state): state is not a state");
-    const two = isState(s) && s.kind === "s" && ui_._widget_kind(widget) === "textfield";
+    const two = isState(s) && s.kind === "s" && (textareas.has(widget) || ui_._widget_kind(widget) === "textfield");
     ui_._bind(two ? "value" : "text", widget, h, 0);
     return widget;
   };
@@ -137,7 +146,7 @@
   };
 
   Object.assign(globalThis, { state, computed, bind: bindAny, bind_enabled, bind_hidden, each, batch });
-  Object.assign(ui_, { state, computed, bind: bindAny, bind_enabled, bind_hidden, each, batch });
+  Object.assign(ui_, { state, computed, bind: bindAny, bind_enabled, bind_hidden, each, batch, textarea });
 
   // --- vg over the frame clock ---
   const easings = {

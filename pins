@@ -67,4 +67,9 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # 0cfbf942 (2026-10-12): a datagrid cell whose style changes is redrawn
 # (the style hash overflowed): the spreadsheet's cells turn red on an error
 # and back when it is mended. Verified: spec_sheet, spec_grid, spec_keys.
-AETHER_UI_REF=0cfbf942d5a2ec127fee382d31c7a9742e70217c
+# 08e3193d (2026-10-12): asks/aether-ui-datagrid-rows-and-cells.md, all
+# seven: hidden rows and columns, frozen rows, italic, underline, sizes,
+# borders, data bars, corner markers and tooltips in cell_style, merges, row
+# heights and wrapped text, the editor's text as it is typed, and
+# ui.textarea_bound. Verified: spec_sheet, spec_grid, spec_keys.
+AETHER_UI_REF=08e3193d207569ce864a5503b0baa140950e2288

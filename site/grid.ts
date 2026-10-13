@@ -7,7 +7,9 @@
 // block, as a button is of its own. A second, small grid below keeps the
 // first form (a cell function in the block's place). A field and a label
 // below take blocks of their own: onsubmit() and ondrag() act on them.
-// tests/spec_grid.ae drives it.
+// A third grid has hidden and frozen rows, merges, row heights, styles,
+// tooltips and the editor's text as it is typed; a textarea is bound to a
+// state. tests/spec_grid.ae drives it.
 const { text, btn, textfield, onsubmit, ondrag, pointer_shape, onfocuschange, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
         on_cell_edit, on_col_resize, on_col_move, edit_text, cell_style } = ui;
 
@@ -80,4 +82,38 @@ text("drag me", () => {
     if (phase === 2) print(`dragged by ${x},${y}`);
   });
 });
+// A third grid for the rows and cells API: hidden rows, frozen rows,
+// merges, row heights, styles past colour and bold, tooltips, and the
+// editor's text as it is typed (ui.datagrid_on_edit_change, _edit_insert).
+const rows = ui.datagrid(8, 4, 6, 3, 1, (r: number, c: number) => (c === 0 ? String(r + 1) : `n${r}:${c}`));
+ui.datagrid_cell_style(rows, (r: number, c: number) => (r === 0 && c === 1
+  ? "font-style: italic; text-decoration: underline; border-bottom: 2px solid #ff0000; --fill: 0.5; --fill-color: #638ec6; --corner: #d00000"
+  : r === 7 && c === 1 ? "white-space: normal" : ""));
+ui.datagrid_cell_tooltip(rows, (r: number, c: number) => (r === 0 && c === 1 ? "a note" : ""));
+ui.datagrid_on_edit(rows, (r: number, c: number, t: string) => print(`rows edited ${r},${c} = ${t}`));
+ui.datagrid_on_edit_change(rows, (t: string, caret: number) => print(`rows typing ${t} @${caret}`));
+btn("Hide row 2", () => {
+  ui.datagrid_hide_row(rows, 1, 1);
+  print(`rows: shown row 1 is model row ${ui.datagrid_row_model(rows, 1)}`);
+});
+btn("Freeze a row", () => ui.datagrid_freeze_rows(rows, 1));
+btn("Merge", () => {
+  ui.datagrid_merge(rows, 3, 1, 2, 2);
+  print(`rows: merged ${ui.datagrid_merge_of(rows, 4, 2)}`);
+});
+btn("Unmerge", () => {
+  ui.datagrid_unmerge(rows, 3, 1);
+  print(`rows: merge of 4,2 is "${ui.datagrid_merge_of(rows, 4, 2)}"`);
+});
+btn("Tall rows", () => {
+  ui.datagrid_set_row_height(rows, 0, 48);
+  ui.datagrid_fit_row(rows, 7);
+  print("rows: heights set");
+});
+btn("Insert X1", () => ui.datagrid_edit_insert(rows, "X1"));
+// ui.textarea: several lines, bound both ways to a state.
+const story = state("");
+bind(ui.textarea("story"), story);
+bind(ui.text(""), computed(() => `story has ${story.value.split("\n").length} lines`, story));
+btn("Two lines", () => story.set("one\ntwo"));
 btn("Home", () => browserContext.changePage("/"));
