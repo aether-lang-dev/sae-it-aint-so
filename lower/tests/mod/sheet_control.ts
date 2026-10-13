@@ -3,36 +3,14 @@
 // makes of the answer), then in scripts through a Workbook, and last the
 // app's own ARexx-style demonstration script, unchanged but for its ADDRESS.
 import { CONTROL, MISSING, controlFunctions } from "./sheet/control.ts";
-import type { Exec } from "./sheet/control.ts";
 import { Commands } from "./sheet/commands.ts";
 import { Workbook } from "./sheet/workbook.ts";
 import { show } from "./sheet/format.ts";
 import { ADDRESS_DEMO } from "./lib/app_address_demo.ts";
 import { eq } from "./lib/check.ts";
+import { failed, stub, told as toldBy } from "./lib/controlstub.ts";
 
-// exec, stubbed: each call recorded; each command answered with its output
-// from `answers`, or refused when in `refused`.
-function stub(answers: Record<string, unknown> = {}, refused: readonly string[] = []) {
-  const calls: [string, Record<string, string>][] = [];
-  const exec: Exec = async (id, params) => {
-    calls.push([id, { ...params }]);
-    return refused.includes(id) ? { ok: false, message: `${id} refused` } : { ok: true, message: "", output: answers[id] };
-  };
-  return { exec, calls };
-}
-async function told(name: string, args: unknown[], answers: Record<string, unknown> = {}) {
-  const s = stub(answers);
-  const result = await CONTROL[name](s.exec, ...args);
-  return [result, s.calls];
-}
-const failed = async (f: () => unknown) => {
-  try {
-    await f();
-    return "did not fail";
-  } catch (e) {
-    return (e as Error).message;
-  }
-};
+const told = (name: string, args: unknown[], answers: Record<string, unknown> = {}) => toldBy(CONTROL, name, args, answers);
 
 eq("a setter tells its command, and gives what the app's gives", [
   await told("SETFORMAT", ["A1", "bold"]), await told("CLEARCELL", ["B2"]), await told("ADDSHEET", ["Costs"]),
@@ -92,14 +70,14 @@ const APP = ["SETCELL", "GETCELL", "GETEXPRESSION", "CLEARCELL", "SUM_RANGE", "A
   "MOVECOLUMNLEFT", "MOVECOLUMNRIGHT", "MERGECELLS", "UNMERGECELLS", "GETMERGEDRANGE", "ISCELLMERGED", "SETCELLEDITOR", "GETCELLEDITOR", "REMOVECELLEDITOR", "CREATEPIVOT",
   "UPDATEPIVOT", "DELETEPIVOT", "GETPIVOT", "LISTPIVOTS", "PIVOTCONFIG", "DEFINETABLE", "DELETETABLE", "GETTABLE", "LISTTABLES", "SORTTABLEBYCOLUMN", "LISTCOMMANDS"];
 const OWN = ["SETCELL", "GETCELL", "SUM_RANGE", "AVERAGE_RANGE", "COUNT_RANGE", "MIN_RANGE", "MAX_RANGE", "SUMIF_RANGE", "COUNTIF_RANGE"];
-const fns = controlFunctions(stub().exec, OWN);
+const fns = controlFunctions(stub().exec, Object.fromEntries(OWN.map((n) => [n, () => n])));
 eq("every name the app lists is here, missing, or a script's own; none both", [APP.filter((n) => !(n in fns) && !OWN.includes(n)), Object.keys(CONTROL).filter((n) => n in MISSING)], [[], []]);
 const listed = fns.LISTCOMMANDS() as Record<string, unknown>;
-eq("LISTCOMMANDS: a stem of what a script may call; LISTCOMMANDS('missing'), what it may not yet and why", [
-  Object.entries(listed).filter(([k]) => k !== "0").map(([, n]) => n).sort(), listed[0], (fns.LISTCOMMANDS("missing") as Record<string, unknown>)[1],
-  await failed(() => fns.CREATEPIVOT("p", "{}")),
-], [APP.filter((n) => !(n in MISSING)).sort(), APP.filter((n) => !(n in MISSING)).length, "BATCH_SET_CELLS: a batch of cells as JSON (SETCELLS takes a range and its values)",
-  "CREATEPIVOT is not in demo 18 yet: it needs pivot tables"]);
+const names = Object.entries(listed).filter(([k]) => k !== "0").map(([, n]) => n as string);
+eq("LISTCOMMANDS: a stem of what a script may call, the app's list among them; LISTCOMMANDS('missing'), what it may not yet and why", [
+  APP.filter((n) => !(n in MISSING) && !names.includes(n)), names.filter((n) => !(n in fns) && !OWN.includes(n)), listed[0] === names.length,
+  (fns.LISTCOMMANDS("missing") as Record<string, unknown>)[0], await failed(() => fns.CREATEPIVOT("p", "{}")),
+], [[], [], true, Object.keys(MISSING).length, "CREATEPIVOT is not in demo 18 yet: it needs pivot tables"]);
 
 // Through a workbook.
 const wb = new Workbook();
@@ -143,7 +121,7 @@ eq("its formats as the grid draws them", ["D1", "D2", "D3", "F1"].map((k) => dem
 // expect: ok references worked out without the sheet
 // expect: ok refusals: a bad argument, a refused command, what demo 18 cannot do
 // expect: ok every name the app lists is here, missing, or a script's own; none both
-// expect: ok LISTCOMMANDS: a stem of what a script may call; LISTCOMMANDS('missing'), what it may not yet and why
+// expect: ok LISTCOMMANDS: a stem of what a script may call, the app's list among them; LISTCOMMANDS('missing'), what it may not yet and why
 // expect: ok cell.about and sheet.state, the getters' commands
 // expect: ok a script calls them by the app's names
 // expect: ok a missing one stops the script, saying what it needs

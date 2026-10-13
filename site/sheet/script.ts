@@ -58,7 +58,7 @@ export async function runScript(text: string, host: ScriptHost, say: (line: stri
     },
     GETCELL: (cell: string) => host.get(String(cell).toUpperCase()),
   };
-  const functions = { ...sheetFunctions, ...controlFunctions((id, params) => host.execute(id, params), Object.keys(sheetFunctions)) };
+  const functions = { ...sheetFunctions, ...controlFunctions((id, params) => host.execute(id, params), sheetFunctions) };
   const interpreter = () => {
     const it = new RexxInterpreter(null, { output: (line: unknown) => say(String(line)) });
     it.variableResolver = (name: string) => (addrOf(name) ? host.get(keyOf(addrOf(name)!)) : undefined);

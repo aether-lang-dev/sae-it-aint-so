@@ -125,6 +125,18 @@ async function setting(wb: Workbook, entries: readonly (readonly [string, string
   return { ok: true, message: `${what}: ${new Set(entries.map(([k]) => k)).size} cells set, ${changed.length} changed`, changed };
 }
 
+// Every sheet compiled and worked out again: the active one's cells whose
+// shown value changed.
+async function recalculated(wb: Workbook): Promise<string[]> {
+  let changed: string[] = [];
+  for (const page of wb.pages()) {
+    const keys = await page.sheet.recalculate();
+    if (page.name === wb.active) changed = keys;
+  }
+  await wb.settle();
+  return changed;
+}
+
 async function changedBy(wb: Workbook, changed: readonly string[], message: string): Promise<Outcome> {
   await wb.settle();
   return { ok: true, message, changed };
@@ -1066,6 +1078,47 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
+    // A formula worked out against the sheet without a cell to hold it: the
+    // app's EVALUATE.
+    id: "formulas.calculate", label: "Calculate", params: ["formula"], journaled: false,
+    run: async (wb, p) => {
+      const text = p.formula.trim().replace(/^=/, "");
+      const v = await wb.sheet.evaluate(text);
+      return { ok: !(v instanceof CellError), message: `=${text} → ${show(v)}${v instanceof CellError && v.why ? ` (${v.why})` : ""}`, changed: [], output: scripted(v) };
+    },
+  },
+  {
+    // Every sheet compiled and worked out again; how many formulas it took.
+    id: "formulas.recalculate", label: "Calculate Now", params: [], journaled: false,
+    run: async (wb) => {
+      const changed = await recalculated(wb);
+      const n = wb.pages().reduce((t, page) => t + page.sheet.keys().filter((k) => page.sheet.input(k).startsWith("=")).length, 0);
+      return { ...await changedBy(wb, changed, `${n} formula${n === 1 ? "" : "s"} worked out`), output: n };
+    },
+  },
+  {
+    // The setup script (RexxJS: what it LETs, every formula reads), as the
+    // file keeps it; set, and run (everything is then worked out again).
+    id: "setup.get", label: "Setup script", params: [], journaled: false,
+    run: async (wb) => ({ ok: true, message: wb.setupScript || "no setup script", changed: [], output: wb.setupScript }),
+  },
+  {
+    id: "setup.set", label: "Set the setup script", params: ["text"], journaled: true,
+    run: async (wb, p) => {
+      wb.setupScript = p.text;
+      return { ok: true, message: `setup script: ${p.text.split("\n").length} line${p.text.split("\n").length === 1 ? "" : "s"}`, changed: [] };
+    },
+  },
+  {
+    id: "setup.run", label: "Run the setup script", params: [], journaled: true,
+    run: async (wb) => {
+      const failed = await wb.rexx.setup(wb.setupScript);
+      if (failed) refuse(`the setup script failed: ${failed.split("\n").pop()}`);
+      const changed = await recalculated(wb);
+      return changedBy(wb, changed, "ran the setup script");
+    },
+  },
+  {
     id: "formulas.use", label: "Formula language", params: ["language"], journaled: true,
     run: async (wb, p) => {
       const name = ({ excel: "Excel", rexxjs: "RexxJS" } as Record<string, LanguageName>)[p.language.toLowerCase()]
@@ -1124,6 +1177,27 @@ const SPECS: readonly Spec[] = [
       if (p.name !== undefined) return open(wb, readSheetFile(JSON.parse(store.get(fileKey(savedName(store, p.name)))!)));
       if (p.sample !== undefined) return open(wb, readSheetFile(SAMPLES[p.sample.toLowerCase()] ?? refuse(`no sample ${p.sample} (budget, test, formatted)`)));
       return refuse("file.open needs a name or a sample");
+    },
+  },
+  {
+    // The workbook as the file's JSON (what file.save keeps), and a file's
+    // JSON opened: the app's EXPORT and IMPORT.
+    id: "file.export", label: "Export the file", params: [], journaled: false,
+    run: async (wb) => {
+      const text = JSON.stringify(writeSheetFile(wb));
+      return { ok: true, message: `${text.length} characters`, changed: [], output: text };
+    },
+  },
+  {
+    id: "file.import", label: "Import a file", params: ["text"], journaled: true,
+    run: (wb, p) => {
+      let data: unknown;
+      try {
+        data = JSON.parse(p.text);
+      } catch (e) {
+        return refuse(`not a sheet file: ${(e as Error).message}`);
+      }
+      return open(wb, readSheetFile(data as SheetFile));
     },
   },
   {

@@ -445,6 +445,10 @@ summary.
     (by a header row or named columns), read by TABLE in any case,
     refused, moved with an inserted row, saved and read back, deleted; and
     a script's GROUP_BY the sheet's.
+  - `sheet_control_more` (9 so far): the functions brought in after the
+    first 64, stubbed then through a Workbook: the file's JSON out and in,
+    EVALUATE and RECALCULATE, the setup script kept, run and failing, the
+    two batches.
   - `sheet_control` (17): each control function against a stubbed `exec`
     (the command it tells and its parameters, what it gives from the
     answer, arguments as the app takes them, refusals); every name in the
@@ -707,12 +711,18 @@ criterion read as COUNTIF reads one, where the app matches a substring in
 every row); FREEZEPANES refuses columns; GETROWHEIGHT is 0 for the grid's
 own height; SETCELLVALIDATION's text pattern is refused.
 
-Still missing (`MISSING` in `control.ts`, listed by
-`LISTCOMMANDS('missing')`, each refusing with what it needs): BATCH_*,
-EXPORT and IMPORT, sheet renaming, EVALUATE and RECALCULATE, the setup
-script's three, column widths, GETFILTERCRITERIA, moving columns, FILLUP,
-FILLLEFT, AUTOFILL, cell editors, auto IDs, table metadata, the table sort
-cycle, pivots.
+Being filled in (2026-10-13, Paul asked for all 37), a group to a commit,
+each with checks in `sheet_control_more`:
+
+- done: BATCH_SET_CELLS and BATCH_EXECUTE (in `control.ts`, over the
+  other functions), EXPORT and IMPORT (`file.export`, `file.import
+  text=`), EVALUATE (`formulas.calculate formula=`), RECALCULATE
+  (`formulas.recalculate`), the setup script's three (`setup.get`,
+  `setup.set text=`, `setup.run`);
+- still `MISSING` (each refusing with what it needs, listed by
+  `LISTCOMMANDS('missing')`): sheet renaming, column widths,
+  GETFILTERCRITERIA, moving columns, FILLUP, FILLLEFT, AUTOFILL, cell
+  editors, auto IDs, table metadata, the table sort cycle, pivots.
 
 The app's `src/spreadsheet-control-functions.js` has about 100 control
 functions (SETCELL, INSERTROW, SORTRANGE, MERGECELLS, FREEZEPANES, ...).

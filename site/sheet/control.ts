@@ -91,6 +91,23 @@ const VERSION = "sae demo 18";
 
 export const CONTROL: Readonly<Record<string, Control>> = {
   SPREADSHEET_VERSION: () => VERSION,
+  EXPORT: async (exec) => (await must(exec, "file.export")).output,
+  IMPORT: async (exec, json) => (await must(exec, "file.import", { text: text(json) }), "OK"),
+  EVALUATE: async (exec, formula) => (await must(exec, "formulas.calculate", { formula: text(formula) })).output,
+  RECALCULATE: async (exec) => (await must(exec, "formulas.recalculate")).output,
+  GETSETUPSCRIPT: async (exec) => (await must(exec, "setup.get")).output,
+  SETSETUPSCRIPT: async (exec, script) => (await must(exec, "setup.set", { text: text(script) }), "OK"),
+  EXECUTESETUPSCRIPT: async (exec) => (await must(exec, "setup.run"), "OK"),
+  // [{address, value}, ...]: each set that can be; a summary, as the app's.
+  BATCH_SET_CELLS: async (exec, updates) => {
+    const errors: { address: string; error: string }[] = [];
+    const list = unstem(updates) as { address?: unknown; value?: unknown }[];
+    for (const u of list) {
+      const o = await exec("cell.set", { cell: text(u.address), input: text(u.value) });
+      if (!o.ok) errors.push({ address: text(u.address), error: o.message });
+    }
+    return JSON.stringify({ total: list.length, success: list.length - errors.length, errors: errors.length, ...(errors.length ? { errorDetails: errors } : {}) });
+  },
   GETEXPRESSION: async (exec, c) => {
     const input = (await about(exec, c)).input;
     return input.startsWith("=") ? input.slice(1) : "";
@@ -248,17 +265,8 @@ const table = (ts: readonly Table[], name: string) => {
 
 // The app's names with no command here yet, and what each would need.
 export const MISSING: Readonly<Record<string, string>> = {
-  BATCH_SET_CELLS: "a batch of cells as JSON (SETCELLS takes a range and its values)",
-  BATCH_EXECUTE: "a batch of commands as JSON",
-  EXPORT: "a command giving the file's JSON (file.save keeps it in storage)",
-  IMPORT: "a command taking the file's JSON (file.open reads it from storage)",
   SETSHEETNAME: "sheet renaming (the plan's 8)",
   RENAMESHEET: "sheet renaming (the plan's 8)",
-  EVALUATE: "a command working out a formula without a cell",
-  RECALCULATE: "nothing to do: the sheet is always worked out",
-  GETSETUPSCRIPT: "commands for the setup script",
-  SETSETUPSCRIPT: "commands for the setup script",
-  EXECUTESETUPSCRIPT: "commands for the setup script",
   SETCOLWIDTH: "column widths in the model (the grid keeps them)",
   GETCOLWIDTH: "column widths in the model (the grid keeps them)",
   GETFILTERCRITERIA: "the filter's criterion kept (demo 18 keeps the rows it hid)",
@@ -287,19 +295,41 @@ export const MISSING: Readonly<Record<string, string>> = {
   PIVOTCONFIG: "pivot tables",
 };
 
+type Fn = (...args: any[]) => unknown;
+
 // Every control function, for a script: those above, the missing ones
-// saying so, and LISTCOMMANDS. `others` are the names a script has besides
-// (SETCELL, GETCELL, the range functions), for LISTCOMMANDS to list too.
-export function controlFunctions(exec: Exec, others: readonly string[]): Record<string, (...args: any[]) => unknown> {
-  const fns: Record<string, (...args: any[]) => unknown> = {};
+// saying so, LISTCOMMANDS and BATCH_EXECUTE. `others` are the functions a
+// script has besides (SETCELL, GETCELL, the range functions), which
+// LISTCOMMANDS lists and BATCH_EXECUTE calls too.
+export function controlFunctions(exec: Exec, others: Readonly<Record<string, Fn>>): Record<string, Fn> {
+  const fns: Record<string, Fn> = {};
   for (const [name, fn] of Object.entries(CONTROL)) fns[name] = (...args: any[]) => fn(exec, ...args);
   for (const [name, why] of Object.entries(MISSING)) fns[name] = () => {
     throw new Error(`${name} is not in demo 18 yet: it needs ${why}`);
   };
-  const listed = [...new Set([...others, ...Object.keys(CONTROL), "LISTCOMMANDS"])];
+  const listed = [...new Set([...Object.keys(others), ...Object.keys(CONTROL), "LISTCOMMANDS", "BATCH_EXECUTE"])];
   // LISTCOMMANDS() as the app's: a stem of the names a script may call;
   // LISTCOMMANDS("missing"): those it may not yet, each with what it needs.
   fns.LISTCOMMANDS = (which?: unknown) =>
     text(which).toLowerCase() === "missing" ? stem(Object.entries(MISSING).map(([n, why]) => `${n}: ${why}`)) : stem(listed);
+  // [{command, args}, ...]: each run in turn, by any of these names; what
+  // each gave or why it failed, as the app's.
+  fns.BATCH_EXECUTE = async (commands: unknown) => {
+    const results: Record<string, unknown>[] = [];
+    for (const [index, c] of (unstem(commands) as { command?: unknown; args?: unknown }[]).entries()) {
+      const command = text(c.command).toUpperCase();
+      const fn = fns[command] ?? others[command];
+      if (!fn || command === "BATCH_EXECUTE") {
+        results.push({ index, command, success: false, error: `Unknown command: ${command}` });
+        continue;
+      }
+      try {
+        results.push({ index, command, success: true, result: await fn(...(Array.isArray(c.args) ? c.args : [])) });
+      } catch (e) {
+        results.push({ index, command, success: false, error: (e as Error).message });
+      }
+    }
+    return JSON.stringify(results);
+  };
   return fns;
 }
