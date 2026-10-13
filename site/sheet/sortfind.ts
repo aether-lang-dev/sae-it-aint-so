@@ -44,20 +44,29 @@ export function sortedRows(cells: Cells, a: Addr, b: Addr, col: number, ascendin
 
 // Where each cell went in that sort (cells outside the rectangle stay), for
 // what a cell carries besides its input (notes.ts) to follow its row.
-export function sortMoves(cells: Cells, a: Addr, b: Addr, col: number, ascending: boolean): (at: Addr) => Addr {
+export const sortMoves = (cells: Cells, a: Addr, b: Addr, col: number, ascending: boolean): (at: Addr) => Addr =>
+  rearrangedMoves(a, b, sortedRows(cells, a, b, col, ascending));
+
+// Where each cell went in that rearrangement.
+export function rearrangedMoves(a: Addr, b: Addr, rows: readonly number[]): (at: Addr) => Addr {
   const top = Math.min(a.row, b.row);
   const left = Math.min(a.col, b.col), right = Math.max(a.col, b.col);
-  const placeOf = new Map(sortedRows(cells, a, b, col, ascending).map((from, i) => [from, top + i]));
+  const placeOf = new Map(rows.map((from, i) => [from, top + i]));
   return (at) => (at.col >= left && at.col <= right && placeOf.has(at.row) ? { col: at.col, row: placeOf.get(at.row)! } : at);
 }
 
 // The rectangle sorted so: a row moves whole, its formulas rewritten as a
 // copy by the rows it moved.
-export function sorted(cells: Cells, a: Addr, b: Addr, col: number, ascending: boolean, language: Language): [string, string][] {
+export const sorted = (cells: Cells, a: Addr, b: Addr, col: number, ascending: boolean, language: Language): [string, string][] =>
+  rearranged(cells, a, b, sortedRows(cells, a, b, col, ascending), language);
+
+// The rectangle's rows put in an order (the row each place takes its cells
+// from), as a sort puts them.
+export function rearranged(cells: Cells, a: Addr, b: Addr, rows: readonly number[], language: Language): [string, string][] {
   const top = Math.min(a.row, b.row);
   const left = Math.min(a.col, b.col), right = Math.max(a.col, b.col);
   const out: [string, string][] = [];
-  sortedRows(cells, a, b, col, ascending).forEach((from, i) => {
+  rows.forEach((from, i) => {
     const to = top + i;
     for (let c = left; c <= right; c++) {
       out.push([keyOf({ col: c, row: to }), movedBy(language, cells.input(keyOf({ col: c, row: from })), { cols: 0, rows: to - from })]);

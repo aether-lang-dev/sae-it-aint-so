@@ -22,7 +22,7 @@ const outcome = async (line: string) => {
 };
 
 eq("the catalogue: every command, with its label and parameters", cmds.catalogue("sort").map((c) => `${c.id} (${c.params})`),
-  ["data.sortAscending (range, by)", "data.sortDescending (range, by)"]);
+  ["data.sortAscending (range, by)", "data.sortDescending (range, by)", "table.sort (name, column)"]);
 eq("cell.set", [await outcome("cell.set cell=A1 input=2"), await outcome('cell.set cell=B1 input="=A1*10"'), value("B1")], ["ok: A1 = 2", "ok: B1 = 20", "20"]);
 eq("what changed comes back, for the view to redraw", (await cmds.run("cell.set cell=A1 input=3")).changed, ["A1", "B1"]);
 eq("cell.get reads, and is not journaled", [await outcome("cell.get cell=B1"), (await cmds.run("cell.get cell=B1")).output], ["ok: B1 = 30", "30"]);

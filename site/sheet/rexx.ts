@@ -223,8 +223,8 @@ export function rangeFunctions(read: (key: string) => unknown, names: () => Name
       const t = tables()?.(String(name));
       if (!t) throw new Error(`no table ${name}`);
       const g = grid(t.range);
-      return new Piped(t.columns ? queryOf(g.rows, g.left, t.columns)
-        : t.headers ? queryOf(g.rows.slice(1), g.left, g.rows[0].map((v) => String(v ?? ""))) : queryOf(g.rows, g.left, null));
+      const rows = t.headers ? g.rows.slice(1) : g.rows;
+      return new Piped(queryOf(rows, g.left, t.columns ?? (t.headers ? g.rows[0].map((v) => String(v ?? "")) : null)));
     },
     WHERE: async (q: unknown, condition: string) => {
       const it = new RexxInterpreter(null, { output: () => {} });

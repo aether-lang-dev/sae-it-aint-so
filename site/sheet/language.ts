@@ -19,6 +19,19 @@ export interface TableDef {
   readonly range: [Addr, Addr];
   readonly headers: boolean;
   readonly columns: readonly string[] | null;
+  // The Tauri app's table metadata: a column's type and description, by its
+  // name; and how the table was last sorted by the sort cycle (table.sort).
+  readonly types?: Readonly<Record<string, string>>;
+  readonly descriptions?: Readonly<Record<string, string>>;
+  readonly sort?: TableSort;
+}
+
+// A table sorted by a column, ascending or descending, and the row each of
+// its data rows came from before the first sort (to put them back).
+export interface TableSort {
+  readonly column: number;
+  readonly direction: "asc" | "desc";
+  readonly origin: readonly number[];
 }
 
 // The sheet's tables, by name (upper case), or null.

@@ -720,6 +720,18 @@ main() {
             spec.assert_true(g.wait_cell("I", 8, "6"), "H's cells now in I")
             spec.assert_true(g.wait_cell("H", 1, "12"), "and I's in H, still reading Spend_B2")
         }
+        spec.it("auto IDs on an inserted row, and a table's sort cycle, from a script") callback {
+            g.command("sheet.add name=Ids")
+            g.script("LET r = SETCELL('A1', 'name'); LET r = SETCELL('A2', 'b'); LET r = SETCELL('A3', 'c'); LET r = SETCELL('A4', 'a'); LET r = CONFIGURE_AUTO_ID('C', 7, 'R'); LET r = INSERTROW(2)")
+            spec.assert_true(g.wait_cell("C", 2, "R7"), "the inserted row's ID")
+            spec.assert_true(g.wait_cell("A", 5, "a"), "the rest moved down")
+            g.script("LET r = DEFINETABLE('Names', 'A1:A5'); SAY SORTTABLEBYCOLUMN('Names', 'A')")
+            spec.assert_true(b.wait_for_console("sheet: say asc"), "ascending first")
+            spec.assert_true(g.wait_cell("A", 2, "a"), "sorted below the header row, the empty row last")
+            g.script("SAY SORTTABLEBYCOLUMN('Names', 'A') SORTTABLEBYCOLUMN('Names', 'A')")
+            spec.assert_true(b.wait_for_console("sheet: say desc original"), "then descending, then as it was")
+            spec.assert_true(g.wait_cell("A", 3, "b"), "as it was")
+        }
     }
     return spec.run_summary(fw)
 }

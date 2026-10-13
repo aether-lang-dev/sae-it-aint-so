@@ -445,13 +445,16 @@ summary.
     (by a header row or named columns), read by TABLE in any case,
     refused, moved with an inserted row, saved and read back, deleted; and
     a script's GROUP_BY the sheet's.
-  - `sheet_control_more` (23 so far): the functions brought in after the
+  - `sheet_control_more` (33 so far): the functions brought in after the
     first 64, stubbed then through a Workbook: the file's JSON out and in,
     EVALUATE and RECALCULATE, the setup script kept, run and failing, the
     two batches; fills up and left, AUTOFILL each way with its source
     repeated; column widths kept, moved and saved; the filter kept, moved,
     saved, worked out again on opening, cleared; sheets renamed; columns
-    moved with their notes and widths, and not off either end.
+    moved with their notes and widths, and not off either end; table
+    metadata in and out, TABLE over a header row and named columns, the
+    sort cycle with formulas and comments following, auto IDs given,
+    found, updated, saved and turned off.
   - `sheet_control` (17): each control function against a stubbed `exec`
     (the command it tells and its parameters, what it gives from the
     answer, arguments as the app takes them, refusals); every name in the
@@ -472,7 +475,7 @@ summary.
   - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 47 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 48 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -524,7 +527,8 @@ summary.
   - SETCOLWIDTH drawn on the grid, and AUTOFILL repeating a two-cell
     source;
   - Rename sheet, a RexxJS formula on another sheet following it, and a
-    column moved right with what reads it.
+    column moved right with what reads it;
+  - auto IDs on an inserted row, and a table's sort cycle, from a script.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -743,9 +747,20 @@ each with checks in `sheet_control_more`:
   (`columns.move at= way=`, a swap as the app's, through the same
   reshaping as inserting and deleting: references, notes, widths, rules,
   merges, tables and the filter go with the cells);
+- done: the table metadata four (`table.define` takes `types=` and
+  `descriptions=` as JSON, kept and saved; `table.get` gives a table as
+  the app's metadata has it; a table may have both a header row and named
+  columns, which TABLE now reads), SORTTABLEBYCOLUMN (`table.sort name=
+  column=`: ascending, descending, then the order before the first sort,
+  which the table keeps until its rows are reshaped; `sortfind.ts`'s
+  `rearranged` puts rows in any order, a sort being one), and the auto-ID
+  four (`ids.configure column= start= prefix=`, `ids.find id=`; each row
+  `rows.insert` adds is given the next ID; the column moves with columns,
+  and is saved as the sheet's `autoId`). The app's SET_TABLE_METADATA
+  also defines a named range of the table's name; here TABLE("name") is
+  how a formula reaches it;
 - still `MISSING` (each refusing with what it needs, listed by
-  `LISTCOMMANDS('missing')`): cell editors, auto IDs, table metadata, the
-  table sort cycle, pivots.
+  `LISTCOMMANDS('missing')`): cell editors, pivots.
 
 The app's `src/spreadsheet-control-functions.js` has about 100 control
 functions (SETCELL, INSERTROW, SORTRANGE, MERGECELLS, FREEZEPANES, ...).

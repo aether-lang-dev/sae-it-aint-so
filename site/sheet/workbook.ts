@@ -83,6 +83,15 @@ export interface Page {
   merges: [Addr, Addr][];
   heights: Map<number, number>;
   widths: Map<number, number>;
+  autoId: AutoId | null;
+}
+
+// The Tauri app's auto IDs: the column a row inserted is given the next ID
+// in, as the prefix and a number counting up.
+export interface AutoId {
+  readonly column: number;
+  readonly next: number;
+  readonly prefix: string;
 }
 
 // An AutoFilter: its range (headers in the first row), the column it
@@ -170,7 +179,7 @@ export class Workbook {
       keys.add(key);
     };
     page = { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [], charts: [],
-      hiddenRows: new Set(), hiddenCols: new Set(), filtered: null, filter: null, frozen: 0, merges: [], heights: new Map(), widths: new Map() };
+      hiddenRows: new Set(), hiddenCols: new Set(), filtered: null, filter: null, frozen: 0, merges: [], heights: new Map(), widths: new Map(), autoId: null };
     return page;
   }
 

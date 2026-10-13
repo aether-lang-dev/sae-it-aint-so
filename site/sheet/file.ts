@@ -27,7 +27,7 @@ import type { ChartSpec } from "./workbook.ts";
 import { show } from "./format.ts";
 import type { Note } from "./notes.ts";
 import { ruleOf } from "./validation.ts";
-import type { Filter, Page, Workbook } from "./workbook.ts";
+import type { AutoId, Filter, Page, Workbook } from "./workbook.ts";
 
 export interface FileSheet {
   readonly name: string;
@@ -43,6 +43,7 @@ export interface FileSheet {
   };
   readonly merges: readonly string[];
   readonly tables: readonly TableDef[];
+  readonly autoId: AutoId | null;
 }
 
 export interface SheetFile {
@@ -128,23 +129,32 @@ function tablesOf(tables: unknown): TableDef[] {
   return tables.flatMap((t: any): TableDef[] => {
     const r = parseRange(String(t?.range ?? ""));
     if (!r || !/^[A-Za-z][A-Za-z0-9_]*$/.test(String(t?.name ?? ""))) return [];
-    return [{ name: String(t.name), range: r, headers: t.headers !== false, columns: Array.isArray(t.columns) ? t.columns.map(String) : null }];
+    const byName = (o: unknown) => (o && typeof o === "object" && !Array.isArray(o) ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, String(v)])) : undefined);
+    return [{ name: String(t.name), range: r, headers: t.headers !== false, columns: Array.isArray(t.columns) ? t.columns.map(String) : null, types: byName(t.types), descriptions: byName(t.descriptions) }];
   });
 }
 
-function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown, charts: unknown, view: unknown, merges: unknown, tables: unknown): FileSheet {
-  const list = Object.entries(cells ?? {}).map(([k, c]): [string, string | FileCell] => [k.toUpperCase(), c]);
+// A sheet as written: the file itself for the first, or one of its sheets.
+function sheetOf(name: string, s: any): FileSheet {
+  const list = Object.entries((s?.cells ?? {}) as Cells).map(([k, c]): [string, string | FileCell] => [k.toUpperCase(), c]);
   return {
     name,
     entries: list.map(([k, c]): [string, string] => [k, inputOf(c)]).filter(([, input]) => input !== ""),
     notes: new Map(list.map(([k, c]): [string, Note] => [k, noteOf(c)]).filter(([, n]) => Object.keys(n).length)),
-    names: Object.entries((names ?? {}) as Record<string, unknown>).map(([n, r]): [string, string] => [n.toUpperCase(), String(r)]),
-    rules: rulesOf(rules),
-    charts: chartsOf(charts),
-    view: viewOf(view),
-    merges: Array.isArray(merges) ? merges.map(String).filter((m) => parseRange(m)) : [],
-    tables: tablesOf(tables),
+    names: Object.entries((s?.names ?? {}) as Record<string, unknown>).map(([n, r]): [string, string] => [n.toUpperCase(), String(r)]),
+    rules: rulesOf(s?.rules),
+    charts: chartsOf(s?.charts),
+    view: viewOf(s?.view),
+    merges: Array.isArray(s?.merges) ? s.merges.map(String).filter((m: string) => parseRange(m)) : [],
+    tables: tablesOf(s?.tables),
+    autoId: autoIdOf(s?.autoId),
   };
+}
+
+// Auto IDs ({ column: "A", next: 1001, prefix: "ID-" }), or null.
+function autoIdOf(a: any): AutoId | null {
+  const at = addrOf(`${a?.column ?? ""}1`), next = Number(a?.next);
+  return at && Number.isInteger(next) ? { column: at.col, next, prefix: String(a?.prefix ?? "") } : null;
 }
 
 export function readSheetFile(data: any): SheetFile {
@@ -154,8 +164,8 @@ export function readSheetFile(data: any): SheetFile {
     language: String(data?.formulas ?? "").toLowerCase() === "excel" ? "Excel" : "RexxJS",
     setupScript: String(data?.setupScript ?? ""),
     sheets: [
-      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules, data?.charts, data?.view, data?.merges, data?.tables),
-      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules, s?.charts, s?.view, s?.merges, s?.tables)),
+      sheetOf(String(data?.sheetName ?? "Sheet1"), data),
+      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s)),
     ],
   };
 }
@@ -180,7 +190,10 @@ function cellsOf(page: Page): Cells {
 
 const namesOf = (page: Page): Record<string, string> => Object.fromEntries(page.sheet.names());
 const rulesIn = (page: Page) => page.rules.map((r) => ({ ...r, range: rangeName(r.range) }));
-const tablesIn = (page: Page) => page.sheet.tables().map((t) => ({ name: t.name, range: rangeName(t.range), headers: t.headers, columns: t.columns }));
+const tablesIn = (page: Page) => page.sheet.tables().map((t) => ({
+  name: t.name, range: rangeName(t.range), headers: t.headers, columns: t.columns,
+  ...(t.types && Object.keys(t.types).length ? { types: t.types } : {}), ...(t.descriptions && Object.keys(t.descriptions).length ? { descriptions: t.descriptions } : {}),
+}));
 const chartsIn = (page: Page) => page.charts.map((c) => ({ kind: c.kind, range: rangeName(c.range), title: c.title }));
 const up = (a: number, b: number) => a - b;
 const viewIn = (page: Page) => ({
@@ -188,6 +201,12 @@ const viewIn = (page: Page) => ({
   rowHeights: [...page.heights].sort(([a], [b]) => a - b), colWidths: [...page.widths].sort(([a], [b]) => a - b),
   // The filter's rows are worked out again when the file is opened.
   ...(page.filter ? { filter: { range: rangeName(page.filter.range), column: colName(page.filter.column), criterion: page.filter.criterion } } : {}),
+});
+
+// A sheet's parts as the file has them.
+const sheetIn = (p: Page) => ({
+  cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p), view: viewIn(p), merges: p.merges.map(rangeName), tables: tablesIn(p),
+  ...(p.autoId ? { autoId: { column: colName(p.autoId.column), next: p.autoId.next, prefix: p.autoId.prefix } } : {}),
 });
 
 // The workbook as a file: JSON-ready.
@@ -198,13 +217,7 @@ export function writeSheetFile(wb: Workbook) {
     formulas: wb.sheet.language.name === "Excel" ? "excel" : "rexxjs",
     setupScript: wb.setupScript,
     sheetName: first.name,
-    cells: cellsOf(first),
-    names: namesOf(first),
-    rules: rulesIn(first),
-    charts: chartsIn(first),
-    view: viewIn(first),
-    merges: first.merges.map(rangeName),
-    tables: tablesIn(first),
-    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p), view: viewIn(p), merges: p.merges.map(rangeName), tables: tablesIn(p) })),
+    ...sheetIn(first),
+    sheets: others.map((p) => ({ name: p.name, ...sheetIn(p) })),
   };
 }

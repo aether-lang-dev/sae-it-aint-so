@@ -110,6 +110,56 @@ eq("not off either end", [await failed(() => fns3.MOVECOLUMNLEFT("A")), await fa
   ["A is the first column: it cannot move left", "J is the last column: it cannot move right"]);
 eq("SETSHEETNAME renames the active sheet, GETSHEETNAME reads it", [await fns3.SETSHEETNAME("Main"), await fns3.GETSHEETNAME(), await fns3.RENAMESHEET("main", "Data"), wb3.sheetNames()],
   ["Main", "Main", "Data", ["Data"]]);
+
+// Table metadata, the sort cycle, auto IDs.
+eq("the table and auto-ID functions tell their commands", [
+  (await told("SET_TABLE_METADATA", ["Sales", '{"range":"A1:C5","columns":{"region":"A","amount":"C"},"types":{"amount":"number"},"descriptions":{"amount":"in pounds"}}']))[1],
+  (await told("GET_TABLE_METADATA", ["Sales"], { "table.get": { name: "Sales", range: "B1:C5", headers: true, columns: ["region", "amount"], types: { amount: "number" }, descriptions: {} } }))[0],
+  await told("LIST_TABLES", [], { "table.list": ["Sales A1:C5 (region, B, amount)"] }), await told("SORTTABLEBYCOLUMN", ["Sales", "c"], { "table.sort": "asc" }),
+  await told("CONFIGURE_AUTO_ID", [null]), (await told("CONFIGURE_AUTO_ID", ["A", 1000, "ID-"]))[0], await told("FIND_ROW_BY_ID", ["ID-1"], { "ids.find": 3 }),
+  await failed(() => told("GET_NEXT_ID", [], { "sheet.state": { autoId: null } })),
+], [
+  [["table.define", { name: "Sales", range: "A1:C5", headers: "1", columns: "region,B,amount", types: '{"amount":"number"}', descriptions: '{"amount":"in pounds"}' }]],
+  '{"range":"B1:C5","columns":{"region":"B","amount":"C"},"hasHeader":true,"types":{"amount":"number"},"descriptions":{}}',
+  ['["Sales"]', [["table.list", {}]]], ["asc", [["table.sort", { name: "Sales", column: "C" }]]],
+  ["Auto-ID disabled", [["ids.configure", {}]]], 'Auto-ID configured: column=A, nextId=1000, prefix="ID-"', ["3", [["ids.find", { id: "ID-1" }]]],
+  "Auto-ID column is not configured for this sheet",
+]);
+
+const wb4 = new Workbook();
+const cmds4 = new Commands(wb4);
+const fns4 = controlFunctions((id, params) => cmds4.execute(id, params), {});
+for (const [k, v] of [["A1", "region"], ["B1", "amount"], ["A2", "North"], ["B2", "30"], ["A3", "South"], ["B3", "10"], ["A4", "East"], ["B4", "20"], ["C2", "=B2*2"]]) await cmds4.run(`cell.set cell=${k} input=${v}`);
+await cmds4.run("cell.comment cell=A3 text=south");
+await fns4.SET_TABLE_METADATA("Sales", { range: "A1:C4", columns: { region: "A", amount: "B", double: "C" }, hasHeader: true, types: { amount: "number" }, descriptions: { double: "twice" } });
+eq("SET_TABLE_METADATA then GET_TABLE_METADATA, as the app has it", JSON.parse(await fns4.GET_TABLE_METADATA("sales") as string),
+  { range: "A1:C4", columns: { region: "A", amount: "B", double: "C" }, hasHeader: true, types: { amount: "number" }, descriptions: { double: "twice" } });
+await cmds4.run("formulas.use language=RexxJS");
+await cmds4.run(`cell.set cell=E1 input="=TABLE(""Sales"") |> WHERE(""double > 30"") |> COUNT()"`);
+eq("a table with a header row and named columns: TABLE reads the rows below by those names", show(wb4.sheet.value("E1")), "1");
+const column = () => ["A2", "A3", "A4"].map((k) => wb4.sheet.input(k));
+eq("SORTTABLEBYCOLUMN cycles: ascending, descending, then the rows as they were; formulas and comments go with their rows", [
+  await fns4.SORTTABLEBYCOLUMN("Sales", "B"), column(), wb4.sheet.input("C4"), wb4.notes.get("A2").comment,
+  await fns4.SORTTABLEBYCOLUMN("Sales", "B"), column(), await fns4.SORTTABLEBYCOLUMN("Sales", "B"), column(), wb4.notes.get("A3").comment, wb4.sheet.input("C2"),
+], ["asc", ["South", "East", "North"], "=B4*2", "south", "desc", ["North", "East", "South"], "original", ["North", "South", "East"], "south", "=B2*2"]);
+await fns4.SORTTABLEBYCOLUMN("Sales", "A");
+eq("another column starts again at ascending; the original order is still the first one", [column(), await fns4.SORTTABLEBYCOLUMN("Sales", "B"), await fns4.SORTTABLEBYCOLUMN("Sales", "b"), await fns4.SORTTABLEBYCOLUMN("Sales", "B"), column()],
+  [["East", "North", "South"], "asc", "desc", "original", ["North", "South", "East"]]);
+eq("the cycle refuses a column off the table", await failed(() => fns4.SORTTABLEBYCOLUMN("Sales", "D")), "D is not a column of Sales");
+
+eq("auto IDs: CONFIGURE_AUTO_ID, then each row inserted gets the next", [await fns4.CONFIGURE_AUTO_ID("D", 1001, "ID-"), await fns4.GET_NEXT_ID(),
+  (await cmds4.run("rows.insert at=3 count=2")).ok, wb4.sheet.input("D3"), wb4.sheet.input("D4"), await fns4.GET_NEXT_ID()],
+  ['Auto-ID configured: column=D, nextId=1001, prefix="ID-"', "ID-1001", true, "ID-1001", "ID-1002", "ID-1003"]);
+eq("FIND_ROW_BY_ID and UPDATE_ROW_BY_ID", [await fns4.FIND_ROW_BY_ID("ID-1002"), await fns4.FIND_ROW_BY_ID("nope"),
+  await fns4.UPDATE_ROW_BY_ID("ID-1002", '[{"column":"A","value":"West"},{"column":"B","value":"5"}]'), wb4.sheet.input("A4"), wb4.sheet.input("B4"),
+  await failed(() => fns4.UPDATE_ROW_BY_ID("nope", "[]"))], ["4", "", "4", "West", "5", "Row with ID nope not found"]);
+const file4 = JSON.parse(await fns4.EXPORT() as string);
+const wb5 = new Workbook();
+await new Commands(wb5).execute("file.import", { text: JSON.stringify(file4) });
+eq("saved: a table's types and descriptions, the auto-ID column and the next ID", [file4.tables[0].types, file4.tables[0].descriptions, file4.autoId, wb5.page(wb5.active)!.autoId],
+  [{ amount: "number" }, { double: "twice" }, { column: "D", next: 1003, prefix: "ID-" }, { column: 3, next: 1003, prefix: "ID-" }]);
+eq("DELETE_TABLE_METADATA, LIST_TABLES, and auto IDs off", [await fns4.DELETE_TABLE_METADATA("Sales"), await fns4.LIST_TABLES(), await fns4.CONFIGURE_AUTO_ID(""), await failed(() => fns4.FIND_ROW_BY_ID("ID-1001"))],
+  ["Table metadata deleted for 'Sales'", "[]", "Auto-ID disabled", "no auto-ID column on this sheet"]);
 // expect: ok EXPORT, IMPORT, EVALUATE, RECALCULATE and the setup script's three tell their commands
 // expect: ok EVALUATE: a formula worked out against the sheet, no cell set; an error says why
 // expect: ok RECALCULATE: how many formulas it worked out
@@ -133,3 +183,13 @@ eq("SETSHEETNAME renames the active sheet, GETSHEETNAME reads it", [await fns3.S
 // expect: ok MOVECOLUMNLEFT puts it back
 // expect: ok not off either end
 // expect: ok SETSHEETNAME renames the active sheet, GETSHEETNAME reads it
+// expect: ok the table and auto-ID functions tell their commands
+// expect: ok SET_TABLE_METADATA then GET_TABLE_METADATA, as the app has it
+// expect: ok a table with a header row and named columns: TABLE reads the rows below by those names
+// expect: ok SORTTABLEBYCOLUMN cycles: ascending, descending, then the rows as they were; formulas and comments go with their rows
+// expect: ok another column starts again at ascending; the original order is still the first one
+// expect: ok the cycle refuses a column off the table
+// expect: ok auto IDs: CONFIGURE_AUTO_ID, then each row inserted gets the next
+// expect: ok FIND_ROW_BY_ID and UPDATE_ROW_BY_ID
+// expect: ok saved: a table's types and descriptions, the auto-ID column and the next ID
+// expect: ok DELETE_TABLE_METADATA, LIST_TABLES, and auto IDs off

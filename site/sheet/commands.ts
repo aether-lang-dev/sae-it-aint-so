@@ -31,7 +31,7 @@ import type { ChartSpec } from "./workbook.ts";
 import type { TableDef } from "./language.ts";
 import { deleted, inserted, movedBy, restructured, swapped } from "./shift.ts";
 import type { Edit, Scope } from "./shift.ts";
-import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
+import { found, rearranged, rearrangedMoves, replaced, sortedRows } from "./sortfind.ts";
 import { distinctRows, secant, splitText } from "./whatif.ts";
 import { criterion } from "./functions.ts";
 
@@ -169,6 +169,7 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     page.frozen = s.view.frozenRows;
     page.heights = new Map(s.view.rowHeights);
     page.widths = new Map(s.view.colWidths);
+    page.autoId = s.autoId;
     page.merges = s.merges.map((m) => parseRange(m)!);
     for (const t of s.tables) await wb.sheet.defineTable(t.name, t);
   }
@@ -214,6 +215,14 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
     if (!Number.isInteger(at) || at < 0 || at >= (axis === "row" ? ROWS : COLS)) refuse(`${p.at} is not a ${axis === "row" ? "row" : "column"} on the sheet`);
     const n = countOf(p.count);
     const entries = await reshaped(wb, axis, (moves) => (how === "insert" ? inserted(axis, at, n, moves) : deleted(axis, at, n, moves)));
+    // The Tauri app's auto IDs: each row inserted is given the next one.
+    const page = wb.page(wb.active)!;
+    if (how === "insert" && axis === "row" && page.autoId) {
+      for (let row = at; row < at + n; row++) {
+        entries.push([keyOf({ col: page.autoId.column, row }), `${page.autoId.prefix}${page.autoId.next}`]);
+        page.autoId = { ...page.autoId, next: page.autoId.next + 1 };
+      }
+    }
     const thing = `${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"}`;
     return setting(wb, entries, `${how === "insert" ? "inserted" : "deleted"} ${thing} at ${axis === "row" ? at + 1 : colName(at)}`);
   };
@@ -257,7 +266,7 @@ async function reshaped(wb: Workbook, axis: "row" | "col", editOf: (moves: Scope
   });
   for (const t of wb.sheet.tables()) {
     const to = edit.range(t.range[0], t.range[1], still, still);
-    await wb.sheet.defineTable(t.name, to ? { ...t, range: to } : null);
+    await wb.sheet.defineTable(t.name, to ? { ...t, range: to, sort: undefined } : null);
   }
   if (axis === "row") {
     page.heights = new Map([...page.heights].flatMap(([row, h]): [number, number][] => {
@@ -269,6 +278,10 @@ async function reshaped(wb: Workbook, axis: "row" | "col", editOf: (moves: Scope
       const to = edit.cell({ col, row: 0 }, still);
       return to ? [[to.col, w]] : [];
     }));
+  }
+  if (page.autoId) {
+    const to = edit.cell({ col: page.autoId.column, row: 0 }, still);
+    page.autoId = to ? { ...page.autoId, column: to.col } : null;
   }
   if (page.filter) {
     const r = edit.range(page.filter.range[0], page.filter.range[1], still, still), col = edit.cell({ col: page.filter.column, row: 0 }, still);
@@ -292,11 +305,19 @@ function sort(ascending: boolean) {
     const r = rangeOf(p.range), by = columnOf(p.by);
     const left = Math.min(r[0].col, r[1].col), right = Math.max(r[0].col, r[1].col);
     if (by < left || by > right) refuse(`${p.by} is not a column of ${named(r)}`);
-    const entries = sorted(wb.sheet, r[0], r[1], by - left, ascending, wb.sheet.language);
-    wb.notes.remap(sortMoves(wb.sheet, r[0], r[1], by - left, ascending),
-      (e, from, to) => movedBy(wb.sheet.language, `=${e}`, { cols: 0, rows: to.row - from.row }).slice(1));
+    const entries = rearranging(wb, r, sortedRows(wb.sheet, r[0], r[1], by - left, ascending));
     return setting(wb, entries, `sorted ${named(r)} by ${colName(by)}, ${ascending ? "ascending" : "descending"}`);
   };
+}
+
+// A rectangle's rows put in an order (the row each place takes its cells
+// from), their formulas moved and their notes going with them: the entries
+// for setting().
+function rearranging(wb: Workbook, r: [Addr, Addr], rows: readonly number[]): [string, string][] {
+  const entries = rearranged(wb.sheet, r[0], r[1], rows, wb.sheet.language);
+  wb.notes.remap(rearrangedMoves(r[0], r[1], rows),
+    (e, from, to) => movedBy(wb.sheet.language, `=${e}`, { cols: 0, rows: to.row - from.row }).slice(1));
+  return entries;
 }
 
 // A name for a range: a letter first, then letters, digits or _; not a
@@ -410,6 +431,19 @@ function hiding(rows: boolean, hide: boolean) {
 }
 
 // A table's columns' names: given, or its first row's, or its letters.
+// A table's types or descriptions, as JSON: {"amount": "number"}.
+function byName(json: string | undefined, what: string): Record<string, string> | undefined {
+  if (json === undefined) return undefined;
+  let o: unknown;
+  try {
+    o = JSON.parse(json);
+  } catch {
+    o = null;
+  }
+  if (!o || typeof o !== "object" || Array.isArray(o)) refuse(`${what} must be a JSON object, a column's name to text`);
+  return Object.fromEntries(Object.entries(o as object).map(([k, v]) => [k, String(v)]));
+}
+
 function tableColumns(wb: Workbook, t: TableDef): string[] {
   const left = Math.min(t.range[0].col, t.range[1].col), right = Math.max(t.range[0].col, t.range[1].col);
   const cols = Array.from({ length: right - left + 1 }, (_, i) => left + i);
@@ -682,6 +716,33 @@ const SPECS: readonly Spec[] = [
     run: async (wb, p) => {
       const entries = replaced(wb.sheet, p.text, p.with, findOptions(p));
       return { ...await setting(wb, entries, `replaced ${p.text}`), output: entries.length };
+    },
+  },
+  {
+    // The Tauri app's auto IDs: a column each inserted row is given the
+    // next ID in (the prefix, then a number from `start`); no column, none.
+    id: "ids.configure", label: "Auto IDs", params: [], optional: ["column", "start", "prefix"], journaled: true,
+    run: async (wb, p) => {
+      const page = wb.page(wb.active)!;
+      if (!p.column) {
+        page.autoId = null;
+        return { ok: true, message: "no auto IDs", changed: [] };
+      }
+      const start = Number(p.start ?? "1");
+      if (!Number.isInteger(start)) refuse(`${p.start} is not a whole number to start from`);
+      page.autoId = { column: columnOf(p.column), next: start, prefix: p.prefix ?? "" };
+      return { ok: true, message: `auto IDs in column ${colName(page.autoId.column)}, next ${page.autoId.prefix}${start}`, changed: [] };
+    },
+  },
+  {
+    // The row (from 1) whose auto-ID cell shows the ID; "" for none.
+    id: "ids.find", label: "Find by ID", params: ["id"], journaled: false,
+    run: async (wb, p) => {
+      const auto = wb.page(wb.active)!.autoId ?? refuse("no auto-ID column on this sheet");
+      for (let row = 0; row < ROWS; row++) {
+        if (show(wb.sheet.value(keyOf({ col: auto.column, row }))) === p.id) return { ok: true, message: `${p.id} is row ${row + 1}`, changed: [], output: row + 1 };
+      }
+      return { ok: true, message: `no row ${p.id}`, changed: [], output: "" };
     },
   },
   { id: "rows.insert", label: "Insert Sheet Rows", params: ["at"], optional: ["count"], journaled: true, run: restructure("insert", "row") },
@@ -963,7 +1024,7 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
-    id: "table.define", label: "Define Table", params: ["name", "range"], optional: ["headers", "columns"], journaled: true,
+    id: "table.define", label: "Define Table", params: ["name", "range"], optional: ["headers", "columns", "types", "descriptions"], journaled: true,
     run: async (wb, p) => {
       const name = p.name.trim();
       if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name)) refuse(`${p.name} is not a table name: a letter first, then letters, digits or _`);
@@ -972,7 +1033,7 @@ const SPECS: readonly Spec[] = [
       if (columns && columns.length !== width) refuse(`${name} has ${width} columns, and ${columns.length} name${columns.length === 1 ? "" : "s"}`);
       const headers = p.headers === undefined ? !columns : flag(p.headers);
       const corners: [Addr, Addr] = [topLeft(r), { col: Math.max(r[0].col, r[1].col), row: Math.max(r[0].row, r[1].row) }];
-      const changed = await wb.sheet.defineTable(name, { name, range: corners, headers, columns });
+      const changed = await wb.sheet.defineTable(name, { name, range: corners, headers, columns, types: byName(p.types, "types"), descriptions: byName(p.descriptions, "descriptions") });
       return changedBy(wb, changed, `${name} is ${rangeName(corners)}, with columns ${tableColumns(wb, wb.sheet.table(name)!).join(", ")}`);
     },
   },
@@ -982,6 +1043,37 @@ const SPECS: readonly Spec[] = [
       const t = wb.sheet.table(p.name) ?? refuse(`no table ${p.name}`);
       const changed = await wb.sheet.defineTable(t.name, null);
       return changedBy(wb, changed, `deleted ${t.name}`);
+    },
+  },
+  {
+    // A table as the app's metadata has it (GETTABLE, GET_TABLE_METADATA).
+    id: "table.get", label: "About a table", params: ["name"], journaled: false,
+    run: async (wb, p) => {
+      const t = wb.sheet.table(p.name) ?? refuse(`no table ${p.name}`);
+      const about = {
+        name: t.name, range: rangeName(t.range), headers: t.headers, columns: tableColumns(wb, t), types: t.types ?? {}, descriptions: t.descriptions ?? {},
+        sort: t.sort ? { column: colName(t.sort.column), direction: t.sort.direction } : null,
+      };
+      return { ok: true, message: JSON.stringify(about), changed: [], output: about };
+    },
+  },
+  {
+    // The app's sort cycle: by a new column ascending; by the same one,
+    // descending, then the rows as they were before the first sort.
+    id: "table.sort", label: "Sort Table", params: ["name", "column"], journaled: true,
+    run: async (wb, p) => {
+      const t = wb.sheet.table(p.name) ?? refuse(`no table ${p.name}`), col = columnOf(p.column);
+      const left = Math.min(t.range[0].col, t.range[1].col), right = Math.max(t.range[0].col, t.range[1].col);
+      if (col < left || col > right) refuse(`${colName(col)} is not a column of ${t.name}`);
+      const top = Math.min(t.range[0].row, t.range[1].row) + (t.headers ? 1 : 0), bottom = Math.max(t.range[0].row, t.range[1].row);
+      if (top > bottom) refuse(`${t.name} has no rows to sort`);
+      const a = { col: left, row: top }, b = { col: right, row: bottom }, height = bottom - top + 1;
+      const origin = t.sort?.origin ?? Array.from({ length: height }, (_, i) => top + i);
+      const next = t.sort?.column !== col ? "asc" : t.sort.direction === "asc" ? "desc" : "original";
+      const rows = next === "original" ? Array.from({ length: height }, (_, i) => top + origin.indexOf(top + i)) : sortedRows(wb.sheet, a, b, col - left, next === "asc");
+      const entries = rearranging(wb, [a, b], rows);
+      await wb.sheet.defineTable(t.name, { ...t, sort: next === "original" ? undefined : { column: col, direction: next, origin: rows.map((from) => origin[from - top]) } });
+      return { ...await setting(wb, entries, `${t.name} by ${colName(col)}: ${next}`), output: next };
     },
   },
   {
@@ -1204,6 +1296,7 @@ const SPECS: readonly Spec[] = [
         frozenRows: wb.frozenRows(), rowHeights: wb.rowHeights().map(([r, h]) => [r + 1, h]), colWidths: wb.colWidths().map(([c, w]) => [colName(c), w]),
         filter: page.filter && { range: rangeName(page.filter.range), column: colName(page.filter.column), criterion: page.filter.criterion },
         canUndo: wb.sheet.canUndo ? 1 : 0, canRedo: wb.sheet.canRedo ? 1 : 0,
+        autoId: page.autoId && { column: colName(page.autoId.column), next: `${page.autoId.prefix}${page.autoId.next}` },
       };
       return { ok: true, message: JSON.stringify(state), changed: [], output: state };
     },

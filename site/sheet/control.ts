@@ -40,6 +40,7 @@ interface State {
   readonly filter: { readonly range: string; readonly column: string; readonly criterion: string } | null;
   readonly canUndo: number;
   readonly canRedo: number;
+  readonly autoId: { readonly column: string; readonly next: string } | null;
 }
 
 // A command that must be done: a refusal is the function's error, as the
@@ -249,11 +250,58 @@ export const CONTROL: Readonly<Record<string, Control>> = {
   ISCELLMERGED: async (exec, c) => ((await about(exec, c)).merged ? "1" : "0"),
   DEFINETABLE: async (exec, n, r, headers) => {
     await must(exec, "table.define", { name: text(n), range: text(r), ...(headers === undefined || yes(headers) ? { headers: "1" } : {}) });
-    return table(await tables(exec), text(n));
+    return JSON.stringify(await table(exec, text(n)));
   },
   DELETETABLE: async (exec, n) => (await must(exec, "table.delete", { name: text(n) }), ""),
-  GETTABLE: async (exec, n) => table(await tables(exec), text(n)),
-  LISTTABLES: async (exec) => stem((await tables(exec)).map((t) => t.name)),
+  GETTABLE: async (exec, n) => {
+    const t = await table(exec, text(n));
+    return t ? JSON.stringify(t) : "";
+  },
+  LISTTABLES: async (exec) => stem(await tableNames(exec)),
+  // The app's table metadata: {range, columns: {name: letter}, hasHeader,
+  // types, descriptions}, a table here with its columns named so.
+  SET_TABLE_METADATA: async (exec, n, json) => {
+    const meta = (typeof json === "string" ? JSON.parse(json) : json) as { range?: unknown; columns?: Record<string, unknown>; hasHeader?: unknown; types?: unknown; descriptions?: unknown };
+    const r = parseRange(text(meta?.range));
+    if (!r || !meta.columns || typeof meta.columns !== "object") throw new Error("Table metadata must include range and columns");
+    const letters = Object.entries(meta.columns).map(([name, letter]) => [name, text(letter).toUpperCase()]);
+    const names = Array.from({ length: Math.abs(r[0].col - r[1].col) + 1 }, (_, i) => colName(Math.min(r[0].col, r[1].col) + i))
+      .map((letter) => letters.find(([, l]) => l === letter)?.[0] ?? letter);
+    await must(exec, "table.define", {
+      name: text(n), range: text(meta.range), headers: meta.hasHeader === false ? "0" : "1", columns: names.join(","),
+      types: JSON.stringify(meta.types ?? {}), descriptions: JSON.stringify(meta.descriptions ?? {}),
+    });
+    return `Table metadata set for '${text(n)}'`;
+  },
+  GET_TABLE_METADATA: async (exec, n) => {
+    const t = await table(exec, text(n));
+    if (!t) return "";
+    const left = parseRange(t.range)![0].col;
+    return JSON.stringify({ range: t.range, columns: Object.fromEntries(t.columns.map((c, i) => [c, colName(left + i)])), hasHeader: t.headers, types: t.types, descriptions: t.descriptions });
+  },
+  DELETE_TABLE_METADATA: async (exec, n) => (await must(exec, "table.delete", { name: text(n) }), `Table metadata deleted for '${text(n)}'`),
+  LIST_TABLES: async (exec) => JSON.stringify(await tableNames(exec)),
+  // asc, desc, then original.
+  SORTTABLEBYCOLUMN: async (exec, n, c) => (await must(exec, "table.sort", { name: text(n), column: col(c, "SORTTABLEBYCOLUMN") })).output,
+  CONFIGURE_AUTO_ID: async (exec, c, start, prefix) => {
+    if (c === null || c === undefined || text(c) === "" || text(c) === "null") return (await must(exec, "ids.configure"), "Auto-ID disabled");
+    const from = start === undefined ? "1" : text(start), pre = prefix === undefined ? "" : text(prefix);
+    await must(exec, "ids.configure", { column: col(c, "CONFIGURE_AUTO_ID"), start: from, prefix: pre });
+    return `Auto-ID configured: column=${text(c)}, nextId=${from}, prefix="${pre}"`;
+  },
+  FIND_ROW_BY_ID: async (exec, id) => String((await must(exec, "ids.find", { id: text(id) })).output),
+  // [{column, value}, ...] set in the row with that ID.
+  UPDATE_ROW_BY_ID: async (exec, id, updates) => {
+    const row = String((await must(exec, "ids.find", { id: text(id) })).output);
+    if (!row) throw new Error(`Row with ID ${text(id)} not found`);
+    for (const u of unstem(updates) as { column?: unknown; value?: unknown }[]) await must(exec, "cell.set", { cell: `${col(u.column, "UPDATE_ROW_BY_ID")}${row}`, input: text(u.value) });
+    return row;
+  },
+  GET_NEXT_ID: async (exec) => {
+    const auto = (await state(exec)).autoId;
+    if (!auto) throw new Error("Auto-ID column is not configured for this sheet");
+    return auto.next;
+  },
 };
 
 const options = (matchCase: unknown, wholeCell: unknown, inFormulas: unknown): Record<string, string> =>
@@ -277,37 +325,27 @@ function validation(type: string, args: readonly unknown[]): Record<string, stri
 const names = async (exec: Exec) => (await must(exec, "names.list")).output as string[];
 const named = (lines: readonly string[]) => new Map(lines.map((l) => l.split(" ") as [string, string]));
 
-// table.list's "Sales A1:D5 (region, amount)" lines, as the app's tables.
+// A table as table.get gives it, or null; the tables' names, from
+// table.list's "Sales A1:D5 (region, amount)" lines.
 interface Table {
   readonly name: string;
   readonly range: string;
+  readonly headers: boolean;
   readonly columns: readonly string[];
+  readonly types: Readonly<Record<string, string>>;
+  readonly descriptions: Readonly<Record<string, string>>;
 }
-async function tables(exec: Exec): Promise<Table[]> {
-  return ((await must(exec, "table.list")).output as string[]).map((l) => {
-    const m = /^(\S+) (\S+) \((.*)\)$/.exec(l)!;
-    return { name: m[1], range: m[2], columns: m[3] ? m[3].split(", ") : [] };
-  });
+async function table(exec: Exec, name: string): Promise<Table | null> {
+  const o = await exec("table.get", { name });
+  return o.ok ? (o.output as Table) : null;
 }
-const table = (ts: readonly Table[], name: string) => {
-  const t = ts.find((x) => x.name.toUpperCase() === name.toUpperCase());
-  return t ? JSON.stringify(t) : "";
-};
+const tableNames = async (exec: Exec) => ((await must(exec, "table.list")).output as string[]).map((l) => l.split(" ")[0]);
 
 // The app's names with no command here yet, and what each would need.
 export const MISSING: Readonly<Record<string, string>> = {
   SETCELLEDITOR: "cell editors (a dropdown, a checkbox, a date in a cell)",
   GETCELLEDITOR: "cell editors",
   REMOVECELLEDITOR: "cell editors",
-  CONFIGURE_AUTO_ID: "auto IDs",
-  FIND_ROW_BY_ID: "auto IDs",
-  UPDATE_ROW_BY_ID: "auto IDs",
-  GET_NEXT_ID: "auto IDs",
-  SET_TABLE_METADATA: "a table's column types and descriptions",
-  GET_TABLE_METADATA: "a table's column types and descriptions",
-  DELETE_TABLE_METADATA: "a table's column types and descriptions",
-  LIST_TABLES: "a table's column types and descriptions (LISTTABLES lists them)",
-  SORTTABLEBYCOLUMN: "a table's sort state (asc, desc, original)",
   CREATEPIVOT: "pivot tables",
   UPDATEPIVOT: "pivot tables",
   DELETEPIVOT: "pivot tables",

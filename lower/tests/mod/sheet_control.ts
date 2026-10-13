@@ -26,12 +26,12 @@ eq("the app's argument shapes as the commands' own", [
   (await told("FILLDOWN", ["A1", "A2:A5"]))[1], (await told("FILLRIGHT", ["A1:A2", "B1:D2"]))[1], (await told("SORTRANGE", ["A1:C10", 2, 0]))[1], (await told("SORTRANGE", ["A1:C10", "a"]))[1],
   (await told("SETWRAPTEXT", ["A1", 0]))[1], (await told("FIND", ["x", 1, 0, "1"], { "edit.find": ["A1", "B2"] })),
   (await told("SETCELLVALIDATION", ["A1", "number", 0, 100]))[1], (await told("SETCELLVALIDATION", ["A1", "list", "Red,Green"]))[1],
-  (await told("FREEZEPANES", [2, 0]))[1], (await told("DEFINETABLE", ["T", "A1:B3"], { "table.list": ["T A1:B3 (x, y)"] })),
+  (await told("FREEZEPANES", [2, 0]))[1], (await told("DEFINETABLE", ["T", "A1:B3"], { "table.get": { name: "T", range: "A1:B3", columns: ["x", "y"] } })),
 ], [
   [["edit.fillDown", { range: "A1:A5", source: "1" }]], [["edit.fillRight", { range: "A1:D2", source: "1" }]], [["data.sortDescending", { range: "A1:C10", by: "B" }]], [["data.sortAscending", { range: "A1:C10", by: "A" }]],
   [["format.wrap", { range: "A1", off: "1" }]], [{ 0: 2, 1: "A1", 2: "B2" }, [["edit.find", { text: "x", matchCase: "1", inFormulas: "1" }]]],
   [["validation.set", { range: "A1", kind: "decimal", min: "0", max: "100" }]], [["validation.set", { range: "A1", kind: "list", values: "Red,Green" }]],
-  [["view.freezeRows", { count: "2" }]], ['{"name":"T","range":"A1:B3","columns":["x","y"]}', [["table.define", { name: "T", range: "A1:B3", headers: "1" }], ["table.list", {}]]],
+  [["view.freezeRows", { count: "2" }]], ['{"name":"T","range":"A1:B3","columns":["x","y"]}', [["table.define", { name: "T", range: "A1:B3", headers: "1" }], ["table.get", { name: "T" }]]],
 ]);
 
 const cell = { value: 300, input: "=A1+A2", format: "number:0.00", comment: "sum", wrap: 1, merged: "A1:B1", validation: null };
@@ -89,7 +89,7 @@ const script = async (text: string) => {
 };
 eq("cell.about and sheet.state, the getters' commands", [(await cmds.run("cell.comment cell=B2 text=hi")) && (await cmds.run("cell.about cell=B2")).output, (await cmds.run("sheet.state")).output],
   [{ cell: "B2", value: "", input: "", format: "", comment: "hi", wrap: 0, merged: "", validation: null },
-    { name: "Sheet1", sheets: ["Sheet1"], hiddenRows: [], hiddenCols: [], frozenRows: 0, rowHeights: [], colWidths: [], filter: null, canUndo: 0, canRedo: 0 }]);
+    { name: "Sheet1", sheets: ["Sheet1"], hiddenRows: [], hiddenCols: [], frozenRows: 0, rowHeights: [], colWidths: [], filter: null, canUndo: 0, canRedo: 0, autoId: null }]);
 eq("a script calls them by the app's names", [await script(`LET r = SETCELL("A1", 10); LET r = SETCELL("A2", 20); LET r = INSERTROW(2); LET r = HIDEROW(2)
 SAY GETCELL("A3") ISROWHIDDEN(2) ISROWHIDDEN(3); LET r = UNDO(); SAY CANUNDO() CANREDO(); LET n = GETSHEETNAMES(); SAY n.0 n.1`), said, wb.sheet.input("A3")],
   ["ran", ["20 1 0", "1 1", "1 Sheet1"], ""]);
