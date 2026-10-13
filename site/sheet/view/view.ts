@@ -28,6 +28,11 @@ export class SheetView {
   readonly watches = state<Watch[]>([]);
   readonly charts = state<(ChartView & { n: number })[]>([]);
   grid = 0;
+  // The rows made as tall as their wrapped text; the rows, columns (model)
+  // and frozen rows the grid was last given.
+  #fitted = new Set<number>();
+  #shownHidden = { rows: new Set<number>(), cols: new Set<number>() };
+  #frozen = 0;
 
   // The selected cell's key (A1 when the address field names none).
   here(): string {
@@ -114,6 +119,30 @@ export class SheetView {
       this.setup.set(this.wb.setupScript ? `Setup script: ${this.wb.setupScript}` : "");
       this.follow();
     });
-    if (this.grid) ui.datagrid_refresh(this.grid);
+    if (this.grid) {
+      this.#showView();
+      ui.datagrid_refresh(this.grid);
+      this.#fitRows();
+    }
+  }
+
+  // The active sheet's hidden rows and columns and frozen rows, given to the
+  // grid where they changed.
+  #showView(): void {
+    const { rows, cols } = this.wb.hidden(), was = this.#shownHidden;
+    const want = { rows: new Set(rows), cols: new Set(cols) };
+    for (const r of new Set([...was.rows, ...want.rows])) if (was.rows.has(r) !== want.rows.has(r)) ui.datagrid_hide_row(this.grid, r, want.rows.has(r) ? 1 : 0);
+    for (const c of new Set([...was.cols, ...want.cols])) if (was.cols.has(c) !== want.cols.has(c)) ui.datagrid_hide_col(this.grid, this.viewCol(c + 1), want.cols.has(c) ? 1 : 0);
+    this.#shownHidden = want;
+    if (this.wb.frozenRows() !== this.#frozen) ui.datagrid_freeze_rows(this.grid, (this.#frozen = this.wb.frozenRows()));
+  }
+
+  // Rows with wrapped text as tall as it; rows no longer wrapped as tall as
+  // the grid's.
+  #fitRows(): void {
+    const wrapped = new Set(this.wb.wrapped());
+    for (const r of this.#fitted) if (!wrapped.has(r)) ui.datagrid_set_row_height(this.grid, r, 0);
+    for (const r of wrapped) ui.datagrid_fit_row(this.grid, r);
+    this.#fitted = wrapped;
   }
 }

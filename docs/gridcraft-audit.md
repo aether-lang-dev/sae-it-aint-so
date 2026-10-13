@@ -145,5 +145,6 @@ These need more of it (asked for in
     `whatif.ts`, the `data.*` commands, the data bar).
 12. The aether-ui asks, as the features that need them come up: hidden
     rows and frozen rows first. Written up as one ask, in order:
-    `asks/aether-ui-datagrid-rows-and-cells.md` (open; aether-ui `main` at
-    `63a6633d` has none of it yet).
+    `asks/aether-ui-datagrid-rows-and-cells.md`, landed in aether-ui
+    `08e3193d`; demo 18 has the looks, data bars, comment markers, hidden
+    and frozen rows and AutoFilter.

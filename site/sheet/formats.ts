@@ -3,8 +3,11 @@
 // number:0.00", "currency:USD", "percent:0.0%"), Excel-style patterns
 // ("$#,##0.00", "0.00%"), CSS objects ({ fontWeight: "bold" }) and the JSON
 // of one (what a RexxJS style function gives). A style comes out as the AeCS
-// a ui.datagrid cell draws: background, color (hex), font-weight: bold and
-// text-align; what the grid cannot draw (italic, sizes, underline) is left out.
+// a ui.datagrid cell draws: background, color (hex), font-weight: bold,
+// text-align, and (aether-ui 08e3193d) font-style: italic, text-decoration,
+// font-size, borders and white-space: normal (wrapped). A cell's look (bold,
+// italic, underline, strikethrough, a size, wrapped, borders: notes.ts) is
+// set by the format.* commands and drawn by lookStyle.
 import { numberFormat } from "./numfmt.ts";
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
@@ -44,7 +47,7 @@ function numberPart(n: number, part: string): string | null {
 // The app's part names: a format with one of these is in its dialect, and
 // ';' separates its parts; any other is Excel's number-format language
 // (numfmt.ts), where ';' separates sections.
-const APP_PART = /^\s*(bold|italic|underline|(number|currency|percent|background|background-color|backgroundcolor|bg|color|text-color|font-weight|fontweight|align|text-align|textalign)\s*:)/i;
+const APP_PART = /^\s*(bold|italic|underline|strikethrough|strike|wrap|(size|border|border-top|border-right|border-bottom|border-left|number|currency|percent|background|background-color|backgroundcolor|bg|color|text-color|font-weight|fontweight|align|text-align|textalign)\s*:)/i;
 const appDialect = (format: string): boolean => format.split(";").some((p) => APP_PART.test(p));
 
 // A value as its format writes it, or null when the format does not apply
@@ -68,6 +71,12 @@ function colour(v: string): string | null {
   return COLOURS[c] ?? null;
 }
 
+// The app's format strings' words for a look.
+const WORDS: Record<string, string> = {
+  bold: "font-weight: bold", italic: "font-style: italic", underline: "text-decoration: underline",
+  strikethrough: "text-decoration: line-through", strike: "text-decoration: line-through", wrap: "white-space: normal",
+};
+
 const ALIGN: Record<string, string> = { left: "start", start: "start", center: "center", middle: "center", right: "end", end: "end" };
 
 // One declaration (any dialect's name) as the grid's AeCS, or null.
@@ -87,6 +96,22 @@ function declaration(name: string, value: string): string | null {
       const a = ALIGN[value.trim().toLowerCase()];
       return a ? `text-align: ${a}` : null;
     }
+    case "font-style": case "fontstyle":
+      return /^italic$/i.test(value.trim()) ? "font-style: italic" : null;
+    case "text-decoration": case "textdecoration": {
+      const parts = value.toLowerCase().split(/\s+/).filter((p) => p === "underline" || p === "line-through");
+      return parts.length ? `text-decoration: ${parts.join(" ")}` : null;
+    }
+    case "font-size": case "fontsize": case "size": {
+      const n = parseFloat(value);
+      return n > 0 ? `font-size: ${n}px` : null;
+    }
+    case "white-space": case "whitespace":
+      return /^normal$/i.test(value.trim()) ? "white-space: normal" : null;
+    case "border": case "border-top": case "border-right": case "border-bottom": case "border-left": {
+      const width = parseFloat(value) || 1, c = colour(value.trim().split(/\s+/).pop() ?? "");
+      return c ? `${name.trim().toLowerCase()}: ${width}px solid ${c}` : null;
+    }
     default:
       return null;
   }
@@ -99,6 +124,28 @@ export function formatStyle(v: Value, format: string): string {
   if (appDialect(format)) return toStyle(format);
   const c = numberFormat(v, format)?.color;
   return c ? `color: ${c}` : "";
+}
+
+// A cell's look, as the format.* commands set it.
+export interface Look {
+  readonly bold?: boolean;
+  readonly italic?: boolean;
+  readonly underline?: boolean;
+  readonly strike?: boolean;
+  readonly size?: number;
+  readonly wrap?: boolean;
+  readonly borders?: { readonly top?: string; readonly right?: string; readonly bottom?: string; readonly left?: string };
+}
+
+export function lookStyle(look: Look | undefined): string {
+  if (!look) return "";
+  const lines = [look.underline ? "underline" : "", look.strike ? "line-through" : ""].filter((x) => x).join(" ");
+  const b = look.borders ?? {};
+  return [
+    look.bold ? "font-weight: bold" : "", look.italic ? "font-style: italic" : "", lines ? `text-decoration: ${lines}` : "",
+    look.size ? `font-size: ${look.size}px` : "", look.wrap ? "white-space: normal" : "",
+    ...(["top", "right", "bottom", "left"] as const).map((e) => (b[e] ? `border-${e}: 1px solid ${b[e]}` : "")),
+  ].filter((p) => p).join("; ");
 }
 
 // A style in any of the dialects, as the grid's AeCS ("" for none).
@@ -120,7 +167,8 @@ export function toStyle(style: unknown): string {
     }
   } else {
     for (const part of String(style).split(";")) {
-      if (part.trim() === "bold") decls.push("font-weight: bold");
+      const word = WORDS[part.trim().toLowerCase()];
+      if (word) decls.push(word);
       const i = part.indexOf(":");
       if (i < 0) continue;
       const d = declaration(part.slice(0, i), part.slice(i + 1));

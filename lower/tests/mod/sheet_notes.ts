@@ -19,12 +19,12 @@ eq("text, an empty cell or an error is not a number to format", [formatted("pear
   [null, null, null, null]);
 
 eq("the app's style strings, as the grid draws them", toStyle("bold;italic;color:red;background:yellow;align:center"),
-  "font-weight: bold; color: #ff0000; background: #ffff00; text-align: center");
+  "font-weight: bold; font-style: italic; color: #ff0000; background: #ffff00; text-align: center");
 eq("CSS objects, as the formatted sample's styles are", toStyle({ fontWeight: "bold", fontSize: "16px", backgroundColor: "#2196F3", color: "white", textAlign: "center" }),
-  "font-weight: bold; background: #2196f3; color: #ffffff; text-align: center");
+  "font-weight: bold; font-size: 16px; background: #2196f3; color: #ffffff; text-align: center");
 eq("JSON of one, as a RexxJS style function gives", toStyle('{"color":"#d32f2f"}'), "color: #d32f2f");
 eq("AeCS as it is, right and left as the grid says them", [toStyle("background: #ffe0e0; text-align: right"), toStyle("align:left")], ["background: #ffe0e0; text-align: end", "text-align: start"]);
-eq("what the grid cannot draw is left out, and nothing is nothing", [toStyle("underline;font-size:20px"), toStyle(""), toStyle(null), toStyle("color: not-a-colour")], ["", "", "", ""]);
+eq("what the grid cannot draw is left out, and nothing is nothing", [toStyle("blink;font-family:serif"), toStyle(""), toStyle(null), toStyle("color: not-a-colour")], ["", "", "", ""]);
 
 {
   const notes = new CellNotes();

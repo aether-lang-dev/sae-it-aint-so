@@ -10,11 +10,11 @@
 // Formulas, and the watched cells. It answers what a cell shows, its style
 // and its status line.
 // Commands (commands.ts) change it; the page's panels read it.
-import { splitKey } from "./address.ts";
+import { cellAddr, splitKey } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { EXCEL } from "./excel.ts";
 import { describe, show } from "./format.ts";
-import { formatStyle, formatted, toStyle } from "./formats.ts";
+import { formatStyle, formatted, lookStyle, toStyle } from "./formats.ts";
 import type { Language } from "./language.ts";
 import { CellNotes } from "./notes.ts";
 import type { Note } from "./notes.ts";
@@ -63,13 +63,19 @@ export interface ChartView {
 export const CHART_W = 400, CHART_H = 240;
 
 // A sheet of the workbook: its name as given, its cells and their notes, its
-// conditional-format rules (rules.ts), in priority order, and its charts.
+// conditional-format rules (rules.ts), in priority order, its charts, and
+// how it is viewed: rows and columns hidden by hand (0-based), rows hidden
+// by its AutoFilter, and how many rows are frozen.
 export interface Page {
   readonly name: string;
   readonly sheet: Sheet;
   readonly notes: CellNotes;
   rules: CfRule[];
   charts: ChartSpec[];
+  hiddenRows: Set<number>;
+  hiddenCols: Set<number>;
+  filtered: Set<number> | null;
+  frozen: number;
 }
 
 export type Direction = "precedents" | "dependents";
@@ -144,7 +150,8 @@ export class Workbook {
       if (!keys) this.#pending.set(upper, (keys = new Set()));
       keys.add(key);
     };
-    return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [], charts: [] };
+    return { name, sheet: new Sheet({ changed }, language, context), notes: new CellNotes(), rules: [], charts: [],
+      hiddenRows: new Set(), hiddenCols: new Set(), filtered: null, frozen: 0 };
   }
 
   // A cell on another sheet ("COSTS!B2"), or #REF! when there is no such sheet.
@@ -336,12 +343,35 @@ export class Workbook {
   }
 
   // Its style, each layer over the last: numbers to the right, its own
-  // style, its format's style parts, its conditional style, its rules', a
-  // trace, a circle (its input breaks its rule), an error in red.
+  // style and look, its format's style parts, its conditional style, its
+  // rules', a trace, a circle (its input breaks its rule), an error in red,
+  // and a comment's corner marker.
   styleOf(key: string): string {
     const v = this.sheet.value(key), n = this.notes.get(key);
-    return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), formatStyle(v, n.format ?? ""), this.#conditional.get(key) ?? "", this.#marks.get(key)?.style ?? "", this.#traced.get(key) ?? "",
-      this.#circled.has(key) ? "background: #ffd6d6" : "", v instanceof CellError ? "color: #c0392b" : ""].filter((p) => p).join("; ");
+    return [typeof v === "number" ? "text-align: end" : "", toStyle(n.style), lookStyle(n.look), formatStyle(v, n.format ?? ""), this.#conditional.get(key) ?? "", this.#marks.get(key)?.style ?? "", this.#traced.get(key) ?? "",
+      this.#circled.has(key) ? "background: #ffd6d6" : "", v instanceof CellError ? "color: #c0392b" : "",
+      n.comment ? "--corner: #d00000" : ""].filter((p) => p).join("; ");
+  }
+
+  // The active sheet's rows (by hand or by its filter) and columns out of
+  // view, in order.
+  hidden(): { rows: number[]; cols: number[] } {
+    const p = this.#active, up = (a: number, b: number) => a - b;
+    return { rows: [...new Set([...p.hiddenRows, ...(p.filtered ?? [])])].sort(up), cols: [...p.hiddenCols].sort(up) };
+  }
+
+  frozenRows(): number {
+    return this.#active.frozen;
+  }
+
+  // What shows when the pointer rests on a cell: its comment.
+  tooltipOf(key: string): string {
+    return this.notes.get(key).comment ?? "";
+  }
+
+  // The rows (0-based) with a wrapped cell, to be as tall as their text.
+  wrapped(): number[] {
+    return [...new Set(this.notes.keys().filter((k) => this.notes.get(k).look?.wrap).map((k) => cellAddr(k)!.row))].sort((a, b) => a - b);
   }
 
   // The status line for a cell.

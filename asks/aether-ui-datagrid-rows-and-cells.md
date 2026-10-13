@@ -1,8 +1,17 @@
 # Ask (aether-ui): the datagrid's rows, and more in a cell
 
-**Open.** Checked against aether-ui `origin/main` at `63a6633d`: none of
-this is there yet (the datagrid freezes leading columns, and `cell_style`
-draws background, colour, bold and alignment).
+**Landed**, all seven, in aether-ui `94fee594` .. `08e3193d`; sae pins
+`08e3193d` and gives pages each (`ui.datagrid_hide_row` and the rest, and
+`ui.textarea`: README's page API, `site/grid.ts`, `spec_grid`). As landed:
+rows are model rows everywhere; columns stay view columns (a hidden one
+stays hidden when moved); the driver reads styles back as `fontStyle`,
+`textDecoration`, `borderTop` (and the other sides), `bar`, `barColor`,
+`corner` and `tooltip`, and a hidden row's cells show no text; a merge's
+click reports its top-left, and its text sits in its top row; taller rows
+mean fewer rows shown; `on_edit_change` is heard on the next turn of the
+loop (so the caret is after the new text), in UTF-16 units on AppKit,
+UIKit, Windows and Android and characters on GTK. (On GTK 4.6 an underline
+is faint at the default size; 4.22 draws it properly.)
 
 sae's spreadsheet (demo 18, `docs/spreadsheet_demo_done_and_todo.md`) now
 has everything GridCraft's audit (`docs/gridcraft-audit.md`) put before

@@ -4,8 +4,8 @@
 // between, text that contains), Top/Bottom (n cells, or n%), Above/Below
 // Average, Duplicate or Unique values, a two- or three-colour scale, an
 // icon set. applied() works out what each cell of a sheet gets: a style, or
-// an icon before its text. Data bars need a fill fraction per cell from
-// aether-ui (docs/gridcraft-audit.md).
+// an icon before its text, or a data bar (a share of the largest number,
+// from the cell's end when negative, as the grid's --fill draws it).
 import { keyOf, range } from "./address.ts";
 import type { Addr } from "./address.ts";
 import { show } from "./format.ts";
@@ -21,6 +21,7 @@ export type CfRule = (
   | { readonly kind: "duplicates"; readonly unique: boolean; readonly style: string }
   | { readonly kind: "colorScale"; readonly colors: readonly string[] }
   | { readonly kind: "iconSet"; readonly icons: IconSet }
+  | { readonly kind: "dataBar"; readonly color: string }
 ) & { readonly range: [Addr, Addr] };
 
 export const ICONS = { arrows: ["↑", "→", "↓"], triangles: ["▲", "▬", "▼"], ratings: ["●●●", "●●○", "●○○"] } as const;
@@ -98,6 +99,12 @@ function marked(rule: CfRule, value: (key: string) => Value): [string, Mark][] {
       };
       return keys.flatMap((k, i): [string, Mark][] => (numbers[i] === null ? [] : [[k, { style: `background: ${at(numbers[i]!)}` }]]));
     }
+    case "dataBar": {
+      const most = Math.max(...ns.map(Math.abs));
+      if (!most) return [];
+      return keys.flatMap((k, i): [string, Mark][] => (numbers[i] === null ? []
+        : [[k, { style: `--fill: ${Number((numbers[i]! / most).toFixed(4))}; --fill-color: ${rule.color}` }]]));
+    }
     case "iconSet": {
       if (!ns.length) return [];
       const lo = Math.min(...ns), hi = Math.max(...ns), [up, level, down] = ICONS[rule.icons];
@@ -137,6 +144,7 @@ export function describeRule(rule: CfRule): string {
       case "duplicates": return `${rule.unique ? "unique" : "duplicate"} values`;
       case "colorScale": return `colour scale ${rule.colors.join(", ")}`;
       case "iconSet": return `icon set ${rule.icons}`;
+      case "dataBar": return `data bars ${rule.color}`;
     }
   })();
   return `${rangeName(rule.range)}: ${what}`;

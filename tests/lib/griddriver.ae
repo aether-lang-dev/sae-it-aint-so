@@ -7,7 +7,7 @@
 // placeholders "cell" and "formula"; Return in the formula field enters.
 
 exports(
-    cell_id, cell_text, wait_cell, cell_has, pick, formula_field, enter, editor,
+    cell_id, cell_text, wait_cell, cell_has, pick, goto, formula_field, enter, editor,
     header_id, grip_of, key, field, command, script
 )
 
@@ -22,36 +22,29 @@ const POLL_MS = 50
 has_class_(w: ptr, c: string) -> int { return string.contains(uidriver.field_str(w, "classes"), c) }
 
 // The widget id of the cell at column `col` ("A".."J") and row `row` (1..20),
-// or 0.
+// or 0 when it is not shown: the cell whose column header (a11y_header, the
+// header widget's id) reads `col` and whose row (a11y_row, the model row
+// from 1) is `row`, as the grid tells assistive technology (a frozen row's
+// cells are aui-grid-frozen rather than aui-grid-cell). Frozen, hidden,
+// taller and moved rows and columns do not change it.
 cell_id(col: string, row: int) -> int {
     v, _jerr = json.parse(uidriver.get_body("/widgets"))
     if v == null { return 0 }
     n = json.json_array_size(v)
-    cx = 0 - 1
-    cy = 0 - 1
+    header = 0
     i = 0
     while i < n {
         w = json.json_array_get_raw(v, i)
-        t = uidriver.field_str(w, "text")
-        if has_class_(w, "aui-grid-header") == 1 && string.equals(t, col) == 1 {
-            cx = uidriver.field_int(w, "x") + uidriver.field_int(w, "w") / 2
-        }
-        if has_class_(w, "aui-grid-frozen") == 1 && string.equals(t, "${row}") == 1 {
-            cy = uidriver.field_int(w, "y") + uidriver.field_int(w, "h") / 2
-        }
+        if has_class_(w, "aui-grid-header") == 1 && string.equals(uidriver.field_str(w, "text"), col) == 1 { header = uidriver.field_int(w, "id") }
         i = i + 1
     }
     id = 0
-    if cx >= 0 && cy >= 0 {
+    if header > 0 {
         i = 0
         while i < n {
             w = json.json_array_get_raw(v, i)
-            if has_class_(w, "aui-grid-cell") == 1 {
-                x = uidriver.field_int(w, "x")
-                y = uidriver.field_int(w, "y")
-                if cx >= x && cx < x + uidriver.field_int(w, "w") && cy >= y && cy < y + uidriver.field_int(w, "h") {
-                    id = uidriver.field_int(w, "id")
-                }
+            if (has_class_(w, "aui-grid-cell") == 1 || has_class_(w, "aui-grid-frozen") == 1) && uidriver.field_int(w, "a11y_header") == header && uidriver.field_int(w, "a11y_row") == row {
+                id = uidriver.field_int(w, "id")
             }
             i = i + 1
         }
@@ -99,6 +92,13 @@ enter(cell: string, formula: string) {
     b.set_field_by("cell", cell)
     b.set_field_by("formula", formula)
     uidriver.post_ok("/widget/${formula_field()}/submit", "Return in the formula field")
+}
+
+// A cell selected through the address field (the Name Box), as a person
+// goes to one that may be scrolled out of view: the grid brings it in.
+goto(cell: string) {
+    b.set_field_by("cell", cell)
+    uidriver.post_ok("/widget/${field("cell")}/submit", "Return in the address field")
 }
 
 // The editor a double click opens over a cell: the newest text field with

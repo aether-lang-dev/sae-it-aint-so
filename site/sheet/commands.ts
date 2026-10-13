@@ -23,6 +23,7 @@ import { check, describeRule, ruleOf } from "./validation.ts";
 import { ICONS, describeRule as describeCf, rangeName } from "./rules.ts";
 import type { CfRule, Comparison, IconSet } from "./rules.ts";
 import { toStyle } from "./formats.ts";
+import type { Look } from "./formats.ts";
 import { CHART_KINDS } from "./charts.ts";
 import type { ChartKind } from "./charts.ts";
 import type { ChartSpec } from "./workbook.ts";
@@ -30,6 +31,9 @@ import { deleted, inserted, movedBy, restructured } from "./shift.ts";
 import type { Scope } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
 import { distinctRows, secant, splitText } from "./whatif.ts";
+import { criterion } from "./functions.ts";
+
+const NUMERIC_TEXT = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)\s*$/;
 import { CellError } from "./values.ts";
 import type { Value } from "./values.ts";
 import type { Direction, LanguageName, Page, Workbook } from "./workbook.ts";
@@ -144,7 +148,11 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     wb.sheet.forget();
     for (const [key, note] of s.notes) wb.notes.set(key, note);
     wb.page(s.name)!.rules = [...s.rules];
-    wb.page(s.name)!.charts = [...s.charts];
+    const page = wb.page(s.name)!;
+    page.charts = [...s.charts];
+    page.hiddenRows = new Set(s.view.hiddenRows);
+    page.hiddenCols = new Set(s.view.hiddenCols);
+    page.frozen = s.view.frozenRows;
   }
   wb.activate(file.sheets[0].name);
   wb.name = file.name;
@@ -206,6 +214,13 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
       const to = edit.range(c.range[0], c.range[1], still, still);
       return to ? [{ ...c, range: to }] : [];
     });
+    // Hidden rows (columns) move with the rest, and go with deleted ones.
+    const moved = (set: Set<number>, row: boolean) => new Set([...set].flatMap((i) => {
+      const to = edit.cell(row ? { col: 0, row: i } : { col: i, row: 0 }, still);
+      return to ? [row ? to.row : to.col] : [];
+    }));
+    if (axis === "row") page.hiddenRows = moved(page.hiddenRows, true); else page.hiddenCols = moved(page.hiddenCols, false);
+    if (page.filtered && axis === "row") page.filtered = moved(page.filtered, true);
     const thing = `${n} ${axis === "row" ? "row" : "column"}${n === 1 ? "" : "s"}`;
     return setting(wb, entries, `${how === "insert" ? "inserted" : "deleted"} ${thing} at ${axis === "row" ? at + 1 : colName(at)}`);
   };
@@ -284,6 +299,39 @@ const styleParam = (p: Params): string => (p.style === undefined ? HIGHLIGHT : t
 async function addRule(wb: Workbook, rule: CfRule): Promise<Outcome> {
   wb.page(wb.active)!.rules.push(rule);
   return changedBy(wb, [...range(rule.range[0], rule.range[1])], describeCf(rule));
+}
+
+// ---- A cell's look (formats.ts's Look), a part at a time.
+
+// Each cell of a range's look changed by `change`.
+function relook(wb: Workbook, r: [Addr, Addr], change: (look: Look, key: string) => Look): string[] {
+  const keys = [...range(r[0], r[1])];
+  for (const k of keys) {
+    const look = change(wb.notes.get(k).look ?? {}, k);
+    wb.notes.set(k, { look: Object.values(look).some((v) => v !== undefined && v !== false) ? look : undefined });
+  }
+  return keys;
+}
+
+const EDGES = ["outline", "all", "top", "right", "bottom", "left", "none"];
+
+// ---- Rows and columns out of view.
+
+// The rows (or columns) a range covers, 0-based, and as people count them.
+function spanOf(r: [Addr, Addr], rows: boolean): { at: number[]; said: string } {
+  const lo = rows ? Math.min(r[0].row, r[1].row) : Math.min(r[0].col, r[1].col), hi = rows ? Math.max(r[0].row, r[1].row) : Math.max(r[0].col, r[1].col);
+  const name = (i: number) => (rows ? String(i + 1) : colName(i));
+  const at = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  return { at, said: `${rows ? "row" : "column"}${at.length > 1 ? `s ${name(lo)} to ${name(hi)}` : ` ${name(lo)}`}` };
+}
+
+function hiding(rows: boolean, hide: boolean) {
+  return async (wb: Workbook, p: Params): Promise<Outcome> => {
+    const page = wb.page(wb.active)!, { at, said } = spanOf(rangeOf(p.range), rows);
+    const set = rows ? page.hiddenRows : page.hiddenCols;
+    for (const i of at) if (hide) set.add(i); else set.delete(i);
+    return changedBy(wb, wb.sheet.keys(), `${hide ? "hid" : "showed"} ${said}`);
+  };
 }
 
 // Trace Precedents or Dependents: a level further each time.
@@ -378,7 +426,7 @@ const SPECS: readonly Spec[] = [
     id: "range.clearFormats", label: "Clear Formats", params: ["range"], journaled: true,
     run: async (wb, p) => {
       const r = rangeOf(p.range), keys = [...range(r[0], r[1])];
-      for (const k of keys) wb.notes.set(k, { format: "", style: "", styleExpression: "" });
+      for (const k of keys) wb.notes.set(k, { format: "", style: "", styleExpression: "", look: undefined });
       return changedBy(wb, keys, `cleared the formats of ${named(r)}`);
     },
   },
@@ -394,7 +442,7 @@ const SPECS: readonly Spec[] = [
     id: "range.clearAll", label: "Clear All", params: ["range"], journaled: true,
     run: (wb, p) => {
       const r = rangeOf(p.range), keys = [...range(r[0], r[1])];
-      for (const k of keys) wb.notes.set(k, { comment: "", format: "", style: "", styleExpression: "" });
+      for (const k of keys) wb.notes.set(k, { comment: "", format: "", style: "", styleExpression: "", look: undefined });
       return setting(wb, keys.map((k) => [k, ""] as const), `cleared all of ${named(r)}`);
     },
   },
@@ -446,7 +494,7 @@ const SPECS: readonly Spec[] = [
         if (what === "formats" || what === "all") {
           const n = clip.notes[i][j];
           wb.notes.set(key, {
-            format: n.format ?? "", style: n.style ?? "",
+            format: n.format ?? "", style: n.style ?? "", look: n.look,
             styleExpression: n.styleExpression ? movedBy(clip.language, `=${n.styleExpression}`, by).slice(1) : "",
             ...(what === "all" ? { comment: n.comment ?? "" } : {}),
           });
@@ -682,6 +730,88 @@ const SPECS: readonly Spec[] = [
       const n = page.rules.filter(over).length;
       page.rules = page.rules.filter((r) => !over(r));
       return changedBy(wb, wb.sheet.keys(), `cleared ${n} rule${n === 1 ? "" : "s"}`);
+    },
+  },
+  {
+    id: "format.font", label: "Font", params: ["range"], optional: ["bold", "italic", "underline", "strike", "size"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range);
+      const size = p.size === undefined ? undefined : Number(p.size) > 0 ? Number(p.size) : refuse(`${p.size} is not a size`);
+      const parts = (["bold", "italic", "underline", "strike"] as const).filter((k) => p[k] !== undefined);
+      const keys = relook(wb, r, (look) => ({ ...look, ...Object.fromEntries(parts.map((k) => [k, flag(p[k])])), ...(size ? { size } : {}) }));
+      const said = [...parts.map((k) => (flag(p[k]) ? k : `not ${k}`)), ...(size ? [`size ${size}`] : [])].join(", ");
+      return changedBy(wb, keys, `${rangeName(r)}: ${said || "no change"}`);
+    },
+  },
+  {
+    id: "format.border", label: "Borders", params: ["range", "edge"], optional: ["color"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), edge = p.edge.toLowerCase(), color = (p.color ?? "#000000").toLowerCase();
+      if (!EDGES.includes(edge)) refuse(`${p.edge} is not an edge (${EDGES.join(", ")})`);
+      if (!/^#[0-9a-f]{6}$/.test(color)) refuse(`${p.color} is not a colour (#rrggbb)`);
+      const [a, b] = r, top = Math.min(a.row, b.row), bottom = Math.max(a.row, b.row), left = Math.min(a.col, b.col), right = Math.max(a.col, b.col);
+      const keys = relook(wb, r, (look, k) => {
+        const at = parseRange(k)![0];
+        if (edge === "none") return { ...look, borders: undefined };
+        const on = (e: "top" | "right" | "bottom" | "left") => edge === "all" || edge === e
+          || (edge === "outline" && ((e === "top" && at.row === top) || (e === "bottom" && at.row === bottom) || (e === "left" && at.col === left) || (e === "right" && at.col === right)));
+        const borders = { ...look.borders };
+        for (const e of ["top", "right", "bottom", "left"] as const) if (on(e)) borders[e] = color;
+        return { ...look, borders };
+      });
+      return changedBy(wb, keys, `${rangeName(r)}: ${edge === "none" ? "no" : edge} border${edge === "none" || edge === "all" || edge === "outline" ? "s" : ""}`);
+    },
+  },
+  {
+    id: "format.wrap", label: "Wrap Text", params: ["range"], optional: ["off"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), on = !flag(p.off);
+      return changedBy(wb, relook(wb, r, (look) => ({ ...look, wrap: on || undefined })), `${rangeName(r)}: ${on ? "wrapped" : "not wrapped"}`);
+    },
+  },
+  {
+    id: "format.dataBar", label: "Data Bars", params: ["range"], optional: ["color"], journaled: true,
+    run: (wb, p) => {
+      const color = (p.color ?? "#638ec6").toLowerCase();
+      if (!/^#[0-9a-f]{6}$/.test(color)) refuse(`${p.color} is not a colour (#rrggbb)`);
+      return addRule(wb, { kind: "dataBar", range: rangeOf(p.range), color });
+    },
+  },
+  { id: "rows.hide", label: "Hide Rows", params: ["range"], journaled: true, run: hiding(true, true) },
+  { id: "rows.unhide", label: "Unhide Rows", params: ["range"], journaled: true, run: hiding(true, false) },
+  { id: "columns.hide", label: "Hide Columns", params: ["range"], journaled: true, run: hiding(false, true) },
+  { id: "columns.unhide", label: "Unhide Columns", params: ["range"], journaled: true, run: hiding(false, false) },
+  {
+    id: "data.filter", label: "AutoFilter", params: ["range", "column", "criterion"], journaled: true,
+    run: async (wb, p) => {
+      const r = rangeOf(p.range), col = columnOf(p.column), tl = topLeft(r);
+      const bottom = Math.max(r[0].row, r[1].row), right = Math.max(r[0].col, r[1].col);
+      if (col < tl.col || col > right) refuse(`${p.column} is not a column of ${named(r)}`);
+      // The criterion as COUNTIF reads one: 5, ">100", "<>x", "north".
+      const keep = criterion(NUMERIC_TEXT.test(p.criterion) ? Number(p.criterion) : p.criterion);
+      const hidden = new Set<number>();
+      for (let row = tl.row + 1; row <= bottom; row++) if (!keep(wb.sheet.value(keyOf({ col, row })))) hidden.add(row);
+      wb.page(wb.active)!.filtered = hidden;
+      return changedBy(wb, wb.sheet.keys(), `filtered ${named(r)} by ${colName(col)} ${p.criterion}: ${hidden.size} row${hidden.size === 1 ? "" : "s"} hidden`);
+    },
+  },
+  {
+    id: "data.clearFilter", label: "Clear Filter", params: [], journaled: true,
+    run: async (wb) => {
+      const page = wb.page(wb.active)!;
+      if (!page.filtered) refuse("no filter");
+      const n = [...page.filtered!].filter((r) => !page.hiddenRows.has(r)).length;
+      page.filtered = null;
+      return changedBy(wb, wb.sheet.keys(), `filter cleared: ${n} row${n === 1 ? "" : "s"} shown`);
+    },
+  },
+  {
+    id: "view.freezeRows", label: "Freeze Top Rows", params: ["count"], journaled: true,
+    run: async (wb, p) => {
+      const n = Number(p.count);
+      if (!Number.isInteger(n) || n < 0 || n >= ROWS) refuse(`${p.count} is not a number of rows to freeze`);
+      wb.page(wb.active)!.frozen = n;
+      return changedBy(wb, [], n ? `froze ${n} row${n === 1 ? "" : "s"}` : "unfroze rows");
     },
   },
   {

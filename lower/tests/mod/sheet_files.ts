@@ -37,7 +37,7 @@ const file = writeSheetFile(wb);
 eq("written in the Tauri app's shapes: text as itself, a formula as value and expression, notes beside them", [file.cells.A1, file.cells.B1, file.cells.B2],
   ["Item", { value: "2", format: "number:0.00", validation: { kind: "whole", min: 0, mode: "stop", when: "always" } }, { value: "42", expression: "B1*21", comment: "answer" }]);
 eq("with its language, its names, and the other sheets", [file.formulas, file.sheetName, file.names, file.sheets],
-  ["excel", "Sheet1", { TWO: "B1" }, [{ name: "Costs", cells: { A1: { value: "43", expression: "Sheet1!B2+1" } }, names: {}, rules: [], charts: [] }]]);
+  ["excel", "Sheet1", { TWO: "B1" }, [{ name: "Costs", cells: { A1: { value: "43", expression: "Sheet1!B2+1" } }, names: {}, rules: [], charts: [], view: { hiddenRows: [], hiddenCols: [], frozenRows: 0 } }]]);
 const read = readSheetFile(JSON.parse(JSON.stringify(file)));
 eq("and read back", [read.language, read.sheets.map((s) => [s.name, s.entries, s.names])],
   ["Excel", [["Sheet1", [["A1", "Item"], ["B1", "2"], ["B2", "=B1*21"]], [["TWO", "B1"]]], ["Costs", [["A1", "=Sheet1!B2+1"]], []]]]);

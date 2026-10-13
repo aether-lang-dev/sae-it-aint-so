@@ -6,10 +6,12 @@
 // app's are, unless the file says "formulas": "excel".
 //
 // sae's own additions, which the app passes over: a cell's validation rule
-// (validation.ts's, as an object), the first sheet's name (sheetName), named
+// (validation.ts's, as an object) and its look (formats.ts's), the first
+// sheet's name (sheetName), named
 // ranges (names: { QTY: "B2:B4" }), conditional-format rules (rules.ts's,
-// their ranges as text) and charts ({ kind, range, title }), and the
-// workbook's other sheets (sheets: [{ name, cells, names, rules, charts }]).
+// their ranges as text), charts ({ kind, range, title }) and how it is viewed
+// (view: { hiddenRows, hiddenCols, frozenRows }, 0-based), and the workbook's
+// other sheets (sheets: [{ name, cells, names, rules, charts, view }]).
 // writeSheetFile writes it all.
 import { addrOf, order, parseRange } from "./address.ts";
 import { ICONS, rangeName } from "./rules.ts";
@@ -29,6 +31,7 @@ export interface FileSheet {
   readonly names: readonly [string, string][];     // [NAME, "B2:B4"]
   readonly rules: readonly CfRule[];
   readonly charts: readonly ChartSpec[];
+  readonly view: { readonly hiddenRows: readonly number[]; readonly hiddenCols: readonly number[]; readonly frozenRows: number };
 }
 
 export interface SheetFile {
@@ -47,6 +50,7 @@ interface FileCell {
   readonly style?: unknown;
   readonly styleExpression?: string | null;
   readonly validation?: Record<string, unknown> | null;
+  readonly look?: Record<string, unknown> | null;
 }
 
 type Cells = Record<string, string | FileCell>;
@@ -74,6 +78,7 @@ function noteOf(c: string | FileCell): Note {
   for (const k of ["comment", "format", "style", "styleExpression"] as const) if (c[k]) note[k] = c[k];
   const rule = c.validation ? ruleIn(c.validation) : undefined;
   if (rule) note.validation = rule;
+  if (c.look && typeof c.look === "object") note.look = c.look;
   return note;
 }
 
@@ -96,7 +101,13 @@ function chartsOf(charts: unknown): ChartSpec[] {
   });
 }
 
-function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown, charts: unknown): FileSheet {
+// How a sheet was viewed: rows and columns hidden, rows frozen.
+function viewOf(v: any): FileSheet["view"] {
+  const indexes = (xs: unknown) => (Array.isArray(xs) ? xs.map(Number).filter((n) => Number.isInteger(n) && n >= 0) : []);
+  return { hiddenRows: indexes(v?.hiddenRows), hiddenCols: indexes(v?.hiddenCols), frozenRows: Number.isInteger(v?.frozenRows) && v.frozenRows > 0 ? v.frozenRows : 0 };
+}
+
+function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown, charts: unknown, view: unknown): FileSheet {
   const list = Object.entries(cells ?? {}).map(([k, c]): [string, string | FileCell] => [k.toUpperCase(), c]);
   return {
     name,
@@ -105,6 +116,7 @@ function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: 
     names: Object.entries((names ?? {}) as Record<string, unknown>).map(([n, r]): [string, string] => [n.toUpperCase(), String(r)]),
     rules: rulesOf(rules),
     charts: chartsOf(charts),
+    view: viewOf(view),
   };
 }
 
@@ -115,8 +127,8 @@ export function readSheetFile(data: any): SheetFile {
     language: String(data?.formulas ?? "").toLowerCase() === "excel" ? "Excel" : "RexxJS",
     setupScript: String(data?.setupScript ?? ""),
     sheets: [
-      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules, data?.charts),
-      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules, s?.charts)),
+      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules, data?.charts, data?.view),
+      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules, s?.charts, s?.view)),
     ],
   };
 }
@@ -142,6 +154,10 @@ function cellsOf(page: Page): Cells {
 const namesOf = (page: Page): Record<string, string> => Object.fromEntries(page.sheet.names());
 const rulesIn = (page: Page) => page.rules.map((r) => ({ ...r, range: rangeName(r.range) }));
 const chartsIn = (page: Page) => page.charts.map((c) => ({ kind: c.kind, range: rangeName(c.range), title: c.title }));
+const up = (a: number, b: number) => a - b;
+const viewIn = (page: Page) => ({
+  hiddenRows: [...new Set([...page.hiddenRows, ...(page.filtered ?? [])])].sort(up), hiddenCols: [...page.hiddenCols].sort(up), frozenRows: page.frozen,
+});
 
 // The workbook as a file: JSON-ready.
 export function writeSheetFile(wb: Workbook) {
@@ -155,6 +171,7 @@ export function writeSheetFile(wb: Workbook) {
     names: namesOf(first),
     rules: rulesIn(first),
     charts: chartsIn(first),
-    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p) })),
+    view: viewIn(first),
+    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p), view: viewIn(p) })),
   };
 }

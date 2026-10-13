@@ -3,10 +3,12 @@
 // cell_style functions and on_cell_edit get model columns; on_cell_select a
 // column on screen (columns move). Keys over the selection run commands:
 // Delete clears it, Ctrl+C and Ctrl+V copy and paste, Ctrl+D and Ctrl+R
-// fill, Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) undo and redo; while an editor is
-// open, or a field has the focus, keys are theirs.
+// fill, Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) undo and redo, Ctrl+B, Ctrl+I and
+// Ctrl+U the look; while an editor is open, or a field has the focus, keys
+// are theirs. A cell's comment shows when the pointer rests on it.
 import { COLS, ROWS, addrOf, colName, keyOf } from "../address.ts";
 import type { SheetView } from "./view.ts";
+import { toggleFont } from "./lookbar.ts";
 
 const SHIFT = 1, CTRL = 2, SUPER = 8;
 
@@ -48,6 +50,10 @@ export function sheetGrid(v: SheetView): void {
     });
   });
   ui.datagrid_set_col_width(v.grid, 0, 34);     // the row numbers
+  ui.datagrid_cell_tooltip(v.grid, (r: number, c: number) => {
+    const key = keyAt(r, c);
+    return key ? v.wb.tooltipOf(key) : "";
+  });
 
   // The address field drives the grid's selection: name a cell, go to it.
   v.address.subscribe((a: string) => {
@@ -74,6 +80,9 @@ export function sheetGrid(v: SheetView): void {
       case "r": v.run("edit.fillRight", { range }); return;
       case "z": v.run((mods & SHIFT) !== 0 ? "edit.redo" : "edit.undo"); return;
       case "y": v.run("edit.redo"); return;
+      case "b": toggleFont(v, "bold"); return;
+      case "i": toggleFont(v, "italic"); return;
+      case "u": toggleFont(v, "underline"); return;
     }
   });
 }

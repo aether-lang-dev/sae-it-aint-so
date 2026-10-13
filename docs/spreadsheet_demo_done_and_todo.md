@@ -97,7 +97,14 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   own), an icon set (arrows, triangles, ratings, before the text), Clear
   rules. Each sheet has its rules, the first listed winning; they follow
   edits, move with inserted and deleted rows, and are saved with the
-  file. Data bars need a fill per cell from aether-ui.
+  file. Data bars (a share of the largest number, from the cell's end when
+  negative) too.
+- Rows and columns out of view (the view bar): Hide and Unhide rows and
+  columns (select across hidden ones to unhide them, as in Excel); a
+  filter on the selected column of a table (the criterion as COUNTIF
+  writes one: `>100`, `north`), its header row kept, Clear filter; Freeze
+  top row and Unfreeze. Per sheet; hidden rows move with inserted and
+  deleted ones; saved.
 - What-if and data tools (the data bar), as Excel's Data tab has them:
   Goal Seek (the selected formula brought to a goal by changing one
   input, the secant method over the sheet); Data Table (a formula worked
@@ -187,9 +194,15 @@ fields under the formula bar:
   numbers (`d mmm yyyy`, `h:mm AM/PM`, `[h]:mm`; a date typed as
   `2024-01-15` is formatted as one). A section's colour is the cell's
   text colour.
-- A style, as the app's format strings (`bold;color:red;align:center`) or
-  CSS objects have it, drawn as the grid can: background, colour, bold,
-  alignment (italic and sizes need aether-ui).
+- A style, as the app's format strings (`bold;italic;color:red;align:center`)
+  or CSS objects have it, drawn as the grid can: background, colour, bold,
+  alignment, italic, underline, strikethrough, sizes, borders, wrapping.
+- A look (the look bar; `format.font`, `format.border`, `format.wrap`):
+  Bold, Italic, Underline and Strikethrough (Ctrl+B, Ctrl+I, Ctrl+U),
+  outline, all or no borders, Wrap text (its row as tall as its text). Paste
+  Special formats takes it, Clear formats clears it, a file keeps it.
+- A comment shows as a red corner, and its text when the pointer rests on
+  the cell.
 - A conditional style: an expression in the sheet's language whose value
   is a style, worked out after every change. In RexxJS formulas the app's
   style functions give one (`STYLE_IF(C5 < 0, RED_TEXT(), GREEN_TEXT())`,
@@ -396,6 +409,14 @@ summary.
     Goal Seek (reached, undone, unreachable, refused), one- and
     two-input data tables, Remove Duplicates by every column and by
     chosen ones, Text to Columns and its refusals.
+  - `sheet_look` (14): the dialects' words for italic, underline, sizes,
+    borders and wrapping; a look as the grid's style; format.font, .border
+    and .wrap; Paste Special and Clear formats; a file; a comment's corner
+    and tooltip; data bars.
+  - `sheet_rows` (11): rows and columns hidden and shown, moving with
+    inserted and deleted rows; AutoFilter by number and text, its rows
+    apart from those hidden by hand; refusals; frozen rows; per sheet;
+    saved.
   - `sheet_csv` (7): RFC 4180 out and back, CRLF, quoted line breaks, and
     its two errors.
   - `sheet_names` (12): names defined, read in both languages, followed,
@@ -407,7 +428,7 @@ summary.
   - `sheet_copy` (26): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 40 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 42 tests, on GTK4
   under Xvfb):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -442,7 +463,10 @@ summary.
     categories, its palette), its scale following an edit; a sparkline;
     the chart deleted;
   - a dynamic array spilling, read whole by `F14#`, blocked and cleared;
-  - Goal seek, Text to columns and Remove duplicates from the data bar.
+  - Goal seek, Text to columns and Remove duplicates from the data bar;
+  - a look (Ctrl+I, underline, borders, wrapping), a comment's corner and
+    tooltip, and data bars, read back from the grid;
+  - a filter, a column hidden and unhidden, a row frozen.
 
   Cells are read and clicked through the driver's widget tree: the
   `aui-grid-cell` under its column's header and beside its row's number.
@@ -509,12 +533,11 @@ is `src/spreadsheet-model.js`, its control functions
 Not coming over: the DOM itself (React, the DOM functions RexxJS has for
 web pages), and Pyodide (NumPy, SciPy, SymPy in WebAssembly).
 
-**Waiting on aether-ui** (`asks/aether-ui-datagrid-rows-and-cells.md`,
-open): hidden rows and columns (AutoFilter, outlines, the Tauri app's
-row filter), frozen rows, italic, underline, strikethrough, sizes and
-borders, data bars, a comment's corner marker, merged cells, wrapped
-text and row heights, the editor's text as it is typed (point mode), and
-a multi-line field.
+**From aether-ui `08e3193d`** (`asks/aether-ui-datagrid-rows-and-cells.md`,
+landed): in demo 18 now, the looks, data bars, comment markers, hidden
+and frozen rows and AutoFilter. Still to wire in: merged cells (Merge &
+Center), row heights by hand, the editor's text as it is typed (point
+mode, coloured references), and multi-line fields for CSV and scripts.
 
 **Demo 18's own:**
 

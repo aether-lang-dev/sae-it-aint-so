@@ -1,7 +1,7 @@
 // Conditional formatting over the selection, as Excel's menu has it:
 // Highlight Cells (greater than, less than, equal to, text that contains,
 // the value in the field), Top 10, Above average, Duplicates, a colour scale
-// (Excel's red, yellow, green), an icon set (arrows), Clear rules; and the
+// (Excel's red, yellow, green), an icon set (arrows), data bars, Clear rules; and the
 // sheet's rules listed, the first one winning.
 import type { SheetView } from "./view.ts";
 
@@ -23,6 +23,7 @@ export function rulesBar(v: SheetView): void {
     ui.btn("Duplicates", () => added(v.run("format.duplicates", { range: v.range() })));
     ui.btn("Color scale", () => added(v.run("format.colorScale", { range: v.range() })));
     ui.btn("Icon set", () => added(v.run("format.iconSet", { range: v.range() })));
+    ui.btn("Data bars", () => added(v.run("format.dataBar", { range: v.range() })));
     ui.btn("Clear rules", () => added(v.run("format.clearRules", { range: v.range() })));
   });
   bind(ui.text_wrapped("", 720), listed);
