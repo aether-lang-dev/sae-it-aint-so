@@ -3,9 +3,10 @@
 [GridCraft](https://github.com/storytold/gridcraft) (storytold, at `fc45b7f`,
 release 0.6.1, audited 2026-10-12) is a clean-room reimplementation of Excel
 in Rust: about 121,000 lines, an egui desktop app, a WebAssembly build, a
-CLI and an MCP server. It is MIT OR Apache-2.0, so its designs and
-algorithms can be ported to sae's TypeScript with attribution; its own
-clean-room rule is about Excel's code, and does not bind us. Its catalogue
+CLI and an MCP server. It is MIT OR Apache-2.0, but it lives under
+`not-ours/`: its features are ideas to envy, and demo 18 builds each its own
+way. None of its code is copied, ported or paraphrased, whatever the
+licence allows. Its catalogue
 claims 274 of Excel's 290 ribbon commands and 513 of 523 worksheet functions
 (`docs/parity-checklist.md`, `docs/function-parity.md` there), and about
 50% readiness "weighted by what Excel users rely on".

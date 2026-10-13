@@ -54,19 +54,21 @@ awaited (`lower/tests/mod/sheet_sheet.ts`, `sheet_rexx.ts`).
    and its functions are exported as one object, which `boot.ts` puts in
    the interpreter's `externalFunctions`.
 
-RexxJS core needed two changes, each a patch in `vendor/rexxjs/patches/`
-with its jest spec beside it (for `core/tests/`), applied by
-`tools/bundle-rexxjs.mjs`. RexxJS's own suite is green with both (2,488
-jest tests, 12 of them theirs; 41 dogfood sources).
+RexxJS core needed two changes. They were patches in `vendor/rexxjs/patches/`
+until 2026-10-13, and are now upstream: RexxJS `88eefca`, with their jest
+specs in `core/tests/` (`comparisons-in-expressions.spec.js`,
+`expressions-as-function-arguments.spec.js`; jest +12 passing, dogfood
+41/41). `vendor/rexxjs` is re-vendored from that commit with no patches, and
+the bundle is byte-for-byte what the patched one was.
 
-1. `0001-comparisons-in-expressions`: a comparison in an expression is now
+1. Comparisons in expressions: a comparison in an expression is now
    one. `LET X = B2 > 500` read `B2` as a function call, and
    `LET X = (B2 > 500)` came to B2's value, as parentheses dropped what
    followed their inner sum. Comparisons are the loosest operators, come to
    1 or 0, and take every Rexx spelling (`=`, `\=`, `<>`, `><`, `!=`, `¬=`,
    `==`, `\==`, `>`, `<`, `>=`, `<=`); `=` stays a named parameter in a call
    such as `ARRAY_FILTER array=mixed`.
-2. `0002-expressions-as-function-arguments`: a function's arguments were
+2. Expressions as function arguments: a function's arguments were
    kept as text and resolved as a literal, a number or a name, so one with
    an operator was never worked out: `MAX(B + 1, 2)` came to 2,
    `ABS(B - 3000)` to 0, and an external function was handed the text
