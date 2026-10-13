@@ -515,27 +515,194 @@ Building the earlier algorithms demo (17) found the lowerer's two bugs, now
 fixed: nested generics closed by `>>`, and union types written one member a
 line.
 
+## Picking this up (a handover)
+
+This document is the plan for demo 18. It is written so that someone with
+none of the conversation behind it (another Claude, on another machine, or
+a person) can carry on: what is done is above, what comes next and how to
+go about it is here. Keep it current in the same commit as each change.
+
+**Where the work is.** On the branch `claude/spreadsheet-demo-todo-472igg`
+(commit and push to it as each piece lands; `main` is behind it and gets
+it by merge when Paul or Nic say so). The aether-ui pin is `08e3193d`
+(`pins`); the Aether pin 0.801.0.
+
+**How the code is laid out** (more under "How it is built"):
+
+- `site/sheet.ts`, the page: a list of panels, nothing else.
+- `site/sheet/view/*.ts`, the panels: widgets bound to state, handlers
+  that run commands through `SheetView.run` and nothing else.
+- `site/sheet/commands.ts`, the seam: every action is a command
+  (`cell.set cell=A1 input=5`), with string parameters, an Outcome, a
+  journal; `ADDRESS SHEET "..."` and `SETCELL`/`GETCELL` in RexxJS scripts
+  (`script.ts`) and the specs drive the same commands.
+- `site/sheet/workbook.ts` and the model modules under it (`sheet.ts`, the
+  two languages `excel.ts` and `rexx.ts`, `functions.ts`, `evaluate.ts`,
+  `notes.ts`, `rules.ts`, `charts.ts`, `numfmt.ts`, `file.ts` ...): no
+  `ui` at all.
+
+**How a feature lands** (every one so far has gone this way):
+
+1. A headless test first, `lower/tests/mod/sheet_<thing>.ts`, with
+   `// expect: ok ...` lines: the model's pure functions, then the commands
+   through a `Workbook` and `Commands` (a fake or stub where a collaborator
+   is outside, e.g. the `Store` in `sheet_files`). Run `lower/run-tests.sh`.
+2. The model, then the command(s) in `commands.ts`, until it passes.
+3. A panel (or a button on one) in `site/sheet/view/`, and an `it` in
+   `tests/spec_sheet.ae` that drives it as a person would, through
+   `tests/lib/griddriver.ae`'s verbs. Run
+   `tests/run_all.sh spec_sheet` (about two minutes; Xvfb on Linux).
+4. This document (what it is, how it is tested, the counts), `AGENTS.md`'s
+   lowerer test count and spec_sheet line, then commit and push.
+
+**Traps met so far:**
+
+- The browser embeds the lowerer: a change to `lower/module.ae` needs
+  `./build.sh` and `AETHER_UI_WITH_DRIVER=1 ./build.sh` (as well as
+  `target/saelower` for the headless tests) before a spec sees it.
+- `spec_sheet`'s `it`s run in order on one page, each leaving the sheet as
+  the next expects; a new `it` goes at the end, on cells nothing else uses
+  (rows 14 to 20 and columns H to J are where the later ones work).
+- A cell scrolled out of view cannot be clicked: `g.goto("C1")` selects
+  through the Name Box, which scrolls it in; then `g.pick` focuses the
+  grid for keys. A taller row (wrapping, a height) means fewer rows show.
+- The driver reports centred text as `"anchor":"middle"`; a frozen row's
+  cells have the class `aui-grid-frozen`, not `aui-grid-cell`;
+  `/window/key?combo=Return` does not commit an editor, but
+  `/widget/{id}/submit` does. `griddriver`'s `cell_id` finds a cell by its
+  `a11y_header` and `a11y_row`, so none of that fools it.
+- A click on a cell while editing commits the editor before the page hears
+  of the click (point mode holds that commit back: `view/grid.ts`).
+- `pkill -f spec_sheet` matches the shell running it: stop a stuck spec by
+  killing `sae-driver` and `pageserver` only.
+- Storage keys are letters, digits, `.`, `_` and `-` only (`file.ts`
+  encodes a file's name into one).
+- In the dialect, `x! / y` (a non-null assertion, then a division) lexed
+  as a regular expression until `1088eee`; an older lowerer still does.
+
+**On a Mac:** `spec_sheet` has only run on GTK4 under Xvfb. The first
+thing to do on the Mac mini is `./build.sh`, `AETHER_UI_WITH_DRIVER=1
+./build.sh`, `lower/run-tests.sh`, `tests/run_all.sh spec_sheet` and
+`tests/run_all.sh spec_grid`, and note what differs here.
+
 ## To do
 
-This section is the plan; keep it current as things land.
-`docs/gridcraft-audit.md`'s recommended order (twelve steps, set against
-GridCraft, an Excel reimplementation in Rust) is all done. What comes next,
-in order of value for effort:
+What comes next, in order. The first three are in progress as a smaller
+plan agreed on 2026-10-13; the rest follow.
 
-1. **Undo for everything.** Undo takes back cell contents only; notes,
-   looks, rules, charts, merges, hidden rows, names and sheets added or
-   deleted are not undone. A workbook-wide undo of command snapshots
-   (GridCraft's idea 4) would cover them all, and undo across sheets.
-2. **A bigger sheet** (Demo 18's own, 3 below): 26 x 100 at least.
-3. **Cut, and paste over a larger selection** (Demo 18's own, 2).
-4. **Functions:** scalar functions lifted over arrays, then named
-   LAMBDAs, TAKE/DROP/CHOOSECOLS/VSTACK/HSTACK, and a text batch.
-5. **The Tauri app's query functions and control bus** (3 and 5 below).
-6. **Sheets renamed and moved**, names scoped to the workbook.
-7. **`files` in app mode**, the system clipboard: each needs a page
-   service.
+### 1. The Tauri app's query functions, and tables (in progress)
 
-The lists below are where these come from.
+The app's `public/lib/spreadsheet-functions.js` has a small query language
+in RexxJS's pipe syntax:
+
+```rexx
+=RANGE("A1:D100") |> WHERE("column_C > 1000") |> GROUP_BY("B") |> SUM("D")
+=TABLE("sales") |> WHERE("region = 'West'") |> PLUCK("amount") |> RESULT()
+```
+
+`RANGE(ref)` or `TABLE(name)` starts a query; `WHERE(condition)` keeps the
+rows for which it holds; `PLUCK(col)` takes one column; `GROUP_BY(col)`
+groups; `SUM(col)`, `AVG(col)` and `COUNT()` aggregate (each group's,
+after GROUP_BY); `RESULT()` gives the rows. A column is named by its
+letter, `column_C`/`col_C`, or (with a header or table metadata) its name.
+`TABLE` reads a table's metadata: its range, column names, types and
+descriptions (`DEFINETABLE`/`SET_TABLE_METADATA` in the app). The app
+works WHERE's condition out by substituting values into the text and
+calling JavaScript's `eval`, which sae must never do: here the condition
+is an expression in the sheet's own language (RexxJS), each column's name
+bound to the row's value.
+
+The plan:
+
+- `site/sheet/query.ts`: a query (rows, headers, groups) and its steps as
+  pure functions; WHERE's condition through a callback that works one out
+  for a row (so the model does not know the language). Headless tests.
+- Tables in the workbook, per sheet: `table.define name= range=
+  [headers=1]`, `table.delete`, `table.list`; saved with the file; moved
+  with inserted and deleted rows, as charts are.
+- The RexxJS functions: a query is a value RexxJS carries between pipe
+  steps; the final value a cell shows is RESULT's rows (spilled, as a
+  dynamic array) or an aggregate's number.
+- Excel's structured references over the same tables (`Sales[Amount]`,
+  `SUM(Sales[Amount])`) in the Excel language, as a later step.
+
+### 2. The control-function name table (next)
+
+The app's `src/spreadsheet-control-functions.js` has about 100 control
+functions (SETCELL, INSERTROW, SORTRANGE, MERGECELLS, FREEZEPANES, ...).
+Most are one of demo 18's commands under another name. A table from each
+name and its arguments to a command line makes the app's REXX scripts run
+against demo 18 unchanged, in scripts (`script.ts`) and through
+`ADDRESS SHEET`. Those without a command yet are listed by
+`LISTCOMMANDS` as such: pivots, auto IDs (`CONFIGURE_AUTO_ID`,
+`GET_NEXT_ID`, `FIND_ROW_BY_ID`, `UPDATE_ROW_BY_ID`), cell editors
+(`SETCELLEDITOR`: a dropdown or checkbox in a cell), moving columns,
+renaming sheets.
+
+### 3. The external control bus (a decision first, then perhaps code)
+
+The app can be driven from another process, ARexx-style: `postMessage` in
+a browser, HTTP on `localhost:8083` with a token in Tauri
+(`ADDRESS "http://localhost:8083/api/spreadsheet" AUTH "..." AS
+SPREADSHEET`). A sae page cannot listen for anything: that is the
+sandbox. Two ways it could:
+
+- (a) an app-mode service: an installed app declares
+  `capabilities.controlBus` in `app.json`, sae listens on localhost with a
+  token, and hands each request to a handler the page registers (as
+  `files` and `shell` are app-mode only, declared, and a service);
+- (b) page-to-page messages inside sae, through `browserContext`: safer,
+  but no outside process can use it.
+
+Either needs a page-API function, a service, an attempt in
+`tests/escape/` and a spec. This is a browser-architecture decision: the
+step is to write (a) up with its security rules, as a doc, for Paul and
+Nic to decide on before any code.
+
+### 4. Undo for everything
+
+Undo takes back cell contents only (each `Sheet` keeps the inputs a change
+replaced). Notes, looks, rules, charts, merges, hidden rows, names, tables
+and sheets added or deleted are not undone, and each sheet's undo is its
+own. A workbook-wide undo of snapshots taken before each journaled command
+(GridCraft's idea 4: its copy-on-write snapshots) would cover all of them,
+and undo across sheets; the `Sheet`'s own undo would become one part of it.
+
+### 5. A bigger sheet
+
+The app's sheets are 26 x 100. `address.ts` allows columns A to J and two
+digit rows: AA-style columns and larger `COLS`/`ROWS` are its regexes and
+constants, then the datagrid's size in `view/grid.ts` (it is virtualised,
+at most 4,000 cells shown) and anything that loops over every cell.
+
+### 6. Cut, and paste over a larger selection
+
+Ctrl+X (a copy, then a clear of the source on paste) and one copied cell
+pasted into each cell of a selection: both small, in `copy.ts` and
+`commands.ts`.
+
+### 7. More functions
+
+Scalar functions lifted over arrays (`UPPER(A1:A3)` is `#VALUE!` today: a
+lift in `evaluate.ts`'s call, as operators have), named LAMBDAs (a name
+for a LAMBDA in the Name Manager, and so recursion), TAKE, DROP,
+CHOOSECOLS, VSTACK, HSTACK, and a text batch (TEXT, TEXTBEFORE, TEXTAFTER,
+TEXTSPLIT).
+
+### 8. Sheets renamed and moved, names for the workbook
+
+A rename rewrites what reads the sheet (`Costs!B2` in either language);
+moving a sheet reorders the tabs; named ranges scoped to the workbook as
+well as to a sheet.
+
+### 9. Real files in app mode, and the system clipboard
+
+Each needs a page service (as `storage` is a page API): `files` for an
+installed app (a `.json` or `.rexxsheet` the Tauri app opens too, and
+`.csv`), and a clipboard with a permission.
+
+The lists below are where these came from, with what has landed struck
+through.
 
 **From the Tauri spreadsheet** (RexxJS/example-app-spreadsheet; its model
 is `src/spreadsheet-model.js`, its control functions
