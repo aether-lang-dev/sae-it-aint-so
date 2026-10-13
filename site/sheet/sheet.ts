@@ -19,7 +19,7 @@ import { COLS, ROWS, addrOf, cellAddr, keyOf, order, splitKey } from "./address.
 import { CellError, isArray } from "./values.ts";
 import type { ArrayValue, Result, Value } from "./values.ts";
 import { EXCEL } from "./excel.ts";
-import type { Formula, Language, Names } from "./language.ts";
+import type { Formula, Language, Names, TableDef, Tables } from "./language.ts";
 import type { Addr } from "./address.ts";
 import { show } from "./format.ts";
 
@@ -38,8 +38,8 @@ export type Compiled = Formula | { readonly kind: "constant"; readonly value: Va
 
 const NUMERIC = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?\s*$/;
 
-export function compile(input: string, language: Language = EXCEL, names?: Names): Compiled {
-  if (input.startsWith("=")) return language.compile(input.slice(1), names);
+export function compile(input: string, language: Language = EXCEL, names?: Names, tables?: Tables): Compiled {
+  if (input.startsWith("=")) return language.compile(input.slice(1), names, tables);
   if (input === "") return { kind: "constant", value: null };
   return { kind: "constant", value: NUMERIC.test(input) ? Number(input) : input };
 }
@@ -108,6 +108,7 @@ export class Sheet {
   #language: Language;
   readonly #context: Context;
   readonly #names = new Map<string, [Addr, Addr]>();
+  readonly #tables = new Map<string, TableDef>();
   readonly #areas = new Map<string, string[]>();          // a formula -> the cells its array covers (or would)
   readonly #spills = new Map<string, ArrayValue>();       // a formula -> the array it spills
   readonly #spilledBy = new Map<string, string>();        // a cell -> the formula whose array it shows
@@ -241,7 +242,7 @@ export class Sheet {
   // (a conditional style): its value, or the error it came to.
   evaluate(formula: string): Promise<Value> {
     return this.#inTurn(async () => {
-      const f = this.#language.compile(formula, (n) => this.#names.get(n) ?? null);
+      const f = this.#language.compile(formula, (n) => this.#names.get(n) ?? null, (n) => this.#tables.get(n.toUpperCase()) ?? null);
       const r = f.kind === "broken" ? f.error : (await f.run(this.#env())) ?? null;
       return isArray(r) ? r.values[0] ?? null : r;
     });
@@ -265,6 +266,24 @@ export class Sheet {
     });
   }
 
+  // The tables, by name; one by its name (any case).
+  tables(): TableDef[] {
+    return [...this.#tables.values()].sort((x, y) => (x.name.toUpperCase() < y.name.toUpperCase() ? -1 : 1));
+  }
+
+  table(n: string): TableDef | null {
+    return this.#tables.get(n.toUpperCase()) ?? null;
+  }
+
+  // A table defined (or redefined), or deleted (null): every formula
+  // compiled again, as any may read it.
+  defineTable(n: string, t: TableDef | null): Promise<string[]> {
+    return this.#inTurn(() => {
+      if (t) this.#tables.set(n.toUpperCase(), t); else this.#tables.delete(n.toUpperCase());
+      return this.#recomputeAll();
+    });
+  }
+
   // Everything compiled and worked out again, as after a language's setup
   // script ran, or a sheet was added to the workbook or deleted from it.
   recalculate(): Promise<string[]> {
@@ -284,7 +303,7 @@ export class Sheet {
   }
 
   #compile(key: string): void {
-    const c = compile(this.input(key), this.#language, (n) => this.#names.get(n) ?? null);
+    const c = compile(this.input(key), this.#language, (n) => this.#names.get(n) ?? null, (n) => this.#tables.get(n.toUpperCase()) ?? null);
     this.#compiled.set(key, c);
     this.#link(key, new Set(c.kind === "formula" ? c.reads.map((k) => this.#local(k) ?? k) : []));
   }

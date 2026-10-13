@@ -9,12 +9,15 @@
 // RexxJS compound variable, so sae takes _), and its ranges are strings,
 // SUM_RANGE("Costs!B1:B3").
 import { addrOf, keyOf, parseRange, qualified, range } from "./address.ts";
-import type { Env, Formula, Language, Names } from "./language.ts";
+import type { Env, Formula, Language, Names, Tables } from "./language.ts";
+import { aggregate, groupBy, pluck, queryOf, result, where } from "./query.ts";
+import type { Query } from "./query.ts";
+import { array } from "./values.ts";
 import type { Addr } from "./address.ts";
 import type { Edit } from "./shift.ts";
 import { RexxInterpreter, parse } from "./rexxjs.js";
 import { CellError } from "./values.ts";
-import type { Value } from "./values.ts";
+import type { Result, Value } from "./values.ts";
 import { colName } from "./address.ts";
 import { sparkline } from "./charts.ts";
 
@@ -30,7 +33,7 @@ const SHEET_CELL = /^(\w+)_([A-Za-z]+\d+)$/;
 
 const lastLine = (e: unknown): string => String((e as Error)?.message ?? e).split("\n").pop()!;
 
-function readsOf(formula: string, names?: Names): string[] {
+function readsOf(formula: string, names?: Names, tables?: Tables): string[] {
   const reads = new Set<string>();
   for (const m of formula.matchAll(REFS)) {
     const sheet = m[1] ?? m[2];
@@ -45,7 +48,7 @@ function readsOf(formula: string, names?: Names): string[] {
   }
   // A named range's cells, wherever its name is (bare, or in a string).
   for (const m of formula.matchAll(/[A-Za-z_]\w*/g)) {
-    const r = names?.(m[0].toUpperCase());
+    const r = names?.(m[0].toUpperCase()) ?? tables?.(m[0])?.range;
     if (r) for (const k of range(r[0], r[1])) reads.add(k);
   }
   return [...reads];
@@ -57,11 +60,32 @@ function sheetCell(name: string): string | null {
   return m && a ? qualified(m[1], keyOf(a)) : null;
 }
 
-// A number where RexxJS gives one; text, or the JSON of what it built.
-function fromRexx(v: unknown): Value {
+// What the query functions give along a pipe: a query, or rows of values (a
+// column, or each group's key beside its aggregate); a cell spills either.
+// Each is a class instance, as the app's RangeQuery is: RexxJS passes those
+// along a pipe as they are, where it converts plain objects holding arrays.
+class Piped {
+  readonly q: Query;
+  constructor(q: Query) { this.q = q; }
+}
+class Rows {
+  readonly rows: readonly (readonly Value[])[];
+  constructor(rows: readonly (readonly Value[])[]) { this.rows = rows; }
+}
+const rowsOf = (rows: readonly (readonly Value[])[]): Rows => new Rows(rows);
+const spilled = (rows: readonly (readonly Value[])[]): Result => {
+  const width = Math.max(1, ...rows.map((r) => r.length));
+  return rows.length ? array(rows.length, width, rows.flatMap((r) => Array.from({ length: width }, (_, i) => r[i] ?? null))) : null;
+};
+
+// A number where RexxJS gives one; text; rows spilled; or the JSON of what
+// it built.
+function fromRexx(v: unknown): Result {
   if (v === undefined || v === null) return null;
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "number" || typeof v === "string") return v;
+  if (v instanceof Piped) return spilled(result(v.q));
+  if (v instanceof Rows) return spilled(v.rows);
   return JSON.stringify(v);
 }
 
@@ -90,16 +114,53 @@ function criterion(condition: string): (n: number) => boolean {
   }
 }
 
+// Gives an interpreter the sheet's functions. RexxJS looks among its
+// built-ins before the functions it is given, and has a GROUP_BY of its own
+// (over arrays, through an argument converter); the sheet's name wins, so a
+// built-in it shadows goes, its converter with it.
+export function install(it: RexxInterpreter, functions: Record<string, (...args: any[]) => unknown>): void {
+  for (const name of Object.keys(functions)) {
+    delete it.builtInFunctions[name];
+    delete it.builtInFunctions[`${name}_positional_args_to_named_param_map`];
+  }
+  Object.assign(it.externalFunctions, functions);
+}
+
 // The app's range functions over `read`, a cell's value as RexxJS sees it.
-export function rangeFunctions(read: (key: string) => unknown, names: () => Names | undefined = () => undefined): Record<string, (...args: any[]) => unknown> {
-  const values = (ref: string): unknown[] => {
-    // "Costs!B1:B3" is on Costs; a name is on this sheet.
+export function rangeFunctions(read: (key: string) => unknown, names: () => Names | undefined = () => undefined,
+  tables: () => Tables | undefined = () => undefined): Record<string, (...args: any[]) => unknown> {
+  // A range's corners and the keys to read its cells by: "Costs!B1:B3" is
+  // on Costs; a name is on this sheet.
+  const located = (ref: string): { r: [Addr, Addr]; key: (k: string) => string } => {
     const m = /^\s*(?:'([^']+)'|([^'!]+))!(.*)$/.exec(String(ref));
     const sheet = m ? (m[1] ?? m[2]).trim() : null;
     const r = sheet !== null ? parseRange(m![3]) : parseRange(String(ref)) ?? names()?.(String(ref).trim().toUpperCase());
     if (!r) throw new Error(`Invalid range: ${ref}`);
-    return [...range(r[0], r[1])].map((k) => read(sheet !== null ? qualified(sheet, k) : k));
+    return { r, key: (k) => (sheet !== null ? qualified(sheet, k) : k) };
   };
+  const values = (ref: string): unknown[] => {
+    const { r, key } = located(ref);
+    return [...range(r[0], r[1])].map((k) => read(key(k)));
+  };
+  // A range as rows of values, and its first column.
+  const grid = (r: [Addr, Addr], key: (k: string) => string = (k) => k) => {
+    const left = Math.min(r[0].col, r[1].col), right = Math.max(r[0].col, r[1].col);
+    const rows: Value[][] = [];
+    for (let row = Math.min(r[0].row, r[1].row); row <= Math.max(r[0].row, r[1].row); row++) {
+      const line: Value[] = [];
+      for (let col = left; col <= right; col++) {
+        const v = read(key(keyOf({ col, row })));
+        line.push(v === "" ? null : (v as Value));
+      }
+      rows.push(line);
+    }
+    return { rows, left };
+  };
+  const query = (q: unknown, fn: string): Query => {
+    if (!(q instanceof Piped)) throw new Error(`${fn} takes a query: RANGE(...) or TABLE(...) |> ${fn}(...)`);
+    return q.q;
+  };
+  const aggregated = (a: number | [string, number][]) => (typeof a === "number" ? a : rowsOf(a));
   return {
     SUM_RANGE: (r: string) => numbers(values(r)).reduce((s, n) => s + n, 0),
     AVERAGE_RANGE: (r: string) => {
@@ -150,6 +211,46 @@ export function rangeFunctions(read: (key: string) => unknown, names: () => Name
       return numbers(values(r)).filter(ok).length;
     },
     CELL: (ref: string) => values(ref)[0],
+    // The app's queries (query.ts): RANGE("A1:D9") |> WHERE("amount > 100")
+    // |> GROUP_BY("region") |> SUM("amount"). WHERE's condition is RexxJS,
+    // worked out on an interpreter of its own a row at a time, each column's
+    // name (or column_C) bound to the row's value.
+    RANGE: (ref: string) => {
+      const { r, key } = located(ref), g = grid(r, key);
+      return new Piped(queryOf(g.rows, g.left));
+    },
+    TABLE: (name: string) => {
+      const t = tables()?.(String(name));
+      if (!t) throw new Error(`no table ${name}`);
+      const g = grid(t.range);
+      return new Piped(t.columns ? queryOf(g.rows, g.left, t.columns)
+        : t.headers ? queryOf(g.rows.slice(1), g.left, g.rows[0].map((v) => String(v ?? ""))) : queryOf(g.rows, g.left, null));
+    },
+    WHERE: async (q: unknown, condition: string) => {
+      const it = new RexxInterpreter(null, { output: () => {} });
+      const test = parse(`LET OK = (${condition})`);
+      // A name that is no column is an error, not Rexx's unset variable
+      // (its own name), which would compare as text.
+      let col: (name: string) => Value | undefined = () => undefined;
+      it.variableResolver = (name: string) => {
+        const v = col(name);
+        if (v === undefined) throw new Error(`no column ${name.toLowerCase()}`);
+        return v ?? "";
+      };
+      return new Piped(await where(query(q, "WHERE"), async (c) => {
+        col = c;
+        await it.run(test);
+        const ok = it.getVariable("OK");
+        if (ok !== true && ok !== false && ![0, 1, "0", "1"].includes(ok)) throw new Error(`WHERE's condition is not true or false: ${condition}`);
+        return ok === true || ok === 1 || ok === "1";
+      }));
+    },
+    PLUCK: (q: unknown, column: string) => rowsOf(pluck(query(q, "PLUCK"), column)),
+    GROUP_BY: (q: unknown, column: string) => new Piped(groupBy(query(q, "GROUP_BY"), column)),
+    SUM: (q: unknown, column: string) => aggregated(aggregate(query(q, "SUM"), "sum", column)),
+    AVG: (q: unknown, column: string) => aggregated(aggregate(query(q, "AVG"), "avg", column)),
+    COUNT: (q: unknown) => aggregated(aggregate(query(q, "COUNT"), "count")),
+    RESULT: (q: unknown) => rowsOf(result(query(q, "RESULT"))),
     SPARKLINE_RANGE: (r: string) => sparkline(numbers(values(r))),
   };
 }
@@ -189,6 +290,7 @@ export class RexxLanguage implements Language {
   readonly #functions: Record<string, (...args: any[]) => unknown>;
   #env: Env | null = null;
   #names: Names | undefined;
+  #tables: Tables | undefined;
   #errorRead: CellError | null = null;
 
   constructor() {
@@ -204,8 +306,9 @@ export class RexxLanguage implements Language {
       const vs = [...range(r[0], r[1])].map((k) => this.#read(k));
       return vs.length === 1 ? vs[0] : vs;
     };
-    this.#functions = { ...rangeFunctions((k) => this.#read(k), () => this.#names), ...STYLE_FUNCTIONS };
-    Object.assign(this.#it.externalFunctions, this.#functions, {
+    this.#functions = { ...rangeFunctions((k) => this.#read(k), () => this.#names, () => this.#tables), ...STYLE_FUNCTIONS };
+    install(this.#it, {
+      ...this.#functions,
       // A formula only reads: scripts change cells (script.ts).
       SETCELL: () => {
         throw new Error("SETCELL changes the sheet: run it in a script, not a formula");
@@ -239,7 +342,7 @@ export class RexxLanguage implements Language {
     }
   }
 
-  compile(formula: string, names?: Names): Formula {
+  compile(formula: string, names?: Names, tables?: Tables): Formula {
     const statements = /^\s*LET\b/i.test(formula) || formula.includes("\n");
     let commands: unknown;
     try {
@@ -249,10 +352,11 @@ export class RexxLanguage implements Language {
     }
     return {
       kind: "formula",
-      reads: readsOf(formula, names),
+      reads: readsOf(formula, names, tables),
       run: async (env) => {
         this.#env = env;
         this.#names = names;
+        this.#tables = tables;
         this.#errorRead = null;
         try {
           await this.#it.run(commands);

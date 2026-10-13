@@ -27,6 +27,7 @@ import type { Look } from "./formats.ts";
 import { CHART_KINDS } from "./charts.ts";
 import type { ChartKind } from "./charts.ts";
 import type { ChartSpec } from "./workbook.ts";
+import type { TableDef } from "./language.ts";
 import { deleted, inserted, movedBy, restructured } from "./shift.ts";
 import type { Scope } from "./shift.ts";
 import { found, replaced, sortMoves, sorted } from "./sortfind.ts";
@@ -155,6 +156,7 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     page.frozen = s.view.frozenRows;
     page.heights = new Map(s.view.rowHeights);
     page.merges = s.merges.map((m) => parseRange(m)!);
+    for (const t of s.tables) await wb.sheet.defineTable(t.name, t);
   }
   wb.activate(file.sheets[0].name);
   wb.name = file.name;
@@ -227,6 +229,10 @@ function restructure(how: "insert" | "delete", axis: "row" | "col") {
       const to = edit.range(m[0], m[1], still, still);
       return to && keyOf(to[0]) !== keyOf(to[1]) ? [to] : [];
     });
+    for (const t of wb.sheet.tables()) {
+      const to = edit.range(t.range[0], t.range[1], still, still);
+      await wb.sheet.defineTable(t.name, to ? { ...t, range: to } : null);
+    }
     if (axis === "row") {
       page.heights = new Map([...page.heights].flatMap(([row, h]): [number, number][] => {
         const to = edit.cell({ col: 0, row }, still);
@@ -344,6 +350,14 @@ function hiding(rows: boolean, hide: boolean) {
     for (const i of at) if (hide) set.add(i); else set.delete(i);
     return changedBy(wb, wb.sheet.keys(), `${hide ? "hid" : "showed"} ${said}`);
   };
+}
+
+// A table's columns' names: given, or its first row's, or its letters.
+function tableColumns(wb: Workbook, t: TableDef): string[] {
+  const left = Math.min(t.range[0].col, t.range[1].col), right = Math.max(t.range[0].col, t.range[1].col);
+  const cols = Array.from({ length: right - left + 1 }, (_, i) => left + i);
+  if (t.columns) return [...t.columns];
+  return cols.map((col) => (t.headers ? show(wb.sheet.value(keyOf({ col, row: t.range[0].row }))) : colName(col)));
 }
 
 // Two ranges that share a cell.
@@ -863,6 +877,35 @@ const SPECS: readonly Spec[] = [
       const page = wb.page(wb.active)!, { at, said } = spanOf(rangeOf(p.range), true);
       for (const row of at) if (h) page.heights.set(row, h); else page.heights.delete(row);
       return changedBy(wb, [], h ? `${said} ${at.length > 1 ? "are" : "is"} ${h} high` : `${said} ${at.length > 1 ? "are" : "is"} as tall as the grid's`);
+    },
+  },
+  {
+    id: "table.define", label: "Define Table", params: ["name", "range"], optional: ["headers", "columns"], journaled: true,
+    run: async (wb, p) => {
+      const name = p.name.trim();
+      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name)) refuse(`${p.name} is not a table name: a letter first, then letters, digits or _`);
+      const r = rangeOf(p.range), width = Math.abs(r[0].col - r[1].col) + 1;
+      const columns = p.columns === undefined ? null : p.columns.split(",").map((c) => c.trim());
+      if (columns && columns.length !== width) refuse(`${name} has ${width} columns, and ${columns.length} name${columns.length === 1 ? "" : "s"}`);
+      const headers = p.headers === undefined ? !columns : flag(p.headers);
+      const corners: [Addr, Addr] = [topLeft(r), { col: Math.max(r[0].col, r[1].col), row: Math.max(r[0].row, r[1].row) }];
+      const changed = await wb.sheet.defineTable(name, { name, range: corners, headers, columns });
+      return changedBy(wb, changed, `${name} is ${rangeName(corners)}, with columns ${tableColumns(wb, wb.sheet.table(name)!).join(", ")}`);
+    },
+  },
+  {
+    id: "table.delete", label: "Delete Table", params: ["name"], journaled: true,
+    run: async (wb, p) => {
+      const t = wb.sheet.table(p.name) ?? refuse(`no table ${p.name}`);
+      const changed = await wb.sheet.defineTable(t.name, null);
+      return changedBy(wb, changed, `deleted ${t.name}`);
+    },
+  },
+  {
+    id: "table.list", label: "Tables", params: [], journaled: false,
+    run: async (wb) => {
+      const listed = wb.sheet.tables().map((t) => `${t.name} ${rangeName(t.range)} (${tableColumns(wb, t).join(", ")})`);
+      return { ok: true, message: listed.length ? listed.join("; ") : "no tables", changed: [], output: listed };
     },
   },
   {

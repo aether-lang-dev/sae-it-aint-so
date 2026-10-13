@@ -663,6 +663,23 @@ main() {
             spec.assert_true(g.wait_cell("H", 11, "7"), "entered: =H10")
             spec.assert_eq(g.cell_has("H", 10, "1f6fd1"), 0, "the outline gone")
         }
+        spec.it("the Tauri app's query functions: a table by name, WHERE, GROUP_BY and SUM along a pipe, spilled") callback {
+            g.command("sheet.add name=Sales")
+            g.command("formulas.use language=RexxJS")
+            g.script("LET r = SETCELL('A1', 'region'); LET r = SETCELL('B1', 'amount'); LET r = SETCELL('A2', 'North'); LET r = SETCELL('B2', 120); LET r = SETCELL('A3', 'South'); LET r = SETCELL('B3', 80); LET r = SETCELL('A4', 'North'); LET r = SETCELL('B4', 40)")
+            spec.assert_true(g.wait_cell("B", 4, "40"), "the data, from a script")
+            g.command("table.define name=Sales range=A1:B4 headers=1")
+            spec.assert_true(b.wait_for_text("Sales is A1:B4, with columns region, amount"), "defined")
+            g.enter("D1", "=TABLE(\"sales\") |> GROUP_BY(\"region\") |> SUM(\"amount\")")
+            spec.assert_true(g.wait_cell("D", 1, "North"), "each group's key")
+            spec.assert_true(g.wait_cell("E", 1, "160"), "beside its sum")
+            spec.assert_true(g.wait_cell("E", 2, "80"), "a row a group")
+            g.enter("D4", "=TABLE(\"Sales\") |> WHERE(\"amount > 50\") |> COUNT()")
+            spec.assert_true(g.wait_cell("D", 4, "2"), "WHERE's condition is RexxJS over the row")
+            g.enter("B3", "10")
+            spec.assert_true(g.wait_cell("E", 2, "10"), "a query follows its cells")
+            spec.assert_true(g.wait_cell("D", 4, "1"), "and so does the count")
+        }
     }
     return spec.run_summary(fw)
 }

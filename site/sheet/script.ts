@@ -6,7 +6,7 @@
 // own: the formulas' interpreter is busy whenever a change it makes is
 // being worked out.
 import { addrOf, keyOf } from "./address.ts";
-import { rangeFunctions } from "./rexx.ts";
+import { install, rangeFunctions } from "./rexx.ts";
 import { RexxInterpreter, parse } from "./rexxjs.js";
 
 export interface Outcome {
@@ -54,7 +54,8 @@ export async function runScript(text: string, host: ScriptHost, say: (line: stri
     methods: {},
     metadata: { name: "sheet" },
   });
-  Object.assign(it.externalFunctions, rangeFunctions((k) => host.get(k)), {
+  install(it, {
+    ...rangeFunctions((k) => host.get(k)),
     SETCELL: async (cell: string, input: unknown) => {
       const o = await host.set(String(cell), String(input ?? ""));
       if (!o.ok) throw new Error(o.message);

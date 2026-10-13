@@ -11,14 +11,17 @@
 // ranges (names: { QTY: "B2:B4" }), conditional-format rules (rules.ts's,
 // their ranges as text), charts ({ kind, range, title }) and how it is viewed
 // (view: { hiddenRows, hiddenCols, frozenRows, rowHeights }, 0-based), its
-// merged cells (merges: ["A1:C1"]), and the workbook's other sheets
-// (sheets: [{ name, cells, names, rules, charts, view, merges }]).
+// merged cells (merges: ["A1:C1"]), its tables (tables: [{ name, range,
+// headers, columns }], the Tauri app's table metadata), and the workbook's
+// other sheets (sheets: [{ name, cells, names, rules, charts, view, merges,
+// tables }]).
 // writeSheetFile writes it all.
 import { addrOf, order, parseRange } from "./address.ts";
 import { ICONS, rangeName } from "./rules.ts";
 import type { CfRule } from "./rules.ts";
 import { CHART_KINDS } from "./charts.ts";
 import type { ChartKind } from "./charts.ts";
+import type { TableDef } from "./language.ts";
 import type { ChartSpec } from "./workbook.ts";
 import { show } from "./format.ts";
 import type { Note } from "./notes.ts";
@@ -37,6 +40,7 @@ export interface FileSheet {
     readonly rowHeights: readonly [number, number][];
   };
   readonly merges: readonly string[];
+  readonly tables: readonly TableDef[];
 }
 
 export interface SheetFile {
@@ -113,7 +117,17 @@ function viewOf(v: any): FileSheet["view"] {
   return { hiddenRows: indexes(v?.hiddenRows), hiddenCols: indexes(v?.hiddenCols), frozenRows: Number.isInteger(v?.frozenRows) && v.frozenRows > 0 ? v.frozenRows : 0, rowHeights: heights };
 }
 
-function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown, charts: unknown, view: unknown, merges: unknown): FileSheet {
+// Tables as written ({ name, range, headers, columns }), read back.
+function tablesOf(tables: unknown): TableDef[] {
+  if (!Array.isArray(tables)) return [];
+  return tables.flatMap((t: any): TableDef[] => {
+    const r = parseRange(String(t?.range ?? ""));
+    if (!r || !/^[A-Za-z][A-Za-z0-9_]*$/.test(String(t?.name ?? ""))) return [];
+    return [{ name: String(t.name), range: r, headers: t.headers !== false, columns: Array.isArray(t.columns) ? t.columns.map(String) : null }];
+  });
+}
+
+function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: unknown, charts: unknown, view: unknown, merges: unknown, tables: unknown): FileSheet {
   const list = Object.entries(cells ?? {}).map(([k, c]): [string, string | FileCell] => [k.toUpperCase(), c]);
   return {
     name,
@@ -124,6 +138,7 @@ function sheetOf(name: string, cells: Cells | undefined, names: unknown, rules: 
     charts: chartsOf(charts),
     view: viewOf(view),
     merges: Array.isArray(merges) ? merges.map(String).filter((m) => parseRange(m)) : [],
+    tables: tablesOf(tables),
   };
 }
 
@@ -134,8 +149,8 @@ export function readSheetFile(data: any): SheetFile {
     language: String(data?.formulas ?? "").toLowerCase() === "excel" ? "Excel" : "RexxJS",
     setupScript: String(data?.setupScript ?? ""),
     sheets: [
-      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules, data?.charts, data?.view, data?.merges),
-      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules, s?.charts, s?.view, s?.merges)),
+      sheetOf(String(data?.sheetName ?? "Sheet1"), data?.cells, data?.names, data?.rules, data?.charts, data?.view, data?.merges, data?.tables),
+      ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s?.cells, s?.names, s?.rules, s?.charts, s?.view, s?.merges, s?.tables)),
     ],
   };
 }
@@ -160,6 +175,7 @@ function cellsOf(page: Page): Cells {
 
 const namesOf = (page: Page): Record<string, string> => Object.fromEntries(page.sheet.names());
 const rulesIn = (page: Page) => page.rules.map((r) => ({ ...r, range: rangeName(r.range) }));
+const tablesIn = (page: Page) => page.sheet.tables().map((t) => ({ name: t.name, range: rangeName(t.range), headers: t.headers, columns: t.columns }));
 const chartsIn = (page: Page) => page.charts.map((c) => ({ kind: c.kind, range: rangeName(c.range), title: c.title }));
 const up = (a: number, b: number) => a - b;
 const viewIn = (page: Page) => ({
@@ -181,6 +197,7 @@ export function writeSheetFile(wb: Workbook) {
     charts: chartsIn(first),
     view: viewIn(first),
     merges: first.merges.map(rangeName),
-    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p), view: viewIn(p), merges: p.merges.map(rangeName) })),
+    tables: tablesIn(first),
+    sheets: others.map((p) => ({ name: p.name, cells: cellsOf(p), names: namesOf(p), rules: rulesIn(p), charts: chartsIn(p), view: viewIn(p), merges: p.merges.map(rangeName), tables: tablesIn(p) })),
   };
 }
