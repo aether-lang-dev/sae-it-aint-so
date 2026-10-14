@@ -898,7 +898,7 @@ against demo 18 unchanged, in scripts (`script.ts`) and through
 (`SETCELLEDITOR`: a dropdown or checkbox in a cell), moving columns,
 renaming sheets.
 
-### 3. The external control bus (written up; waiting on a decision)
+### 3. The external control bus (decided 2026-10-14; ready to build)
 
 The app can be driven from another process, ARexx-style: `postMessage` in
 a browser, HTTP on `localhost:8083` with a token in Tauri
@@ -916,8 +916,9 @@ sandbox. Two ways it could:
 Either needs a page-API function, a service, an attempt in
 `tests/escape/` and a spec. This is a browser-architecture decision, so
 (a) is written up with its security rules in `docs/control-bus.md`, for
-Paul and Nic to decide on before any code (decided: (a) now, (b) later): its section 5 lists the six
-decisions. Nothing is built until they are made.
+Paul and Nic to decide on before any code: its section 5 has the six
+decisions, all made (2026-10-14): (a) now, (b) later, off until switched
+on at launch, the sealed wire after aeo.
 
 ### 4. Undo for everything (done, 2026-10-13)
 

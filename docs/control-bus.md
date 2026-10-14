@@ -1,9 +1,11 @@
 # A control bus: may an installed app accept local connections?
 
-A design note for Paul and Nic to decide on. Nothing here is built.
+A design note, decided by Paul (2026-10-14). Nothing here is built yet.
 Decided so far (section 5): option (a), an app-mode service, now, and
 option (b), messages between pages, later; off until the person switches
-it on at launch. Decisions 3 to 6 are open. It is
+it on at launch; the sealed wire after aeo, the courier file, a stronger
+installer warning with fs, documents or shell, and the same wire beyond the
+local machine later. All six are decided: (a) is ready to build. It is
 step 3 of the spreadsheet plan (`docs/spreadsheet_demo_done_and_todo.md`):
 steps 1 and 2 brought over the Tauri spreadsheet's query functions and its
 control functions. That leaves its control bus, which lets another process
@@ -269,20 +271,24 @@ program drive an app, which is what the ARexx comparison is about.
 2. **Off until the person opts in at launch?** **Decided (Paul,
    2026-10-14): yes.** Declared by the app, switched on by the person at
    each launch (`--control-bus`, or a window toggle), as a microphone is.
-3. **The wire:** HTTP on loopback with every request and reply sealed with
-   the courier key (rule 5, after aeo), and RexxJS's `ADDRESS` taught the
-   envelope? The alternatives were the Tauri app's plain HTTP and bearer
-   token (its clients unchanged, but nothing proves to a client it reached
-   sae), and a Unix socket (file permissions as the gate, but a new
-   transport for every client). My suggestion: the sealed wire, with
-   aeo's modules shared.
-4. **The installer's wording** for an app with `controlBus`, and whether
-   `controlBus` together with `fs` or `shell` needs a stronger warning than
-   either alone.
-5. **The courier file**: `$APPDATA/.control-bus`, readable only by the
-   user, holding the address and the key, as the way a client finds sae and
-   gets its key? (The alternative is a key the person copies out of the
-   window: clumsier, and the key on screen.)
-6. **Beyond the local machine, later:** the same sealed wire with the key
-   carried out of band (as aeo does), and TLS with a pinned certificate
-   only if clients we do not write must connect?
+3. **The wire.** **Decided (Paul, 2026-10-14): the sealed wire.** HTTP on
+   loopback with every request and reply sealed with the courier key (rule
+   5, after aeo), RexxJS's `ADDRESS` taught the envelope, and aeo's
+   `secure_channel` and `agent_auth` shared rather than copied. (Weighed and
+   not taken: the Tauri app's plain HTTP and bearer token, which proves
+   nothing to a client about whom it reached; a Unix socket, a new
+   transport for every client.)
+4. **The installer's wording.** **Decided (Paul, 2026-10-14): yes, a
+   stronger warning for the combination.** An app with `controlBus` is
+   listed as "Other programs you run can control this app, while you have
+   it switched on". With `fs`, `documents` or `shell` as well, the warning
+   says what that adds up to: "Other programs you run could then read and
+   write your files (or open links) through this app".
+5. **The courier file.** **Decided (Paul, 2026-10-14): yes.**
+   `$APPDATA/.control-bus`, readable only by the user, holding the address
+   and the key: how a client finds sae and gets its key. (Not a key copied
+   out of the window: clumsier, and the key on screen.)
+6. **Beyond the local machine, later.** **Decided (Paul, 2026-10-14):
+   yes.** The same sealed wire, the key carried to the other machine out of
+   band (as aeo does), sae binding an address the person names; TLS with a
+   pinned certificate only if clients we do not write must connect.
