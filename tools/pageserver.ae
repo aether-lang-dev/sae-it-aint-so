@@ -32,7 +32,7 @@ page_file_(site: *Site, path: string) -> string {
 
 // Routes for the pages of <site>/<sub> (sub "" or "lib/", say), and of its
 // subdirectories, four levels deep (a page's modules can be in folders of
-// folders: site/sheet/view/).
+// folders).
 route_dir_(server: ptr, site: *Site, sub: string) {
     l, lerr = dir.list("${site.dir}/${sub}")
     if lerr != "" {

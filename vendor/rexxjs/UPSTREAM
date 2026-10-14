@@ -1,3 +1,0 @@
-https://github.com/RexxJS/RexxJS d27c738f12e9734cbfc2c42b352620b296a66860
-The closure of core/src/interpreter.js and core/src/parser.js, by tools/bundle-rexxjs.mjs,
-with patches/*.patch applied.

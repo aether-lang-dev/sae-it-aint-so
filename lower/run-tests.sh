@@ -17,16 +17,28 @@
 #                   count as for run/. tests/mod/golden/*.ts are lowered and
 #                   compared with their .js, the exact rewrite.
 #
+#   --mod DIR       only the module tests in DIR, another repo's (an app
+#                   built on sae, such as ../example-app-spreadsheet), run
+#                   as tests/mod's are; their output goes to DIR/../target
+#                   or $SAE_LOWER_OUT.
+#
 # Needs target/saelower and target/saejs (see the README).
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LOWER="$ROOT/target/saelower"
 SAEJS=${SAEJS:-$ROOT/target/saejs}
+MOD="$ROOT/lower/tests/mod"
 OUT="$ROOT/target/lower-tests"
+only_mod=0
+if [ "${1:-}" = --mod ]; then
+    MOD=$(cd "$2" && pwd)
+    OUT=${SAE_LOWER_OUT:-$MOD/../target/lower-tests}
+    only_mod=1
+fi
 mkdir -p "$OUT"
 pass=0
 fail=0
 
-for t in "$ROOT"/lower/tests/run/*.ts; do
+[ $only_mod -eq 1 ] || for t in "$ROOT"/lower/tests/run/*.ts; do
     name=$(basename "$t" .ts)
     if ! "$LOWER" "$t" > "$OUT/$name.js" 2> "$OUT/$name.err"; then
         echo "FAIL run/$name: lowering failed: $(cat "$OUT/$name.js" "$OUT/$name.err")"
@@ -52,7 +64,7 @@ for t in "$ROOT"/lower/tests/run/*.ts; do
 done
 
 # An err/module_*.ts is lowered as a module (--module).
-for t in "$ROOT"/lower/tests/err/*.ts; do
+[ $only_mod -eq 1 ] || for t in "$ROOT"/lower/tests/err/*.ts; do
     name=$(basename "$t" .ts)
     want=$(sed -n 's|^// error: ||p' "$t")
     mode=""
@@ -89,11 +101,11 @@ loaded=""
 load_module() {   # load_module BUNDLE IMPORTER-KEY SPEC
     case "$3" in
         sae:*) set -- "$1" "$3" "$ROOT/lib/sae/${3#sae:}.ts" ;;
-        *) set -- "$1" "$(cd "$ROOT/lower/tests/mod/$(dirname "$2")" && cd "$(dirname "$3")" && pwd)/$(basename "$3")" ;;
+        *) set -- "$1" "$(cd "$MOD/$(dirname "$2")" && cd "$(dirname "$3")" && pwd)/$(basename "$3")" ;;
     esac
     case "$2" in
         sae:*) ;;
-        *) set -- "$1" "${2#$ROOT/lower/tests/mod/}" "$2" ;;
+        *) set -- "$1" "${2#$MOD/}" "$2" ;;
     esac
     # now: $1 bundle, $2 key, $3 file
     case " $loaded " in *" $2 "*) return 0 ;; esac
@@ -114,7 +126,7 @@ load_module() {   # load_module BUNDLE IMPORTER-KEY SPEC
     { printf '__module("%s", ' "$2"; cat "$OUT/mod.js"; echo ");"; } >> "$1"
 }
 
-for t in "$ROOT"/lower/tests/mod/*.ts; do
+for t in "$MOD"/*.ts; do
     name=$(basename "$t" .ts)
     if ! "$LOWER" "$t" > "$OUT/mod_$name.page.js" 2> "$OUT/mod_$name.err"; then
         echo "FAIL mod/$name: lowering failed: $(cat "$OUT/mod_$name.page.js" "$OUT/mod_$name.err")"
@@ -154,7 +166,7 @@ done
 
 # --- golden: the exact rewrite ---
 
-for t in "$ROOT"/lower/tests/mod/golden/*.ts; do
+[ $only_mod -eq 1 ] || for t in "$MOD"/golden/*.ts; do
     name=$(basename "$t" .ts)
     mode=""
     case "$name" in module_*) mode="--module" ;; esac

@@ -300,9 +300,9 @@ page's seeks, then the call.
 **Built (2026-10-14):** `documents` in app mode on the desktop, through
 aether-ui's `open_file` and `save_file` (headless in specs: the driver
 answers the picker); handles last as long as the app runs;
-`tests/spec_app_documents.ae`; demo 18 as an app (`sae --app site`,
-`site/app.json`) opens and saves workbooks and CSV through it
-(`tests/spec_app_sheet_files.ae`). `fs` moved under `sandbox.enforce` too.
+`tests/spec_app_documents.ae`; demo 18 as an app (now
+RexxJS/example-app-spreadsheet) opens and saves workbooks and CSV through
+it (its `tests/specs/spec_app_sheet_files.ae`). `fs` moved under `sandbox.enforce` too.
 
 **Next, in order:**
 

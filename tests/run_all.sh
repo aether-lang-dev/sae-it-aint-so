@@ -39,7 +39,7 @@ T=$ROOT/target
 # Fresh app storage and shell logs every run: the specs that use them expect
 # a first launch (pomatez's tasks were left from the run before, so its
 # "2 to do" read 3 and failed on every run after the first).
-rm -rf "$T/spec-storage" "$T/sheet-storage" "$T/caps-appdata" "$T/globals-appdata" \
+rm -rf "$T/spec-storage" "$T/caps-appdata" "$T/globals-appdata" \
        "$T/spec-shell.log" "$T/caps-shell.log"
 # label | environment (space-separated NAME=value) | command
 TABLE="
@@ -58,7 +58,6 @@ spec_reactive||spec spec_reactive
 spec_terrain||spec spec_terrain
 spec_life||spec spec_life
 spec_algos||spec spec_algos
-spec_sheet|AETHER_UI_TEST_CLIPBOARD=1 SAE_STORAGE_DIR=$T/sheet-storage|spec spec_sheet
 spec_keys||spec spec_keys
 spec_grid||spec spec_grid
 spec_aevg||spec spec_aevg
@@ -70,11 +69,9 @@ spec_app_caps|SAE_TEST_APP=tests/apps/caps SAE_APPDATA_DIR=$T/caps-appdata SAE_S
 spec_app_climb|SAE_TEST_APP=tests/apps/climb|spec spec_app_climb
 spec_app_documents|AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents|spec spec_app_documents
 spec_app_bus|SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$T/bus-appdata SAE_TEST_APP=tests/apps/bus|spec spec_app_bus
-spec_app_sheet_bus|SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$T/sheet-bus-appdata AETHER_UI_HEADLESS=1 SAE_TEST_APP=site|spec spec_app_sheet_bus
 spec_app_bus_off|SAE_APPDATA_DIR=$T/bus-off-appdata SAE_TEST_APP=tests/apps/bus|spec spec_app_bus_off
 spec_app_clipboard|AETHER_UI_HEADLESS=1 SAE_CLIP_READ=1 SAE_TEST_APP=tests/apps/clipboard|spec spec_app_clipboard
 spec_app_clipboard_write|AETHER_UI_HEADLESS=1 SAE_CLIP_READ=0 SAE_TEST_APP=tests/apps/clipboard_write|spec spec_app_clipboard
-spec_app_sheet_files|AETHER_UI_HEADLESS=1 SAE_TEST_APP=site|spec spec_app_sheet_files
 spec_app_httplist|SAE_TEST_APP=tests/apps/httplist|spec spec_app_httplist
 spec_app_imports|SAE_TEST_APP=tests/apps/imports|spec spec_app_imports
 spec_app_net|SAE_TEST_APP=tests/apps/net|spec spec_app_net

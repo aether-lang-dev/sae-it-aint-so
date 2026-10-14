@@ -325,8 +325,9 @@ service touches files, and each of its operations runs inside Aether's
 - `documents.pick_open(title)` and `documents.pick_save(name)`: the
   system's picker; a promise of a handle (`name`, `read_text()`,
   `write_text(text)`, both promises) or null when the person cancels. A
-  page never sees a path, and a handle reaches that one file only. Demo 18
-  run as an app (`sae --app site`) opens, saves and exports CSV through it.
+  page never sees a path, and a handle reaches that one file only. The
+  spreadsheet (RexxJS/example-app-spreadsheet, once demo 18) opens, saves
+  and exports CSV through it.
 - `shell.open(url)`: hands a URL to the system (the default browser), for
   the granted prefixes.
 - `sqlite.<name>`: the app's databases, declared in `app.json` under
@@ -342,7 +343,7 @@ service touches files, and each of its operations runs inside Aether's
   machine, while the person has started it with `--control-bus`: loopback
   only, a per-launch courier key in `$APPDATA/.control-bus`, every request
   and reply sealed with it (after aeo's agent channel; docs/control-bus.md).
-  Demo 18 run so answers the Tauri spreadsheet's REXX strings.
+  The spreadsheet (RexxJS/example-app-spreadsheet) run so answers its REXX strings.
 - A web page has no `fs`, no `documents`, no `shell` and no `sqlite` at all.
 
 A page says at its top which privileges it seeks, one per line:
@@ -877,8 +878,5 @@ yet: more of the `ui` surface, the bytecode cache, a Win32 build arm,
 ## Licence
 
 MIT (`LICENSE`), Copyright (c) 2026 Aether Contributors collectively, as
-aether-ui. Vendored code keeps its own: RexxJS is MIT (`vendor/rexxjs/LICENSE`),
-and what demo 18 takes from the Tauri spreadsheet (RexxJS/example-app-spreadsheet:
-its range functions in `site/sheet/rexx.ts`, its sample sheets in
-`site/sheet/samples.ts`) is MIT by its copyright holder's relicensing
-(`docs/tauri-spreadsheet-upstream-notes.md`).
+aether-ui. Demo 18, the spreadsheet, moved to RexxJS/example-app-spreadsheet
+on 2026-10-14 (its `app/`, MIT there too), with RexxJS's vendored copy.

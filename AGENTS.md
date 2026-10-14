@@ -22,14 +22,13 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `lib/sae/` | The `sae:` page standard library (`noise`, `scales`, `easing`), written in the dialect; `MANIFEST` holds their build-time hashes (`tools/hash-lib.sh`) |
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae` |
-| `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`; modules in folders four deep, `site/sheet/view/grid.ts`) |
+| `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`; modules in folders four deep) |
 | `tools/saelower.ae` | CLI for the lowerer, and `--from-svg` (an SVG as an AeVG-TS page) |
 | `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
-| `vendor/rexxjs/` | RexxJS's interpreter and parser (the closure of their requires) at the commit in `UPSTREAM`, plus `patches/*.patch` (sae's changes, each to go back upstream, with its jest spec); `node tools/bundle-rexxjs.mjs [../RexxJS]` re-vendors it, applies the patches and writes `site/sheet/rexxjs.js`, demo 18's "RexxJS formulas" (`--from-vendor` only bundles) |
+| `../example-app-spreadsheet` | Not here: demo 18, the spreadsheet, moved there on 2026-10-14 (its `app/`, with RexxJS vendored). It runs on this checkout (`sae -> ../sae`) and its `./run-tests.sh` runs sae's harnesses on its tests (`lower/run-tests.sh --mod`, `tests/run_spec.sh <path>.ae`); run it before pushing a change to a page API it uses (documents, clipboard, the control bus, the datagrid) |
 | `tests/escape/` | The escape corpus: one page per attempt to get out (README "Browser security rules"); `tests/spec_escape.ae` holds each to "refused, logged once". A new browser rule is not done until its attempt is here |
 | `tests/lib/saedriver.ae` | The browser-test driver: Tsyne's TsyneBrowserTest verbs (navigate, back, forward, reload, current_url, assert_url, screenshot) plus page, vg and console queries, on aether-ui's uidriver |
-| `tests/lib/griddriver.ae` | Verbs for a `ui.datagrid` page with a formula bar (a cell by column and row, enter, the in-cell editor, header grips, a field by placeholder) and a command bar (`command`, `script`: the spreadsheet's seam, driven as a person would), for `spec_sheet` |
-| `tests/run_spec.sh` | Starts the page server and sae-driver, runs a spec, stops both |
+| `tests/run_spec.sh` | Starts the page server and sae-driver, runs a spec, stops both (or another repo's spec, by its path) |
 | `aether-ui`, `ui`, `vg` | Symlinks into the sibling checkout `../aether-ui`; the README's "Build and run" says why each exists |
 
 ## Adding a page-API function
@@ -64,7 +63,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 (cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 ../aether/build/ae build tools/saejs.ae -o target/saejs
-lower/run-tests.sh                           # 107 lowerer tests (run, err, mod, golden; mod/algos_* and mod/sheet_* test site/algos/ and site/sheet/ headless)
+lower/run-tests.sh                           # 67 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless; --mod DIR runs another repo's)
 tests/run_all.sh                             # every spec and check below, each with its environment (a label filter: tests/run_all.sh spec_app_)
 tests/run_spec.sh                            # spec_nav: 45 specs
 tests/check_page_veto.sh                     # page veto present and enforced
@@ -83,8 +82,7 @@ SAE_TEST_APP=tests/apps/clocks tests/run_spec.sh spec_webrules   # app mode: ful
 tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 19 attempts, each refused and logged once
 SAE_TEST_APP=tests/apps/climb tests/run_spec.sh spec_app_climb   # app mode: navigation cannot climb out of the bundle
 AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents tests/run_spec.sh spec_app_documents   # documents: picked files as handles (the driver answers the picker)
-AETHER_UI_HEADLESS=1 SAE_TEST_APP=site tests/run_spec.sh spec_app_sheet_files   # demo 18 as an app: open, save and export through documents
-SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$PWD/target/bus-appdata SAE_TEST_APP=tests/apps/bus tests/run_spec.sh spec_app_bus   # the control bus: courier file, sealed requests, every refusal (spec_app_bus_off without the flag; spec_app_sheet_bus: demo 18 over it)
+SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$PWD/target/bus-appdata SAE_TEST_APP=tests/apps/bus tests/run_spec.sh spec_app_bus   # the control bus: courier file, sealed requests, every refusal (spec_app_bus_off without the flag)
 AETHER_UI_HEADLESS=1 SAE_CLIP_READ=1 SAE_TEST_APP=tests/apps/clipboard tests/run_spec.sh spec_app_clipboard   # an app's clipboard grant (tests/apps/clipboard_write, SAE_CLIP_READ=0: write only)
 ../aether/build/ae run tests/spec_sqlite_service.ae   # services/sqlite: parameters, rows, migrations, escape routes, no window
 SAE_TEST_APP=tests/apps/sqlite_demo tests/run_spec.sh spec_app_sqlite   # sqlite.<name> through pages (resets its own rows)
@@ -96,7 +94,6 @@ tests/run_spec.sh spec_raster                  # pixels from a page: vg.raster/i
 tests/run_spec.sh spec_terrain                 # demo 13
 tests/run_spec.sh spec_life                    # demo 14
 tests/run_spec.sh spec_algos                   # demo 17: sorting generators race on the frame clock
-AETHER_UI_TEST_CLIPBOARD=1 tests/run_spec.sh spec_sheet   # demo 18 (its Ctrl+C would write the system clipboard; this makes it the driver's buffer) on ui.datagrid: formulas, ripples, parse errors, cycles, a batched paste, in-cell editing, styles, keys, resize and fit, fill, copy and paste, Delete; RexxJS formulas and the Tauri app's sheets, formats and conditional styles; several sheets; saving, opening and CSV; formula auditing; number formats and conditional-format rules; charts; dynamic arrays; what-if and data tools; looks, data bars, comment markers, hidden and frozen rows, filters, merges, point mode; the Tauri app's query functions over tables, and all its control functions (pivots, auto IDs, cell editors, table metadata and the rest) and ADDRESS SPREADSHEET in scripts
 tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom

@@ -3,9 +3,10 @@
 A design note, decided by Paul (2026-10-14). **Option (a) is built**
 (2026-10-14): `services/bus`, with aeo's `agent_auth` and `secure_channel`
 copied into `services/` (to be shared later); `"seeks control-bus"` and
-`bus.serve`/`bus.stop`; `--control-bus` after `sae --app <dir>`; demo 18
-serves it (`site/app.json`); `tests/spec_app_bus.ae`,
-`spec_app_bus_off.ae`, `spec_app_sheet_bus.ae`. Not yet: a window toggle
+`bus.serve`/`bus.stop`; `--control-bus` after `sae --app <dir>`; the
+spreadsheet serves it (RexxJS/example-app-spreadsheet, once demo 18:
+its `app/app.json`, `tests/specs/spec_app_sheet_bus.ae`);
+`tests/spec_app_bus.ae`, `spec_app_bus_off.ae`. Not yet: a window toggle
 (the launch flag is the switch), an installer (decision 4's wording waits in
 docs/app-capabilities.md), and how RexxJS client scripts reach it (no sae
 code goes into RexxJS).
@@ -14,7 +15,8 @@ option (b), messages between pages, later; off until the person switches
 it on at launch; the sealed wire after aeo, the courier file, a stronger
 installer warning with fs, documents or shell, and the same wire beyond the
 local machine later. All six are decided: (a) is ready to build. It is
-step 3 of the spreadsheet plan (`docs/spreadsheet_demo_done_and_todo.md`):
+step 3 of the spreadsheet plan (now example-app-spreadsheet's
+`docs/spreadsheet_demo_done_and_todo.md`):
 steps 1 and 2 brought over the Tauri spreadsheet's query functions and its
 control functions. That leaves its control bus, which lets another process
 drive the app, ARexx-style. Steps 1 and 2 were spreadsheet questions. This

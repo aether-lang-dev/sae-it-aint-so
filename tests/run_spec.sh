@@ -5,6 +5,9 @@
 #   tests/run_spec.sh [spec] [site-dir]     (defaults: spec_nav, site/)
 #   SAE_TEST_APP=<dir> tests/run_spec.sh <spec>   app mode: sae-driver --app <dir>
 #   SAE_TEST_START=<url|file> tests/run_spec.sh <spec>   the browser, starting there
+#   tests/run_spec.sh /path/to/spec_x.ae [site-dir]   a spec of another repo's
+#       (an app built on sae, such as ../example-app-spreadsheet); its own
+#       test libraries go first on the module path with SAE_TEST_LIB_DIR.
 #
 # Starts target/pageserver on the site directory and sae-driver (built with
 # `AETHER_UI_WITH_DRIVER=1 ./build.sh`) pointed at it, on the AetherUIDriver
@@ -16,7 +19,12 @@
 # verbs read it (SAE_TEST_LOG).
 set -e
 SPEC="${1:-spec_nav}"
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
+# A spec named by its path (another repo's) runs where it is.
+SPEC_DIR="$ROOT/tests"
+case "$SPEC" in
+    */*) SPEC_DIR=$(cd "$(dirname "$SPEC")" && pwd); SPEC=$(basename "$SPEC" .ae) ;;
+esac
 SITE=$(cd "${2:-$ROOT/site}" && pwd)
 SITE_PORT="${SAE_TEST_SITE_PORT:-8091}"
 DRIVER_PORT="${AETHER_UI_TEST_PORT:-9222}"
@@ -75,9 +83,9 @@ fi
 SAE=$!
 trap 'kill $SAE $SERVER 2>/dev/null || true; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
-cd "$ROOT/tests"
+cd "$SPEC_DIR"
 status=0
-env AETHER_LIB_DIR="$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT" \
+env AETHER_LIB_DIR="${SAE_TEST_LIB_DIR:+$SAE_TEST_LIB_DIR:}$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT" \
     SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
     ae run "$SPEC.ae" || status=$?
 exit $status
