@@ -28,7 +28,14 @@
 # dev tree at 0.801.0 (./build.sh). A bare get.sh install of 0.801.0
 # (SAE_AETHER_HOME=none) does not link yet: the release ships contrib/sqlite's
 # source but not its libaether_sqlite archive, which aether is fixing.
-AE_PIN=0.801.0
+# 0.814.0 (2026-10-14): a real floor move. services/files and
+# services/documents run each file operation inside std.sandbox's enforce,
+# and until aether#2905 (released in 0.814.0) enforce left its checker
+# installed after the block: from then on a path that could not be resolved
+# was refused everywhere, the kernel's included. Verified: the dev tree at
+# 0.814.0, run_all and the file specs (spec_app_caps, spec_app_documents,
+# spec_app_sheet_files) on macOS and aether-linux.
+AE_PIN=0.814.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and

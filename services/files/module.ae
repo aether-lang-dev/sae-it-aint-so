@@ -187,7 +187,6 @@ read_text(raw: string) -> (string, string) {
         t, err = fs.read(p)
     }
     sandbox.free(perms)
-    ended_()
     if err != "" { return "", "fs.read_text: ${err}" }
     return t, ""
 }
@@ -201,7 +200,6 @@ write_text(raw: string, text: string) -> string {
         err = fs.write_atomic(p, string.bytes(text))
     }
     sandbox.free(perms)
-    ended_()
     if err != "" { return "fs.write_text: ${err}" }
     return ""
 }
@@ -216,7 +214,6 @@ exists(raw: string) -> (int, string) {
         yes = fs.exists(p)
     }
     sandbox.free(perms)
-    ended_()
     return yes, ""
 }
 
@@ -231,7 +228,6 @@ list_json(raw: string) -> (string, string) {
         l, lerr = dir.list(p)
     }
     sandbox.free(perms)
-    ended_()
     if lerr != "" { return "", "fs.list: ${lerr}" }
     out = "["
     n = dir.list_count(l)
@@ -254,7 +250,6 @@ mkdir(raw: string) -> string {
         made = fs.exists(p)
     }
     sandbox.free(perms)
-    ended_()
     if made == 0 { return "fs.mkdir: could not create ${p}" }
     return ""
 }
@@ -275,7 +270,6 @@ remove(raw: string) -> string {
         }
     }
     sandbox.free(perms)
-    ended_()
     if e != "" { return "fs.remove: ${e}" }
     return ""
 }
@@ -292,13 +286,4 @@ quote_(s: string) -> string {
         i = i + 1
     }
     return string.concat(out, "\"")
-}
-
-// After each enforce: the sandbox off again. Aether's enforce up to 0.813
-// leaves its checker installed once the block returns (aether#2905), and
-// then every path that cannot be resolved is refused everywhere, the
-// kernel's included. With the block's grants popped, this clears it; it goes
-// when sae's Aether floor has the fix.
-ended_() {
-    sandbox_uninstall()
 }

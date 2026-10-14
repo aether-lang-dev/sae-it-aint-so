@@ -102,7 +102,7 @@ tests/run_spec.sh spec_aevg_parity             # corpus pages (tools/gen-corpus.
 tests/run_spec.sh spec_camera                  # demo 1b (site/camera.ts) and the clock components
 ```
 
-Toolchain: Aether 0.801.0 or later (`pins`: contrib.sqlite's authorizer
+Toolchain: Aether 0.814.0 or later (`pins`: enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
 and column API, contrib.quickjs's `arg_bytes`), installed, or a dev tree
 (`$SAE_AETHER_HOME`, default `../aether`, built with `make compiler ae
 stdlib contrib`; `SAE_AETHER_HOME=none` builds against the installed one even when

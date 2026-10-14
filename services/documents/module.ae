@@ -69,7 +69,6 @@ read_text(h: int) -> (string, string) {
         text, err = fs.read(p)
     }
     sandbox.free(one)
-    ended_()
     if err != "" { return "", "documents.read_text ${name(h)}: ${err}" }
     return text, ""
 }
@@ -86,16 +85,6 @@ write_text(h: int, text: string) -> string {
         err = fs.write_atomic(p, string.bytes(text))
     }
     sandbox.free(one)
-    ended_()
     if err != "" { return "documents.write_text ${name(h)}: ${err}" }
     return ""
-}
-
-// After each enforce: the sandbox off again. Aether's enforce up to 0.813
-// leaves its checker installed once the block returns (aether#2905), and
-// then every path that cannot be resolved is refused everywhere, the
-// kernel's included. With the block's grants popped, this clears it; it goes
-// when sae's Aether floor has the fix.
-ended_() {
-    sandbox_uninstall()
 }
