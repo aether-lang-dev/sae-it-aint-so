@@ -1,0 +1,6 @@
+{
+  "name": "Clipboard test",
+  "capabilities": {
+    "clipboard": ["write", "read"]
+  }
+}

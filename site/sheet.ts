@@ -1,4 +1,5 @@
 "seeks documents, reduced functionality without";
+"seeks clipboard, reduced functionality without";
 // Spreadsheet (docs/roadmap.md demo 18), declared as panels over a seam.
 //
 // site/sheet/ is the spreadsheet with no ui: two formula languages (Excel's,

@@ -756,6 +756,16 @@ const SPECS: readonly Spec[] = [
     },
   },
   {
+    // Text from another app (the system clipboard): tab-separated rows
+    // placed at `at`'s first cell, taken as written (its formulas are not
+    // moved: they were never this sheet's).
+    id: "edit.pasteText", label: "Paste text", params: ["at", "text"], journaled: true,
+    run: (wb, p) => {
+      const at = topLeft(rangeOf(p.at));
+      return setting(wb, pasted(p.text, at), `pasted text at ${keyOf(at)}`);
+    },
+  },
+  {
     id: "edit.pasteSpecial", label: "Paste Special", params: ["at", "what"], optional: ["transpose"], journaled: true,
     run: async (wb, p) => {
       const at = rangeOf(p.at)[0];

@@ -1,0 +1,55 @@
+// services/clipboard — the one place sae touches the system clipboard on a
+// page's behalf: the page API's `clipboard` object. See
+// docs/page-services.md, section 8.
+//
+// The rules (agreed 2026-10-14), each checked here before the clipboard is
+// touched:
+//   - write: while the page handles a click or a key (the kernel says so),
+//     or at any time for an app whose app.json grants clipboard "write";
+//   - read: while the page handles the person's own paste (Ctrl or Cmd+V),
+//     or at any time for an app whose app.json grants clipboard "read" and
+//     whose page seeks clipboard-read. Reading is the sensitive half:
+//     passwords pass through clipboards.
+// A refusal is a message naming the rule; the caller (the page-API gate)
+// throws it.
+//
+// What this module can reach is its imports: aether-ui's two clipboard calls
+// and std.string. tests/check_layers.sh holds it to that, and holds those
+// two calls to this module.
+
+import ui (clipboard_read, clipboard_write)
+import std.string
+
+exports (configure, grant_write, grant_read, write_text, read_text)
+
+const PASTE = 2   // the person's own paste
+
+var write_any_: int = 0
+var read_any_: int = 0
+
+// For a web page (no grants) or an app, before its grants are read.
+configure() {
+    write_any_ = 0
+    read_any_ = 0
+}
+
+grant_write() { write_any_ = 1 }
+grant_read() { read_any_ = 1 }
+
+// "" or why not. `gesture` is the kernel's: 0, CLICK or PASTE.
+write_text(text: string, gesture: int) -> string {
+    if gesture == 0 && write_any_ == 0 {
+        return "clipboard.write_text: only while the page handles a click or a key"
+    }
+    clipboard_write(text)
+    return ""
+}
+
+// (its text, "") or ("", why not). `sought_read` is 1 when the page seeks
+// clipboard-read (and so may use an app's read grant).
+read_text(gesture: int, sought_read: int) -> (string, string) {
+    if gesture != PASTE && (read_any_ == 0 || sought_read == 0) {
+        return "", "clipboard.read_text: only while the page handles the person's paste (Ctrl or Cmd+V)"
+    }
+    return clipboard_read(), ""
+}

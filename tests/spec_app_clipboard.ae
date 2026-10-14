@@ -1,0 +1,32 @@
+// spec_app_clipboard.ae — an app's clipboard grant. SAE_TEST_APP is
+// tests/apps/clipboard (write and read granted, clipboard-read sought) or
+// tests/apps/clipboard_write (write only); SAE_CLIP_READ says which ("1" or
+// "0"). Headless: the clipboard is the driver's buffer.
+//   AETHER_UI_HEADLESS=1 SAE_CLIP_READ=1 SAE_TEST_APP=tests/apps/clipboard tests/run_spec.sh spec_app_clipboard
+import std.spec
+import std.string
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    reads = os_getenv("SAE_CLIP_READ") == "1"
+    spec.describe(fw, "an app's clipboard grant") {
+        spec.it("app.json's write: the app writes when nobody is clicking (a timer)") callback {
+            b.assert_text("wrote: from the app", "written")
+            spec.assert_str_eq(uidriver.clipboard(), "from the app", "on the clipboard")
+        }
+        spec.it("a read on a click, which is not a paste: app.json's read and clipboard-read allow it, nothing else does") callback {
+            uidriver.set_clipboard("set by the spec")
+            b.click("read")
+            if reads {
+                b.assert_text("read: set by the spec", "read")
+            } else {
+                b.assert_text("read: refused: clipboard.read_text: only while the page handles the person's paste (Ctrl or Cmd+V)", "refused")
+            }
+        }
+    }
+    return spec.run_summary(fw)
+}

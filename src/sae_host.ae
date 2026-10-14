@@ -31,6 +31,7 @@ import std.json
 import std.actors
 import services.files
 import services.documents
+import services.clipboard
 import services.shell
 import services.net
 import services.sqlite
@@ -309,6 +310,19 @@ fire0_(ctx: ptr, ref: int, what: string) {
     settle_(ctx)
 }
 
+// What the person is doing while a page's handler runs, for the clipboard
+// (services/clipboard): 0 nothing (a timer, a frame, a reply), 1 a click or
+// a key, 2 their paste (Ctrl or Cmd+V). Set around a click's or a key's
+// handler and the promise jobs it queued, then put back.
+var gesture_: int = 0
+
+fire_click_(ctx: ptr, ref: int) {
+    was = gesture_
+    gesture_ = 1
+    fire0_(ctx, ref, "a click handler")
+    gesture_ = was
+}
+
 report_exception_(ctx: ptr, where_: string) {
     say_("sae: uncaught exception in ${where_}:\n${quickjs.last_error(ctx)}")
 }
@@ -494,7 +508,7 @@ sae_ui_btn(ctx: ptr, this_val: int, argv: int) -> int {
         return sae_throw_type_error(ctx, "btn(label, fn): fn must be a function")
     }
     ref = hold_arg_(ctx, argv, 1)
-    on_press = || { fire0_(ctx, ref, "a click handler") }
+    on_press = || { fire_click_(ctx, ref) }
     long t = now_ns_()
     h = ui.btn(mem.long_to_ptr(top_(p)), label, on_press)
     ui_done_(p, t)
@@ -647,10 +661,15 @@ keys_deliver_(k: string, m: int) {
                 ms = quickjs.new_int(ctx, m)
                 _b = quickjs.set_index(ctx, args, 1, ms)
                 quickjs.release(ctx, ms)
+                // A key is a gesture; Ctrl or Cmd with V is the person's paste.
+                was = gesture_
+                gesture_ = 1
+                if (k == "v" || k == "V") && ((m / 2) % 2 == 1 || (m / 8) % 2 == 1) { gesture_ = 2 }
                 r = calln_(ctx, p.key_ref, args)
                 quickjs.release(ctx, args)
                 if r < 0 { report_exception_(ctx, "a ui.on_key handler") }
                 settle_(ctx)
+                gesture_ = was
                 return
             }
         }
@@ -1733,7 +1752,7 @@ sae_ui_onclick(ctx: ptr, this_val: int, argv: int) -> int {
         return sae_throw_type_error(ctx, "onclick(fn): fn must be a function")
     }
     ref = hold_arg_(ctx, argv, 0)
-    ui.onclick(mem.long_to_ptr(target), || { fire0_(ctx, ref, "a click handler") })
+    ui.onclick(mem.long_to_ptr(target), || { fire_click_(ctx, ref) })
     return 0
 }
 
@@ -2732,6 +2751,26 @@ sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     text, err = files.read_text(own_(arg_str_(ctx, argv, argc, 0)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
+    return quickjs.new_string(ctx, text)
+}
+
+// --- the page API: clipboard (services/clipboard has the rules) ---
+
+sae_clip_write(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    err = clipboard.write_text(own_(arg_str_(ctx, argv, argc, 0)), gesture_)
+    if err != "" { return sae_throw_type_error(ctx, err) }
+    return 0
+}
+
+sae_clip_read(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    p = page_of_(ctx)
+    sought_read = 0
+    if string.contains(p.absent, ",clipboard-read,") == 0 { sought_read = 1 }
+    text, err = clipboard.read_text(gesture_, sought_read)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return quickjs.new_string(ctx, text)
 }
@@ -6351,17 +6390,24 @@ json_value_(ctx: ptr, text: string) -> int {
     return h
 }
 
+// 1 when app.json grants clipboard "read" (a page that also seeks
+// clipboard-read may read at any time).
+var clip_read_granted_: int = 0
+
 // 1 if this context can give a page the privilege `nm`. A web page in the
 // browser gets outgoing-http (to its own origin) and nothing else; an app
 // gets each only as far as app.json grants it.
 available_(nm: string) -> int {
     if app_dir_ == "" {
         if nm == "outgoing-http" { return 1 }
+        if nm == "clipboard" { return 1 }
         return 0
     }
     if nm == "outgoing-http" { return net.granted() }
     if nm == "local-filesystem" { return files.granted() }
     if nm == "documents" { return documents.granted() }
+    if nm == "clipboard" { return 1 }
+    if nm == "clipboard-read" { return clip_read_granted_ }
     if nm == "open-urls" { return shell.granted() }
     if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
     return 0
@@ -6452,7 +6498,7 @@ absent_of_(optional: string) -> string {
 // ("local-filesystem,open-urls,"), to leave out with the absent ones.
 unsought_(seeks: string, optional: string) -> string {
     out = ""
-    names = string.split("outgoing-http,local-filesystem,open-urls,documents", ",")
+    names = string.split("outgoing-http,local-filesystem,open-urls,documents,clipboard,clipboard-read", ",")
     n = string.string_array_size(names)
     i = 0
     while i < n {
@@ -6504,6 +6550,16 @@ read_capabilities_(manifest: ptr) {
     // capabilities.documents ({}): pages may ask the person to pick files
     // (services/documents); what they read and write is what was picked.
     if json.json_object_get_raw(caps, "documents") != null { documents.configure(1) }
+    // capabilities.clipboard (["write"], ["read"], both): at any time, not
+    // only while the person clicks, types or pastes. Reading also needs the
+    // page to seek clipboard-read.
+    grants_from_(caps, "clipboard", |g: string| {
+        if g == "write" { clipboard.grant_write() }
+        if g == "read" {
+            clipboard.grant_read()
+            clip_read_granted_ = 1
+        }
+    })
 }
 
 // --- storage (the kernel side of the storage page API) ---
@@ -6988,6 +7044,17 @@ api_register_(p: *Page) {
         quickjs.release(q, dr)
         dw, _dwe = quickjs.eval(q, "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;", "sae:documents")
         quickjs.release(q, dw)
+    }
+    // clipboard: writes while the person clicks or types, reads only their
+    // paste (services/clipboard has the rules), in the browser and in apps.
+    if string.contains(p.absent, ",clipboard,") == 0 {
+        cr = quickjs.new_object(q)
+        reg_(q, cr, "write", 1, sae_clip_write)
+        reg_(q, cr, "read", 0, sae_clip_read)
+        quickjs.set_global(q, "__sae_clipboard", cr)
+        quickjs.release(q, cr)
+        cw, _cwe = quickjs.eval(q, "globalThis.clipboard = (function (raw) { return Object.freeze({ write_text: function (t) { return Promise.resolve().then(function () { raw.write(String(t)); }); }, read_text: function () { return Promise.resolve().then(function () { return raw.read(); }); } }); })(globalThis.__sae_clipboard); delete globalThis.__sae_clipboard;", "sae:clipboard")
+        quickjs.release(q, cw)
     }
     if app_dir_ != "" && string.contains(p.absent, ",open-urls,") == 0 {
         sho = quickjs.new_object(q)

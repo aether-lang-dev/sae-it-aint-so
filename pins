@@ -82,4 +82,8 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # 63b3b9ed (2026-10-13): Ctrl+arrows go to the edge of the data, which
 # demo 18's spec_sheet now drives (Ctrl+Down, Ctrl+Up). Verified: spec_sheet
 # on macOS and aether-linux (GTK 4.6).
-AETHER_UI_REF=63b3b9ed6a5ad03a36f9c3e97bdc07d4cd16514a
+# ba68c90c (2026-10-14): a test clipboard (GET and POST /clipboard, under
+# AETHER_UI_HEADLESS or AETHER_UI_TEST_CLIPBOARD), which demo 18's clipboard
+# spec reads and sets. Verified: spec_sheet, spec_app_clipboard on macOS and
+# aether-linux.
+AETHER_UI_REF=ba68c90c81fbc1643470b088b71e06515c8dd2bf

@@ -56,6 +56,11 @@ Aether's `hide` (`aether/docs/hide-and-seal.md`):
 - **`documents`** (`{}`): the page may ask the person to pick files, and
   gets handles to what was picked; nothing else. Held in
   `services/documents`.
+- **`clipboard`** (`["write"]`, `["read"]`, or both): what a page may do
+  with the system clipboard beyond the browser's rule (write while the
+  person clicks or types, read their paste): `"write"` at any time,
+  `"read"` at any time for a page that also seeks `clipboard-read`. Held in
+  `services/clipboard`.
 - **Both file services are fenced by Aether too.** `services/files` runs
   each operation inside `std.sandbox`'s `enforce`, with the app's
   `fs.read`/`fs.write` roots as the sandbox's grants; `services/documents`
@@ -138,6 +143,8 @@ A line is `seeks <privilege> [<methods> <pattern>][, reduced functionality witho
   | `open-urls` | `shell.open` | never | if `app.json` grants `shell.open` |
   | `database <name>` | `sqlite.<name>` (one line per database) | never | if `app.json` declares that name under `capabilities.sqlite` |
   | `documents` | `documents` | never (yet: a server-backed form is planned) | if `app.json` has `capabilities.documents` |
+  | `clipboard` | `clipboard` | yes: writes during a click or a key, reads during the person's paste | the same, and more where `app.json`'s `capabilities.clipboard` grants it |
+  | `clipboard-read` | reading `clipboard` at any time | never | if `app.json`'s `capabilities.clipboard` has `"read"` |
 
   `ui`, `vg`, `storage` and `browserContext` every page has; they are not
   sought.

@@ -34,6 +34,8 @@ expect_imports services/files/module.ae \
     "import std.fs|import std.dir|import std.string|import std.strarr|import std.sandbox"
 expect_imports services/documents/module.ae \
     "import std.fs|import std.string|import std.strarr|import std.sandbox"
+expect_imports services/clipboard/module.ae \
+    "import ui (clipboard_read, clipboard_write)|import std.string"
 expect_imports services/shell/module.ae \
     "import ui (open_url)|import std.fs (read, write_atomic)|import std.string|import std.strarr"
 expect_imports services/net/module.ae \
@@ -55,6 +57,19 @@ else
 fi
 expect_imports services/stdlib/module.ae \
     "import std.fs (read, exists)|import std.string|import std.strarr|import std.cryptography (sha256_hex)"
+
+# ui.clipboard_read and clipboard_write only in services/clipboard: every
+# read and write of the system clipboard goes through its rules.
+hits=$(grep -rnE '(^|[^_a-zA-Z0-9])clipboard_(read|write)[[:space:]]*\(' \
+        --include='*.ae' src services lower tools gen 2>/dev/null \
+      | grep -v '^services/clipboard/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+if [ -n "$hits" ]; then
+    echo "FAIL the system clipboard named outside services/clipboard:"
+    echo "$hits" | sed 's/^/       /'
+    fail=1
+else
+    echo "ok   the system clipboard is named only in services/clipboard"
+fi
 
 # ui.open_url, or a bare open_url from a selective import, only in services/shell.
 hits=$(grep -rnE '(^|[^_a-zA-Z0-9])open_url[[:space:]]*\(|import ui \([^)]*open_url' \

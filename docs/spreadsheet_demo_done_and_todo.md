@@ -560,7 +560,7 @@ summary.
     and paste: the cells and what reads them moved, here and on another
     sheet, `#REF!` for what was landed on, notes with them, one undo, and
     the refusals.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 53 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 54 tests, with a test clipboard, on GTK4
   under Xvfb and on macOS):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -975,7 +975,7 @@ workbook's by default (`Workbook`'s names; a sheet reads them through its
 undone, and saved as the file's `bookNames`. Still to come: a sheet's own
 name written from another sheet (`Costs!QTY`), and dragging a tab.
 
-### 9. Real files in app mode (done, 2026-10-14), and the system clipboard
+### 9. Real files in app mode, and the system clipboard (done, 2026-10-14)
 
 Demo 18 run as an installed app (`sae --app site`; `site/app.json` grants
 `documents`) has Open file, Save file and Export CSV file: the person picks,
@@ -988,8 +988,12 @@ come: files remembered across launches (with documents' persisted handles),
 and the same buttons for a page fetched over HTTP (server-backed
 documents).
 
-The clipboard still waits on a decision: who may write it, and who may
-read it (docs/page-services.md section 8).
+The system clipboard (done, 2026-10-14): Ctrl+C and Ctrl+X also put what
+the copied cells show on it, tab-separated, as other apps take it; Ctrl+V
+reads it: the sheet's own copy pastes as before (formulas move, a cut
+moves), another app's text is pasted as written (`edit.pasteText`). In the
+browser too: a page may write while the person clicks or types and read
+their paste (`clipboard`, docs/page-services.md section 8).
 
 The lists below are where these came from, with what has landed struck
 through.
@@ -1033,11 +1037,7 @@ fields for CSV and RexxJS scripts.
 
 **Demo 18's own:**
 
-1. **The system clipboard.** Copy and paste work within the sheet only.
-   Copying out to other apps, and pasting in from them, needs a clipboard
-   API for pages: a page service with a permission, like `files`. Text
-   pasted from elsewhere would go through `pasted()` with no `from`, so its
-   formulas are taken as written.
+1. ~~**The system clipboard.**~~ (done: To do 9.)
 2. ~~**Cut, and paste over a larger selection.**~~ (done: To do 6.)
 3. ~~**A bigger sheet.**~~ (done: To do 5.)
 4. **More functions.**

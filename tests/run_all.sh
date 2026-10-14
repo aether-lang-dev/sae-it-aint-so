@@ -58,7 +58,7 @@ spec_reactive||spec spec_reactive
 spec_terrain||spec spec_terrain
 spec_life||spec spec_life
 spec_algos||spec spec_algos
-spec_sheet|SAE_STORAGE_DIR=$T/sheet-storage|spec spec_sheet
+spec_sheet|AETHER_UI_TEST_CLIPBOARD=1 SAE_STORAGE_DIR=$T/sheet-storage|spec spec_sheet
 spec_keys||spec spec_keys
 spec_grid||spec spec_grid
 spec_aevg||spec spec_aevg
@@ -69,6 +69,8 @@ spec_app|SAE_TEST_APP=apps/tasks|spec spec_app
 spec_app_caps|SAE_TEST_APP=tests/apps/caps SAE_APPDATA_DIR=$T/caps-appdata SAE_SHELL_LOG=$T/caps-shell.log|spec spec_app_caps
 spec_app_climb|SAE_TEST_APP=tests/apps/climb|spec spec_app_climb
 spec_app_documents|AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents|spec spec_app_documents
+spec_app_clipboard|AETHER_UI_HEADLESS=1 SAE_CLIP_READ=1 SAE_TEST_APP=tests/apps/clipboard|spec spec_app_clipboard
+spec_app_clipboard_write|AETHER_UI_HEADLESS=1 SAE_CLIP_READ=0 SAE_TEST_APP=tests/apps/clipboard_write|spec spec_app_clipboard
 spec_app_sheet_files|AETHER_UI_HEADLESS=1 SAE_TEST_APP=site|spec spec_app_sheet_files
 spec_app_httplist|SAE_TEST_APP=tests/apps/httplist|spec spec_app_httplist
 spec_app_imports|SAE_TEST_APP=tests/apps/imports|spec spec_app_imports

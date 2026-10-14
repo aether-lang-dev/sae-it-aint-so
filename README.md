@@ -331,6 +331,12 @@ service touches files, and each of its operations runs inside Aether's
   the granted prefixes.
 - `sqlite.<name>`: the app's databases, declared in `app.json` under
   `capabilities.sqlite` with their migrations (App mode, below).
+- `clipboard.write_text(text)` and `clipboard.read_text()` (promises): for
+  any page that seeks `clipboard`, a write while it handles a click or a
+  key, a read while it handles the person's paste (Ctrl or Cmd+V); an app
+  granted `"clipboard": ["write", "read"]` may do either at any time (a read
+  also seeks `clipboard-read`). Demo 18's Ctrl+C, Ctrl+X and Ctrl+V go
+  through it, to and from other apps.
 - A web page has no `fs`, no `documents`, no `shell` and no `sqlite` at all.
 
 A page says at its top which privileges it seeks, one per line:
@@ -341,6 +347,8 @@ A page says at its top which privileges it seeks, one per line:
 "seeks open-urls";          // unlocks shell.open
 "seeks database notes";     // unlocks sqlite.notes (one line per database)
 "seeks documents";          // unlocks documents
+"seeks clipboard";          // unlocks clipboard: write on a click or key, read the person's paste
+"seeks clipboard-read";     // an app's clipboard read at any time (app.json grants "read")
 ```
 
 `ui`, `vg`, `storage`, `browserContext` and the timer globals (`setTimeout`
@@ -629,7 +637,7 @@ list starts with the file system and its neighbours and grows from there;
 the end state is `seal except`, an explicit whitelist per function.
 
 The effects a page can ask for live in their own modules,
-`services/files`, `services/documents`, `services/shell`, `services/net` and `services/stdlib`
+`services/files`, `services/documents`, `services/clipboard`, `services/shell`, `services/net` and `services/stdlib`
 (the `sae:` library and the import hashes), each able to reach only its
 imports: only `services/shell` can name the system URL opener.
 `tests/check_layers.sh` holds each service to its import list.

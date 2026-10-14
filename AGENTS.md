@@ -18,7 +18,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `src/sae_prelude.js` | The reactive surface and the vg helpers that are JavaScript (`state`, `computed`, `bind`, `each`, `batch`, `vg.animate`, `vg.items`), evaluated into every page; embedded as `src/sae_prelude.c` by `tools/embed-prelude.sh` |
 | `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
 | `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
-| `services/` | One module per effect a page can ask for (`files`, `documents` (files the person picks), `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `stdlib`: the `sae:` library and import hashes), each confined by its imports; `docs/architecture.md` |
+| `services/` | One module per effect a page can ask for (`files`, `documents` (files the person picks), `clipboard`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `stdlib`: the `sae:` library and import hashes), each confined by its imports; `docs/architecture.md` |
 | `lib/sae/` | The `sae:` page standard library (`noise`, `scales`, `easing`), written in the dialect; `MANIFEST` holds their build-time hashes (`tools/hash-lib.sh`) |
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae` |
@@ -80,10 +80,11 @@ SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$PWD/target/globals-appdata test
 ../aether/build/ae run tests/spec_origin_rules.ae  # origins, mixed content, Sae-Allow-Origin: no window
 tests/run_spec.sh spec_webrules                # no ambient credentials, no Referer, the CORS-alike, coarse clocks
 SAE_TEST_APP=tests/apps/clocks tests/run_spec.sh spec_webrules   # app mode: full-resolution clocks
-tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 18 attempts, each refused and logged once
+tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 19 attempts, each refused and logged once
 SAE_TEST_APP=tests/apps/climb tests/run_spec.sh spec_app_climb   # app mode: navigation cannot climb out of the bundle
 AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents tests/run_spec.sh spec_app_documents   # documents: picked files as handles (the driver answers the picker)
 AETHER_UI_HEADLESS=1 SAE_TEST_APP=site tests/run_spec.sh spec_app_sheet_files   # demo 18 as an app: open, save and export through documents
+AETHER_UI_HEADLESS=1 SAE_CLIP_READ=1 SAE_TEST_APP=tests/apps/clipboard tests/run_spec.sh spec_app_clipboard   # an app's clipboard grant (tests/apps/clipboard_write, SAE_CLIP_READ=0: write only)
 ../aether/build/ae run tests/spec_sqlite_service.ae   # services/sqlite: parameters, rows, migrations, escape routes, no window
 SAE_TEST_APP=tests/apps/sqlite_demo tests/run_spec.sh spec_app_sqlite   # sqlite.<name> through pages (resets its own rows)
 tests/check_sqlite_relaunch.sh                 # migrations once across a relaunch; a failing migration refuses the app
@@ -94,7 +95,7 @@ tests/run_spec.sh spec_raster                  # pixels from a page: vg.raster/i
 tests/run_spec.sh spec_terrain                 # demo 13
 tests/run_spec.sh spec_life                    # demo 14
 tests/run_spec.sh spec_algos                   # demo 17: sorting generators race on the frame clock
-tests/run_spec.sh spec_sheet                   # demo 18 on ui.datagrid: formulas, ripples, parse errors, cycles, a batched paste, in-cell editing, styles, keys, resize and fit, fill, copy and paste, Delete; RexxJS formulas and the Tauri app's sheets, formats and conditional styles; several sheets; saving, opening and CSV; formula auditing; number formats and conditional-format rules; charts; dynamic arrays; what-if and data tools; looks, data bars, comment markers, hidden and frozen rows, filters, merges, point mode; the Tauri app's query functions over tables, and all its control functions (pivots, auto IDs, cell editors, table metadata and the rest) and ADDRESS SPREADSHEET in scripts
+AETHER_UI_TEST_CLIPBOARD=1 tests/run_spec.sh spec_sheet   # demo 18 (its Ctrl+C would write the system clipboard; this makes it the driver's buffer) on ui.datagrid: formulas, ripples, parse errors, cycles, a batched paste, in-cell editing, styles, keys, resize and fit, fill, copy and paste, Delete; RexxJS formulas and the Tauri app's sheets, formats and conditional styles; several sheets; saving, opening and CSV; formula auditing; number formats and conditional-format rules; charts; dynamic arrays; what-if and data tools; looks, data bars, comment markers, hidden and frozen rows, filters, merges, point mode; the Tauri app's query functions over tables, and all its control functions (pivots, auto IDs, cell editors, table metadata and the rest) and ADDRESS SPREADSHEET in scripts
 tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom

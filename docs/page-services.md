@@ -425,10 +425,19 @@ The worker dies with its page. Questions:
 Each would be a new privilege, granted in app.json, sought by a page, and
 held in its own service (`services/<name>`, confined by its imports):
 
-- **Clipboard.** `clipboard.read_text()` and `write_text()`. aether-ui has
-  `clipboard_read`/`clipboard_write`. Reading is the sensitive half
-  (passwords pass through clipboards), so a separate `clipboard-read` seek,
-  or read only during a user gesture?
+- **Clipboard. Agreed 2026-10-14 and built.** `clipboard.write_text(t)`
+  and `clipboard.read_text()` (promises), for any page that seeks
+  `clipboard`, in the browser and in apps, held in `services/clipboard`
+  (the one module that names aether-ui's clipboard calls):
+  - **write** while the page handles a click or a key (the kernel's gesture,
+    set around a click's or key's handler and the promise jobs it queued);
+  - **read** only while it handles the person's own paste (Ctrl or Cmd+V):
+    reading is the sensitive half, since passwords pass through clipboards;
+  - an app may do more, each in `app.json`: `"clipboard": ["write"]` writes
+    at any time; `["read"]`, with the page also seeking `clipboard-read`,
+    reads at any time. A web page cannot seek `clipboard-read`.
+  Specs run headless, where aether-ui's clipboard is the driver's buffer
+  (`GET`/`POST /clipboard`), never the person's.
 - **Notifications.** `notify(title, body)`. aether-ui has `notify`,
   `notify_full` and `notify_request_permission`, and Android APKs already
   request `POST_NOTIFICATIONS`. Should the APK request that permission only

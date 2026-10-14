@@ -3,7 +3,8 @@
 // cell_style functions and on_cell_edit get model columns; on_cell_select a
 // column on screen (columns move). Keys over the selection run commands:
 // Delete clears it, Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste (over
-// the selection: a cell copied fills each of its cells), Ctrl+D and Ctrl+R
+// the selection: a cell copied fills each of its cells; with the system
+// clipboard, to and from other apps too), Ctrl+D and Ctrl+R
 // fill, Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) undo and redo, Ctrl+B, Ctrl+I and
 // Ctrl+U the look (Ctrl+arrows, to the edge of the data, are the grid's
 // own); while an editor is open, or a field has the focus, keys
@@ -130,9 +131,9 @@ export function sheetGrid(v: SheetView): void {
     }
     if ((mods & (CTRL | SUPER)) === 0) return;
     switch (key.toLowerCase()) {
-      case "c": v.run("edit.copy", { range }); return;
-      case "x": v.run("edit.cut", { range }); return;
-      case "v": v.run("edit.paste", { at: range }); return;
+      case "c": copyOut(v, "edit.copy", range); return;
+      case "x": copyOut(v, "edit.cut", range); return;
+      case "v": pasteIn(v, range); return;
       case "d": v.run("edit.fillDown", { range }); return;
       case "r": v.run("edit.fillRight", { range }); return;
       case "z": v.run((mods & SHIFT) !== 0 ? "edit.redo" : "edit.undo"); return;
@@ -143,3 +144,28 @@ export function sheetGrid(v: SheetView): void {
     }
   });
 }
+
+// The system clipboard, where the page has it (clipboard: writes while the
+// person clicks or types, reads only their paste). A copy or cut goes there
+// too, as what the cells show, tab-separated, as other apps take it.
+function copyOut(v: SheetView, id: string, range: string): void {
+  v.run(id, { range }).then((o) => {
+    if (o.ok && typeof clipboard !== "undefined" && v.wb.clip) return clipboard.write_text(shownTsv(v));
+  }).catch((e) => v.status.set(String((e as Error)?.message ?? e)));
+}
+
+// A paste: this sheet's own copy as before (its formulas move, a cut
+// moves), or another app's text, taken as written.
+function pasteIn(v: SheetView, range: string): void {
+  if (typeof clipboard === "undefined") {
+    v.run("edit.paste", { at: range });
+    return;
+  }
+  clipboard.read_text().then((text) => {
+    const own = !!v.wb.clip && text.replace(/\r/g, "").replace(/\n+$/, "") === shownTsv(v);
+    return own || text === "" ? v.run("edit.paste", { at: range }) : v.run("edit.pasteText", { at: range, text });
+  }, () => v.run("edit.paste", { at: range }));
+}
+
+// What the copied cells show, a row a line, tab-separated.
+const shownTsv = (v: SheetView): string => v.wb.clip!.shown.map((row) => row.join("\t")).join("\n");

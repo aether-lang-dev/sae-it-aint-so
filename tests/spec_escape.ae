@@ -98,6 +98,9 @@ main() {
         spec.it("reach fs and shell by a computed name") callback {
             attempt("computed_fs", "")
         }
+        spec.it("write and read the clipboard while the person is not clicking, typing or pasting") callback {
+            attempt("clipboard", "")
+        }
         spec.it("set_text, get_text and clear on the chrome's handles") callback {
             attempt("chrome_set_text", "")
         }
