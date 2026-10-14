@@ -18,7 +18,7 @@ import { readSheetFile, writeSheetFile } from "./file.ts";
 import type { SheetFile } from "./file.ts";
 import { show } from "./format.ts";
 import { EXAMPLE, FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./samples.ts";
-import { runScript } from "./script.ts";
+import { runScript, runSpreadsheet } from "./script.ts";
 import { lambdaOf } from "./rexx.ts";
 import { continued } from "./series.ts";
 import { check, describeRule, ruleOf } from "./validation.ts";
@@ -1714,12 +1714,20 @@ export class Commands {
   // A RexxJS script, driving these commands (script.ts); `say` gets its
   // SAY lines.
   script(text: string, say: (line: string) => void): Promise<{ ok: boolean; message: string }> {
-    const sheet = this.#wb.sheet;
-    return runScript(text, {
-      run: (line) => this.run(line),
-      execute: (id, params) => this.execute(id, params),
-      set: (cell, input) => this.execute("cell.set", { cell, input }),
-      get: (cell) => scripted(sheet.value(cell)),
-    }, say);
+    return runScript(text, this.#scriptHost(), say);
+  }
+
+  // One control-bus string, as the Tauri app's (script.ts's runSpreadsheet).
+  spreadsheet(code: string, say: (line: string) => void): Promise<{ ok: boolean; message: string; output?: unknown }> {
+    return runSpreadsheet(code, this.#scriptHost(), say);
+  }
+
+  #scriptHost() {
+    return {
+      run: (line: string) => this.run(line),
+      execute: (id: string, params: Record<string, string>) => this.execute(id, params),
+      set: (cell: string, input: string) => this.execute("cell.set", { cell, input }),
+      get: (cell: string) => scripted(this.#wb.sheet.value(cell)),
+    };
   }
 }

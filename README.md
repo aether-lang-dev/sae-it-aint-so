@@ -337,6 +337,12 @@ service touches files, and each of its operations runs inside Aether's
   granted `"clipboard": ["write", "read"]` may do either at any time (a read
   also seeks `clipboard-read`). Demo 18's Ctrl+C, Ctrl+X and Ctrl+V go
   through it, to and from other apps.
+- `bus.serve(handler)` and `bus.stop()`: an app declaring
+  `capabilities.controlBus` may be driven by other programs on the same
+  machine, while the person has started it with `--control-bus`: loopback
+  only, a per-launch courier key in `$APPDATA/.control-bus`, every request
+  and reply sealed with it (after aeo's agent channel; docs/control-bus.md).
+  Demo 18 run so answers the Tauri spreadsheet's REXX strings.
 - A web page has no `fs`, no `documents`, no `shell` and no `sqlite` at all.
 
 A page says at its top which privileges it seeks, one per line:
@@ -349,6 +355,7 @@ A page says at its top which privileges it seeks, one per line:
 "seeks documents";          // unlocks documents
 "seeks clipboard";          // unlocks clipboard: write on a click or key, read the person's paste
 "seeks clipboard-read";     // an app's clipboard read at any time (app.json grants "read")
+"seeks control-bus";        // unlocks bus: other programs drive the app (app.json's controlBus, --control-bus)
 ```
 
 `ui`, `vg`, `storage`, `browserContext` and the timer globals (`setTimeout`
@@ -637,7 +644,7 @@ list starts with the file system and its neighbours and grows from there;
 the end state is `seal except`, an explicit whitelist per function.
 
 The effects a page can ask for live in their own modules,
-`services/files`, `services/documents`, `services/clipboard`, `services/shell`, `services/net` and `services/stdlib`
+`services/files`, `services/documents`, `services/clipboard`, `services/bus` (with `services/agent_auth` and `services/secure_channel`, copied from aeo), `services/shell`, `services/net` and `services/stdlib`
 (the `sae:` library and the import hashes), each able to reach only its
 imports: only `services/shell` can name the system URL opener.
 `tests/check_layers.sh` holds each service to its import list.

@@ -31,6 +31,31 @@ const lastLine = (e: unknown): string => String((e as Error)?.message ?? e).spli
 
 
 export async function runScript(text: string, host: ScriptHost, say: (line: string) => void): Promise<Outcome> {
+  try {
+    await interpreterFor(host, say)().run(parse(text));
+    return { ok: true, message: "ran" };
+  } catch (e) {
+    return { ok: false, message: lastLine(e) };
+  }
+}
+
+// One string as the Tauri app's control bus sends it (SETCELL("A1", "100")),
+// REXX worked out on an interpreter of its own, as ADDRESS SPREADSHEET does:
+// what it came to, or why it failed. What the page serves on sae's control
+// bus (docs/control-bus.md).
+export async function runSpreadsheet(code: string, host: ScriptHost, say: (line: string) => void): Promise<Outcome> {
+  try {
+    const one = interpreterFor(host, say)();
+    await one.run(parse(`LET RESULT = ${String(code).trim()}`));
+    return { ok: true, message: "ran", output: one.getVariable("RESULT") };
+  } catch (e) {
+    return { ok: false, message: lastLine(e) };
+  }
+}
+
+// A maker of interpreters with the sheet's functions, the app's control
+// functions, ADDRESS SHEET and ADDRESS SPREADSHEET.
+function interpreterFor(host: ScriptHost, say: (line: string) => void): () => any {
   const sheetFunctions = {
     ...rangeFunctions((k) => host.get(k)),
     SETCELL: async (cell: string, input: unknown) => {
@@ -70,10 +95,5 @@ export async function runScript(text: string, host: ScriptHost, say: (line: stri
     install(it, functions);
     return it;
   };
-  try {
-    await interpreter().run(parse(text));
-    return { ok: true, message: "ran" };
-  } catch (e) {
-    return { ok: false, message: lastLine(e) };
-  }
+  return interpreter;
 }

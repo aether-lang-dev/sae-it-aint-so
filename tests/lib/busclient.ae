@@ -1,0 +1,79 @@
+// busclient.ae — a control-bus client for specs (docs/control-bus.md): it
+// reads the courier file, seals with services/secure_channel (aeo's), and
+// speaks raw HTTP over std.tcp, so a spec can also send what a well-behaved
+// client never would. The courier file is $SAE_APPDATA_DIR/.control-bus.
+import std.string
+import std.fs
+import std.tcp
+import std.json
+import std.os (os_getenv)
+import services.secure_channel
+
+exports (courier_path_, courier_, port_of_, exchange_, request_, command_)
+
+courier_path_() -> string {
+    return "${os_getenv("SAE_APPDATA_DIR")}/.control-bus"
+}
+
+// The courier file's url and key, ("", "") when there is none.
+courier_() -> (string, string) {
+    text, err = fs.read(courier_path_())
+    if err != "" { return "", "" }
+    v, jerr = json.parse(text)
+    if jerr != "" || v == null { return "", "" }
+    u, _ue = json.get_string(json.json_object_get_raw(v, "url"))
+    k, _ke = json.get_string(json.json_object_get_raw(v, "key"))
+    return u, k
+}
+
+// "http://127.0.0.1:PORT/api/NAME" -> PORT.
+port_of_(url: string) -> int {
+    rest = string.substring(url, 17, string.length(url))
+    slash = string.index_of(rest, "/")
+    n, _e = string.to_int(string.substring(rest, 0, slash))
+    return n
+}
+
+// One raw HTTP exchange: the answer's status line and body.
+exchange_(port: int, request: string) -> (string, string) {
+    sock, cerr = tcp.connect("127.0.0.1", port)
+    if cerr != "" { return "no connection: ${cerr}", "" }
+    _w = tcp.write(sock, request)
+    got = ""
+    i = 0
+    while i < 200 {
+        ready, _pe = tcp.poll(sock, 50)
+        if ready {
+            data, rerr = tcp.read(sock, 65536)
+            if rerr != "" || data == "" { break }
+            got = "${got}${data}"
+        }
+        i = i + 1
+    }
+    _c = tcp.tcp_close(sock)
+    end = string.index_of(got, "\r\n\r\n")
+    if end < 0 { return got, "" }
+    status = string.substring(got, 0, string.index_of(got, "\r\n"))
+    return status, string.substring(got, end + 4, string.length(got))
+}
+
+request_(port: int, path: string, host: string, extra: string, body: string) -> string {
+    return "POST ${path} HTTP/1.1\r\nHost: ${host}\r\n${extra}Content-Type: text/plain\r\nContent-Length: ${string.length(body)}\r\n\r\n${body}"
+}
+
+// A command sealed with `key`, sent as a client would; (status, the reply
+// opened with `key`, or why it did not open).
+command_(key: string, command: string) -> (string, string) {
+    url, _k = courier_()
+    port = port_of_(url)
+    o = json.obj()
+    _c = json.set(o, "command", json.str(command))
+    plain_in, _se = json.stringify(o)
+    frame = secure_channel.seal_line(key, plain_in)
+    path = string.substring(url, string.index_of(string.substring(url, 7, string.length(url)), "/") + 7, string.length(url))
+    status, body = exchange_(port, request_(port, path, "127.0.0.1:${port}", "", frame))
+    plain, perr = secure_channel.open_line(key, string.trim(body))
+    if perr != "" { return status, "did not open: ${perr}" }
+    return status, plain
+}
+

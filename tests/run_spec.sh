@@ -67,7 +67,7 @@ export SAE_PAGE_TIME_MS="${SAE_PAGE_TIME_MS:-1000}"
 SERVER=$!
 if [ -n "${SAE_TEST_APP:-}" ]; then
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
-        --app "$(cd "$SAE_TEST_APP" && pwd)" >"$LOG" 2>&1 &
+        --app "$(cd "$SAE_TEST_APP" && pwd)" ${SAE_TEST_FLAGS:-} >"$LOG" 2>&1 &
 else
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
         "${SAE_TEST_START:-http://127.0.0.1:$SITE_PORT/}" >"$LOG" 2>&1 &
@@ -77,7 +77,7 @@ trap 'kill $SAE $SERVER 2>/dev/null || true; rmdir "$LOCK" 2>/dev/null' EXIT INT
 
 cd "$ROOT/tests"
 status=0
-env AETHER_LIB_DIR="$ROOT/tests/lib:$ROOT/aether-ui/tests/lib" \
+env AETHER_LIB_DIR="$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT" \
     SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
     ae run "$SPEC.ae" || status=$?
 exit $status

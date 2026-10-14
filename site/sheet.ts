@@ -1,5 +1,6 @@
 "seeks documents, reduced functionality without";
 "seeks clipboard, reduced functionality without";
+"seeks control-bus, reduced functionality without";
 // Spreadsheet (docs/roadmap.md demo 18), declared as panels over a seam.
 //
 // site/sheet/ is the spreadsheet with no ui: two formula languages (Excel's,
@@ -59,3 +60,15 @@ setupScript(sheet);
 problemList(sheet);
 chartPanel(sheet);
 sheet.refresh();
+
+// The control bus (an installed app started with --control-bus): another
+// program drives the sheet as the Tauri app's clients do, each request a
+// string of REXX (SETCELL("A1", "100")), answered with what it came to.
+if (typeof bus !== "undefined") {
+  bus.serve(async (code: string) => {
+    const o = await sheet.cmds.spreadsheet(code, (line) => print(`sheet: ${line}`));
+    sheet.refresh();
+    if (!o.ok) throw new Error(o.message);
+    return o.output ?? null;
+  });
+}

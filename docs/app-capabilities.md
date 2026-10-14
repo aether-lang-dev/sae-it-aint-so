@@ -61,6 +61,16 @@ Aether's `hide` (`aether/docs/hide-and-seal.md`):
   person clicks or types, read their paste): `"write"` at any time,
   `"read"` at any time for a page that also seeks `clipboard-read`. Held in
   `services/clipboard`.
+- **`controlBus`** (`{ "name": ..., "maxRequestBytes": ... }`): other
+  programs on this machine may drive the app (`bus.serve(handler)`, each
+  request a string, the answer the handler's value), while the person has
+  switched it on for this launch (`sae --app <dir> --control-bus`). Loopback
+  only, a courier key in `$APPDATA/.control-bus` (0600) and every message
+  sealed with it (docs/control-bus.md). Held in `services/bus`. An
+  installer would say, of an app that declares it: "Other programs you run
+  can control this app, while you have it switched on"; and, with `fs`,
+  `documents` or `shell` too: "Other programs you run could then read and
+  write your files (or open links) through this app".
 - **Both file services are fenced by Aether too.** `services/files` runs
   each operation inside `std.sandbox`'s `enforce`, with the app's
   `fs.read`/`fs.write` roots as the sandbox's grants; `services/documents`
@@ -145,6 +155,7 @@ A line is `seeks <privilege> [<methods> <pattern>][, reduced functionality witho
   | `documents` | `documents` | never (yet: a server-backed form is planned) | if `app.json` has `capabilities.documents` |
   | `clipboard` | `clipboard` | yes: writes during a click or a key, reads during the person's paste | the same, and more where `app.json`'s `capabilities.clipboard` grants it |
   | `clipboard-read` | reading `clipboard` at any time | never | if `app.json`'s `capabilities.clipboard` has `"read"` |
+  | `control-bus` | `bus` (`serve`, `stop`) | never | if `app.json` declares `capabilities.controlBus`, on the desktop; it listens only when the person starts the app with `--control-bus` |
 
   `ui`, `vg`, `storage` and `browserContext` every page has; they are not
   sought.

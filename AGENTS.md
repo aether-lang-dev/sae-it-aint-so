@@ -18,7 +18,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `src/sae_prelude.js` | The reactive surface and the vg helpers that are JavaScript (`state`, `computed`, `bind`, `each`, `batch`, `vg.animate`, `vg.items`), evaluated into every page; embedded as `src/sae_prelude.c` by `tools/embed-prelude.sh` |
 | `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
 | `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
-| `services/` | One module per effect a page can ask for (`files`, `documents` (files the person picks), `clipboard`, `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `stdlib`: the `sae:` library and import hashes), each confined by its imports; `docs/architecture.md` |
+| `services/` | One module per effect a page can ask for (`files`, `documents` (files the person picks), `clipboard`, `bus` (the control bus, with `agent_auth` and `secure_channel` copied from aeo), `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `stdlib`: the `sae:` library and import hashes), each confined by its imports; `docs/architecture.md` |
 | `lib/sae/` | The `sae:` page standard library (`noise`, `scales`, `easing`), written in the dialect; `MANIFEST` holds their build-time hashes (`tools/hash-lib.sh`) |
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae` |
@@ -84,6 +84,7 @@ tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 19 attempt
 SAE_TEST_APP=tests/apps/climb tests/run_spec.sh spec_app_climb   # app mode: navigation cannot climb out of the bundle
 AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents tests/run_spec.sh spec_app_documents   # documents: picked files as handles (the driver answers the picker)
 AETHER_UI_HEADLESS=1 SAE_TEST_APP=site tests/run_spec.sh spec_app_sheet_files   # demo 18 as an app: open, save and export through documents
+SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$PWD/target/bus-appdata SAE_TEST_APP=tests/apps/bus tests/run_spec.sh spec_app_bus   # the control bus: courier file, sealed requests, every refusal (spec_app_bus_off without the flag; spec_app_sheet_bus: demo 18 over it)
 AETHER_UI_HEADLESS=1 SAE_CLIP_READ=1 SAE_TEST_APP=tests/apps/clipboard tests/run_spec.sh spec_app_clipboard   # an app's clipboard grant (tests/apps/clipboard_write, SAE_CLIP_READ=0: write only)
 ../aether/build/ae run tests/spec_sqlite_service.ae   # services/sqlite: parameters, rows, migrations, escape routes, no window
 SAE_TEST_APP=tests/apps/sqlite_demo tests/run_spec.sh spec_app_sqlite   # sqlite.<name> through pages (resets its own rows)

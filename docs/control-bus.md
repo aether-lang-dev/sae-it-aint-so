@@ -1,6 +1,14 @@
 # A control bus: may an installed app accept local connections?
 
-A design note, decided by Paul (2026-10-14). Nothing here is built yet.
+A design note, decided by Paul (2026-10-14). **Option (a) is built**
+(2026-10-14): `services/bus`, with aeo's `agent_auth` and `secure_channel`
+copied into `services/` (to be shared later); `"seeks control-bus"` and
+`bus.serve`/`bus.stop`; `--control-bus` after `sae --app <dir>`; demo 18
+serves it (`site/app.json`); `tests/spec_app_bus.ae`,
+`spec_app_bus_off.ae`, `spec_app_sheet_bus.ae`. Not yet: a window toggle
+(the launch flag is the switch), an installer (decision 4's wording waits in
+docs/app-capabilities.md), and how RexxJS client scripts reach it (no sae
+code goes into RexxJS).
 Decided so far (section 5): option (a), an app-mode service, now, and
 option (b), messages between pages, later; off until the person switches
 it on at launch; the sealed wire after aeo, the courier file, a stronger

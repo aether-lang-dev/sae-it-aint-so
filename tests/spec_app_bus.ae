@@ -1,0 +1,109 @@
+// spec_app_bus.ae — the control bus (docs/control-bus.md): another program
+// on this machine drives an app, with the courier key from the courier file
+// and every message sealed. This spec is that other program: it reads the
+// file, seals with services/secure_channel (aeo's), and speaks raw HTTP over
+// std.tcp, so it can also send what a well-behaved client never would.
+//   SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$PWD/target/bus-appdata \
+//     SAE_TEST_APP=tests/apps/bus tests/run_spec.sh spec_app_bus
+import std.spec
+import std.string
+import std.fs
+import std.tcp
+import std.json
+import std.os (os_getenv)
+import std.os
+import std.list
+import saedriver as b
+import uidriver
+import services.secure_channel
+import busclient (courier_path_, courier_, port_of_, exchange_, request_, command_)
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "the control bus, switched on at launch") {
+        spec.it("listening: the courier file has the address and a key, only for this user; the title says so") callback {
+            spec.assert_true(b.wait_for_console("sae: control bus: listening"), "listening")
+            url, key = courier_()
+            spec.assert_true(string.starts_with(url, "http://127.0.0.1:") == 1, "on loopback: ${url}")
+            spec.assert_true(string.ends_with(url, "/api/sheet") == 1, "at the app's name")
+            spec.assert_true(string.length(key) >= 20, "a key")
+            argv = list.new()
+            list.add(argv, "-c")
+            list.add(argv, "stat -c %a \"$0\" 2>/dev/null || stat -f %Lp \"$0\"")
+            list.add(argv, courier_path_())
+            mode, _code, _merr = os.run_capture("sh", argv, null)
+            spec.assert_str_eq(string.trim(mode), "600", "readable only by this user")
+            spec.assert_contains(uidriver.get_body("/windows"), "Bus test - control bus on", "the title marked")
+        }
+        spec.it("a sealed command reaches the page's handler; its answer comes back sealed") callback {
+            _u, key = courier_()
+            status, plain = command_(key, "SETCELL(A1, 100)")
+            spec.assert_str_eq(status, "HTTP/1.1 200 OK", "answered")
+            spec.assert_contains(plain, "\"success\":true", "succeeded")
+            spec.assert_contains(plain, "\"echo\":\"SETCELL(A1, 100)\"", "the handler's result")
+            b.assert_text("last: SETCELL(A1, 100)", "the page saw it")
+        }
+        spec.it("an async handler, and one that throws") callback {
+            _u, key = courier_()
+            _s1, later = command_(key, "later")
+            spec.assert_contains(later, "\"late\":true", "a promise's value")
+            _s2, boom = command_(key, "boom")
+            spec.assert_contains(boom, "\"success\":false", "failed")
+            spec.assert_contains(boom, "the handler failed", "saying why")
+        }
+        spec.it("refused: unsealed, the wrong key, a replay, a browser, another host, too big, another path") callback {
+            url, key = courier_()
+            port = port_of_(url)
+            here = "127.0.0.1:${port}"
+            s1, _b1 = exchange_(port, request_(port, "/api/sheet", here, "", "{\"command\":\"x\"}"))
+            spec.assert_str_eq(s1, "HTTP/1.1 401 Unauthorized", "unsealed")
+            s2, _b2 = exchange_(port, request_(port, "/api/sheet", here, "", secure_channel.seal_line("not the key", "{\"command\":\"x\"}")))
+            spec.assert_str_eq(s2, "HTTP/1.1 401 Unauthorized", "the wrong key")
+            frame = secure_channel.seal_line(key, "{\"command\":\"once\"}")
+            s3, _b3 = exchange_(port, request_(port, "/api/sheet", here, "", frame))
+            s4, b4 = exchange_(port, request_(port, "/api/sheet", here, "", frame))
+            spec.assert_str_eq(s3, "HTTP/1.1 200 OK", "the first time")
+            spec.assert_str_eq(s4, "HTTP/1.1 401 Unauthorized", "the same frame again: a replay")
+            spec.assert_contains(b4, "(replay)", "said so")
+            s5, _b5 = exchange_(port, request_(port, "/api/sheet", here, "Origin: https://evil.test\r\n", secure_channel.seal_line(key, "{\"command\":\"x\"}")))
+            spec.assert_str_eq(s5, "HTTP/1.1 403 Forbidden", "a browser (Origin)")
+            s6, _b6 = exchange_(port, request_(port, "/api/sheet", "evil.test:${port}", "", secure_channel.seal_line(key, "{\"command\":\"x\"}")))
+            spec.assert_str_eq(s6, "HTTP/1.1 403 Forbidden", "another host (DNS rebinding)")
+            big = "x"
+            while string.length(big) < 5000 { big = "${big}${big}" }
+            s7, _b7 = exchange_(port, request_(port, "/api/sheet", here, "", big))
+            spec.assert_str_eq(s7, "HTTP/1.1 413 Payload Too Large", "past maxRequestBytes")
+            s8, _b8 = exchange_(port, request_(port, "/api/other", here, "", secure_channel.seal_line(key, "{\"command\":\"x\"}")))
+            spec.assert_str_eq(s8, "HTTP/1.1 404 Not Found", "another path")
+            spec.assert_true(b.wait_for_console("sae: control bus: refused a request from a web browser"), "refusals logged")
+            body, _e = fs.read(target_log_())
+            spec.assert_eq(string.contains(body, key), 0, "and the key never")
+        }
+        spec.it("a reply from a server without the key does not open") callback {
+            _u, key = courier_()
+            fake = secure_channel.seal_line("an impostor's key", "{\"success\":true}")
+            _p, why = secure_channel.open_line(key, fake)
+            spec.assert_true(string.length(why) > 0, "refused: ${why}")
+        }
+        spec.it("bus.stop: the courier file goes, the title is plain again, nothing listens") callback {
+            url, _k = courier_()
+            port = port_of_(url)
+            b.click("stop")
+            spec.assert_true(b.wait_for_console("sae: control bus: stopped"), "stopped")
+            spec.assert_eq(fs.exists(courier_path_()), 0, "the file deleted")
+            spec.assert_eq(string.contains(uidriver.get_body("/windows"), "control bus on"), 0, "the title plain")
+            s, _b = exchange_(port, "x")
+            spec.assert_true(string.starts_with(s, "no connection") == 1 || s == "", "nothing listening: ${s}")
+            b.click("serve")
+            spec.assert_true(b.wait_for_console_n("sae: control bus: listening", 2), "and serving again")
+            _u2, key2 = courier_()
+            spec.assert_true(key2 != "", "a new key")
+        }
+    }
+    return spec.run_summary(fw)
+}
+
+target_log_() -> string {
+    return os_getenv("SAE_TEST_LOG")
+}

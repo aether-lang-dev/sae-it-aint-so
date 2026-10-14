@@ -1,4 +1,4 @@
-// Attempt: reach fs, shell and documents (and documents' raw gates) without
+// Attempt: reach fs, shell, documents and bus (and their raw gates) without
 // naming them (the lowerer checks names; the kernel leaves the objects out).
 // Expected: undefined, every route.
 const out = ui.text("computed_fs: trying");
@@ -13,6 +13,8 @@ const routes = [
   () => Object.getOwnPropertyDescriptor(g, "f" + "s"),
   () => g["docu" + "ments"],
   () => g["__sae_" + "documents"],
+  () => g["b" + "us"],
+  () => g["__sae_" + "bus"],
 ];
 const found = routes.map((r) => { try { return r(); } catch (e) { return undefined; } }).filter((v) => v !== undefined).length;
 report(found === 0 ? `computed_fs: refused: ${routes.length} routes, nothing there` : `computed_fs: ESCAPED ${found} routes reached something`);

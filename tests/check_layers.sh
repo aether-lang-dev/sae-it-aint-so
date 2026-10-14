@@ -36,6 +36,12 @@ expect_imports services/documents/module.ae \
     "import std.fs|import std.string|import std.strarr|import std.sandbox"
 expect_imports services/clipboard/module.ae \
     "import ui (clipboard_read, clipboard_write)|import std.string"
+expect_imports services/bus/module.ae \
+    "import std.tcp|import std.fs|import std.list|import std.string|import std.strarr|import std.json|import std.time (now_ms)|import services.agent_auth|import services.secure_channel"
+expect_imports services/agent_auth/module.ae \
+    "import std.nanoid|import std.cryptography (hmac_sha256_hex)|import std.string (bytes, string_length, string_char_at)"
+expect_imports services/secure_channel/module.ae \
+    "import std.bytes|import std.string (string_length, string_char_at, string_index_of, string_substring, string_equals, string_from_char, string_from_long, to_long)|import std.cryptography.ascon_aead128 (aead_seal, aead_open)|import std.cryptography.hkdf (hkdf)|import std.cryptography (random_bytes)|import std.time (now_ms)"
 expect_imports services/shell/module.ae \
     "import ui (open_url)|import std.fs (read, write_atomic)|import std.string|import std.strarr"
 expect_imports services/net/module.ae \
@@ -57,6 +63,19 @@ else
 fi
 expect_imports services/stdlib/module.ae \
     "import std.fs (read, exists)|import std.string|import std.strarr|import std.cryptography (sha256_hex)"
+
+# Listening for connections only in services/bus: the control bus is the
+# one place sae accepts them, under its rules (docs/control-bus.md).
+hits=$(grep -rnE '(tcp\.(listen|listen_on|accept)|tcp_listen(_on)?_raw|tcp_accept_raw|server_create)[[:space:]]*\(' \
+        --include='*.ae' src services lower 2>/dev/null \
+      | grep -v '^services/bus/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+if [ -n "$hits" ]; then
+    echo "FAIL a listener outside services/bus:"
+    echo "$hits" | sed 's/^/       /'
+    fail=1
+else
+    echo "ok   sae listens only in services/bus"
+fi
 
 # ui.clipboard_read and clipboard_write only in services/clipboard: every
 # read and write of the system clipboard goes through its rules.

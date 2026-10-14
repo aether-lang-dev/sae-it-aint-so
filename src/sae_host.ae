@@ -32,6 +32,7 @@ import std.actors
 import services.files
 import services.documents
 import services.clipboard
+import services.bus
 import services.shell
 import services.net
 import services.sqlite
@@ -146,6 +147,7 @@ struct Page {
     mod_factory: int // the JS factory making each unit's $sae object, or 0
     wrapped: int     // 1: the lowered page is a function to call with $sae
     key_ref: int     // ui.on_key's held function, or 0
+    bus_ref: int     // bus.serve's dispatcher (the page's handler, wrapped), or 0
     dgrids: ptr      // std.list of aether-ui datagrids this page made (ui.datagrid)
 }
 
@@ -2753,6 +2755,130 @@ sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
     text, err = files.read_text(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
     return quickjs.new_string(ctx, text)
+}
+
+// --- the page API: bus, the control bus (services/bus has the rules) ---
+//
+// One page serves at a time: the last to call bus.serve. The bus listens
+// only when the person started the app with --control-bus; otherwise
+// bus.serve says so once and nothing listens. While it listens the window's
+// title says so. A UI timer polls the listener (services/bus), hands each
+// request to the page's dispatcher, one at a time, and the page's answer
+// comes back through bus.answer. A request the page has not answered in
+// BUS_DEADLINE_MS is answered for it, as failed.
+
+var control_bus_flag_: int = 0    // the person started the app with --control-bus
+var bus_page_: ptr = null         // the page whose handler serves, or null
+var bus_timer_: int = 0
+var bus_told_off_: int = 0
+var bus_inflight_: int = 0        // the request with the page, or 0
+var bus_since_: long = 0
+const BUS_DEADLINE_MS = 10000
+
+sae_bus_serve(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "bus.serve(fn): fn must be a function") }
+    if p.bus_ref != 0 { quickjs.release(ctx, p.bus_ref) }
+    p.bus_ref = hold_arg_(ctx, argv, 0)
+    bus_page_ = p as ptr
+    if control_bus_flag_ == 0 {
+        if bus_told_off_ == 0 {
+            bus_told_off_ = 1
+            say_("sae: control bus: off; start the app with --control-bus to switch it on")
+        }
+        return 0
+    }
+    why = bus_listen_()
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    return 0
+}
+
+sae_bus_stop(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    p = page_of_(ctx)
+    if p.bus_ref != 0 {
+        quickjs.release(ctx, p.bus_ref)
+        p.bus_ref = 0
+    }
+    if bus_page_ == p as ptr { bus_page_ = null }
+    bus_silence_()
+    return 0
+}
+
+sae_bus_answer(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    id = arg_int_(ctx, argv, argc, 0, 0)
+    if id != bus_inflight_ { return 0 }   // answered already (its deadline passed)
+    bus.answer(id, arg_int_(ctx, argv, argc, 1, 0), own_(arg_str_(ctx, argv, argc, 2)), own_(arg_str_(ctx, argv, argc, 3)))
+    bus_inflight_ = 0
+    return 0
+}
+
+// Listen (the courier file written), the title marked, the poll timer on.
+bus_listen_() -> string {
+    if bus.listening() == 1 { return "" }
+    why = bus.start(app_data_dir_())
+    if why != "" { return why }
+    ui.set_window_title(1, "${app_name_} - control bus on")
+    say_("sae: control bus: listening (other programs on this machine can control ${app_name_})")
+    if bus_timer_ == 0 { bus_timer_ = ui.timer(20, || { bus_tick_() }) }
+    return ""
+}
+
+// Stop listening: the courier file gone, the title as it was.
+bus_silence_() {
+    if bus.listening() == 0 { return }
+    bus.stop()
+    if bus_timer_ != 0 {
+        ui.timer_cancel(bus_timer_)
+        bus_timer_ = 0
+    }
+    bus_inflight_ = 0
+    ui.set_window_title(1, app_name_)
+    say_("sae: control bus: stopped")
+}
+
+// Each tick: what has arrived read, refusals logged, and the next request
+// handed to the page (one at a time).
+bus_tick_() {
+    bus.poll()
+    l = bus.take_log()
+    if l != "" { say_(l) }
+    if bus_inflight_ != 0 {
+        if now_ms_() - bus_since_ > BUS_DEADLINE_MS {
+            bus.answer(bus_inflight_, 0, "", "the app did not answer in ${BUS_DEADLINE_MS / 1000} s")
+            bus_inflight_ = 0
+        }
+        return
+    }
+    id, command = bus.next()
+    if id == 0 { return }
+    if bus_page_ == null {
+        bus.answer(id, 0, "", "no page of this app is serving the control bus")
+        return
+    }
+    p = bus_page_ as *Page
+    if p.bus_ref == 0 {
+        bus.answer(id, 0, "", "no page of this app is serving the control bus")
+        return
+    }
+    bus_inflight_ = id
+    bus_since_ = now_ms_()
+    ctx = p.ctx
+    args = quickjs.new_array(ctx)
+    iv = quickjs.new_int(ctx, id)
+    _a = quickjs.set_index(ctx, args, 0, iv)
+    quickjs.release(ctx, iv)
+    cv = quickjs.new_string(ctx, command)
+    _b = quickjs.set_index(ctx, args, 1, cv)
+    quickjs.release(ctx, cv)
+    r = calln_(ctx, p.bus_ref, args)
+    quickjs.release(ctx, args)
+    if r < 0 { report_exception_(ctx, "the control bus's handler") }
+    settle_(ctx)
 }
 
 // --- the page API: clipboard (services/clipboard has the rules) ---
@@ -6408,6 +6534,11 @@ available_(nm: string) -> int {
     if nm == "documents" { return documents.granted() }
     if nm == "clipboard" { return 1 }
     if nm == "clipboard-read" { return clip_read_granted_ }
+    // Desktop first: Android and iOS have their own IPC.
+    if nm == "control-bus" {
+        if os.platform() == "android" || os.platform() == "ios" { return 0 }
+        return bus.declared()
+    }
     if nm == "open-urls" { return shell.granted() }
     if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
     return 0
@@ -6498,7 +6629,7 @@ absent_of_(optional: string) -> string {
 // ("local-filesystem,open-urls,"), to leave out with the absent ones.
 unsought_(seeks: string, optional: string) -> string {
     out = ""
-    names = string.split("outgoing-http,local-filesystem,open-urls,documents,clipboard,clipboard-read", ",")
+    names = string.split("outgoing-http,local-filesystem,open-urls,documents,clipboard,clipboard-read,control-bus", ",")
     n = string.string_array_size(names)
     i = 0
     while i < n {
@@ -6550,6 +6681,22 @@ read_capabilities_(manifest: ptr) {
     // capabilities.documents ({}): pages may ask the person to pick files
     // (services/documents); what they read and write is what was picked.
     if json.json_object_get_raw(caps, "documents") != null { documents.configure(1) }
+    // capabilities.controlBus ({ "name": ..., "maxRequestBytes": ... }): the
+    // app may be driven by other programs on this machine, while the person
+    // has switched it on (--control-bus). services/bus.
+    cb = json.json_object_get_raw(caps, "controlBus")
+    if cb != null {
+        bn = "control"
+        bnv = json.json_object_get_raw(cb, "name")
+        if bnv != null {
+            bs, _bse = json.get_string(bnv)
+            if bs != "" { bn = bs }
+        }
+        bmax = 65536
+        bmv = json.json_object_get_raw(cb, "maxRequestBytes")
+        if bmv != null { bmax = json.json_get_int(bmv) }
+        bus.configure(bn, bmax)
+    }
     // capabilities.clipboard (["write"], ["read"], both): at any time, not
     // only while the person clicks, types or pastes. Reading also needs the
     // page to seek clipboard-read.
@@ -7056,6 +7203,19 @@ api_register_(p: *Page) {
         cw, _cwe = quickjs.eval(q, "globalThis.clipboard = (function (raw) { return Object.freeze({ write_text: function (t) { return Promise.resolve().then(function () { raw.write(String(t)); }); }, read_text: function () { return Promise.resolve().then(function () { return raw.read(); }); } }); })(globalThis.__sae_clipboard); delete globalThis.__sae_clipboard;", "sae:clipboard")
         quickjs.release(q, cw)
     }
+    // bus: the control bus (app mode, capabilities.controlBus, --control-bus).
+    // A request reaches the handler as its command string; what the handler
+    // gives (or its promise's value) goes back as JSON.
+    if app_dir_ != "" && string.contains(p.absent, ",control-bus,") == 0 {
+        br = quickjs.new_object(q)
+        reg_(q, br, "serve", 1, sae_bus_serve)
+        reg_(q, br, "stop", 0, sae_bus_stop)
+        reg_(q, br, "answer", 4, sae_bus_answer)
+        quickjs.set_global(q, "__sae_bus", br)
+        quickjs.release(q, br)
+        bw, _bwe = quickjs.eval(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
+        quickjs.release(q, bw)
+    }
     if app_dir_ != "" && string.contains(p.absent, ",open-urls,") == 0 {
         sho = quickjs.new_object(q)
         reg_(q, sho, "open", 1, sae_shell_open)
@@ -7167,6 +7327,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.raf_ids = 0
     p.frame_sub = 0
     p.key_ref = 0
+    p.bus_ref = 0
     p.dgrids = list.new()
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
@@ -7185,6 +7346,9 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
 
 page_free_(p: *Page) {
     esc_free_(p)   // wave1/escape: the page's cap state
+    // The control bus's handler goes with its page; the bus keeps listening,
+    // and answers that no page serves it until another calls bus.serve.
+    if bus_page_ == p as ptr { bus_page_ = null }
     // A page's timers and animation frames stop with it: a tick after this
     // would call into a freed runtime.
     timers_free_(p)
@@ -7910,6 +8074,9 @@ base_name_(d: string) -> string {
 // sae (in a packaged .app)     the app bundled beside the binary
 // sae (in an APK)              the app among the files it runs in
 main() {
+    // sae --app <dir> --control-bus: the person switches the app's control
+    // bus on for this launch (docs/control-bus.md, decision 2).
+    if os.args_get(3) == "--control-bus" { control_bus_flag_ = 1 }
     code = sae_main(os.args_get(1), os.args_get(2), os.argv0())
     if code != 0 { exit(code) }
 }
@@ -7970,6 +8137,9 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     // desktop backend's window_run returns as the process ends, and
     // Android's returns at once (the platform's loop runs the app from
     // then on, through the page's handlers).
+    // The first page may have started the control bus before the window
+    // existed: its title says so from the start.
+    if bus.listening() == 1 { title = "${title} - control bus on" }
     ui.window_run(title, w, h, root)
     return 0
 }

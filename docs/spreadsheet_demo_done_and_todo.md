@@ -898,7 +898,7 @@ against demo 18 unchanged, in scripts (`script.ts`) and through
 (`SETCELLEDITOR`: a dropdown or checkbox in a cell), moving columns,
 renaming sheets.
 
-### 3. The external control bus (decided 2026-10-14; ready to build)
+### 3. The external control bus (done, 2026-10-14: option (a))
 
 The app can be driven from another process, ARexx-style: `postMessage` in
 a browser, HTTP on `localhost:8083` with a token in Tauri
@@ -919,6 +919,13 @@ Either needs a page-API function, a service, an attempt in
 Paul and Nic to decide on before any code: its section 5 has the six
 decisions, all made (2026-10-14): (a) now, (b) later, off until switched
 on at launch, the sealed wire after aeo.
+
+Built (option (a)): run as an app with `--control-bus`, demo 18 answers
+another program's REXX strings (`SETCELL("A1", "100")`, `GETCELL`) over the
+control bus, each sealed with the launch's courier key
+(`tests/spec_app_sheet_bus.ae`; `script.ts`'s `runSpreadsheet`). Still to
+come: how the Tauri app's RexxJS client scripts reach it, with no sae code
+in RexxJS; option (b), pages scripting each other.
 
 ### 4. Undo for everything (done, 2026-10-13)
 

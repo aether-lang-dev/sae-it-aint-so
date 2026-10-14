@@ -2,6 +2,9 @@
   "name": "Spreadsheet",
   "start": "/sheet",
   "capabilities": {
-    "documents": {}
+    "documents": {},
+    "controlBus": {
+      "name": "spreadsheet"
+    }
   }
 }

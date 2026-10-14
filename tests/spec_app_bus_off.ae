@@ -1,0 +1,26 @@
+// spec_app_bus_off.ae — the control bus switched off: the app declares one
+// and its page serves, but the person did not start it with --control-bus,
+// so nothing listens (docs/control-bus.md, decision 2).
+//   SAE_APPDATA_DIR=$PWD/target/bus-off-appdata SAE_TEST_APP=tests/apps/bus tests/run_spec.sh spec_app_bus_off
+import std.spec
+import std.string
+import std.fs
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "the control bus, not switched on") {
+        spec.it("the page serves, sae says once that the bus is off, and nothing listens") callback {
+            spec.assert_true(b.wait_for_console("sae: control bus: off; start the app with --control-bus to switch it on"), "said so")
+            spec.assert_eq(fs.exists("${os_getenv("SAE_APPDATA_DIR")}/.control-bus"), 0, "no courier file")
+            spec.assert_eq(string.contains(uidriver.get_body("/windows"), "control bus on"), 0, "the title plain")
+            b.click("serve")
+            b.click("serve")
+            spec.assert_eq(b.console_count("sae: control bus: off"), 1, "said once")
+        }
+    }
+    return spec.run_summary(fw)
+}

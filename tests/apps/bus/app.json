@@ -1,0 +1,6 @@
+{
+  "name": "Bus test",
+  "capabilities": {
+    "controlBus": { "name": "sheet", "maxRequestBytes": 4096 }
+  }
+}

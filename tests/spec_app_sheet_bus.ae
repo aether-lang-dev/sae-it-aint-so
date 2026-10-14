@@ -1,0 +1,37 @@
+// spec_app_sheet_bus.ae — demo 18 as an app, driven over the control bus as
+// the Tauri spreadsheet's clients drive it: each request a string of REXX
+// (SETCELL, GETCELL), answered with what it came to.
+//   SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$PWD/target/sheet-bus-appdata \
+//     AETHER_UI_HEADLESS=1 SAE_TEST_APP=site tests/run_spec.sh spec_app_sheet_bus
+import std.spec
+import std.string
+import saedriver as b
+import griddriver as g
+import uidriver
+import busclient (courier_, command_)
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "demo 18 over the control bus") {
+        spec.it("SETCELL from another program sets the cell, and the sheet shows it") callback {
+            spec.assert_true(b.wait_for_console("sae: control bus: listening"), "listening")
+            url, key = courier_()
+            spec.assert_true(string.ends_with(url, "/api/spreadsheet") == 1, "at the app's name")
+            status, plain = command_(key, "SETCELL(\"A1\", \"100\")")
+            spec.assert_str_eq(status, "HTTP/1.1 200 OK", "answered")
+            spec.assert_contains(plain, "\"success\":true", "succeeded")
+            spec.assert_contains(plain, "\"result\":\"100\"", "what was set")
+            spec.assert_true(g.wait_cell("A", 1, "100"), "on the sheet")
+        }
+        spec.it("GETCELL reads it back; a formula ripples; a bad command says why") callback {
+            _u, key = courier_()
+            _s1, _p1 = command_(key, "SETCELL(\"B1\", \"=A1*2\")")
+            _s2, got = command_(key, "GETCELL(\"B1\")")
+            spec.assert_contains(got, "\"result\":200", "B1 = A1*2")
+            _s3, bad = command_(key, "NOSUCHFUNCTION(1)")
+            spec.assert_contains(bad, "\"success\":false", "refused")
+        }
+    }
+    return spec.run_summary(fw)
+}
