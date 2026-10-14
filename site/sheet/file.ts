@@ -15,7 +15,9 @@
 // merged cells (merges: ["A1:C1"]), its tables (tables: [{ name, range,
 // headers, columns }], the Tauri app's table metadata), and the workbook's
 // other sheets (sheets: [{ name, cells, names, rules, charts, view, merges,
-// tables }]).
+// tables }]), and the workbook's own names, a range with its sheet's name
+// or a formula (bookNames: { QTY: "Sheet1!B2:B4", DOUBLE: "=LAMBDA(x, x*2)" };
+// a sheet's names are its own).
 // writeSheetFile writes it all.
 import { addrOf, colName, keyOf, order, parseRange } from "./address.ts";
 import { ICONS, rangeName } from "./rules.ts";
@@ -55,6 +57,7 @@ export interface SheetFile {
   readonly language: "Excel" | "RexxJS";
   readonly setupScript: string;
   readonly sheets: readonly FileSheet[];           // the first one, then any others
+  readonly bookNames: readonly [string, string][]; // [NAME, "Sheet1!B2:B4"], or a formula [NAME, "=LAMBDA(x, x*2)"]
 }
 
 interface FileCell {
@@ -188,6 +191,7 @@ export function readSheetFile(data: any): SheetFile {
       sheetOf(String(data?.sheetName ?? "Sheet1"), data),
       ...others.map((s: any, i: number) => sheetOf(String(s?.name ?? `Sheet${i + 2}`), s)),
     ],
+    bookNames: Object.entries((data?.bookNames ?? {}) as Record<string, unknown>).map(([n, r]): [string, string] => [n.toUpperCase(), String(r)]),
   };
 }
 
@@ -246,5 +250,6 @@ export function writeSheetFile(wb: Workbook) {
     sheetName: first.name,
     ...sheetIn(first),
     sheets: others.map((p) => ({ name: p.name, ...sheetIn(p) })),
+    ...(wb.names().length ? { bookNames: Object.fromEntries(wb.names()) } : {}),
   };
 }

@@ -30,6 +30,7 @@ import { applied } from "./rules.ts";
 import { chartData, layout } from "./charts.ts";
 import type { ChartData, ChartKind, Shape } from "./charts.ts";
 import { rangeName } from "./rules.ts";
+import { sheetPrefix } from "./address.ts";
 import type { CfRule, Mark } from "./rules.ts";
 import { check } from "./validation.ts";
 
@@ -144,6 +145,7 @@ export interface Watch {
 // RexxJS's own state: what a setup script defined stays defined.
 interface Saved {
   readonly pages: readonly SavedPage[];
+  readonly names: ReadonlyMap<string, BookName>;
   readonly active: Page;
   readonly name: string;
   readonly setupScript: string;
@@ -165,6 +167,11 @@ const viewOf = (p: Omit<Page, "name" | "sheet" | "notes">): Omit<Page, "name" | 
   filtered: p.filtered && new Set(p.filtered), filter: p.filter, frozen: p.frozen, merges: [...p.merges],
   heights: new Map(p.heights), widths: new Map(p.widths), autoId: p.autoId, pivots: new Map(p.pivots),
 });
+
+// A name for the whole workbook: a range of one of its sheets, or a
+// formula (what follows its '=', a named LAMBDA). A sheet's own name of the
+// same spelling hides it on that sheet, as in Excel.
+export type BookName = { readonly page: Page; readonly range: [Addr, Addr] } | { readonly formula: string };
 
 // Undo steps kept, as the Tauri spreadsheet keeps.
 const HISTORY = 100;
@@ -200,6 +207,7 @@ export class Workbook {
   // each undo, to redo.
   readonly #undo: Saved[] = [];
   readonly #redo: Saved[] = [];
+  #names = new Map<string, BookName>();
 
   constructor() {
     this.#active = this.#make("Sheet1", EXCEL);
@@ -223,7 +231,17 @@ export class Workbook {
     // The page's name as it is now: a sheet can be renamed.
     let page: Page | null = null;
     const upper = () => (page?.name ?? name).toUpperCase();
-    const context: Context = { get name() { return upper(); }, turns: this.#turns, value: (key) => this.#valueOf(key) };
+    const context: Context = {
+      get name() { return upper(); }, turns: this.#turns, value: (key) => this.#valueOf(key),
+      named: (n) => {
+        const b = this.#names.get(n);
+        return b && "range" in b ? { range: b.range, sheet: b.page === page ? null : b.page.name.toUpperCase() } : null;
+      },
+      formula: (n) => {
+        const b = this.#names.get(n);
+        return b && "formula" in b ? b.formula : null;
+      },
+    };
     const changed = (key: string) => {
       let keys = this.#pending.get(upper());
       if (!keys) this.#pending.set(upper(), (keys = new Set()));
@@ -280,10 +298,37 @@ export class Workbook {
     await this.#recalculate();
   }
 
+  // The workbook's names: a range as [NAME, "Sheet1!B2:B4"], a formula as
+  // [NAME, "=LAMBDA(x, x*2)"].
+  names(): [string, string][] {
+    return [...this.#names].sort(([x], [y]) => (x < y ? -1 : 1))
+      .map(([n, b]): [string, string] => [n, "formula" in b ? `=${b.formula}` : `${sheetPrefix(b.page.name)}${rangeName(b.range)}`]);
+  }
+
+  bookName(n: string): BookName | null {
+    return this.#names.get(n.toUpperCase()) ?? null;
+  }
+
+  // A name for the whole workbook defined (or redefined), or deleted
+  // (null): every sheet worked out again, as any formula may read it.
+  async defineName(n: string, b: BookName | null): Promise<void> {
+    if (b) this.#names.set(n.toUpperCase(), b); else this.#names.delete(n.toUpperCase());
+    await this.#recalculate();
+  }
+
+  // A sheet moved to `at` (0-based) among the others; what is active stays.
+  move(name: string, at: number): void {
+    const from = this.#pages.findIndex((p) => p.name.toUpperCase() === name.toUpperCase());
+    if (from < 0) return;
+    const [page] = this.#pages.splice(from, 1);
+    this.#pages.splice(Math.max(0, Math.min(at, this.#pages.length)), 0, page);
+  }
+
   // One empty sheet, as a file opened starts; where undo stops.
   reset(name = "Sheet1"): void {
     this.#active = this.#make(name, this.sheet.language);
     this.#pages = [this.#active];
+    this.#names = new Map();
     this.#pending.clear();
     this.#undo.length = 0;
     this.#redo.length = 0;
@@ -293,6 +338,7 @@ export class Workbook {
   saved(): Saved {
     return {
       pages: this.#pages.map((p) => ({ page: p, name: p.name, sheet: p.sheet.saved(), notes: p.notes.saved(), view: viewOf(p) })),
+      names: new Map(this.#names),
       active: this.#active, name: this.name, setupScript: this.setupScript,
     };
   }
@@ -321,8 +367,10 @@ export class Workbook {
     const was = this.#active, before = this.sheet.keys();
     // Sheets added, deleted, moved or renamed: every sheet worked out again,
     // as what reads one by name may read another now.
-    const moved = step.pages.length !== this.#pages.length || step.pages.some((s, i) => s.page !== this.#pages[i] || s.name !== s.page.name);
+    const sameNames = step.names.size === this.#names.size && [...step.names].every(([n, b]) => this.#names.get(n) === b);
+    const moved = !sameNames || step.pages.length !== this.#pages.length || step.pages.some((s, i) => s.page !== this.#pages[i] || s.name !== s.page.name);
     this.#pages = step.pages.map((s) => s.page);
+    this.#names = new Map(step.names);
     this.#active = step.active;
     this.name = step.name;
     this.setupScript = step.setupScript;

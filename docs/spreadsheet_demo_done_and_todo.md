@@ -93,8 +93,15 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
 - Named ranges: name the selection (the names bar), and a formula reads
   the name in either language (`=SUM(qty)`, `=SUM_RANGE("qty")`, a bare
   `rate`); redefining it moves what reads it, deleting it makes them
-  `#NAME?` (as an Excel formula's unknown name is). The address field is
-  the Name Box: Return on a name selects its range.
+  `#NAME?` (as an Excel formula's unknown name is). A name is the
+  workbook's, as Excel's are by default: read on every sheet, as its own
+  sheet's range (`names.define range=Costs!B1:B3` names one of another
+  sheet), following that sheet's rename, `#REF!` when it is deleted.
+  `scope=sheet` makes a sheet's own name, which hides a workbook name of
+  the same spelling there; Delete name takes a sheet's own first. The
+  Name Manager lists the workbook's (`QTY Sheet1!B2:B4`), then each
+  sheet's own (`Costs!QTY C1`). The address field is the Name Box: Return
+  on a name selects its range, going to its sheet.
 - Find (a field, and Match case, Whole cell and In formulas) lists the
   matches and selects the next; Replace all changes every match in
   constants (in formulas' text too, when asked), as one undo.
@@ -109,8 +116,9 @@ and no editor is open; `ui.datagrid_has_focus` tells it so):
   sheet COSTS") when there is no such sheet, until there is again. A copy
   moves a reference to another sheet as any other; rows or columns
   inserted on a sheet move every sheet's references to it, and no others.
-  The language is the workbook's, for every sheet; each sheet has its own
-  named ranges; undo is the workbook's.
+  The language is the workbook's, for every sheet, and so is undo. Move
+  left and Move right (`sheet.move`, `to=` or `way=`) reorder the tabs;
+  the file keeps the order.
 - Conditional formatting rules over the selection (the rules bar), as
   Excel's menu has them: Highlight Cells (greater than, less than, equal
   to, text that contains; between and the rest by command), Top 10 (or
@@ -535,6 +543,10 @@ summary.
   - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
+  - `sheet_book` (19): sheets moved (to, way, refused, undone, saved in
+    order); workbook names read on another sheet in both languages,
+    hidden by a sheet's own, listed, deleted, following a rename, `#REF!`
+    with their sheet gone and back on undo, saved and opened.
   - `sheet_rexx_lambda` (12): named LAMBDAs in RexxJS formulas: parts,
     calls, recursion through IF() and too deep, a statements body, cells
     read, the setup script's variables, names in any case, the wrong
@@ -548,7 +560,7 @@ summary.
     and paste: the cells and what reads them moved, here and on another
     sheet, `#REF!` for what was landed on, notes with them, one undo, and
     the refusals.
-- **In the browser** (`tests/run_all.sh spec_sheet`, 52 tests, on GTK4
+- **In the browser** (`tests/run_all.sh spec_sheet`, 53 tests, on GTK4
   under Xvfb and on macOS):
   - formulas, ripples, parse errors in red, cycles, the paste;
   - lookups, conditionals and IFERROR on the example;
@@ -559,7 +571,9 @@ summary.
     has the focus; Ctrl+Z, Undo and Redo, and Ctrl+Z taking back a merge
     and a hidden column; Ctrl+X and Ctrl+V moving cells and what reads
     them, Ctrl+V into a selection, Ctrl+Down and Ctrl+Up; a named LAMBDA
-    from the names bar, TEXTSPLIT spilled and UPPER over it; and Clear all;
+    from the names bar, TEXTSPLIT spilled and UPPER over it; a workbook's
+    name read on another sheet, Move left, the Name Box going back; and
+    Clear all;
   - the app's budget in RexxJS formulas (its setup script's TAX_RATE, a
     comment), RexxJS's `||`, `|>` and `>`, an error's reason, and the
     setting switched to Excel and back;
@@ -952,11 +966,14 @@ Named LAMBDAs in RexxJS formulas too (2026-10-14), on RexxJS `d27c738`:
 standard IF ... THEN ... ELSE, `;` between clauses (sae's own splitting of
 `;` in scripts is gone) and a lazy IF().
 
-### 8. Sheets moved, names for the workbook
+### 8. Sheets moved, names for the workbook (done, 2026-10-14)
 
-Renaming is done (`sheet.rename`, above). Still to come: moving a sheet
-reorders the tabs; named ranges scoped to the workbook as well as to a
-sheet.
+`sheet.move` and the tabs' Move left and Move right. Names are the
+workbook's by default (`Workbook`'s names; a sheet reads them through its
+`Context`, a range of another sheet qualified by that sheet's name, the
+`Named` a formula's names lookup gives), or a sheet's own (`scope=sheet`);
+undone, and saved as the file's `bookNames`. Still to come: a sheet's own
+name written from another sheet (`Costs!QTY`), and dragging a tab.
 
 ### 9. Real files in app mode, and the system clipboard
 
@@ -972,10 +989,10 @@ is `src/spreadsheet-model.js`, its control functions
 `src/spreadsheet-control-functions.js`). Each lands in the model with no
 `ui` and its checks headless, then on the page with an `it`:
 
-1. ~~Several sheets~~ (done). Still to come: ~~renaming~~ and moving a sheet
+1. ~~Several sheets~~ (done). Still to come: ~~renaming~~ and ~~moving a sheet~~
    (a rename rewrites what reads it), ~~undo across sheets~~ (done: To do
-   4), names
-   scoped to the workbook, and a cycle through two sheets found as one
+   4), ~~names scoped to the workbook~~ (done: To do 8), and a cycle
+   through two sheets found as one
    (settle() passes changes between sheets twenty times, then stops).
 2. ~~Saving and opening~~ (done, through `storage`; CSV in a textarea).
    Still to come: `files` in app mode (a `.json` or `.rexxsheet` the app

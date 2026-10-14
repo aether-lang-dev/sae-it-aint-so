@@ -19,7 +19,7 @@ import { COLS, ROWS, addrOf, cellAddr, keyOf, order, splitKey } from "./address.
 import { CellError, isArray } from "./values.ts";
 import type { ArrayValue, Result, Value } from "./values.ts";
 import { EXCEL } from "./excel.ts";
-import type { Formula, Formulas, Language, Names, TableDef, Tables } from "./language.ts";
+import type { Formula, Formulas, Language, Named, Names, TableDef, Tables } from "./language.ts";
 import type { Addr } from "./address.ts";
 import { show } from "./format.ts";
 
@@ -97,6 +97,9 @@ export interface Context {
   readonly name: string;
   readonly turns: Turns;
   value(key: string): Value;
+  // The workbook's names, for a name the sheet has none of its own for.
+  named?(name: string): Named | null;
+  formula?(name: string): string | null;
 }
 
 // A sheet on its own: no other sheet to read.
@@ -235,7 +238,7 @@ export class Sheet {
   // (a conditional style): its value, or the error it came to.
   evaluate(formula: string): Promise<Value> {
     return this.#inTurn(async () => {
-      const f = this.#language.compile(formula, (n) => this.#names.get(n) ?? null, (n) => this.#tables.get(n.toUpperCase()) ?? null, this.#formula);
+      const f = this.#language.compile(formula, this.#named, (n) => this.#tables.get(n.toUpperCase()) ?? null, this.#formula);
       const r = f.kind === "broken" ? f.error : (await f.run(this.#env())) ?? null;
       return isArray(r) ? r.values[0] ?? null : r;
     });
@@ -254,8 +257,19 @@ export class Sheet {
   }
 
   // A named formula's text (what follows the '='), or null.
-  readonly #formula = (n: string): string | null => this.#formulas.get(n.toUpperCase()) ?? null;
-  formula(n: string): string | null { return this.#formula(n); }
+  // A name as a formula reads it: the sheet's own, else the workbook's.
+  readonly #named = (n: string): Named | null => {
+    const r = this.#names.get(n.toUpperCase());
+    return r ? { range: r, sheet: null } : this.#formulas.has(n.toUpperCase()) ? null : this.#context.named?.(n.toUpperCase()) ?? null;
+  };
+  readonly #formula = (n: string): string | null =>
+    this.#formulas.get(n.toUpperCase()) ?? (this.#names.has(n.toUpperCase()) ? null : this.#context.formula?.(n.toUpperCase()) ?? null);
+  named(n: string): Named | null { return this.#named(n); }
+
+  // The sheet's own named formula's text (what follows the '='), or null.
+  formula(n: string): string | null { return this.#formulas.get(n.toUpperCase()) ?? null; }
+  // Its own or the workbook's.
+  formulaOf(n: string): string | null { return this.#formula(n); }
 
   // A name for a range defined (or redefined), or deleted (null), or (a
   // string: what follows the '=') for a formula; a name is one or the
@@ -307,7 +321,7 @@ export class Sheet {
   }
 
   #compile(key: string): void {
-    const c = compile(this.input(key), this.#language, (n) => this.#names.get(n) ?? null, (n) => this.#tables.get(n.toUpperCase()) ?? null, this.#formula);
+    const c = compile(this.input(key), this.#language, this.#named, (n) => this.#tables.get(n.toUpperCase()) ?? null, this.#formula);
     this.#compiled.set(key, c);
     this.#link(key, new Set(c.kind === "formula" ? c.reads.map((k) => this.#local(k) ?? k) : []));
   }

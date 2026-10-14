@@ -106,7 +106,7 @@ await cmds.run("edit.undo");
 const saved = (await cmds.run("file.export")).output as string;
 await cmds.run("file.new");
 await cmds.run(`file.import text="${saved.replace(/"/g, '""')}"`);
-eq("saved and opened with the file", [wb.sheet.formula("FACTORIAL"), value("C1")], ["LAMBDA(n, IF(n<2, 1, n*FACTORIAL(n-1)))", "3628800"]);
+eq("saved and opened with the file", [wb.sheet.formulaOf("FACTORIAL"), value("C1")], ["LAMBDA(n, IF(n<2, 1, n*FACTORIAL(n-1)))", "3628800"]);
 
 // expect: ok functions over a range: each cell
 // expect: ok a row and a column paired as a grid

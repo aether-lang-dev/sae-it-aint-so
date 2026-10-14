@@ -10,7 +10,14 @@ import type { Edit } from "./shift.ts";
 import type { Addr } from "./address.ts";
 
 // The sheet's named ranges: a name (upper case) to its two corners, or null.
-export type Names = (name: string) => [Addr, Addr] | null;
+// A named range as a formula reads it: its corners, and its sheet's name
+// (upper case, as a key has it) when it is on another sheet than the one
+// the formula is on (a workbook's name for a range of another sheet).
+export interface Named {
+  readonly range: [Addr, Addr];
+  readonly sheet: string | null;
+}
+export type Names = (name: string) => Named | null;
 // The sheet's named formulas (the Name Manager's "refers to" a formula, not
 // a range): a named LAMBDA, =LAMBDA(n, IF(n<2, 1, n*FACT(n-1))), by its
 // name; null for none. Its text is what follows the '='.

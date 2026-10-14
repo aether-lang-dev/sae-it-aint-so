@@ -10,6 +10,7 @@ import { FormulaError, tokens } from "./lexer.ts";
 import type { Op, Token } from "./lexer.ts";
 import type { ErrorCode } from "./values.ts";
 import { keyOf, splitKey } from "./address.ts";
+import type { Addr } from "./address.ts";
 import type { Formulas, Names } from "./language.ts";
 
 export type Expr =
@@ -269,7 +270,8 @@ class Parser {
           if (!this.#names) throw new FormulaError(t.at, `unknown name '${t.text}'`);
           const r = this.#names(t.name);
           if (!r) return this.#named(t.name) ?? { kind: "error", code: "#NAME?", why: `no name ${t.name}` };
-          const [a, b] = [keyOf(r[0]), keyOf(r[1])];
+          const on = (a: Addr) => (r.sheet ? `${r.sheet}!${keyOf(a)}` : keyOf(a));
+          const [a, b] = [on(r.range[0]), on(r.range[1])];
           return a === b ? { kind: "ref", name: a } : { kind: "range", from: a, to: b };
         }
         if (local) return this.#applied({ kind: "local", name: t.name });

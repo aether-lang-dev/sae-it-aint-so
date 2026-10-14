@@ -93,8 +93,8 @@ function readsOf(formula: string, names?: Names, tables?: Tables, formulas?: For
   }
   // A named range's cells, wherever its name is (bare, or in a string).
   for (const m of formula.matchAll(/[A-Za-z_]\w*/g)) {
-    const r = names?.(m[0].toUpperCase()) ?? tables?.(m[0])?.range;
-    if (r) for (const k of range(r[0], r[1])) reads.add(k);
+    const n = names?.(m[0].toUpperCase()), r = n?.range ?? tables?.(m[0])?.range;
+    if (r) for (const k of range(r[0], r[1])) reads.add(n?.sheet ? qualified(n.sheet, k) : k);
   }
   return [...reads];
 }
@@ -175,11 +175,16 @@ export function install(it: RexxInterpreter, functions: Record<string, (...args:
 export function rangeFunctions(read: (key: string) => unknown, names: () => Names | undefined = () => undefined,
   tables: () => Tables | undefined = () => undefined): Record<string, (...args: any[]) => unknown> {
   // A range's corners and the keys to read its cells by: "Costs!B1:B3" is
-  // on Costs; a name is on this sheet.
+  // on Costs; a name is on its own sheet.
   const located = (ref: string): { r: [Addr, Addr]; key: (k: string) => string } => {
     const m = /^\s*(?:'([^']+)'|([^'!]+))!(.*)$/.exec(String(ref));
-    const sheet = m ? (m[1] ?? m[2]).trim() : null;
-    const r = sheet !== null ? parseRange(m![3]) : parseRange(String(ref)) ?? names()?.(String(ref).trim().toUpperCase());
+    let sheet = m ? (m[1] ?? m[2]).trim() : null;
+    let r = sheet !== null ? parseRange(m![3]) : parseRange(String(ref));
+    if (!r && sheet === null) {
+      const n = names()?.(String(ref).trim().toUpperCase());
+      r = n?.range ?? null;
+      sheet = n?.sheet ?? null;
+    }
     if (!r) throw new Error(`Invalid range: ${ref}`);
     return { r, key: (k) => (sheet !== null ? qualified(sheet, k) : k) };
   };
@@ -365,9 +370,9 @@ export class RexxLanguage implements Language {
       if (addrOf(name)) return this.#read(keyOf(addrOf(name)!));
       const other = sheetCell(name);
       if (other) return this.#read(other);
-      const r = this.#names?.(name.toUpperCase());
-      if (!r) return undefined;
-      const vs = [...range(r[0], r[1])].map((k) => this.#read(k));
+      const n = this.#names?.(name.toUpperCase());
+      if (!n) return undefined;
+      const vs = [...range(n.range[0], n.range[1])].map((k) => this.#read(n.sheet ? qualified(n.sheet, k) : k));
       return vs.length === 1 ? vs[0] : vs;
     };
     install(it, {

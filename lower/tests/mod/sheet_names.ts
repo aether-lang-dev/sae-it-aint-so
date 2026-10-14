@@ -13,8 +13,8 @@ const message = async (line: string) => (await cmds.run(line)).message;
 
 await cmds.run("example.paste");
 eq("names.define: a range, and a cell", [await message("names.define name=qty range=B2:B4"), await message("names.define name=Rate range=C2")],
-  ["QTY is B2:B4", "RATE is C2"]);
-eq("names are any case, kept upper", wb.sheet.names(), [["QTY", "B2:B4"], ["RATE", "C2"]]);
+  ["QTY is Sheet1!B2:B4", "RATE is Sheet1!C2"]);
+eq("names are any case, kept upper; the workbook's, by their sheet", wb.names(), [["QTY", "Sheet1!B2:B4"], ["RATE", "Sheet1!C2"]]);
 await cmds.run('cell.set cell=F1 input="=SUM(qty)"');
 await cmds.run('cell.set cell=F2 input="=rate*100"');
 eq("an Excel formula reads a name as its range or cell", [value("F1"), value("F2")], ["9", "45"]);
@@ -29,7 +29,7 @@ await cmds.run("names.delete name=rate");
 eq("names.delete: what read it is #NAME?", [value("F2"), String((wb.sheet.value("F2") as any).why)], ["#NAME?", "no name RATE"]);
 await cmds.run("names.define name=rate range=C3");
 eq("and comes back when defined again", value("F2"), "220");
-eq("names.list", (await cmds.run("names.list")).output, ["QTY B2:B3", "RATE C3"]);
+eq("names.list", (await cmds.run("names.list")).output, ["QTY Sheet1!B2:B3", "RATE Sheet1!C3"]);
 
 await cmds.run("formulas.use language=RexxJS");
 await cmds.run('cell.set cell=F3 input="=SUM_RANGE(""qty"") + rate"');
@@ -39,7 +39,7 @@ eq("and follows it", value("F3"), "22");
 eq("names are journaled, and replay", cmds.journal().filter((l) => l.startsWith("names.")),
   ["names.define name=qty range=B2:B4", "names.define name=Rate range=C2", "names.define name=qty range=B2:B3", "names.delete name=rate", "names.define name=rate range=C3"]);
 // expect: ok names.define: a range, and a cell
-// expect: ok names are any case, kept upper
+// expect: ok names are any case, kept upper; the workbook's, by their sheet
 // expect: ok an Excel formula reads a name as its range or cell
 // expect: ok and follows its cells
 // expect: ok a name redefined: what reads it follows

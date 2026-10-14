@@ -8,7 +8,7 @@
 // script.ts), and the specs, headless and in the browser (the page's
 // command bar). The commands that change the workbook are journaled as
 // command lines, which replay.
-import { COLS, ROWS, cellAddr, colName, colOf, keyOf, parseRange, range, splitKey } from "./address.ts";
+import { COLS, ROWS, cellAddr, colName, colOf, keyOf, parseRange, range, sheetPrefix, splitKey } from "./address.ts";
 import { evaluationSteps } from "./audit.ts";
 import type { Addr } from "./address.ts";
 import { copied, filled, pasted } from "./copy.ts";
@@ -177,6 +177,16 @@ async function open(wb: Workbook, file: SheetFile): Promise<Outcome> {
     page.pivots = new Map(s.pivots);
     page.merges = s.merges.map((m) => parseRange(m)!);
     for (const t of s.tables) await wb.sheet.defineTable(t.name, t);
+  }
+  // The workbook's names, once its sheets are there: "Costs!B1:B3" or
+  // "=LAMBDA(...)"; one naming no sheet of it is left out.
+  for (const [n, r] of file.bookNames) {
+    if (r.startsWith("=")) {
+      await wb.defineName(n, { formula: r.slice(1) });
+      continue;
+    }
+    const m = /^\s*(?:'([^']+)'|([^'!]+))!(.*)$/.exec(r), page = m ? wb.page((m[1] ?? m[2]).trim()) : null, range = m ? parseRange(m[3]) : null;
+    if (page && range) await wb.defineName(n, { page, range });
   }
   wb.activate(file.sheets[0].name);
   wb.name = file.name;
@@ -391,6 +401,16 @@ const sheetNameOf = (s: string): string => {
   return /^[A-Za-z0-9_ ]+$/.test(t) ? t : refuse(`${s} is not a sheet name: letters, digits, spaces or _`);
 };
 const pageOf = (wb: Workbook, name: string) => wb.page(name) ?? refuse(`no sheet ${name}`);
+
+const scopeOf = (s: string | undefined): "workbook" | "sheet" =>
+  s === undefined || /^workbook$/i.test(s) ? "workbook" : /^sheet$/i.test(s) ? "sheet" : refuse(`${s} is not a scope: workbook or sheet`);
+
+// A range, perhaps of another sheet ("Costs!B1:B3", "'My Costs'!B1"), and
+// its sheet (the active one when it names none).
+function sheetRangeOf(wb: Workbook, s: string): { page: Page; range: [Addr, Addr] } {
+  const m = /^\s*(?:'([^']+)'|([^'!]+))!(.*)$/.exec(s);
+  return m ? { page: pageOf(wb, (m[1] ?? m[2]).trim()), range: rangeOf(m[3]) } : { page: wb.page(wb.active)!, range: rangeOf(s) };
+}
 
 // What the grid shows changes wholesale when the active sheet does.
 const shownKeys = (wb: Workbook, before: readonly string[]) => [...new Set([...before, ...wb.sheet.keys()])];
@@ -890,29 +910,46 @@ const SPECS: readonly Spec[] = [
   { id: "data.sortDescending", label: "Sort Z to A", params: ["range", "by"], journaled: true, run: sort(false) },
   {
     // A name for a range, or for a formula (a named LAMBDA:
-    // formula="=LAMBDA(x, x*2)", then =DOUBLE(4) anywhere on the sheet).
-    id: "names.define", label: "Define Name", params: ["name"], optional: ["range", "formula"], journaled: true,
+    // formula="=LAMBDA(x, x*2)", then =DOUBLE(4) in any formula). Its scope
+    // is the workbook, as in Excel (a range of any sheet: range=Costs!B1:B3),
+    // or scope=sheet: the active sheet's own, which hides a workbook name of
+    // the same spelling there.
+    id: "names.define", label: "Define Name", params: ["name"], optional: ["range", "formula", "scope"], journaled: true,
     run: async (wb, p) => {
-      const n = nameOf(p.name);
+      const n = nameOf(p.name), own = scopeOf(p.scope) === "sheet";
       if ((p.range === undefined) === (p.formula === undefined)) refuse("names.define needs a range or a formula");
-      const r = p.range !== undefined ? rangeOf(p.range) : formulaOf(wb, n, p.formula!);
-      const changed = await wb.sheet.define(n, r);
-      return changedBy(wb, changed, `${n} is ${wb.sheet.names().find(([x]) => x === n)![1]}`);
+      if (p.formula !== undefined) {
+        const f = formulaOf(wb, n, p.formula);
+        if (own) await wb.sheet.define(n, f); else await wb.defineName(n, { formula: f });
+      } else {
+        const { page, range: r } = sheetRangeOf(wb, p.range!);
+        if (own && page !== wb.page(wb.active)) refuse(`a sheet's own name is for a range of it: ${p.range}`);
+        if (own) await wb.sheet.define(n, r); else await wb.defineName(n, { page, range: r });
+      }
+      const listed = (own ? wb.sheet.names() : wb.names()).find(([x]) => x === n)![1];
+      return changedBy(wb, wb.sheet.keys(), `${own ? `${sheetPrefix(wb.active)}${n}` : n} is ${listed}`);
     },
   },
   {
-    id: "names.delete", label: "Delete Name", params: ["name"], journaled: true,
+    // The active sheet's own name of that spelling, or else the workbook's
+    // (scope says which).
+    id: "names.delete", label: "Delete Name", params: ["name"], optional: ["scope"], journaled: true,
     run: async (wb, p) => {
       const n = p.name.toUpperCase();
-      if (!wb.sheet.name(n) && wb.sheet.formula(n) === null) refuse(`no name ${n}`);
-      const changed = await wb.sheet.define(n, null);
-      return changedBy(wb, changed, `${n} deleted`);
+      const mine = wb.sheet.name(n) !== null || wb.sheet.formula(n) !== null;
+      const own = p.scope === undefined ? mine : scopeOf(p.scope) === "sheet";
+      if (own && !mine) refuse(`no name ${n} of ${wb.active}'s own`);
+      if (!own && !wb.bookName(n)) refuse(`no name ${n}`);
+      if (own) await wb.sheet.define(n, null); else await wb.defineName(n, null);
+      return changedBy(wb, wb.sheet.keys(), `${own ? `${sheetPrefix(wb.active)}${n}` : n} deleted`);
     },
   },
   {
+    // The workbook's names, then each sheet's own (Costs!RATE).
     id: "names.list", label: "Name Manager", params: [], journaled: false,
     run: async (wb) => {
-      const names = wb.sheet.names().map(([n, r]) => `${n} ${r}`);
+      const names = [...wb.names().map(([n, r]) => `${n} ${r}`),
+        ...wb.pages().flatMap((page) => page.sheet.names().map(([n, r]) => `${sheetPrefix(page.name)}${n} ${r}`))];
       return { ok: true, message: names.length ? names.join(", ") : "no names", changed: [], output: names };
     },
   },
@@ -940,7 +977,7 @@ const SPECS: readonly Spec[] = [
       if (wb.sheet.language.name !== "Excel") refuse("Evaluate Formula steps through Excel formulas");
       let steps: string[] = [];
       try {
-        steps = evaluationSteps(input.slice(1), { get: (k) => wb.sheet.value(k) }, (n) => wb.sheet.name(n), (n) => wb.sheet.formula(n));
+        steps = evaluationSteps(input.slice(1), { get: (k) => wb.sheet.value(k) }, (n) => wb.sheet.named(n), (n) => wb.sheet.formulaOf(n));
       } catch (e) {
         if (!(e instanceof FormulaError)) throw e;
         refuse(`${key}: parse error at ${e.at}: ${e.message}`);
@@ -1490,6 +1527,19 @@ const SPECS: readonly Spec[] = [
       const was = page.name, before = wb.sheet.keys();
       await wb.rename(was, to);
       return changedBy(wb, shownKeys(wb, before), `${was} is now ${to}`);
+    },
+  },
+  {
+    // A sheet moved among the tabs: to=N (1 is first), or way=left/right.
+    id: "sheet.move", label: "Move Sheet", params: ["name"], optional: ["to", "way"], journaled: true,
+    run: async (wb, p) => {
+      const page = pageOf(wb, p.name), from = wb.pages().indexOf(page), last = wb.pages().length - 1;
+      if ((p.to === undefined) === (p.way === undefined)) refuse("sheet.move needs to or way");
+      const at = p.to !== undefined ? countOf(p.to) - 1
+        : /^left$/i.test(p.way!) ? from - 1 : /^right$/i.test(p.way!) ? from + 1 : refuse(`${p.way} is not left or right`);
+      if (at < 0 || at > last) refuse(`${page.name} cannot move ${p.to !== undefined ? `to ${p.to}` : p.way}: there are ${last + 1} sheets`);
+      wb.move(page.name, at);
+      return changedBy(wb, [], `${page.name} is sheet ${at + 1} of ${last + 1}`);
     },
   },
   {

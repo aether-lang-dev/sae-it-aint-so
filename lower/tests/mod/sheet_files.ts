@@ -29,7 +29,7 @@ const cmds = new Commands(wb, store);
 const message = async (line: string) => (await cmds.run(line)).message;
 for (const line of [
   "cell.set cell=A1 input=Item", "cell.set cell=B1 input=2", 'cell.set cell=B2 input="=B1*21"', "cell.comment cell=B2 text=answer",
-  "cell.format cell=B1 format=number:0.00", "validation.set range=B1 kind=whole min=0", "names.define name=two range=B1",
+  "cell.format cell=B1 format=number:0.00", "validation.set range=B1 kind=whole min=0", "names.define name=two range=B1 scope=sheet",
   "sheet.add name=Costs", 'cell.set cell=A1 input="=Sheet1!B2+1"', "sheet.activate name=Sheet1",
 ]) await cmds.run(line);
 
