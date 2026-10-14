@@ -1,0 +1,118 @@
+// sae-bus: send one command to a sae app's control bus (docs/control-bus.md)
+// and print its answer. It is what a script, or any other program on this
+// machine, uses to drive an app started with --control-bus, without
+// handling the key or the sealing itself.
+//
+//   sae-bus <app name> <command>
+//   sae-bus --courier <file> <command>
+//
+// The app's courier file says where it listens and holds this launch's
+// key. It is found by the app's name (app.json's "name") in the app's data
+// folder, as the app wrote it: $SAE_APPDATA_DIR/.control-bus when that is
+// set, else ~/Library/Application Support/<name>/.control-bus on macOS and
+// ~/.local/share/<name>/.control-bus elsewhere. The command goes sealed
+// with the key; the answer comes back sealed, and is printed opened, one
+// line of JSON: {"success", "result", "errorCode", "error"}.
+//
+// Exit status 0 when the app answered, even to say the command failed (read
+// "success"); 2 when there was no answer to give: no courier file, nothing
+// listening, a refusal, or an answer that did not open. Why goes to stderr.
+
+import std.fs
+import std.io
+import std.json
+import std.os
+import std.string
+import std.tcp
+import std.time (now_ms)
+import services.secure_channel
+
+extern exit(code: int)
+
+const WAIT_MS = 15000   // the bus gives a page 10 s to answer
+
+fail_(why: string) {
+    _w = io.stderr_write("sae-bus: ${why}\n")
+    exit(2)
+}
+
+usage_() {
+    _w = io.stderr_write("usage: sae-bus <app name> <command>\n       sae-bus --courier <file> <command>\n")
+    exit(2)
+}
+
+// Where the app named `name` writes its courier file (src/sae_host.ae's
+// app_data_dir_).
+courier_path_(name: string) -> string {
+    d = os.getenv("SAE_APPDATA_DIR")
+    if d != null && d != "" { return "${d}/.control-bus" }
+    home = os.getenv("HOME")
+    if os.platform() == "darwin" { return "${home}/Library/Application Support/${name}/.control-bus" }
+    return "${home}/.local/share/${name}/.control-bus"
+}
+
+// The url and key in the courier file at `path`.
+courier_(path: string) -> (string, string) {
+    text, err = fs.read(path)
+    if err != "" { fail_("no courier file at ${path}: is the app running with --control-bus?") }
+    v, jerr = json.parse(text)
+    if jerr != "" || v == null { fail_("${path} is not a courier file") }
+    u, _ue = json.get_string(json.json_object_get_raw(v, "url"))
+    k, _ke = json.get_string(json.json_object_get_raw(v, "key"))
+    if u == "" || k == "" { fail_("${path} is not a courier file") }
+    return u, k
+}
+
+main() {
+    if os.args_count() < 3 { usage_() }
+    path = ""
+    command = ""
+    if os.args_get(1) == "--courier" {
+        if os.args_count() < 4 { usage_() }
+        path = os.args_get(2)
+        command = os.args_get(3)
+    } else {
+        path = courier_path_(os.args_get(1))
+        command = os.args_get(2)
+    }
+    url, key = courier_(path)
+
+    // "http://127.0.0.1:PORT/api/NAME"
+    if string.starts_with(url, "http://127.0.0.1:") == 0 { fail_("the courier file names ${url}, not this machine") }
+    rest = string.substring(url, 17, string.length(url))
+    slash = string.index_of(rest, "/")
+    if slash < 0 { fail_("the courier file names ${url}") }
+    port, _pe = string.to_int(string.substring(rest, 0, slash))
+    target = string.substring(rest, slash, string.length(rest))
+
+    o = json.obj()
+    _c = json.set(o, "command", json.str(command))
+    plain, _se = json.stringify(o)
+    frame = secure_channel.seal_line(key, plain)
+
+    sock, cerr = tcp.connect("127.0.0.1", port)
+    if cerr != "" { fail_("nothing listening at ${url} (${cerr}): has the app stopped?") }
+    _w = tcp.write(sock, "POST ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(frame)}\r\nConnection: close\r\n\r\n${frame}")
+
+    // The bus closes the connection after its answer.
+    got = ""
+    deadline = now_ms() + WAIT_MS
+    while now_ms() < deadline {
+        ready, _qe = tcp.poll(sock, 50)
+        if ready {
+            data, rerr = tcp.read(sock, 65536)
+            if rerr != "" || data == "" { break }
+            got = "${got}${data}"
+        }
+    }
+    _x = tcp.tcp_close(sock)
+
+    head_end = string.index_of(got, "\r\n\r\n")
+    if head_end < 0 { fail_("no answer from ${url} within ${WAIT_MS} ms") }
+    status = string.substring(got, 0, string.index_of(got, "\r\n"))
+    body = string.trim(string.substring(got, head_end + 4, string.length(got)))
+    if status != "HTTP/1.1 200 OK" { fail_("refused: ${status}: ${body}") }
+    answer, oerr = secure_channel.open_line(key, body)
+    if oerr != "" { fail_("the answer did not open: ${oerr}") }
+    println(answer)
+}

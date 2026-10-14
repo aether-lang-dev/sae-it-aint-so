@@ -24,6 +24,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae` |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`; modules in folders four deep) |
 | `tools/saelower.ae` | CLI for the lowerer, and `--from-svg` (an SVG as an AeVG-TS page) |
+| `tools/saebus.ae` | `sae-bus <app name> <command>`: one command to an app's control bus (finds the courier file, seals, prints the opened answer); what other programs, and the spreadsheet's REXX scripts, drive an app with |
 | `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
 | `../example-app-spreadsheet` | Not here: demo 18, the spreadsheet, moved there on 2026-10-14 (its `app/`, with RexxJS vendored). It runs on this checkout (`sae -> ../sae`) and its `./run-tests.sh` runs sae's harnesses on its tests (`lower/run-tests.sh --mod`, `tests/run_spec.sh <path>.ae`); run it before pushing a change to a page API it uses (documents, clipboard, the control bus, the datagrid) |
 | `tests/escape/` | The escape corpus: one page per attempt to get out (README "Browser security rules"); `tests/spec_escape.ae` holds each to "refused, logged once". A new browser rule is not done until its attempt is here |
@@ -63,6 +64,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 (cd tools && ../../aether/build/ae build pageserver.ae -o ../target/pageserver)
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 ../aether/build/ae build tools/saejs.ae -o target/saejs
+../aether/build/ae build tools/saebus.ae -o target/sae-bus
 lower/run-tests.sh                           # 67 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless; --mod DIR runs another repo's)
 tests/run_all.sh                             # every spec and check below, each with its environment (a label filter: tests/run_all.sh spec_app_)
 tests/run_spec.sh                            # spec_nav: 45 specs

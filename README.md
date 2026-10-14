@@ -343,7 +343,9 @@ service touches files, and each of its operations runs inside Aether's
   machine, while the person has started it with `--control-bus`: loopback
   only, a per-launch courier key in `$APPDATA/.control-bus`, every request
   and reply sealed with it (after aeo's agent channel; docs/control-bus.md).
-  The spreadsheet (RexxJS/example-app-spreadsheet) run so answers its REXX strings.
+  Other programs send commands with `target/sae-bus <app name> <command>`
+  (`tools/saebus.ae`), which does the finding and sealing. The spreadsheet
+  (RexxJS/example-app-spreadsheet) run so answers its REXX scripts' commands.
 - A web page has no `fs`, no `documents`, no `shell` and no `sqlite` at all.
 
 A page says at its top which privileges it seeks, one per line:

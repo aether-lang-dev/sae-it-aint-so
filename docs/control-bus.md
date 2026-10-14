@@ -6,10 +6,12 @@ copied into `services/` (to be shared later); `"seeks control-bus"` and
 `bus.serve`/`bus.stop`; `--control-bus` after `sae --app <dir>`; the
 spreadsheet serves it (RexxJS/example-app-spreadsheet, once demo 18:
 its `app/app.json`, `tests/specs/spec_app_sheet_bus.ae`);
-`tests/spec_app_bus.ae`, `spec_app_bus_off.ae`. Not yet: a window toggle
-(the launch flag is the switch), an installer (decision 4's wording waits in
-docs/app-capabilities.md), and how RexxJS client scripts reach it (no sae
-code goes into RexxJS).
+`tests/spec_app_bus.ae`, `spec_app_bus_off.ae`; and `sae-bus`
+(`tools/saebus.ae`), the client other programs run, which the
+spreadsheet's REXX scripts reach through an ADDRESS library of their own
+(see "The wire"). Not yet: a window toggle (the launch flag is the
+switch), and an installer (decision 4's wording waits in
+docs/app-capabilities.md).
 Decided so far (section 5): option (a), an app-mode service, now, and
 option (b), messages between pages, later; off until the person switches
 it on at launch; the sealed wire after aeo, the courier file, a stronger
@@ -210,12 +212,18 @@ HTTP over loopback, every body sealed (rule 5):
 - The reply's body the envelope of `{"success": true|false, "result":
   ..., "errorCode": n}`.
 
-These are the Tauri app's JSON shapes, so its client scripts carry over
-with one change: RexxJS's `ADDRESS "<url>" AUTH "<token>" AS SPREADSHEET`
-learns the envelope. We own RexxJS, so that is a RexxJS change: an
-`ADDRESS` target that reads the courier file (the URL and the key) and
-seals and opens each message, and the scripts themselves stay as they are.
-A small `sae-bus` command for shells and other languages does the same.
+These are the Tauri app's JSON shapes, so its client scripts carry over.
+**Built (2026-10-14):** `target/sae-bus` (`tools/saebus.ae`): `sae-bus
+<app name> <command>` finds the app's courier file, seals the command,
+sends it, opens the answer and prints it, one line of JSON; exit status 2
+when there is no app to ask, with why on stderr. It is the one client:
+shells and other languages run it. RexxJS learns nothing of sae (no sae
+code goes into RexxJS): the spreadsheet's repository has an ADDRESS
+library, `rexx/spreadsheet-address.js`, whose `ADDRESS SPREADSHEET` runs
+`sae-bus` for each command, and its scripts changed only from
+`ADDRESS "<url>" AUTH "<token>" AS SPREADSHEET` to that (and where the sae
+app differs from the Tauri app; its `rexx/README.md`). Its
+`spec_app_sheet_rexx` runs them against the app.
 
 The sealing comes from aeo, which runs it between a host and the agents of
 its nested VMs and containers (down to a Pi Zero 2 W with no OpenSSL):
