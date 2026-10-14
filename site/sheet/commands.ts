@@ -19,6 +19,7 @@ import type { SheetFile } from "./file.ts";
 import { show } from "./format.ts";
 import { EXAMPLE, FORMATTED, SAMPLE_BUDGET, TEST_SHEET } from "./samples.ts";
 import { runScript } from "./script.ts";
+import { lambdaOf } from "./rexx.ts";
 import { continued } from "./series.ts";
 import { check, describeRule, ruleOf } from "./validation.ts";
 import { asApp, editorOf, refusal, toggled } from "./editors.ts";
@@ -362,12 +363,18 @@ function rearranging(wb: Workbook, r: [Addr, Addr], rows: readonly number[]): [s
 // A name for a range: a letter first, then letters, digits or _; not a
 // cell, nor TRUE or FALSE.
 // A named formula's text, what follows its '=': refused when it does not
-// parse (in Excel formulas), or would hide a function of the same name.
+// parse in the sheet's language (in RexxJS formulas, a LAMBDA whose body is
+// RexxJS), or would hide a function of the same name.
 function formulaOf(wb: Workbook, name: string, text: string): string {
   if (!text.startsWith("=")) refuse(`a named formula starts with =: ${text}`);
   if (wb.sheet.language.functions().includes(name)) refuse(`${name} is a function already`);
-  const c = wb.sheet.language.name === "Excel" ? wb.sheet.language.compile(text.slice(1)) : null;
-  if (c?.kind === "broken") refuse(c.error.why);
+  if (wb.sheet.language.name === "Excel") {
+    const c = wb.sheet.language.compile(text.slice(1));
+    if (c.kind === "broken") refuse(c.error.why);
+  } else {
+    const l = lambdaOf(text.slice(1));
+    if (typeof l === "string") refuse(l);
+  }
   return text.slice(1);
 }
 

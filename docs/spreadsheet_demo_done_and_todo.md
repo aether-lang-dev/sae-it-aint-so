@@ -252,7 +252,14 @@ fields under the formula bar:
   `=DOUBLE(A1)`, passed as a function too (`=MAP(A1:A3, DOUBLE)`), and
   one can call itself (`FACT = LAMBDA(n, IF(n<2, 1, n*FACT(n-1)))`),
   `#NUM!` past 200 calls deep. It is parsed when first worked out, reads
-  what its body reads, and is saved and undone with the rest.
+  what its body reads, and is saved and undone with the rest. In RexxJS
+  formulas a named formula is a LAMBDA whose body is RexxJS: an
+  expression (`=LAMBDA(n, IF(n < 2, 1, n * FACT(n - 1)))`, as RexxJS's
+  IF() works out only the branch it takes), or statements that LET
+  RESULT (`IF x > 10 THEN LET RESULT = 10; ELSE LET RESULT = x`). Each
+  call runs on an interpreter of its own with the sheet, the setup
+  script's variables and every function; a body in both languages'
+  common syntax works in either.
 - A function given a range where it takes one value is worked out once
   for each of the range's cells, as Excel's are: `=UPPER(A1:A3)` spills
   three values, `=LEFT(A1:A3, B1:B3)` pairs them (a row and a column
@@ -528,6 +535,10 @@ summary.
   - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
+  - `sheet_rexx_lambda` (12): named LAMBDAs in RexxJS formulas: parts,
+    calls, recursion through IF() and too deep, a statements body, cells
+    read, the setup script's variables, names in any case, the wrong
+    count, refusals, delete and undo, and the same LAMBDA in Excel.
   - `sheet_more` (30): functions over a range, paired and broadcast;
     each new array and text function, its edges and refusals; array
     constants, copied and printed, and the refusals; named
@@ -937,7 +948,9 @@ which argument wanted one value), named LAMBDAs (`Sheet`'s named formulas,
 a `named` Expr parsed when first worked out), TAKE, DROP, CHOOSEROWS,
 CHOOSECOLS, VSTACK, HSTACK, TOCOL, TOROW, WRAPROWS, WRAPCOLS, EXPAND, TEXT,
 TEXTBEFORE, TEXTAFTER and TEXTSPLIT; array constants (`{1,2;3,4}`, 2026-10-14).
-Still to come: named LAMBDAs in RexxJS formulas (they are Excel's).
+Named LAMBDAs in RexxJS formulas too (2026-10-14), on RexxJS `d27c738`:
+standard IF ... THEN ... ELSE, `;` between clauses (sae's own splitting of
+`;` in scripts is gone) and a lazy IF().
 
 ### 8. Sheets moved, names for the workbook
 

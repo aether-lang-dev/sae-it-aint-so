@@ -9,7 +9,7 @@
 // RexxJS compound variable, so sae takes _), and its ranges are strings,
 // SUM_RANGE("Costs!B1:B3").
 import { addrOf, keyOf, parseRange, qualified, range, sheetPrefix } from "./address.ts";
-import type { Env, Formula, Language, Names, Tables } from "./language.ts";
+import type { Env, Formula, Formulas, Language, Names, Tables } from "./language.ts";
 import { aggregate, groupBy, pluck, queryOf, result, where } from "./query.ts";
 import type { Query } from "./query.ts";
 import { array } from "./values.ts";
@@ -33,8 +33,53 @@ const SHEET_CELL = /^(\w+)_([A-Za-z]+\d+)$/;
 
 const lastLine = (e: unknown): string => String((e as Error)?.message ?? e).split("\n").pop()!;
 
-function readsOf(formula: string, names?: Names, tables?: Tables): string[] {
+// A named LAMBDA as RexxJS formulas read one: LAMBDA(a, b, body), its
+// body a RexxJS expression, or statements (lines, or clauses split by ';')
+// that LET RESULT, as a formula's statements do. IF() works out only the
+// branch it takes, so one can call itself: IF(n < 2, 1, n * FACT(n - 1)).
+// Its parts, or why it is not one.
+export function lambdaOf(text: string): { params: string[]; body: string; statements: boolean } | string {
+  const m = /^\s*LAMBDA\s*\(([\s\S]*)\)\s*$/i.exec(text);
+  if (!m) return "a named formula in RexxJS formulas is a LAMBDA: =LAMBDA(x, x * 2)";
+  const params: string[] = [];
+  let rest = m[1];
+  for (let p = /^\s*([A-Za-z_]\w*)\s*,/.exec(rest); p; p = /^\s*([A-Za-z_]\w*)\s*,/.exec(rest)) {
+    if (addrOf(p[1])) return `a LAMBDA's names are not cells: ${p[1]}`;
+    params.push(p[1]);
+    rest = rest.slice(p[0].length);
+  }
+  const body = rest.trim();
+  if (!body) return "a LAMBDA needs a body after its names";
+  // Statements: lines, or a LET, SELECT, DO, or IF ... THEN (IF(...) is
+  // the function).
+  const statements = body.includes("\n") || /^(LET|SELECT|DO)\b/i.test(body) || (/^IF\b/i.test(body) && /\bTHEN\b/i.test(body));
+  try {
+    parse(statements ? body : `LET CELLRESULT = ${body}`);
+  } catch (e) {
+    return lastLine(e);
+  }
+  return { params, body, statements };
+}
+
+// The functions a formula calls that are named LAMBDAs, and those they call.
+function lambdasIn(formula: string, formulas: Formulas | undefined, seen = new Set<string>()): string[] {
+  for (const m of formula.matchAll(/([A-Za-z_]\w*)\s*\(/g)) {
+    const name = m[1].toUpperCase(), text = formulas?.(name);
+    if (text === null || text === undefined || seen.has(name)) continue;
+    seen.add(name);
+    const l = lambdaOf(text);
+    if (typeof l !== "string") lambdasIn(l.body, formulas, seen);
+  }
+  return [...seen];
+}
+
+function readsOf(formula: string, names?: Names, tables?: Tables, formulas?: Formulas): string[] {
   const reads = new Set<string>();
+  // What a named LAMBDA's body reads, the formula that calls it reads.
+  for (const name of lambdasIn(formula, formulas)) {
+    const l = lambdaOf(formulas!(name)!);
+    if (typeof l !== "string") for (const k of readsOf(l.body, names, tables)) reads.add(k);
+  }
   for (const m of formula.matchAll(REFS)) {
     const sheet = m[1] ?? m[2];
     const a = addrOf(`${m[3]}${m[4]}`);
@@ -284,20 +329,39 @@ const STYLE_FUNCTIONS: Record<string, (...args: any[]) => unknown> = {
   ORANGE_BG: () => ({ backgroundColor: "#ffe0b2" }),
 };
 
+// How deep named LAMBDAs may call named LAMBDAs before the formula is #NUM!.
+const DEPTH = 200;
+
 export class RexxLanguage implements Language {
   readonly name = "RexxJS";
+  readonly #functions: Record<string, (...args: any[]) => unknown> = {
+    ...rangeFunctions((k) => this.#read(k), () => this.#names, () => this.#tables), ...STYLE_FUNCTIONS,
+  };
   readonly #it: any;
-  readonly #functions: Record<string, (...args: any[]) => unknown>;
   #env: Env | null = null;
   #names: Names | undefined;
   #tables: Tables | undefined;
+  #formulas: Formulas | undefined;
   #errorRead: CellError | null = null;
+  #depth = 0;
+  // A named LAMBDA's body, parsed once.
+  readonly #parsed = new Map<string, unknown>();
 
   constructor() {
-    this.#it = new RexxInterpreter(null, { output: () => {} });
-    // An unset variable that names a cell reads it; a named range's name
-    // reads its cell, or its cells' values.
-    this.#it.variableResolver = (name: string) => {
+    this.#it = this.#interpreter();
+    // A named LAMBDA is a function too, looked up as it is called.
+    const own = this.#it.externalFunctions;
+    this.#it.externalFunctions = new Proxy(own, {
+      get: (t, p) => (typeof p !== "string" || p in t ? t[p as string] : this.#lambda(p)),
+    });
+  }
+
+  // An interpreter whose unset variables that name cells read them (a
+  // named range's name reads its cell, or its cells' values), with the
+  // app's functions; SETCELL is a script's (a formula only reads).
+  #interpreter(): any {
+    const it = new RexxInterpreter(null, { output: () => {} });
+    it.variableResolver = (name: string) => {
       if (addrOf(name)) return this.#read(keyOf(addrOf(name)!));
       const other = sheetCell(name);
       if (other) return this.#read(other);
@@ -306,14 +370,49 @@ export class RexxLanguage implements Language {
       const vs = [...range(r[0], r[1])].map((k) => this.#read(k));
       return vs.length === 1 ? vs[0] : vs;
     };
-    this.#functions = { ...rangeFunctions((k) => this.#read(k), () => this.#names, () => this.#tables), ...STYLE_FUNCTIONS };
-    install(this.#it, {
+    install(it, {
       ...this.#functions,
-      // A formula only reads: scripts change cells (script.ts).
       SETCELL: () => {
         throw new Error("SETCELL changes the sheet: run it in a script, not a formula");
       },
     });
+    return it;
+  }
+
+  // A named LAMBDA as a function, or undefined when `name` names none. Each
+  // call works out its body on an interpreter of its own, its names bound
+  // to the values given (in any case), the sheet, the setup script's
+  // variables and every function as the formula has them; what it gives
+  // is what its body comes to (RESULT, for statements).
+  #lambda(name: string): ((...args: unknown[]) => Promise<unknown>) | undefined {
+    const text = this.#formulas?.(name.toUpperCase());
+    if (text === null || text === undefined) return undefined;
+    return async (...args: unknown[]) => {
+      const fail = (code: "#ERROR!" | "#VALUE!" | "#NUM!", why: string): never => {
+        this.#errorRead ??= new CellError(code, why);
+        throw new Error(why);
+      };
+      const l = lambdaOf(text);
+      if (typeof l === "string") return fail("#ERROR!", `${name.toUpperCase()}: ${l}`);
+      if (args.length !== l.params.length) fail("#VALUE!", `${name.toUpperCase()} takes ${l.params.length} values, given ${args.length}`);
+      if (this.#depth >= DEPTH) fail("#NUM!", `LAMBDAs call LAMBDAs more than ${DEPTH} deep`);
+      const source = l.statements ? l.body : `LET CELLRESULT = ${l.body}`;
+      if (!this.#parsed.has(source)) this.#parsed.set(source, parse(source));
+      const it = this.#interpreter(), main = this.#it;
+      const resolve = it.variableResolver;
+      it.variableResolver = (v: string) => resolve(v) ?? main.variables.get(v);
+      it.externalFunctions = main.externalFunctions;
+      l.params.forEach((p, i) => {
+        for (const n of new Set([p, p.toUpperCase(), p.toLowerCase()])) it.variables.set(n, args[i]);
+      });
+      this.#depth++;
+      try {
+        await it.run(this.#parsed.get(source));
+      } finally {
+        this.#depth--;
+      }
+      return it.variables.get(l.statements ? "RESULT" : "CELLRESULT");
+    };
   }
 
   // A cell's value as RexxJS sees it: '' for an empty one, a number or
@@ -342,7 +441,7 @@ export class RexxLanguage implements Language {
     }
   }
 
-  compile(formula: string, names?: Names, tables?: Tables): Formula {
+  compile(formula: string, names?: Names, tables?: Tables, formulas?: Formulas): Formula {
     const statements = /^\s*LET\b/i.test(formula) || formula.includes("\n");
     let commands: unknown;
     try {
@@ -352,11 +451,12 @@ export class RexxLanguage implements Language {
     }
     return {
       kind: "formula",
-      reads: readsOf(formula, names, tables),
+      reads: readsOf(formula, names, tables, formulas),
       run: async (env) => {
         this.#env = env;
         this.#names = names;
         this.#tables = tables;
+        this.#formulas = formulas;
         this.#errorRead = null;
         try {
           await this.#it.run(commands);
