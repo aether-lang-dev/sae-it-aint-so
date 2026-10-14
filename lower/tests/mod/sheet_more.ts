@@ -11,6 +11,9 @@ import { show } from "./sheet/format.ts";
 import { Commands } from "./sheet/commands.ts";
 import { Workbook } from "./sheet/workbook.ts";
 import { eq } from "./lib/check.ts";
+import { movedBy } from "./sheet/shift.ts";
+import { EXCEL } from "./sheet/excel.ts";
+import { evaluationSteps } from "./sheet/audit.ts";
 
 // A1:C3 is 1 to 9 by rows; D1:D3 is text; F1:F2 two delimiters.
 const cells = new Map<string, Value>([
@@ -52,6 +55,17 @@ eq("any of several delimiters, any case, the end as one, if not found", [ev("TEX
 eq("TEXTSPLIT into columns and rows, padded", [ev("TEXTSPLIT(D3, \",\", \";\")"), ev("TEXTSPLIT(D1, \" \")"), ev("TEXTSPLIT(\"a,,b\", \",\", , 1)")],
   [[["a", "b", "#N/A"], ["c", "d", "e"]], [["apple", "pie"]], [["a", "b"]]]);
 eq("TEXTSPLIT over a range: #CALC! where a cell's is an array", ev("TEXTSPLIT(D1:D2, \" \")"), [["#CALC!"], ["Banana-Split"]]);
+
+eq("array constants: rows split by ';', negatives, text, TRUE, errors", [ev("{1,2;3,4}"), ev("{-1.5,\"#N/A\",TRUE,#N/A}"), ev("SUM({1,2;3,4}*10)"), ev("TAKE({1,2,3}, , -1)")],
+  [[["1", "2"], ["3", "4"]], [["-1.5", "#N/A", "TRUE", "#N/A"]], "100", "3"]);
+eq("and what they lift", [ev("UPPER({\"a\",\"b\"})"), ev("TEXTBEFORE(D3, {\",\";\";\"}, 2)"), ev("ISTEXT({\"#N/A\",#N/A})")],
+  [[["A", "B"]], "a,b", [["TRUE", "FALSE"]]]);
+eq("a copy moves the references round a constant, not the constant; Evaluate Formula prints it",
+  [movedBy(EXCEL, "=SUM({1,2;3,4}*A1)", { cols: 1, rows: 1 }), evaluationSteps("SUM({1,2}*A1)", env)],
+  ["=SUM({1,2;3,4}*B2)", ["SUM({1,2}*A1)", "SUM({1,2}*1)", "SUM({1,2})", "3"]]);
+const broken = (src: string) => { try { parse(src); return "parsed"; } catch (e) { return (e as Error).message; } };
+eq("refusals: a reference, a ragged row, an unclosed brace", [broken("{A1,2}"), broken("{1,2;3}"), broken("{1,2")],
+  ["an array constant holds numbers, text, TRUE, FALSE or errors, not 'A1'", "an array constant's rows differ in length", "expected ',', ';' or '}' but found the end"]);
 
 // Named LAMBDAs, through the Name Manager.
 const wb = new Workbook();
@@ -108,6 +122,10 @@ eq("saved and opened with the file", [wb.sheet.formula("FACTORIAL"), value("C1")
 // expect: ok any of several delimiters, any case, the end as one, if not found
 // expect: ok TEXTSPLIT into columns and rows, padded
 // expect: ok TEXTSPLIT over a range: #CALC! where a cell's is an array
+// expect: ok array constants: rows split by ';', negatives, text, TRUE, errors
+// expect: ok and what they lift
+// expect: ok a copy moves the references round a constant, not the constant; Evaluate Formula prints it
+// expect: ok refusals: a reference, a ragged row, an unclosed brace
 // expect: ok a name for a LAMBDA
 // expect: ok called as a function, and passed as one
 // expect: ok redefined, what calls it is worked out again

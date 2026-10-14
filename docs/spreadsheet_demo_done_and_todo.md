@@ -265,6 +265,10 @@ fields under the formula bar:
   (any of several delimiters, from the end, any case, the end as one,
   if_not_found) and TEXTSPLIT (columns and rows, empty pieces dropped,
   padded).
+- Array constants, as Excel writes them: `={1,2;3,4}` (`,` between
+  columns, `;` between rows), of numbers (a minus before one), text, TRUE,
+  FALSE and errors; no references in them. A copy leaves them be; Evaluate
+  Formula prints them; functions lift over them as over a range.
 - Dynamic arrays, as Excel 365 has them. A formula may come to an array:
   a range, an operator over ranges cell by cell (`=A1:A3*2`; a row or a
   column broadcast across the other, `#N/A` where one runs out), IF over
@@ -524,8 +528,9 @@ summary.
   - `sheet_copy` (29): moving formulas (relative, `$`-fixed, ranges, off
     the sheet, kept as typed), copy as text, paste from the sheet and from
     elsewhere, fill down and right.
-  - `sheet_more` (26): functions over a range, paired and broadcast;
-    each new array and text function, its edges and refusals; named
+  - `sheet_more` (30): functions over a range, paired and broadcast;
+    each new array and text function, its edges and refusals; array
+    constants, copied and printed, and the refusals; named
     LAMBDAs: called, passed to MAP, redefined, recursive and too deep,
     reading cells, listed, refused, deleted, undone, saved and opened.
   - `sheet_cut` (14): paste into a range (each part of it, or once); cut
@@ -931,9 +936,8 @@ Functions lifted over ranges (`functions.ts`'s `lifted`: `val()` says
 which argument wanted one value), named LAMBDAs (`Sheet`'s named formulas,
 a `named` Expr parsed when first worked out), TAKE, DROP, CHOOSEROWS,
 CHOOSECOLS, VSTACK, HSTACK, TOCOL, TOROW, WRAPROWS, WRAPCOLS, EXPAND, TEXT,
-TEXTBEFORE, TEXTAFTER and TEXTSPLIT. Still to come: array constants
-(`{1,2;3,4}`, which the lexer does not read yet), and named LAMBDAs in
-RexxJS formulas (they are Excel's).
+TEXTBEFORE, TEXTAFTER and TEXTSPLIT; array constants (`{1,2;3,4}`, 2026-10-14).
+Still to come: named LAMBDAs in RexxJS formulas (they are Excel's).
 
 ### 8. Sheets moved, names for the workbook
 
@@ -1003,7 +1007,7 @@ fields for CSV and RexxJS scripts.
    - Done too: functions lifted over ranges; named LAMBDAs; TAKE, DROP,
      CHOOSEROWS, CHOOSECOLS, VSTACK, HSTACK, TOCOL, TOROW, WRAPROWS,
      WRAPCOLS, EXPAND; TEXT, TEXTBEFORE, TEXTAFTER, TEXTSPLIT (To do 7).
-   - Next: array constants (`{1,2;3,4}`).
+   - Done too: array constants (`{1,2;3,4}`).
 5. ~~Highlighting what a formula reads while it is typed~~ (done: coloured
    references and point mode). Still to come: Evaluate Formula for RexxJS
    formulas, which needs RexxJS's own expression tree.

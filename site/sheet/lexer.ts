@@ -14,7 +14,7 @@ export type Token = (
   | { readonly kind: "error"; readonly code: ErrorCode }
   | { readonly kind: "name"; readonly name: string }
   | { readonly kind: "op"; readonly op: Op }
-  | { readonly kind: "(" | ")" | "," | ":" }
+  | { readonly kind: "(" | ")" | "," | ":" | "{" | "}" | ";" }
   | { readonly kind: "end" }
 ) & { readonly at: number; readonly text: string };
 
@@ -84,7 +84,7 @@ export function* tokens(formula: string, from = 2): Generator<Token, void, undef
       i = j + 1;
       continue;
     }
-    if (c === "(" || c === ")" || c === "," || c === ":") {
+    if (c === "(" || c === ")" || c === "," || c === ":" || c === "{" || c === "}" || c === ";") {
       yield { kind: c, at, text: c };
       i++;
       continue;

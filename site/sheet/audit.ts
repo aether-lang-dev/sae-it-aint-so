@@ -14,7 +14,7 @@ import { show } from "./format.ts";
 import type { Formulas, Names } from "./language.ts";
 import { parse } from "./parser.ts";
 import type { Expr } from "./parser.ts";
-import { CellError, isArray, toNumber } from "./values.ts";
+import { CellError, array, isArray, toNumber } from "./values.ts";
 import type { Result, Value } from "./values.ts";
 
 const LEVEL: Record<string, number> = { "=": 0, "<>": 0, "<": 0, ">": 0, "<=": 0, ">=": 0, "&": 1, "+": 2, "-": 2, "*": 3, "/": 3, "^": 4 };
@@ -57,6 +57,7 @@ function nodeOf(e: Expr): Node {
   if (e.kind === "num" || e.kind === "str" || e.kind === "bool") n.text = literal(e.value);
   if (e.kind === "error") n.text = e.code;
   if (e.kind === "missing") n.text = "";
+  if (e.kind === "array") n.text = literal(array(e.rows, e.cols, e.values.map((v) => (typeof v === "object" ? new CellError(v.error, "") : v))));
   return n;
 }
 

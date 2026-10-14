@@ -168,6 +168,9 @@ class Evaluator {
       }
       case "missing":
         return null;
+      // An error in an array constant is that cell's value.
+      case "array":
+        return array(e.rows, e.cols, e.values.map((v) => (typeof v === "object" ? new CellError(v.error, "written in the formula") : v)));
       case "local":
       case "let":
       case "lambda":

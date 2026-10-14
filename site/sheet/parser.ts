@@ -19,6 +19,8 @@ export type Expr =
   | { readonly kind: "ref"; readonly name: string }
   | { readonly kind: "range"; readonly from: string; readonly to: string }
   | { readonly kind: "spill"; readonly name: string }
+  // An array constant, {1,2;3,4}: rows split by ';', each a row's values.
+  | { readonly kind: "array"; readonly rows: number; readonly cols: number; readonly values: readonly ArrayItem[] }
   | { readonly kind: "error"; readonly code: ErrorCode; readonly why?: string }
   | { readonly kind: "neg"; readonly arg: Expr }
   | { readonly kind: "binary"; readonly op: Op; readonly left: Expr; readonly right: Expr }
@@ -34,6 +36,10 @@ export type Expr =
   // A named formula (a named LAMBDA): parsed when it is first worked out,
   // so one that calls itself is not parsed for ever.
   | { readonly kind: "named"; readonly name: string; readonly expr: () => Expr };
+
+// A value of an array constant: an error is tagged, so "#N/A" in quotes
+// stays text.
+export type ArrayItem = number | string | boolean | { readonly error: ErrorCode };
 
 const LEVELS: readonly (readonly Op[])[] = [
   ["=", "<>", "<", ">", "<=", ">="],
@@ -210,6 +216,31 @@ class Parser {
     };
   }
 
+  // An array constant after its '{': numbers (a minus before one), text,
+  // TRUE, FALSE and errors, ',' between columns and ';' between rows, every
+  // row as long; no references or formulas, as in Excel.
+  #array(at: number): Expr {
+    const rows: ArrayItem[][] = [[]];
+    for (;;) {
+      const t = this.#next();
+      const minus = t.kind === "op" && t.op === "-";
+      const v = minus ? this.#next() : t;
+      if (v.kind === "num") rows[rows.length - 1].push(minus ? -v.value : v.value);
+      else if (minus) throw new FormulaError(v.at, `expected a number after '-' but found ${shown(v)}`);
+      else if (v.kind === "str") rows[rows.length - 1].push(v.value);
+      else if (v.kind === "error") rows[rows.length - 1].push({ error: v.code });
+      else if (v.kind === "name" && (v.name === "TRUE" || v.name === "FALSE")) rows[rows.length - 1].push(v.name === "TRUE");
+      else throw new FormulaError(v.at, `an array constant holds numbers, text, TRUE, FALSE or errors, not ${shown(v)}`);
+      const sep = this.#next();
+      if (sep.kind === "}") break;
+      if (sep.kind === ";") rows.push([]);
+      else if (sep.kind !== ",") throw new FormulaError(sep.at, `expected ',', ';' or '}' but found ${shown(sep)}`);
+    }
+    const cols = rows[0].length;
+    if (rows.some((r) => r.length !== cols)) throw new FormulaError(at, "an array constant's rows differ in length");
+    return { kind: "array", rows: rows.length, cols, values: rows.flat() };
+  }
+
   #primary(): Expr {
     const t = this.#next();
     switch (t.kind) {
@@ -248,6 +279,8 @@ class Parser {
         if (named) return this.#applied(named);
         return { kind: "call", name: t.name, args: this.#args() };
       }
+      case "{":
+        return this.#array(t.at);
       case "(": {
         const e = this.#binary(0);
         this.#expect(")");
