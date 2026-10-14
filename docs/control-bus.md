@@ -1,6 +1,8 @@
 # A control bus: may an installed app accept local connections?
 
-A design note for Paul and Nic to decide on. Nothing here is built. It is
+A design note for Paul and Nic to decide on. Nothing here is built.
+Decided so far (section 5): option (a), an app-mode service, now, and
+option (b), messages between pages, later. Decisions 2 to 6 are open. It is
 step 3 of the spreadsheet plan (`docs/spreadsheet_demo_done_and_todo.md`):
 steps 1 and 2 brought over the Tauri spreadsheet's query functions and its
 control functions. That leaves its control bus, which lets another process
@@ -259,9 +261,10 @@ program drive an app, which is what the ARexx comparison is about.
 
 ## 5. Decisions needed
 
-1. **(a), (b), both, or neither?** My suggestion: (a) with the rules above,
-   because the ARexx use (a shell script or a REXX script driving an app)
-   is the point. (b) can follow if apps want to talk to each other.
+1. **(a), (b), both, or neither?** **Decided (Paul, 2026-10-14): (a) now,
+   (b) later.** (a) with the rules above, because the ARexx use (a shell
+   script or a REXX script driving an app) is the point; (b), sae apps
+   scripting each other through `browserContext`, follows.
 2. **Off until the person opts in at launch?** (`--control-bus`, or a
    window toggle.) My suggestion is yes: declared by the app, switched on
    by the person, as a microphone is.
