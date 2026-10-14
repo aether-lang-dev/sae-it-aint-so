@@ -969,8 +969,8 @@ names_of_(list: string) -> string {
 // page has, so they are not sought. "database" takes the database's name
 // ("seeks database fred", one line per database) and unlocks sqlite.fred;
 // it is kept as "database fred" in the sought and optional lists.
-const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,database:sqlite,"
-const PRIVILEGED = ",fs,http,shell,sqlite,"
+const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,database:sqlite,documents:documents,"
+const PRIVILEGED = ",fs,http,shell,sqlite,documents,"
 
 // The object a privilege unlocks ("local-filesystem" -> "fs"), or "".
 object_of_(privilege: string) -> string {
@@ -1089,7 +1089,7 @@ page_seeks_(x: *Lx) {
         }
         obj = object_of_(nm)
         if obj == "" {
-            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls, database <name>)")
+            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls, database <name>, documents)")
             return
         }
         scoped = 0

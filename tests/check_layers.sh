@@ -31,7 +31,9 @@ expect_imports() {   # expect_imports FILE "line|line|..."
 }
 
 expect_imports services/files/module.ae \
-    "import std.fs|import std.dir|import std.string|import std.strarr"
+    "import std.fs|import std.dir|import std.string|import std.strarr|import std.sandbox"
+expect_imports services/documents/module.ae \
+    "import std.fs|import std.string|import std.strarr|import std.sandbox"
 expect_imports services/shell/module.ae \
     "import ui (open_url)|import std.fs (read, write_atomic)|import std.string|import std.strarr"
 expect_imports services/net/module.ae \

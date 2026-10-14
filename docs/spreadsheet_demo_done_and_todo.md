@@ -975,11 +975,21 @@ workbook's by default (`Workbook`'s names; a sheet reads them through its
 undone, and saved as the file's `bookNames`. Still to come: a sheet's own
 name written from another sheet (`Costs!QTY`), and dragging a tab.
 
-### 9. Real files in app mode, and the system clipboard
+### 9. Real files in app mode (done, 2026-10-14), and the system clipboard
 
-Each needs a page service (as `storage` is a page API): `files` for an
-installed app (a `.json` or `.rexxsheet` the Tauri app opens too, and
-`.csv`), and a clipboard with a permission.
+Demo 18 run as an installed app (`sae --app site`; `site/app.json` grants
+`documents`) has Open file, Save file and Export CSV file: the person picks,
+the page gets a handle, never a path (`documents`, docs/page-services.md
+section 5, agreed 2026-10-14). A workbook in the Tauri app's format opens
+(`file.import`), a `.csv` is read in at the selected cell, the workbook is
+saved as `.json`. In the browser `documents` is absent and the page does
+without (`"seeks documents, reduced functionality without"`). Still to
+come: files remembered across launches (with documents' persisted handles),
+and the same buttons for a page fetched over HTTP (server-backed
+documents).
+
+The clipboard still waits on a decision: who may write it, and who may
+read it (docs/page-services.md section 8).
 
 The lists below are where these came from, with what has landed struck
 through.

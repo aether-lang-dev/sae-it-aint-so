@@ -1,0 +1,101 @@
+// services/documents — the one place sae reads or writes a file the person
+// picked: the page API's `documents` object (app mode). See
+// docs/page-services.md, section 5.
+//
+// A page never sees a path. The kernel's picker hands the path the person
+// chose to adopt(), which keeps it and gives back a handle (a number from
+// 1); name, read_text and write_text take that handle. Each read or write
+// runs inside std.sandbox's enforce with a grant for that one file and
+// nothing else, so a slip here still cannot reach another file
+// (aether/docs/containment-sandbox.md: the contained cannot reach the
+// container).
+//
+// What this module can reach is its imports: std.fs for the work,
+// std.sandbox to fence it, std.string and std.strarr to keep the handles.
+// tests/check_layers.sh holds the import list to that.
+
+import std.fs
+import std.string
+import std.strarr
+import std.sandbox
+
+exports (configure, granted, adopt, name, read_text, write_text)
+
+var enabled_: int = 0     // 0 in the browser, or an app whose app.json does not grant documents
+var paths_: ptr = null    // strarr: the picked paths; handle h is paths_[h - 1]
+
+configure(enabled: int) {
+    enabled_ = enabled
+    paths_ = strarr.new()
+}
+
+granted() -> int {
+    return enabled_
+}
+
+// A path the person picked (the picker's answer, "" for a cancel) kept as a
+// handle, or 0.
+adopt(path: string) -> int {
+    if enabled_ == 0 || path == "" { return 0 }
+    strarr.push_copy(paths_, path)
+    return strarr.size(paths_)
+}
+
+path_(h: int) -> string {
+    if paths_ == null || h < 1 || h > strarr.size(paths_) { return "" }
+    return strarr.get(paths_, h - 1)
+}
+
+// What the person sees of a document: its file name, not where it is.
+name(h: int) -> string {
+    p = path_(h)
+    k = string.length(p) - 1
+    while k >= 0 && string.char_at(p, k) != 47 { k = k - 1 }
+    return string.string_substring(p, k + 1, string.length(p))
+}
+
+// (its text, "") or ("", why).
+read_text(h: int) -> (string, string) {
+    // What the fenced block sets is declared before any return
+    // (asks/aether-closure-capture-early-return.md).
+    text = ""
+    err = ""
+    p = path_(h)
+    if p == "" { return "", "documents: no document ${h}" }
+    one = sandbox.new("documents: one file") {
+        grant_fs_read(p)
+    }
+    sandbox.enforce(one) callback {
+        text, err = fs.read(p)
+    }
+    sandbox.free(one)
+    ended_()
+    if err != "" { return "", "documents.read_text ${name(h)}: ${err}" }
+    return text, ""
+}
+
+// "" or why.
+write_text(h: int, text: string) -> string {
+    err = ""
+    p = path_(h)
+    if p == "" { return "documents: no document ${h}" }
+    one = sandbox.new("documents: one file") {
+        grant_fs_write(p)
+    }
+    sandbox.enforce(one) callback {
+        err = fs.write_atomic(p, string.bytes(text))
+    }
+    sandbox.free(one)
+    ended_()
+    if err != "" { return "documents.write_text ${name(h)}: ${err}" }
+    return ""
+}
+
+// After each enforce: the sandbox off again. Aether's enforce up to 0.813
+// leaves its checker installed once the block returns (aether#2905), and
+// then every path that cannot be resolved is refused everywhere, the
+// kernel's included. With the block's grants popped, this clears it; it goes
+// when sae's Aether floor has the fix.
+ended_() {
+    sandbox_uninstall()
+}

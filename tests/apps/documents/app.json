@@ -1,0 +1,6 @@
+{
+  "name": "Documents test",
+  "capabilities": {
+    "documents": {}
+  }
+}

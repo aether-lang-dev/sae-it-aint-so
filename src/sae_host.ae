@@ -30,6 +30,7 @@ import vg.live
 import std.json
 import std.actors
 import services.files
+import services.documents
 import services.shell
 import services.net
 import services.sqlite
@@ -2733,6 +2734,46 @@ sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
     text, err = files.read_text(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
     return quickjs.new_string(ctx, text)
+}
+
+// --- the page API: documents (app mode, capabilities.documents) ---
+//
+// The person picks; services/documents keeps the path and gives a handle,
+// and fences each read and write to that one file. A cancelled picker is
+// handle 0, which the page sees as null.
+
+sae_docs_pick_open(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return quickjs.new_int(ctx, documents.adopt(ui.open_file(own_(arg_str_(ctx, argv, argc, 0)), "")))
+}
+
+sae_docs_pick_save(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return quickjs.new_int(ctx, documents.adopt(ui.save_file("Save", own_(arg_str_(ctx, argv, argc, 0)))))
+}
+
+sae_docs_name(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return quickjs.new_string(ctx, documents.name(arg_int_(ctx, argv, argc, 0, 0)))
+}
+
+sae_docs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    text, err = documents.read_text(arg_int_(ctx, argv, argc, 0, 0))
+    if err != "" { return sae_throw_type_error(ctx, err) }
+    return quickjs.new_string(ctx, text)
+}
+
+sae_docs_write_text(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    err = documents.write_text(arg_int_(ctx, argv, argc, 0, 0), own_(arg_str_(ctx, argv, argc, 1)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
+    return 0
 }
 
 sae_fs_write_text(ctx: ptr, this_val: int, argv: int) -> int {
@@ -6320,6 +6361,7 @@ available_(nm: string) -> int {
     }
     if nm == "outgoing-http" { return net.granted() }
     if nm == "local-filesystem" { return files.granted() }
+    if nm == "documents" { return documents.granted() }
     if nm == "open-urls" { return shell.granted() }
     if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
     return 0
@@ -6410,7 +6452,7 @@ absent_of_(optional: string) -> string {
 // ("local-filesystem,open-urls,"), to leave out with the absent ones.
 unsought_(seeks: string, optional: string) -> string {
     out = ""
-    names = string.split("outgoing-http,local-filesystem,open-urls", ",")
+    names = string.split("outgoing-http,local-filesystem,open-urls,documents", ",")
     n = string.string_array_size(names)
     i = 0
     while i < n {
@@ -6459,6 +6501,9 @@ read_capabilities_(manifest: ptr) {
     fsg = json.json_object_get_raw(caps, "fs")
     grants_from_(fsg, "read", |r: string| { files.grant_read(r) })
     grants_from_(fsg, "write", |r: string| { files.grant_write(r) })
+    // capabilities.documents ({}): pages may ask the person to pick files
+    // (services/documents); what they read and write is what was picked.
+    if json.json_object_get_raw(caps, "documents") != null { documents.configure(1) }
 }
 
 // --- storage (the kernel side of the storage page API) ---
@@ -6928,6 +6973,21 @@ api_register_(p: *Page) {
         reg_(q, fo, "remove", 1, sae_fs_remove)
         quickjs.set_global(q, "fs", fo)
         quickjs.release(q, fo)
+    }
+    // documents: the person's files, picked; the page gets handles, never
+    // paths. The raw gates go in a hidden global the wrapper takes and
+    // deletes, so a page has only `documents`, all of it promises.
+    if app_dir_ != "" && string.contains(p.absent, ",documents,") == 0 {
+        dr = quickjs.new_object(q)
+        reg_(q, dr, "open", 1, sae_docs_pick_open)
+        reg_(q, dr, "save", 1, sae_docs_pick_save)
+        reg_(q, dr, "name", 1, sae_docs_name)
+        reg_(q, dr, "read", 1, sae_docs_read_text)
+        reg_(q, dr, "write", 2, sae_docs_write_text)
+        quickjs.set_global(q, "__sae_documents", dr)
+        quickjs.release(q, dr)
+        dw, _dwe = quickjs.eval(q, "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;", "sae:documents")
+        quickjs.release(q, dw)
     }
     if app_dir_ != "" && string.contains(p.absent, ",open-urls,") == 0 {
         sho = quickjs.new_object(q)

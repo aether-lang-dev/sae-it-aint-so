@@ -265,90 +265,66 @@ while any tween runs, none when idle, every tween in a frame stepped with
 the same timestamp, and cancelled with the page like any frame callback.
 No new native timer.
 
-## 5. Files: declared bases and a powerbox (agreed design, app mode)
+## 5. Files: `fs` and `documents` (agreed 2026-10-14)
 
-**Status: agreed with Paul on 2026-10-08; not built yet.** This replaces
-today's raw-path `fs` in app mode. Browser-mode pages get no file access at
-all. A **powerbox** is a system dialog the *user* drives: the page asks "let
-the user pick", the user picks, and the page gets a handle to what was
-picked. That is how Android's Storage Access Framework, the macOS sandbox and
-browsers' File System Access API already work.
+**Status: agreed with Paul on 2026-10-14, superseding the 2026-10-08
+"declared bases and a powerbox" design; the first step is built.** Two page
+APIs, split by who chooses the files, not by device:
 
-1. **app.json declares named base folders; pages use paths relative to
-   them.**
+- **`fs`: paths in folders the app was granted.** Roughly today's API
+  (`docs/app-capabilities.md`), for desktop tools that work on known
+  places (a disk-usage scanner, a dev tool). Where the OS forbids opening
+  by path (iOS, Android, a Mac App Store or Flatpak build) a page cannot
+  have it: the "reduced functionality without" rule, by platform. Its
+  verb-and-glob scopes (`seeks local-filesystem read ~/.ssh/*.pub`) remain
+  its next step.
+- **`documents`: files the person picks.** `pick_open`, `pick_save` (later
+  `pick_folder`), giving handles (`name`, `read_text`, `write_text`; a
+  folder's `list`, `create`, ...). The page never sees a path. Every
+  platform has a picker (NSOpenPanel, GtkFileDialog, IFileOpenDialog,
+  Android's document picker, UIDocumentPickerViewController), so this runs
+  everywhere; a document app (demo 18) uses it.
 
-   ```json
-   "capabilities": { "files": { "notes": "$DOCUMENTS/MyNotes" } }
-   ```
+The two ABIs differ because the models do: a path against a handle, the
+app deciding against the person deciding. A name like "contained" was
+weighed and not taken: both are contained; they differ in who chooses.
 
-   ```ts
-   const text = await files.notes.read_text("2026/today.md");
-   ```
+**Containment, both ways** (`aether/docs/containment-sandbox.md`): the page
+veto keeps the file system out of every gate; only `services/files` and
+`services/documents` touch files; each runs every operation inside
+`std.sandbox`'s `enforce`, with the app's `fs` roots, or the one picked
+file, as the sandbox's grants, so a slip in the services' own checks is
+still refused by Aether's. Each level only narrows: app.json, then the
+page's seeks, then the call.
 
-   A page names a declared base and a path inside it, never an absolute
-   path. The files service resolves the real path, takes out `.`/`..`
-   (including encoded forms, as `capabilities.http` does), resolves
-   symlinks, and refuses anything that lands outside the base. A page seeks
-   `files.notes` the same way it seeks `outgoing-http`; an unsought base is
-   absent (the `unsought_()` rule).
-2. **Picking inside a base is normal and needs no warning.** The picker
-   opens at the base; whatever the user picks inside it comes back as a
-   handle (`read_text`, `read_bytes`, `write_text`, `name`, `size`; plus
-   `list`, `get_file`, `get_directory`, `create`, `remove` on a folder
-   handle), held to the same containment rules.
-3. **Picking outside every base is the elevated case, warned after the
-   pick.** No platform's dialog can fence the user into a folder (each treats
-   the start folder as a hint), so sae checks the result. A pick outside
-   every declared base gets sae's own dialog:
+**Built (2026-10-14):** `documents` in app mode on the desktop, through
+aether-ui's `open_file` and `save_file` (headless in specs: the driver
+answers the picker); handles last as long as the app runs;
+`tests/spec_app_documents.ae`; demo 18 as an app (`sae --app site`,
+`site/app.json`) opens and saves workbooks and CSV through it
+(`tests/spec_app_sheet_files.ae`). `fs` moved under `sandbox.enforce` too.
 
-   > *MyNotes normally works in Documents/MyNotes. You picked
-   > Desktop/report.pdf, outside it.* **Allow once** / **Always allow this
-   > folder** / **Cancel**
+**Next, in order:**
 
-   "Always allow" adds the location to the app's persisted grants, so the
-   warning comes once.
-4. **Persisted grants, per app.** Grants survive relaunch, stored by sae in
-   the app's own data folder (keyed per installed app, like storage), as the
-   platform's token where it has one, not a raw path. The user can see and
-   revoke them from a per-app "Folder access" screen.
-5. **Sandboxed platforms need a first-run pick of each base.** On iOS,
-   Android (outside the app's private folder) and a Mac App Store build, the
-   OS will not let an app touch `$DOCUMENTS/MyNotes` until the user has
-   picked it once. There a declared base becomes a first-run step ("Choose
-   where MyNotes keeps its notes"), opened at the suggested location; the
-   pick is persisted as the OS-level grant: a security-scoped bookmark on
-   macOS and iOS, a persistable tree URI (`takePersistableUriPermission`) on
-   Android. From then on it behaves as on the desktop. On GTK, Win32 and a
-   non-App-Store Mac build the base is usable straight away.
-6. **The app's own private data folder** (`$APPDATA`) is always available,
-   with no declaration and no pick.
+1. **Persisted handles.** A handle remembered across launches: the OS's
+   token where there is one (a security-scoped bookmark on a sandboxed Mac
+   and on iOS, a persistable URI on Android), the path elsewhere, kept in
+   the app's own folder, with a per-app "Files this app can reach" screen
+   to revoke them. Then `pick_folder` and a folder handle.
+2. **Server-backed `documents` for pages fetched over HTTP.** The same calls;
+   "pick" lists what the page's own server says this user may see, and a
+   handle reads and writes through that server, which decides per user. No
+   local file access at all: it rides on the page's right to talk to its own
+   origin. sae's side of the protocol, and a reference server in the dev page
+   server.
+3. **Phones.** Android's document picker (aether-ui already uses the
+   Storage Access Framework) and iOS's, whose aether-ui pickers are a stub
+   today (they are synchronous and iOS's are not:
+   `asks/ios-ipados-libaether-and-appstore.md`).
 
-**Platform pieces aether-ui needs** (all five backends, real, no stubs):
-asynchronous `pick_open` / `pick_save` / `pick_directory` that accept a start
-folder and return a platform token plus a display name; open/read/write by
-token; persisting and restoring a token. Per platform:
-
-- **Android:** the Storage Access Framework (`ACTION_OPEN_DOCUMENT`,
-  `ACTION_CREATE_DOCUMENT`, `ACTION_OPEN_DOCUMENT_TREE` with
-  `EXTRA_INITIAL_URI`); aether-ui's Android backend already uses SAF with
-  persistable URI permissions.
-- **iOS:** `UIDocumentPickerViewController` plus security-scoped bookmarks.
-  **aether-ui's UIKit pickers are a stub today** (they return "" outside
-  headless mode, because iOS pickers are asynchronous and the current picker
-  ABI is synchronous; `asks/ios-ipados-libaether-and-appstore.md`). This is
-  the first piece to build.
-- **macOS:** `NSOpenPanel`/`NSSavePanel` with `directoryURL`; for an App
-  Store build, security-scoped bookmarks and the
-  `com.apple.security.files.user-selected.read-write` and
-  `.bookmarks.app-scope` entitlements.
-- **GTK:** `GtkFileDialog` (GTK 4.10+), which goes through the
-  xdg-desktop-portal FileChooser when present (Flatpak-friendly).
-- **Win32:** `IFileOpenDialog`/`IFileSaveDialog` with `SetFolder`; no OS
-  grant tokens, so a persisted grant is the path.
-
-Open details: whether symlinks inside a base that point out of it are
-refused (the safe default) or followed; the exact wording and look of the
-outside-the-base dialog; and what the "Folder access" screen looks like.
+Open details: a picker's file types (`.json`, `.csv`) as a hint; whether a
+handle picked to open may also be written (today it may, as an editor's
+is).
 
 ## 6. SQLite databases (agreed design, app mode)
 

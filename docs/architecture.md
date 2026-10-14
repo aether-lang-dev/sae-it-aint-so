@@ -22,9 +22,13 @@ and the guest can only ask, through the gate, for what a service will do.
 ## How each line is held
 
 1. **Imports, checked by the compiler.** An Aether module can name only what
-   it imports. `services/files` imports `std.fs`, `std.dir`, `std.string`
-   and `std.strarr`, so it cannot open a URL, read the environment or reach
-   the network. `services/shell` imports exactly `ui (open_url)` and
+   it imports. `services/files` imports `std.fs`, `std.dir`, `std.string`,
+   `std.strarr` and `std.sandbox`, so it cannot open a URL, read the
+   environment or reach the network; `services/documents` the same less
+   `std.dir`. Both run each file operation inside `sandbox.enforce`, with
+   the app's `fs` grants (files) or the one picked file (documents) as the
+   sandbox's grants, so a slip in their own checks is still refused by
+   Aether's. `services/shell` imports exactly `ui (open_url)` and
    `std.fs (read, write_atomic)` (the spec log). `services/net` imports one
    client call, `std.http.client (request)`: it builds requests; it cannot
    send them or reach anything else.

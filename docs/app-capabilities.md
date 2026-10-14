@@ -53,6 +53,16 @@ Aether's `hide` (`aether/docs/hide-and-seal.md`):
   followed) before it is checked, so a path cannot climb out of its root,
   not even through directories that do not exist yet (`fs.mkdir(
   "$APPDATA/../x/y")` is refused). `write` covers create, overwrite, remove and mkdir.
+- **`documents`** (`{}`): the page may ask the person to pick files, and
+  gets handles to what was picked; nothing else. Held in
+  `services/documents`.
+- **Both file services are fenced by Aether too.** `services/files` runs
+  each operation inside `std.sandbox`'s `enforce`, with the app's
+  `fs.read`/`fs.write` roots as the sandbox's grants; `services/documents`
+  with a grant for the one picked file. Their own checks come first and
+  say why; the sandbox refuses whatever got past them
+  (`aether/docs/containment-sandbox.md`: the contained cannot reach the
+  container).
 - **Refusal is an exception** for synchronous calls (`fs`), naming the
   capability and the path: `fs.read_text: outside this app's fs.read
   grant: /etc/passwd`.
@@ -82,6 +92,25 @@ documents, caches). Node names where they fit, so porting reads naturally:
 Large or slow work (a directory walk, a big read) belongs on an actor, as
 http does; that is a later addition.
 
+## The `documents` page API
+
+For a document app: the person chooses the files, so it runs everywhere a
+picker does (sandboxed builds and phones included, which `fs` cannot), and
+the page never sees a path. Promises throughout, since a phone's picker is
+asynchronous.
+
+| Call | Gives |
+|---|---|
+| `documents.pick_open(title?)` | a handle, or null if the person cancels |
+| `documents.pick_save(suggested_name?)` | a handle to the file the person named, or null |
+| `handle.name` | the file's name, not where it is |
+| `handle.read_text()`, `handle.write_text(text)` | its text; writes it atomically |
+
+A handle reaches that one file and nothing else: the service keeps the path
+and fences each read or write to it. `docs/page-services.md` section 5 has
+the design and what comes next (persisted handles, folders, phones, and a
+server-backed form for pages fetched over HTTP).
+
 ## Seeks: what a page asks for
 
 A page says at its top which privileges it seeks, one per line, the way a
@@ -108,6 +137,7 @@ A line is `seeks <privilege> [<methods> <pattern>][, reduced functionality witho
   | `outgoing-http` | `http` | yes: its own origin, and others with their consent (the CORS-alike) | if `app.json` grants `http` |
   | `open-urls` | `shell.open` | never | if `app.json` grants `shell.open` |
   | `database <name>` | `sqlite.<name>` (one line per database) | never | if `app.json` declares that name under `capabilities.sqlite` |
+  | `documents` | `documents` | never (yet: a server-backed form is planned) | if `app.json` has `capabilities.documents` |
 
   `ui`, `vg`, `storage` and `browserContext` every page has; they are not
   sought.

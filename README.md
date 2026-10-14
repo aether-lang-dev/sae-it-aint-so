@@ -296,7 +296,7 @@ Tsyne's `examples/sandbox-breakout`) and its happy path in
   `navigator`, no device details, no module loader: `import()` of any URL
   rejects (`tests/spec_globals.ae` pins the whole global surface).
 
-### App capabilities: fs, shell, and what each page may name
+### App capabilities: fs, documents, shell, and what each page may name
 
 An app can be granted what a web page never gets, as narrowly as it can
 say it, in `app.json`; the kernel enforces it on every call:
@@ -305,20 +305,33 @@ say it, in `app.json`; the kernel enforces it on every call:
 "capabilities": {
   "http":  ["https://api.github.com/"],
   "shell": { "open": ["https://github.com/"] },
-  "fs":    { "read": ["$DOCUMENTS/notes/"], "write": ["$APPDATA/"] }
+  "fs":    { "read": ["$DOCUMENTS/notes/"], "write": ["$APPDATA/"] },
+  "documents": {}
 }
 ```
+
+Two ways to files, by who chooses them: `fs` is paths in folders the app
+was granted (a tool that works on known places), `documents` is files the
+person picks (a document app). Both are contained the same way: only a
+service touches files, and each of its operations runs inside Aether's
+`sandbox.enforce` with exactly what was granted or picked
+(`aether/docs/containment-sandbox.md`), behind its own checks.
 
 - `fs.read_text`, `write_text`, `exists`, `list`, `mkdir`, `remove` (and
   Node's `readFileSync`, `writeFileSync`, `existsSync`, `readdirSync`):
   synchronous, within the granted folders. Every path is resolved first
   (symlinks, `..`), so it cannot climb out; a refusal throws, naming the
   grant. `$APPDATA` is the app's own folder.
+- `documents.pick_open(title)` and `documents.pick_save(name)`: the
+  system's picker; a promise of a handle (`name`, `read_text()`,
+  `write_text(text)`, both promises) or null when the person cancels. A
+  page never sees a path, and a handle reaches that one file only. Demo 18
+  run as an app (`sae --app site`) opens, saves and exports CSV through it.
 - `shell.open(url)`: hands a URL to the system (the default browser), for
   the granted prefixes.
 - `sqlite.<name>`: the app's databases, declared in `app.json` under
   `capabilities.sqlite` with their migrations (App mode, below).
-- A web page has no `fs`, no `shell` and no `sqlite` at all.
+- A web page has no `fs`, no `documents`, no `shell` and no `sqlite` at all.
 
 A page says at its top which privileges it seeks, one per line:
 
@@ -327,6 +340,7 @@ A page says at its top which privileges it seeks, one per line:
 "seeks outgoing-http";      // unlocks http
 "seeks open-urls";          // unlocks shell.open
 "seeks database notes";     // unlocks sqlite.notes (one line per database)
+"seeks documents";          // unlocks documents
 ```
 
 `ui`, `vg`, `storage`, `browserContext` and the timer globals (`setTimeout`
@@ -615,7 +629,7 @@ list starts with the file system and its neighbours and grows from there;
 the end state is `seal except`, an explicit whitelist per function.
 
 The effects a page can ask for live in their own modules,
-`services/files`, `services/shell`, `services/net` and `services/stdlib`
+`services/files`, `services/documents`, `services/shell`, `services/net` and `services/stdlib`
 (the `sae:` library and the import hashes), each able to reach only its
 imports: only `services/shell` can name the system URL opener.
 `tests/check_layers.sh` holds each service to its import list.

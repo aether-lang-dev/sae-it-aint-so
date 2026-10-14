@@ -1,3 +1,4 @@
+"seeks documents, reduced functionality without";
 // Spreadsheet (docs/roadmap.md demo 18), declared as panels over a seam.
 //
 // site/sheet/ is the spreadsheet with no ui: two formula languages (Excel's,
@@ -7,7 +8,9 @@
 // string parameters and a journal, which RexxJS scripts drive through
 // ADDRESS SHEET and specs drive headless. site/sheet/view/ is the ui: each
 // panel reads the workbook through state and runs commands, and nothing
-// else. This page only says which panels, in which order.
+// else. This page only says which panels, in which order. Run as an
+// installed app (sae --app site, site/app.json) it may also ask the person
+// for files (documents); in the browser it does without.
 import { SheetView } from "./sheet/view/view.ts";
 import { languageBar } from "./sheet/view/languagebar.ts";
 import { formulaBar } from "./sheet/view/formulabar.ts";

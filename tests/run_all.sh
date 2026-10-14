@@ -68,6 +68,8 @@ spec_local_nav|SAE_TEST_START=site/algos.ts|spec spec_local_nav
 spec_app|SAE_TEST_APP=apps/tasks|spec spec_app
 spec_app_caps|SAE_TEST_APP=tests/apps/caps SAE_APPDATA_DIR=$T/caps-appdata SAE_SHELL_LOG=$T/caps-shell.log|spec spec_app_caps
 spec_app_climb|SAE_TEST_APP=tests/apps/climb|spec spec_app_climb
+spec_app_documents|AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents|spec spec_app_documents
+spec_app_sheet_files|AETHER_UI_HEADLESS=1 SAE_TEST_APP=site|spec spec_app_sheet_files
 spec_app_httplist|SAE_TEST_APP=tests/apps/httplist|spec spec_app_httplist
 spec_app_imports|SAE_TEST_APP=tests/apps/imports|spec spec_app_imports
 spec_app_net|SAE_TEST_APP=tests/apps/net|spec spec_app_net

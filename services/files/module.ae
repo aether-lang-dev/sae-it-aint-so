@@ -2,7 +2,8 @@
 // behalf (the page API's `fs` object, app mode). See docs/architecture.md.
 //
 // What this module can reach is its imports, and nothing else: std.fs and
-// std.dir for the work, std.string and std.strarr to hold grants. It cannot
+// std.dir for the work, std.sandbox to fence it, std.string and std.strarr
+// to hold grants. It cannot
 // name the environment (std.os), the network, the UI or the engine; the
 // kernel hands it what it needs (configure, grant_read, grant_write).
 // tests/check_layers.sh holds the import list to that.
@@ -10,12 +11,16 @@
 // Every operation takes the page's path as written, resolves it to where it
 // leads (resolve), and checks the result against the app's grants before
 // touching anything. A refusal is a message naming the call, the grant and
-// the resolved path; the caller (the page-API gate) throws it.
+// the resolved path; the caller (the page-API gate) throws it. Then it acts
+// inside std.sandbox's enforce, with the app's grants as the sandbox's
+// (fence_), so a slip in these checks is still refused by Aether's own
+// (aether/docs/containment-sandbox.md).
 
 import std.fs
 import std.dir
 import std.string
 import std.strarr
+import std.sandbox
 
 exports (configure, grant_read, grant_write, granted, resolve, path,
          read_text, write_text, exists, list_json, mkdir, remove)
@@ -150,36 +155,83 @@ path(raw: string, write: int, what: string) -> (string, string) {
     return "", "${what}: outside this app's fs.read grant: ${p}"
 }
 
-// The operations: each checks first, then acts. (text, "") or ("", error).
+// The app's grants as a std.sandbox grant list: read roots readable, write
+// roots readable, writable and made and removed in. Release with
+// sandbox.free.
+fence_() -> sandbox.Grants {
+    return sandbox.new("fs: this app's app.json grants") {
+        i = 0
+        while i < strarr.size(reads_) {
+            grant_fs_read("${strarr.get(reads_, i)}*")
+            i = i + 1
+        }
+        j = 0
+        while j < strarr.size(writes_) {
+            grant_fs("${strarr.get(writes_, j)}*")
+            j = j + 1
+        }
+    }
+}
+
+// The operations: each checks first, then acts, fenced. (text, "") or ("", error).
 
 read_text(raw: string) -> (string, string) {
+    // What the fenced block sets is declared before any return
+    // (asks/aether-closure-capture-early-return.md).
+    t = ""
+    err = ""
     p, why = path(raw, 0, "fs.read_text")
     if why != "" { return "", why }
-    t, err = fs.read(p)
+    perms = fence_()
+    sandbox.enforce(perms) callback {
+        t, err = fs.read(p)
+    }
+    sandbox.free(perms)
+    ended_()
     if err != "" { return "", "fs.read_text: ${err}" }
     return t, ""
 }
 
 write_text(raw: string, text: string) -> string {
+    err = ""
     p, why = path(raw, 1, "fs.write_text")
     if why != "" { return why }
-    err = fs.write_atomic(p, string.bytes(text))
+    perms = fence_()
+    sandbox.enforce(perms) callback {
+        err = fs.write_atomic(p, string.bytes(text))
+    }
+    sandbox.free(perms)
+    ended_()
     if err != "" { return "fs.write_text: ${err}" }
     return ""
 }
 
 // (1 or 0, "") or (0, reason).
 exists(raw: string) -> (int, string) {
+    yes = 0
     p, why = path(raw, 0, "fs.exists")
     if why != "" { return 0, why }
-    return fs.exists(p), ""
+    perms = fence_()
+    sandbox.enforce(perms) callback {
+        yes = fs.exists(p)
+    }
+    sandbox.free(perms)
+    ended_()
+    return yes, ""
 }
 
 // The names in a directory, as a JSON array of strings.
 list_json(raw: string) -> (string, string) {
+    l = null
+    lerr = ""
     p, why = path(raw, 0, "fs.list")
     if why != "" { return "", why }
-    l, lerr = dir.list(p)
+    perms = fence_()
+    sandbox.enforce(perms) callback {
+        l, lerr = dir.list(p)
+    }
+    sandbox.free(perms)
+    ended_()
     if lerr != "" { return "", "fs.list: ${lerr}" }
     out = "["
     n = dir.list_count(l)
@@ -193,25 +245,38 @@ list_json(raw: string) -> (string, string) {
 }
 
 mkdir(raw: string) -> string {
+    made = 0
     p, why = path(raw, 1, "fs.mkdir")
     if why != "" { return why }
-    _m = fs.mkdir_p(p)
-    if fs.exists(p) == 0 { return "fs.mkdir: could not create ${p}" }
+    perms = fence_()
+    sandbox.enforce(perms) callback {
+        _m = fs.mkdir_p(p)
+        made = fs.exists(p)
+    }
+    sandbox.free(perms)
+    ended_()
+    if made == 0 { return "fs.mkdir: could not create ${p}" }
     return ""
 }
 
 remove(raw: string) -> string {
+    e = ""
     p, why = path(raw, 1, "fs.remove")
     if why != "" { return why }
-    kind, _sz, _mt, serr = fs.file_stat(p)
-    if serr != "" { return "fs.remove: no such file: ${p}" }
-    if kind == 2 {
-        e = fs.delete_dir(p)
-        if e != "" { return "fs.remove: ${e}" }
-        return ""
+    perms = fence_()
+    sandbox.enforce(perms) callback {
+        kind, _sz, _mt, serr = fs.file_stat(p)
+        if serr != "" {
+            e = "no such file: ${p}"
+        } else if kind == 2 {
+            e = fs.delete_dir(p)
+        } else {
+            e = fs.delete(p)
+        }
     }
-    e2 = fs.delete(p)
-    if e2 != "" { return "fs.remove: ${e2}" }
+    sandbox.free(perms)
+    ended_()
+    if e != "" { return "fs.remove: ${e}" }
     return ""
 }
 
@@ -227,4 +292,13 @@ quote_(s: string) -> string {
         i = i + 1
     }
     return string.concat(out, "\"")
+}
+
+// After each enforce: the sandbox off again. Aether's enforce up to 0.813
+// leaves its checker installed once the block returns (aether#2905), and
+// then every path that cannot be resolved is refused everywhere, the
+// kernel's included. With the block's grants popped, this clears it; it goes
+// when sae's Aether floor has the fix.
+ended_() {
+    sandbox_uninstall()
 }
