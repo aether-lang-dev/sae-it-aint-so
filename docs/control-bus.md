@@ -115,28 +115,42 @@ being done.
      console says so once.
 3. **The local machine, and a port nobody chose.**
    - sae binds `127.0.0.1` (and `::1`), never `0.0.0.0`.
-   - It binds port 0, so the OS picks a free port. No fixed port means no
-     squatting.
-   - It writes the address and the token to a file, `$APPDATA/.control-bus`
-     (mode `0600`, replaced atomically, deleted on exit).
-   - A client on the same account reads that file. A client on another
-     account cannot. That is the whole "who may connect" answer, and it is
-     the operating system's.
-4. **A token with no default, never shown.**
-   - 32 random bytes from the OS's generator for each launch, as hex.
-   - It is never logged, never in argv or the environment, and never shown
-     in the window. The client reads it from the file.
-   - Compared in constant time. A wrong or missing token gets 401 and is
-     logged once per connection, without the token.
-5. **No browser can reach it.**
-   - A request carrying an `Origin` header (only a browser sends one) is
-     refused.
-   - So is one whose `Host` is not `127.0.0.1:<port>`, `[::1]:<port>` or
-     `localhost:<port>`. That closes DNS rebinding.
-   - There are no CORS headers at all, so no preflight can succeed.
-   - Each of these checks is cheap, and together they mean a web page in
-     Chrome or Safari on the same machine gets nowhere even if it guessed
-     the port and the token.
+   - It binds port 0, so the OS picks a free port. That only stops another
+     program from taking a known port first; it is not what keeps anyone
+     out. The courier key is (rule 4).
+   - sae never announces where it is. It writes the address and the key to
+     the courier file (rule 4), and a client reads them there: aeo's "the
+     contained never self-addresses".
+4. **A courier key, delivered by a file, never shown** (after aeo's
+   `lib/agent_auth`: the 1970s bank key courier, not PKI).
+   - A fresh secret from the OS's generator for each launch, dying with it.
+     No default, and nothing to reuse: a key captured once is no good
+     against the next launch.
+   - Delivered out of band: `$APPDATA/.control-bus` (mode `0600`, replaced
+     atomically, deleted on exit) holds the address and the key. The file
+     is the courier; the operating system's file permissions say who may
+     read it. A client on another account cannot.
+   - Never logged, never in argv or the environment, never in the window.
+   - Checked in constant time, fail-closed (no key, no access).
+5. **Every request and reply sealed** (aeo's `lib/secure_channel`).
+   - Each message is one AEAD envelope, `AE1:<nonce>:<ciphertext+tag>`:
+     Ascon-AEAD128 (NIST SP 800-232), its key derived by HKDF-SHA256 from
+     the courier key, pure Aether. That is confidentiality, integrity and
+     authentication **both ways**: a request without the key is refused,
+     and a reply from anything that is not this sae (a program that took
+     the port after a crash left a stale file) does not open, so a client
+     never mistakes it for sae.
+   - Anti-replay: each frame carries its time and is refused outside a
+     short window (aeo uses 30 s), and its nonce is refused if seen before.
+   - No TLS on the local machine: loopback traffic is not readable by
+     other users without root, and root can read the courier file anyway.
+     What a plain token would lack is the client knowing it reached sae;
+     the sealed reply gives that, with no certificate to make or pin.
+   - **No browser can reach it, by construction**: a web page has no
+     courier key, so it cannot make an `AE1` frame. sae still refuses a
+     request carrying an `Origin` header, a `Host` that is not its own
+     address (DNS rebinding), and sends no CORS headers: a second line,
+     cheap, behind the first.
 6. **The bus grants nothing the page does not already have.**
    - The handler runs in the page's own runtime, under its 5 s-per-entry
      and 32 MB caps, with exactly the page's grants.
@@ -173,34 +187,43 @@ being done.
     schemes). The bus is refused there until there is a reason to think
     otherwise.
 
-### The wire, for the RexxJS clients that exist
+### The wire
 
-To keep the app's client scripts working, the wire is the Tauri app's
-(decision 3):
+HTTP over loopback, every body sealed (rule 5):
 
-- `POST /api/<name>` with `Authorization: Bearer <token>` and the JSON
-  body `{"command": "<string>"}`.
-- The answer is `{"success": true|false, "result": ..., "errorCode": n}`.
+- `POST /api/<name>`, its body the envelope of `{"command": "<string>"}`.
+- The reply's body the envelope of `{"success": true|false, "result":
+  ..., "errorCode": n}`.
 
-RexxJS's `ADDRESS "<url>" AUTH "<token>" AS SPREADSHEET` then works as it
-is, given the URL and the token from the file. A short `sae-bus` wrapper
-(or a RexxJS `REQUIRE`d helper) can read the file and write that ADDRESS
-line.
+These are the Tauri app's JSON shapes, so its client scripts carry over
+with one change: RexxJS's `ADDRESS "<url>" AUTH "<token>" AS SPREADSHEET`
+learns the envelope. We own RexxJS, so that is a RexxJS change: an
+`ADDRESS` target that reads the courier file (the URL and the key) and
+seals and opens each message, and the scripts themselves stay as they are.
+A small `sae-bus` command for shells and other languages does the same.
 
-A Unix domain socket would be stricter still. File permissions alone would
-say who may connect, and no browser could ever send to one, so rule 5
-would fall away. But RexxJS's ADDRESS speaks HTTP over TCP, so the app's
-clients would need a new transport. The decision is between compatibility
-and an even smaller surface. My suggestion is TCP with rules 3 to 5 now,
-and the socket as a later option for clients that are not RexxJS.
+The sealing comes from aeo, which runs it between a host and the agents of
+its nested VMs and containers (down to a Pi Zero 2 W with no OpenSSL):
+`lib/secure_channel` and `lib/agent_auth`. Rather than a second copy, both
+would move into one module that aeo and sae import.
+
+**Beyond the local machine** (not in the first version): the same envelope
+works between machines, as it does for aeo's nested agents; what changes is
+delivery. The courier key would have to be carried to the other machine out
+of band (aeo does it with one ssh at bootstrap), and sae would bind an
+address the person names, explicitly. TLS earns its place only if clients
+we do not write must connect (curl, any language's HTTP client): then a
+self-signed certificate pinned by its fingerprint in the courier file, or a
+real certificate for a public name, from Aether's TLS server.
 
 ### What building it would touch
 
 Each part follows sae's existing patterns:
 
-- **`services/bus`**: the listener (Aether's `std.net` server API, which
-  needs checking for an ask to aether if it cannot bind loopback-only on
-  port 0), the token, the file, the request checks of rules 3 to 5 and 7.
+- **`services/bus`**: the listener (Aether's `std.http` server, bound to
+  loopback on port 0: `server_bind`), the courier key and file, the
+  envelope (aeo's `secure_channel` and `agent_auth`, moved into a module
+  both import), the request checks of rules 3 to 5 and 7.
   `tests/check_layers.sh` holds it to its imports, and fails if the listen
   call is named anywhere else, as `client.request` is held to
   `services/net`.
@@ -213,8 +236,11 @@ Each part follows sae's existing patterns:
 - **Tests**:
   - the escape corpus: a web page naming `bus`; an app page that does not
     seek it; an app that does not declare it; and, from a test client, an
-    `Origin` header, a wrong `Host`, a wrong token, an oversized body, the
-    ninth queued request, and a request after the page navigates away;
+    unsealed request, one sealed with the wrong key, a replayed frame (the
+    same nonce, and one outside the window), an `Origin` header, a wrong
+    `Host`, an oversized body, the ninth queued request, and a request
+    after the page navigates away; and, from the client's side, a reply
+    from a server without the key, which must not open;
   - `spec_app_bus`: a test app with a handler, driven by a small Aether
     client (`tools/busclient.ae`);
   - demo 18: the app's `test-spreadsheet-address.rexx` with its original
@@ -239,12 +265,20 @@ program drive an app, which is what the ARexx comparison is about.
 2. **Off until the person opts in at launch?** (`--control-bus`, or a
    window toggle.) My suggestion is yes: declared by the app, switched on
    by the person, as a microphone is.
-3. **The wire:** the Tauri app's HTTP and JSON (RexxJS clients unchanged),
-   or a Unix socket (smaller, but a new client transport)?
+3. **The wire:** HTTP on loopback with every request and reply sealed with
+   the courier key (rule 5, after aeo), and RexxJS's `ADDRESS` taught the
+   envelope? The alternatives were the Tauri app's plain HTTP and bearer
+   token (its clients unchanged, but nothing proves to a client it reached
+   sae), and a Unix socket (file permissions as the gate, but a new
+   transport for every client). My suggestion: the sealed wire, with
+   aeo's modules shared.
 4. **The installer's wording** for an app with `controlBus`, and whether
    `controlBus` together with `fs` or `shell` needs a stronger warning than
    either alone.
-5. **The token file**: `$APPDATA/.control-bus`, readable only by the user,
-   as the way a client finds the port and the token? (The alternative is a
-   token the person copies out of the window, which is clumsier and puts
-   the token on screen.)
+5. **The courier file**: `$APPDATA/.control-bus`, readable only by the
+   user, holding the address and the key, as the way a client finds sae and
+   gets its key? (The alternative is a key the person copies out of the
+   window: clumsier, and the key on screen.)
+6. **Beyond the local machine, later:** the same sealed wire with the key
+   carried out of band (as aeo does), and TLS with a pinned certificate
+   only if clients we do not write must connect?

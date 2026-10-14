@@ -916,7 +916,7 @@ sandbox. Two ways it could:
 Either needs a page-API function, a service, an attempt in
 `tests/escape/` and a spec. This is a browser-architecture decision, so
 (a) is written up with its security rules in `docs/control-bus.md`, for
-Paul and Nic to decide on before any code: its section 5 lists the five
+Paul and Nic to decide on before any code: its section 5 lists the six
 decisions. Nothing is built until they are made.
 
 ### 4. Undo for everything (done, 2026-10-13)
