@@ -2,7 +2,8 @@
 
 A design note for Paul and Nic to decide on. Nothing here is built.
 Decided so far (section 5): option (a), an app-mode service, now, and
-option (b), messages between pages, later. Decisions 2 to 6 are open. It is
+option (b), messages between pages, later; off until the person switches
+it on at launch. Decisions 3 to 6 are open. It is
 step 3 of the spreadsheet plan (`docs/spreadsheet_demo_done_and_todo.md`):
 steps 1 and 2 brought over the Tauri spreadsheet's query functions and its
 control functions. That leaves its control bus, which lets another process
@@ -265,9 +266,9 @@ program drive an app, which is what the ARexx comparison is about.
    (b) later.** (a) with the rules above, because the ARexx use (a shell
    script or a REXX script driving an app) is the point; (b), sae apps
    scripting each other through `browserContext`, follows.
-2. **Off until the person opts in at launch?** (`--control-bus`, or a
-   window toggle.) My suggestion is yes: declared by the app, switched on
-   by the person, as a microphone is.
+2. **Off until the person opts in at launch?** **Decided (Paul,
+   2026-10-14): yes.** Declared by the app, switched on by the person at
+   each launch (`--control-bus`, or a window toggle), as a microphone is.
 3. **The wire:** HTTP on loopback with every request and reply sealed with
    the courier key (rule 5, after aeo), and RexxJS's `ADDRESS` taught the
    envelope? The alternatives were the Tauri app's plain HTTP and bearer
