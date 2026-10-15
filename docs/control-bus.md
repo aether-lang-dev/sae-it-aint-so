@@ -4,7 +4,7 @@ A design note, decided by Paul (2026-10-14). **Option (a) is built**
 (2026-10-14): `services/bus`, with aeo's `agent_auth` and `secure_channel`
 copied into `services/` (to be shared later); `"seeks control-bus"` and
 `bus.serve`/`bus.stop`; `--control-bus` after `sae --app <dir>`; the
-spreadsheet serves it (RexxJS/example-app-spreadsheet, once demo 18:
+spreadsheet serves it (aether-lang-dev/spraedsheet, once demo 18:
 its `app/app.json`, `tests/specs/spec_app_sheet_bus.ae`);
 `tests/spec_app_bus.ae`, `spec_app_bus_off.ae`; and `sae-bus`
 (`tools/saebus.ae`), the client other programs run, which the
@@ -17,7 +17,7 @@ option (b), messages between pages, later; off until the person switches
 it on at launch; the sealed wire after aeo, the courier file, a stronger
 installer warning with fs, documents or shell, and the same wire beyond the
 local machine later. All six are decided: (a) is ready to build. It is
-step 3 of the spreadsheet plan (now example-app-spreadsheet's
+step 3 of the spreadsheet plan (now spraedsheet's
 `docs/spreadsheet_demo_done_and_todo.md`):
 steps 1 and 2 brought over the Tauri spreadsheet's query functions and its
 control functions. That leaves its control bus, which lets another process
@@ -106,6 +106,14 @@ bus.serve(async (request: string) => spreadsheet(request));
   global surface to a list).
 - `bus.serve(fn)` registers the one handler. A second call replaces it.
   `bus.stop()` stops serving.
+- `bus.serve(fn, stopped)`: `stopped(reason)` runs, in an entry of its own,
+  when a request was answered as failed without the handler, so the page
+  can put back what that request had done. `"interrupted"`: the page's
+  time limit stopped the handler (its promise never settles, so nothing
+  of the page's own runs after it). `"deadline"`: it was still running
+  when the bus answered for it at 10 s (the page may still be at it, and
+  should make it fail). Added 2026-10-15, when a REXX request that ran
+  past the limit left the spreadsheet's undo group open for good.
 - A request is a string, and the handler's answer is a string or a plain
   JSON object. Nothing else crosses: no handles, no functions.
 
@@ -189,7 +197,11 @@ being done.
    - At most 8 are queued. Past that the request is refused (503), as a
      page's ninth request in flight is.
    - A handler that throws answers `{rc: 1, error: <message>}`. One that
-     runs past 5 s is stopped as any entry is.
+     runs past 5 s in one entry is stopped as any entry is, and its
+     request answered at once ("stopped: it ran past the app's limit of
+     5 s for one piece of work"); one that has not answered in 10 s (it
+     awaits, so no single entry runs long) is answered for it. Either way
+     the page is told, through `stopped`.
 8. **Seen.**
    - While the bus is listening, the window says so (a marker in the
      title, as an OS marks screen sharing).

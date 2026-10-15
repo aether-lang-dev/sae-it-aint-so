@@ -52,6 +52,26 @@ main() {
             spec.assert_contains(boom, "\"success\":false", "failed")
             spec.assert_contains(boom, "the handler failed", "saying why")
         }
+        spec.it("a handler the page's time limit stops: answered as stopped at once, and the page told") callback {
+            _u, key = courier_()
+            t0 = os.now_monotonic_ms()
+            _s, spin = command_(key, "spin")
+            took = os.now_monotonic_ms() - t0
+            spec.assert_contains(spin, "\"success\":false", "failed")
+            spec.assert_contains(spin, "stopped: it ran past the app's limit of 5 s for one piece of work", "saying why")
+            spec.assert_true(took < 9000, "answered when stopped (${took} ms), not at the bus's 10 s deadline")
+            spec.assert_true(b.wait_for_text("stopped: interrupted (1)"), "the page told: interrupted")
+            _s2, after = command_(key, "after")
+            spec.assert_contains(after, "\"echo\":\"after\"", "and the next request served as ever")
+        }
+        spec.it("a handler that never answers: answered at the deadline, and the page told") callback {
+            _u, key = courier_()
+            _s, hang = command_(key, "hang")
+            spec.assert_contains(hang, "the app did not answer in 10 s", "answered for it")
+            spec.assert_true(b.wait_for_text("stopped: deadline (2)"), "the page told: deadline")
+            _s2, after = command_(key, "after again")
+            spec.assert_contains(after, "\"echo\":\"after again\"", "and the next request served")
+        }
         spec.it("refused: unsealed, the wrong key, a replay, a browser, another host, too big, another path") callback {
             url, key = courier_()
             port = port_of_(url)

@@ -41,7 +41,9 @@ exchange_(port: int, request: string) -> (string, string) {
     _w = tcp.write(sock, request)
     got = ""
     i = 0
-    while i < 200 {
+    // Up to 20 s: past the bus's own 10 s deadline, which answers for a
+    // handler that has not (the reply closes the connection, ending this).
+    while i < 400 {
         ready, _pe = tcp.poll(sock, 50)
         if ready {
             data, rerr = tcp.read(sock, 65536)

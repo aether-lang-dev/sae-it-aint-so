@@ -148,6 +148,7 @@ struct Page {
     wrapped: int     // 1: the lowered page is a function to call with $sae
     key_ref: int     // ui.on_key's held function, or 0
     bus_ref: int     // bus.serve's dispatcher (the page's handler, wrapped), or 0
+    bus_stopped_ref: int  // bus.serve's second function: told when a request was stopped, or 0
     dgrids: ptr      // std.list of aether-ui datagrids this page made (ui.datagrid)
 }
 
@@ -299,10 +300,15 @@ rethrow_(ctx: ptr) -> int {
     return quickjs.rethrow(ctx)
 }
 
-// Run the promise jobs a callback queued (its awaits, its .then()s).
+// Run the promise jobs a callback queued (its awaits, its .then()s). A job
+// the page's time limit stopped while a control-bus request was with the
+// page stopped that request: the bus tick answers it and tells the page.
 settle_(ctx: ptr) {
     n, err = quickjs.run_jobs(ctx)
-    if n < 0 { say_("sae: uncaught exception in a promise job:\n${err}") }
+    if n < 0 {
+        say_("sae: uncaught exception in a promise job:\n${err}")
+        if bus_inflight_ != 0 && string.contains(err, "interrupted") == 1 { bus_interrupted_ = 1 }
+    }
 }
 
 // Run a held handler with no arguments, as a widget does when it fires:
@@ -2773,6 +2779,7 @@ var bus_timer_: int = 0
 var bus_told_off_: int = 0
 var bus_inflight_: int = 0        // the request with the page, or 0
 var bus_since_: long = 0
+var bus_interrupted_: int = 0     // the page's time limit stopped the request in flight
 const BUS_DEADLINE_MS = 10000
 
 sae_bus_serve(ctx: ptr, this_val: int, argv: int) -> int {
@@ -2782,6 +2789,11 @@ sae_bus_serve(ctx: ptr, this_val: int, argv: int) -> int {
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "bus.serve(fn): fn must be a function") }
     if p.bus_ref != 0 { quickjs.release(ctx, p.bus_ref) }
     p.bus_ref = hold_arg_(ctx, argv, 0)
+    if p.bus_stopped_ref != 0 {
+        quickjs.release(ctx, p.bus_stopped_ref)
+        p.bus_stopped_ref = 0
+    }
+    if argc >= 2 && is_fn_arg_(ctx, argv, 1) == 1 { p.bus_stopped_ref = hold_arg_(ctx, argv, 1) }
     bus_page_ = p as ptr
     if control_bus_flag_ == 0 {
         if bus_told_off_ == 0 {
@@ -2801,6 +2813,10 @@ sae_bus_stop(ctx: ptr, this_val: int, argv: int) -> int {
     if p.bus_ref != 0 {
         quickjs.release(ctx, p.bus_ref)
         p.bus_ref = 0
+    }
+    if p.bus_stopped_ref != 0 {
+        quickjs.release(ctx, p.bus_stopped_ref)
+        p.bus_stopped_ref = 0
     }
     if bus_page_ == p as ptr { bus_page_ = null }
     bus_silence_()
@@ -2848,9 +2864,10 @@ bus_tick_() {
     l = bus.take_log()
     if l != "" { say_(l) }
     if bus_inflight_ != 0 {
-        if now_ms_() - bus_since_ > BUS_DEADLINE_MS {
-            bus.answer(bus_inflight_, 0, "", "the app did not answer in ${BUS_DEADLINE_MS / 1000} s")
-            bus_inflight_ = 0
+        if bus_interrupted_ == 1 {
+            bus_stop_request_("interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
+        } else if now_ms_() - bus_since_ > BUS_DEADLINE_MS {
+            bus_stop_request_("deadline", "the app did not answer in ${BUS_DEADLINE_MS / 1000} s")
         }
         return
     }
@@ -2875,9 +2892,36 @@ bus_tick_() {
     cv = quickjs.new_string(ctx, command)
     _b = quickjs.set_index(ctx, args, 1, cv)
     quickjs.release(ctx, cv)
+    bus_interrupted_ = 0
     r = calln_(ctx, p.bus_ref, args)
     quickjs.release(ctx, args)
     if r < 0 { report_exception_(ctx, "the control bus's handler") }
+    settle_(ctx)
+    if bus_interrupted_ == 1 && bus_inflight_ == id {
+        bus_stop_request_("interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
+    }
+}
+
+// The request in flight answered as failed, its handler no longer awaited,
+// and the page told why in an entry of its own (bus.serve's second
+// function): "interrupted" when the page's time limit stopped it, its
+// promise never to settle; "deadline" when it was answered for it while
+// still running. The page puts back what the request had done.
+bus_stop_request_(reason: string, why: string) {
+    bus.answer(bus_inflight_, 0, "", why)
+    bus_inflight_ = 0
+    bus_interrupted_ = 0
+    if bus_page_ == null { return }
+    p = bus_page_ as *Page
+    if p.bus_stopped_ref == 0 { return }
+    ctx = p.ctx
+    args = quickjs.new_array(ctx)
+    rv = quickjs.new_string(ctx, reason)
+    _a = quickjs.set_index(ctx, args, 0, rv)
+    quickjs.release(ctx, rv)
+    r = calln_(ctx, p.bus_stopped_ref, args)
+    quickjs.release(ctx, args)
+    if r < 0 { report_exception_(ctx, "the control bus's stopped handler") }
     settle_(ctx)
 }
 
@@ -7205,15 +7249,18 @@ api_register_(p: *Page) {
     }
     // bus: the control bus (app mode, capabilities.controlBus, --control-bus).
     // A request reaches the handler as its command string; what the handler
-    // gives (or its promise's value) goes back as JSON.
+    // gives (or its promise's value) goes back as JSON. bus.serve(fn, stopped):
+    // stopped(reason) runs, in an entry of its own, when a request was answered
+    // as failed without the handler: "interrupted" (the page's time limit
+    // stopped it) or "deadline" (it was still running at BUS_DEADLINE_MS).
     if app_dir_ != "" && string.contains(p.absent, ",control-bus,") == 0 {
         br = quickjs.new_object(q)
-        reg_(q, br, "serve", 1, sae_bus_serve)
+        reg_(q, br, "serve", 2, sae_bus_serve)
         reg_(q, br, "stop", 0, sae_bus_stop)
         reg_(q, br, "answer", 4, sae_bus_answer)
         quickjs.set_global(q, "__sae_bus", br)
         quickjs.release(q, br)
-        bw, _bwe = quickjs.eval(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
+        bw, _bwe = quickjs.eval(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
         quickjs.release(q, bw)
     }
     if app_dir_ != "" && string.contains(p.absent, ",open-urls,") == 0 {
@@ -7328,6 +7375,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.frame_sub = 0
     p.key_ref = 0
     p.bus_ref = 0
+    p.bus_stopped_ref = 0
     p.dgrids = list.new()
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
