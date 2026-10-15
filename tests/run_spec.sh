@@ -6,7 +6,7 @@
 #   SAE_TEST_APP=<dir> tests/run_spec.sh <spec>   app mode: sae-driver --app <dir>
 #   SAE_TEST_START=<url|file> tests/run_spec.sh <spec>   the browser, starting there
 #   tests/run_spec.sh /path/to/spec_x.ae [site-dir]   a spec of another repo's
-#       (an app built on sae, such as ../example-app-spreadsheet); its own
+#       (an app built on sae, such as ../spraedsheet); its own
 #       test libraries go first on the module path with SAE_TEST_LIB_DIR.
 #
 # Starts target/pageserver on the site directory and sae-driver (built with

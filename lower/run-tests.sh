@@ -18,7 +18,7 @@
 #                   compared with their .js, the exact rewrite.
 #
 #   --mod DIR       only the module tests in DIR, another repo's (an app
-#                   built on sae, such as ../example-app-spreadsheet), run
+#                   built on sae, such as ../spraedsheet), run
 #                   as tests/mod's are; their output goes to DIR/../target
 #                   or $SAE_LOWER_OUT.
 #

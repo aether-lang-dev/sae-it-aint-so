@@ -154,7 +154,7 @@ form, `tla*.ts` top-level await, `sae_*.ts` the library modules,
 `algos_*.ts` the modules under demo 17's page, `site/algos/`, reached
 through the `tests/mod/algos` link and checked with `lib/check.ts`'s `eq`
 and `mock`). `lower/run-tests.sh --mod DIR` runs another repo's module
-tests the same way: example-app-spreadsheet's `tests/headless/`, once demo
+tests the same way: spraedsheet's `tests/headless/`, once demo
 18's `sheet_*.ts`.
 `lower/tests/mod/golden/*.ts` are compared with their `.js`: the exact
 rewrite.

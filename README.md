@@ -881,4 +881,5 @@ yet: more of the `ui` surface, the bytecode cache, a Win32 build arm,
 
 MIT (`LICENSE`), Copyright (c) 2026 Aether Contributors collectively, as
 aether-ui. Demo 18, the spreadsheet, moved to RexxJS/example-app-spreadsheet
-on 2026-10-14 (its `app/`, MIT there too), with RexxJS's vendored copy.
+on 2026-10-14 (its `app/`, MIT there too), with RexxJS's vendored copy;
+that repository is now aether-lang-dev/spraedsheet.
