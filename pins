@@ -90,4 +90,9 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # among themselves (asks/aether-ui-drag-to-reorder.md in the spreadsheet),
 # which ui.reorderable binds and spec_reorder drives over the driver's
 # /widget/{child}/drag. Verified: tests/run_all.sh on macOS.
-AETHER_UI_REF=231073602696e26a8e92b5e3e3f20146ac32370d
+# e0fa5123 (2026-10-16): an AeCS button colour and a text field's / text
+# area's background are drawn on AppKit, not only reported (aether-ui
+# asks/aecs-button-fg-and-field-bg-not-drawn.md, from the chess app's dark
+# look through ui.styles), and ci.sh's heap(1) step time-bounded.
+# Verified: tests/run_all.sh on macOS, 54/54.
+AETHER_UI_REF=e0fa5123dd620307a47d269445e94dbcb8a05f60
