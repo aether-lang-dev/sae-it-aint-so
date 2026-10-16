@@ -1,0 +1,41 @@
+// spec_tooltip.ae -- ui.tooltip(h, text) (site/tooltip.ts): the tooltip on
+// the widget, as the driver reads it (aether-ui records what each backend's
+// set_tooltip was given); "" takes it off; a handle the page did not make
+// is refused.
+//   tests/run_spec.sh spec_tooltip
+import std.spec
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "ui.tooltip") {
+        spec.it("a button and a field carry their tooltips") callback {
+            b.navigate(b.test_url("/tooltip"))
+            spec.assert_true(b.wait_for_text("Tooltips"), "the page ran")
+            save = uidriver.widget_id_of("button", "Save")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${save}", "\"tooltip\":\"Save the workbook (Ctrl+S)\"", 40), "the button's")
+            plain = uidriver.widget_id_of("button", "Plain")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${plain}", "\"tooltip\":\"Click to take this off\"", 40), "another's")
+            spec.assert_true(b.wait_for_text("returns its widget: yes"), "it returns the widget")
+        }
+        spec.it("\"\" takes it off") callback {
+            b.click("Plain")
+            plain = uidriver.widget_id_of("button", "Plain")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${plain}", "\"text\":\"Plain\"", 40), "the button is there")
+            i = 0
+            gone = 0
+            while i < 40 {
+                if uidriver.wait_body_contains("/widget/${plain}", "\"tooltip\"", 1) == 0 { gone = 1; i = 40 }
+                sleep(50)
+                i = i + 1
+            }
+            spec.assert_true(gone, "no tooltip now")
+        }
+        spec.it("a handle the page did not make is refused") callback {
+            spec.assert_true(b.wait_for_text("refused: tooltip(h, text): h is not a widget this page made"), "refused")
+        }
+    }
+    return spec.run_summary(fw)
+}
