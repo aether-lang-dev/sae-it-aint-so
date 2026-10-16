@@ -126,6 +126,14 @@ and fences each read or write to it. `docs/page-services.md` section 5 has
 the design and what comes next (persisted handles, folders, phones, and a
 server-backed form for pages fetched over HTTP).
 
+## Native modules: app.json `natives`
+
+Beside `capabilities`, an app may declare native modules: Aether files in
+the app, each with the functions a page may call, compiled into the app's
+own sae by `tools/saehost.sh` and reached as `natives.<name>` by a page
+that seeks `native <name>`. A module must need no capability at all. The
+whole design, and what holds each rule: `docs/natives.md`.
+
 ## Seeks: what a page asks for
 
 A page says at its top which privileges it seeks, one per line, the way a

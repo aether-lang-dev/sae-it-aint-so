@@ -19,6 +19,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `src/sae_rom.c` | The C that must be C: the stdout handle (`main()` is Aether's, in `src/sae_host.ae`) |
 | `api_register_` in `src/sae_host.ae` | Installs the page API in each page's QuickJS runtime. **This function is the sandbox boundary**: a page reaches only what is registered here (`fs` and `shell` only in app mode) |
 | `services/` | One module per effect a page can ask for (`files`, `documents` (files the person picks), `clipboard`, `bus` (the control bus, with `agent_auth` and `secure_channel` copied from aeo), `shell`, `net`: app.json's `capabilities.http` allowlist and the one place a request is opened; `stdlib`: the `sae:` library and import hashes), each confined by its imports; `docs/architecture.md` |
+| `natives/` | `module.ae`: the natives module the kernel calls for an app's own native modules (`natives.<name>.<fn>`, `docs/natives.md`); here the stub with none, generated in an app's own host by `tools/saenatives.ae` (`tools/saehost.sh <app>` builds that host, each module checked to be capability-empty) |
 | `lib/sae/` | The `sae:` page standard library (`noise`, `scales`, `easing`), written in the dialect; `MANIFEST` holds their build-time hashes (`tools/hash-lib.sh`) |
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
 | `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae` |
@@ -75,6 +76,9 @@ tests/check_android_sources.sh               # the APK compiles the same C as .b
 SAE_TEST_APP=tests/apps/httplist tests/run_spec.sh spec_app_httplist
 SAE_TEST_APP=tests/apps/nohttp tests/run_spec.sh spec_app_nohttp
 tests/check_storage_scope.sh                   # storage per installed app, per file folder
+tests/check_natives.sh                         # an app's native modules: each refusal saenatives makes, one taken, iOS compile
+AETHER_UI_WITH_DRIVER=1 tools/saehost.sh tests/apps/natives && SAE_TEST_BIN=$PWD/target/hosts/natives_demo/target/build/bin/sae-driver SAE_TEST_APP=tests/apps/natives tests/run_spec.sh spec_app_natives   # natives.calc on the app's own host
+SAE_NATIVES_ABSENT=1 SAE_TEST_APP=tests/apps/natives tests/run_spec.sh spec_app_natives   # on sae's own: absent, the page refused
 tests/run_spec.sh spec_timers                  # ui.after/sleep/frame, setTimeout and friends
 tests/run_spec.sh spec_globals                 # the global surface, browser
 SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$PWD/target/globals-appdata tests/run_spec.sh spec_globals

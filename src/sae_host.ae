@@ -37,6 +37,7 @@ import services.shell
 import services.net
 import services.sqlite
 import services.stdlib
+import natives
 import contrib.quickjs
 // wave1/aevg: the scene record and the grammar modules its surface reaches.
 import aevg
@@ -4579,6 +4580,321 @@ sae_sqlite_end(ctx: ptr, this_val: int, argv: int) -> int {
     return sqlite_submit_(ctx, sqlite.KIND_EXEC, SQLITE_OP_END, sql, "", name, id)
 }
 // ===== end wave1/sqlite =====
+// ===== wave1/natives: an app's own native modules, natives.<module>.<function> (docs/natives.md) =====
+//
+//   const line = await natives.engine.search("4|0|<fen>|");
+//
+// An app declares its native modules in app.json ("natives": { "engine":
+// { "module": "native/engine.ae", "functions": ["search", "perft"] } }),
+// and tools/saehost.sh builds the app a host of its own with them compiled
+// in (the natives module, natives/module.ae: a stub here, generated
+// there), each first checked to need no capability at all: no files, no
+// network, no clock, no system, no C. Nothing is loaded at run time, so
+// the same holds where no code may be loaded (iOS). A page seeks "native
+// engine" and gets natives.engine, an object with the declared functions
+// only, each a string to a promise of a string. A call is a NativeJob run
+// off the UI thread by aether-ui's background (a pool thread, the
+// completion back on the UI thread), one at a time a module, in the order
+// the page made them, so a module's own state is touched by one call at a
+// time; the completion settles the page's promise. Not an actor: a call
+// may compute for seconds, and an actor that does starves its scheduler
+// core, the UI thread's asks of other actors there included. The module's
+// error, the second of what it returns, rejects the promise with an Error
+// carrying it. A reply for a page that has since been left is dropped.
+
+// One declared module, compiled in: its name, its declared functions
+// (",search,perft,"), the calls waiting their turn, and whether one runs.
+struct NativeModule {
+    name: string
+    fns: string
+    queue: ptr       // std.list of *NativeJob
+    busy: int
+}
+
+struct NativeJob {
+    id: int
+    unit: string
+    fn: string
+    arg: string
+    page: ptr        // the page that asked, and its load
+    seq: int
+    result: string
+    err: string
+}
+
+// A call a page is waiting on: its promise's resolve and reject.
+struct NativeWait {
+    id: int
+    page: ptr
+    seq: int
+    resolve: int
+    reject: int
+}
+
+var natives_mods_: ptr = null    // std.list of *NativeModule: declared in app.json and compiled in
+var natives_waits_: ptr = null   // std.list of *NativeWait
+var natives_ids_ = 0
+// The page that natives_page_mods_ was last worked out for (api_register_,
+// right after the page was lowered, when the lowerer's answers are its
+// own: modules it imports are lowered later), and what it came to.
+var natives_page_: ptr = null
+var natives_page_seq_ = 0
+var natives_page_set_ = ","
+
+// On a pool thread: the module's function.
+natives_do_(jp: ptr) {
+    j = jp as *NativeJob
+    res, err = natives.call(j.unit, j.fn, j.arg)
+    j.result = own_(res)
+    j.err = own_(err)
+}
+
+// The module's next call, off the UI thread, if none runs.
+natives_next_(m: *NativeModule) {
+    if m.busy == 1 || list.size(m.queue) == 0 { return }
+    jv, _ = list.get(m.queue, 0)
+    list.list_remove(m.queue, 0)
+    m.busy = 1
+    jp = jv
+    ok = ui.background(|| {
+        natives_do_(jp)
+        return jp
+    }, |r: ptr| { natives_finished_(r) })
+    if ok == 0 {
+        j = jp as *NativeJob
+        j.err = own_("no thread to run it on")
+        natives_finished_(jp)
+    }
+}
+
+// On the UI thread: a call done; its promise settled, the module's next begun.
+natives_finished_(jp: ptr) {
+    j = jp as *NativeJob
+    mv = natives_mod_(j.unit)
+    natives_deliver_(j)
+    if mv != null {
+        m = mv as *NativeModule
+        m.busy = 0
+        natives_next_(m)
+    }
+}
+
+// The declared, compiled-in module called `name`, or null.
+natives_mod_(name: string) -> ptr {
+    if natives_mods_ == null { return null }
+    n = list.size(natives_mods_)
+    i = 0
+    while i < n {
+        mv, _ = list.get(natives_mods_, i)
+        if (mv as *NativeModule).name == name { return mv }
+        i = i + 1
+    }
+    return null
+}
+
+// 1 if this app has the native module `name` (available_ asks, for "seeks native <name>").
+natives_granted_(name: string) -> int {
+    if natives_mod_(name) != null { return 1 }
+    return 0
+}
+
+// At start, in app mode: the modules app.json declares under "natives",
+// each with its functions, kept where this host has every one compiled in
+// (natives.functions()); one not compiled in is said, and the app runs
+// without it (a page that seeks it as required is refused, one that can do
+// without it does). Returns "" or why app.json's "natives" is malformed.
+natives_start_(manifest: ptr) -> string {
+    natives_mods_ = list.new()
+    if manifest == null { return "" }
+    decl = json.json_object_get_raw(manifest, "natives")
+    if decl == null { return "" }
+    if json.json_type(decl) != 5 { return "app.json natives must be an object: { \"<name>\": { \"module\": \"<file>.ae\", \"functions\": [...] } }" }
+    have = natives.functions()
+    n = json.json_object_size_raw(decl)
+    i = 0
+    while i < n {
+        name = json.json_object_key_at(decl, i)
+        spec_ = json.json_object_value_at(decl, i)
+        i = i + 1
+        if sqlite_name_ok_(name) == 0 { return "app.json natives: \"${name}\" is not a module name (a letter or _, then letters, digits and _)" }
+        if json.json_type(spec_) != 5 { return "app.json natives.${name} must be an object with \"module\" and \"functions\"" }
+        fl = json.json_object_get_raw(spec_, "functions")
+        if fl == null || json.json_type(fl) != 4 || json.json_array_size(fl) == 0 { return "app.json natives.${name}.functions: the functions a page may call, as a list of names" }
+        fns = ","
+        missing = ""
+        nf = json.json_array_size(fl)
+        k = 0
+        while k < nf {
+            fname, ferr = json.get_string(json.json_array_get_raw(fl, k))
+            k = k + 1
+            if ferr != "" || sqlite_name_ok_(fname) == 0 { return "app.json natives.${name}.functions: each a function's name (a letter or _, then letters, digits and _)" }
+            fns = string.concat(fns, "${fname},")
+            if string.contains(have, ",${name}.${fname},") == 0 { missing = string.concat(missing, " ${fname}") }
+        }
+        if missing != "" {
+            say_("sae: native ${name}: not in this sae (missing:${missing}); the app's own host has it: tools/saehost.sh <app>")
+            continue
+        }
+        m = heap.new(NativeModule)
+        m.name = own_(name)
+        m.fns = own_(fns)
+        m.queue = list.new()
+        m.busy = 0
+        list.add(natives_mods_, m as ptr)
+        say_("sae: native ${name}: ${string.substring(fns, 1, string.length(fns) - 1)}")
+    }
+    return ""
+}
+
+// The modules a page gets, as ",engine,": those it seeks (required or
+// optional) that this app has and were not left out (p.absent).
+natives_page_mods_(p: *Page) -> string {
+    out = ","
+    if app_dir_ == "" { return out }
+    parts = string.split("${lower.page_seeks()},${lower.page_optional()}", ",")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        e = string.string_array_get(parts, i)
+        i = i + 1
+        if string.string_starts_with(e, "native ") == 0 { continue }
+        name = string.string_substring(e, 7, string.length(e))
+        if string.contains(p.absent, ",${e},") == 1 { continue }
+        if natives_mod_(name) == null { continue }
+        if string.contains(out, ",${name},") == 0 { out = string.concat(out, "${name},") }
+    }
+    return out
+}
+
+// The page's natives object: each module it gets, with its declared
+// functions, each calling the raw gate. Names are identifiers (checked at
+// start), so they go into the JavaScript as they are.
+natives_js_(mods: string) -> string {
+    body = ""
+    parts = string.split(mods, ",")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        name = string.string_array_get(parts, i)
+        i = i + 1
+        if name == "" { continue }
+        mv = natives_mod_(name)
+        if mv == null { continue }
+        fns = string.split((mv as *NativeModule).fns, ",")
+        nf = string.string_array_size(fns)
+        k = 0
+        fo = ""
+        while k < nf {
+            f = string.string_array_get(fns, k)
+            k = k + 1
+            if f == "" { continue }
+            fo = string.concat(fo, "${f}: function (a) { return raw.call('${name}', '${f}', a === undefined ? '' : String(a)); }, ")
+        }
+        body = string.concat(body, "${name}: Object.freeze({ ${fo}}), ")
+    }
+    return "globalThis.natives = (function (raw) { return Object.freeze({ ${body}}); })(globalThis.__sae_natives); delete globalThis.__sae_natives;"
+}
+
+// The page's promise for a call settled, if the page is still there; the job freed.
+natives_deliver_(j: *NativeJob) {
+    n = list.size(natives_waits_)
+    i = 0
+    while i < n {
+        wv, _ = list.get(natives_waits_, i)
+        w = wv as *NativeWait
+        if w.id == j.id {
+            list.list_remove(natives_waits_, i)
+            if sqlite_page_live_(w.page, w.seq) == 1 {
+                p = w.page as *Page
+                ctx = p.ctx
+                args = quickjs.new_array(ctx)
+                r = 0
+                e = ""
+                if j.err == "" {
+                    vh = quickjs.new_string(ctx, j.result)
+                    _s = quickjs.set_index(ctx, args, 0, vh)
+                    quickjs.release(ctx, vh)
+                    r, e = quickjs.call(ctx, w.resolve, 0, args)
+                } else {
+                    f = sqlite_fns_for_(ctx, p)
+                    eh = 0
+                    if f != null {
+                        margs = quickjs.new_array(ctx)
+                        ms = quickjs.new_string(ctx, "native ${j.unit}.${j.fn}: ${j.err}")
+                        _s1 = quickjs.set_index(ctx, margs, 0, ms)
+                        quickjs.release(ctx, ms)
+                        eh, _ee = quickjs.call(ctx, f.err_fn, 0, margs)
+                        quickjs.release(ctx, margs)
+                    }
+                    if eh == 0 { eh = quickjs.new_string(ctx, j.err) }
+                    _s2 = quickjs.set_index(ctx, args, 0, eh)
+                    quickjs.release(ctx, eh)
+                    r, e = quickjs.call(ctx, w.reject, 0, args)
+                }
+                quickjs.release(ctx, args)
+                if e != "" { report_exception_(ctx, "a native promise") }
+                if r != 0 { quickjs.release(ctx, r) }
+                quickjs.release(ctx, w.resolve)
+                quickjs.release(ctx, w.reject)
+                settle_(ctx)
+            }
+            heap.free(w)
+            break
+        }
+        i = i + 1
+    }
+    heap.free(j)
+}
+
+// natives.<module>.<function>(text) (the raw gate the page's object calls):
+// a promise of the function's answer, the call made on the module's worker.
+sae_natives_call(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if argc < 3 { return sae_throw_type_error(ctx, "natives: call it as natives.<module>.<function>(text)") }
+    unit = arg_str_(ctx, argv, argc, 0)
+    fname = arg_str_(ctx, argv, argc, 1)
+    arg = arg_str_(ctx, argv, argc, 2)
+    return natives_submit_(ctx, unit, fname, arg)
+}
+
+// Queue one call for the page and return the promise it settles.
+natives_submit_(ctx: ptr, unit: string, fname: string, arg: string) -> int {
+    p = page_of_(ctx)
+    mv = natives_mod_(unit)
+    sought = ","
+    if natives_page_ == p as ptr && natives_page_seq_ == p.seq { sought = natives_page_set_ }
+    if mv == null || string.contains(sought, ",${unit},") == 0 { return sae_throw_type_error(ctx, "natives.${unit}: this page did not seek it (\"seeks native ${unit}\"), or the app has no such module") }
+    m = mv as *NativeModule
+    if string.contains(m.fns, ",${fname},") == 0 { return sae_throw_type_error(ctx, "natives.${unit}.${fname}: not one of the functions app.json declares") }
+    if natives_waits_ == null { natives_waits_ = list.new() }
+    pr = quickjs.new_promise(ctx)
+    resolve, _e1 = quickjs.get(ctx, pr, "resolve")
+    reject, _e2 = quickjs.get(ctx, pr, "reject")
+    promise, _e3 = quickjs.get(ctx, pr, "promise")
+    quickjs.release(ctx, pr)
+    natives_ids_ = natives_ids_ + 1
+    j = heap.new(NativeJob)
+    j.id = natives_ids_
+    j.unit = own_(unit)
+    j.fn = own_(fname)
+    j.arg = own_(arg)
+    j.page = p as ptr
+    j.seq = p.seq
+    j.result = ""
+    j.err = ""
+    w = heap.new(NativeWait)
+    w.id = j.id
+    w.page = p as ptr
+    w.seq = p.seq
+    w.resolve = resolve
+    w.reject = reject
+    list.add(natives_waits_, w as ptr)
+    list.add(m.queue, j as ptr)
+    natives_next_(m)
+    return promise
+}
+// ===== end wave1/natives =====
 // ===== wave1/raster: the page API: rasters (vg.raster, vg.image, ui.image) =====
 //
 // Pixels from a page (docs/roadmap.md 8.2). A raster is an AeVG image element
@@ -6876,6 +7192,7 @@ available_(nm: string) -> int {
     }
     if nm == "open-urls" { return shell.granted() }
     if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
+    if string.string_starts_with(nm, "native ") == 1 { return natives_granted_(string.string_substring(nm, 7, string.length(nm))) }   // wave1/natives
     return 0
 }
 
@@ -7603,6 +7920,21 @@ api_register_(p: *Page) {
         quickjs.release(q, so)
     }
     // ===== end wave1/sqlite =====
+
+    // ===== wave1/natives: natives.<module> for each native module the page seeks and the app has =====
+    nmods = natives_page_mods_(p)
+    natives_page_ = p as ptr
+    natives_page_seq_ = p.seq
+    natives_page_set_ = own_(nmods)
+    if nmods != "," {
+        nr = quickjs.new_object(q)
+        reg_(q, nr, "call", 3, sae_natives_call)
+        quickjs.set_global(q, "__sae_natives", nr)
+        quickjs.release(q, nr)
+        nw, _nwe = quickjs.eval(q, natives_js_(nmods), "sae:natives")
+        quickjs.release(q, nw)
+    }
+    // ===== end wave1/natives =====
 
     st = quickjs.new_object(q)
     reg_(q, st, "get", 1, sae_storage_get)
@@ -8476,6 +8808,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
         read_capabilities_(manifest)
         sqlite_why = sqlite_start_(manifest)   // wave1/sqlite: before any page runs
+        if sqlite_why == "" { sqlite_why = natives_start_(manifest) }   // wave1/natives
         build_content_(b, mem.long_to_ptr(root))
     } else {
         build_chrome_(b, root)

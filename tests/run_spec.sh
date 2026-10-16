@@ -5,6 +5,8 @@
 #   tests/run_spec.sh [spec] [site-dir]     (defaults: spec_nav, site/)
 #   SAE_TEST_APP=<dir> tests/run_spec.sh <spec>   app mode: sae-driver --app <dir>
 #   SAE_TEST_START=<url|file> tests/run_spec.sh <spec>   the browser, starting there
+#   SAE_TEST_BIN=<sae-driver> tests/run_spec.sh <spec>   another sae-driver: an
+#       app's own host, built by tools/saehost.sh with its natives (docs/natives.md)
 #   tests/run_spec.sh /path/to/spec_x.ae [site-dir]   a spec of another repo's
 #       (an app built on sae, such as ../spraedsheet); its own
 #       test libraries go first on the module path with SAE_TEST_LIB_DIR.
@@ -54,12 +56,17 @@ if [ -n "${SAE_AETHER_HOME:-}" ]; then
 fi
 PATH="$ROOT/target/toolchain/bin:$PATH"
 
-for f in target/pageserver target/build/bin/sae-driver; do
+DRIVER_BIN="${SAE_TEST_BIN:-$ROOT/target/build/bin/sae-driver}"
+for f in target/pageserver; do
     [ -x "$ROOT/$f" ] || {
         echo "run_spec.sh: no $f; build it with AETHER_UI_WITH_DRIVER=1 ./build.sh (see README)" >&2
         exit 2
     }
 done
+[ -x "$DRIVER_BIN" ] || {
+    echo "run_spec.sh: no $DRIVER_BIN; build it with AETHER_UI_WITH_DRIVER=1 ./build.sh (see README)" >&2
+    exit 2
+}
 if curl -s -o /dev/null "http://127.0.0.1:$DRIVER_PORT/widgets"; then
     echo "run_spec.sh: something already answers on driver port $DRIVER_PORT" >&2
     exit 2
@@ -74,10 +81,10 @@ export SAE_PAGE_TIME_MS="${SAE_PAGE_TIME_MS:-1000}"
 "$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
 SERVER=$!
 if [ -n "${SAE_TEST_APP:-}" ]; then
-    AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
+    AETHER_UI_TEST_PORT=$DRIVER_PORT "$DRIVER_BIN" \
         --app "$(cd "$SAE_TEST_APP" && pwd)" ${SAE_TEST_FLAGS:-} >"$LOG" 2>&1 &
 else
-    AETHER_UI_TEST_PORT=$DRIVER_PORT "$ROOT/target/build/bin/sae-driver" \
+    AETHER_UI_TEST_PORT=$DRIVER_PORT "$DRIVER_BIN" \
         "${SAE_TEST_START:-http://127.0.0.1:$SITE_PORT/}" >"$LOG" 2>&1 &
 fi
 SAE=$!

@@ -1,0 +1,27 @@
+// natives — the native modules a sae binary is built with: an app's own
+// Aether code, compiled into an app-specific host at build time (never
+// loaded at run time), each a set of functions of a string to a string,
+// called by the app's pages as natives.<module>.<function>(text), a
+// promise answered off the UI thread. docs/natives.md.
+//
+// This is the stub sae's own build has: no native modules, so no page has
+// any. tools/saehost.sh writes an app's own in place of it, in that app's
+// staging folder: one import per module the app's app.json declares under
+// "natives" (each module checked first to need no capability at all), a
+// list of the functions declared, and a dispatch to each.
+//
+// The kernel calls these two, from the natives worker actors only
+// (src/sae_host.ae, "wave1/natives"); a gate never names this module (the
+// page veto hides it).
+
+exports (functions, call)
+
+// The functions compiled in, as ",<module>.<function>,...,"; "," for none.
+functions() -> string {
+    return ","
+}
+
+// Calls a declared function: its answer, or why it has none.
+call(unit: string, fn: string, arg: string) -> (string, string) {
+    return "", "this sae has no native module ${module} (build the app's own: tools/saehost.sh <app>)"
+}

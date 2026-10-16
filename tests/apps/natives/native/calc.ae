@@ -1,0 +1,61 @@
+// The natives demo's module (tests/spec_app_natives.ae, docs/natives.md):
+// Aether compiled into the app's own sae, called by its page as
+// natives.calc.<function>(text). It imports only std.string, so it needs
+// no capability: it computes, and nothing else.
+import std.string
+
+exports (sum, upper, spin, refuse, hidden)
+
+// "1 2 3" -> "6"
+sum(arg: string) -> (string, string) {
+    parts = string.split(arg, " ")
+    n = string.array_size(parts)
+    long total = 0
+    i = 0
+    while i < n {
+        v, err = string.to_int(string.array_get(parts, i))
+        i = i + 1
+        if err != "" { continue }
+        total = total + v
+    }
+    string.array_free(parts)
+    return "${total}", ""
+}
+
+upper(arg: string) -> (string, string) {
+    return string.to_upper(arg), ""
+}
+
+// Work that takes a while (about a second here): a count of the primes
+// below the number given, by trial division, so the page can show it is
+// answered off the UI thread.
+spin(arg: string) -> (string, string) {
+    limit, err = string.to_int(arg)
+    if err != "" { return "", "spin takes a number" }
+    count = 0
+    n = 2
+    while n < limit {
+        prime = 1
+        d = 2
+        while d * d <= n {
+            if n % d == 0 {
+                prime = 0
+                break
+            }
+            d = d + 1
+        }
+        count = count + prime
+        n = n + 1
+    }
+    return "${count}", ""
+}
+
+// A function's error: the page's promise is rejected with it.
+refuse(arg: string) -> (string, string) {
+    return "", "no, not ${arg}"
+}
+
+// Exported but not declared in app.json: no page can call it.
+hidden(arg: string) -> (string, string) {
+    return "you should not see this", ""
+}

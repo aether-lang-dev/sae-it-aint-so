@@ -86,6 +86,12 @@ An app's databases (`"seeks database <name>"`; App mode below), every call a pro
 | `sqlite.<name>` | `all(sql, params?)` the rows as objects, `get(sql, params?)` the first or `null`, `run(sql, params?)` → `{ changes, lastId }`; `params` an array for `?` or an object for `$name` (a number, string, boolean or null each) |
 | transactions | `transaction(async tx => { ... })`: `BEGIN`, the callback with `tx.all/get/run`, `COMMIT`, or `ROLLBACK` if it throws; resolves to the callback's value |
 
+An app's own native modules (`"seeks native <name>"`; App mode below), Aether compiled into the app's own sae, every call a promise answered off the UI thread:
+
+| | |
+|---|---|
+| `natives.<name>` | each function app.json declares for the module, `fn(text)` → a promise of the text it gives; its error rejects with an `Error`. `docs/natives.md` |
+
 A page names only widgets it made: a handle below the page's first widget
 (the address bar, the status line, the browser's own content area, a
 previous page's widgets) makes `get_text`, `set_text`, `clear` and `into`
@@ -807,6 +813,15 @@ being Aether's `contrib.sqlite` (the same one LisMusic builds for Android):
   (`tests/spec_sqlite_service.ae`).
 - Not yet (`docs/page-services.md`, 6): bundled read-only databases and
   large seeds (versions 2 and 3), binary columns, a page-named database.
+
+`natives` gives an app its own compiled code (`docs/natives.md`): Aether
+modules in the app, declared in app.json with the functions a page may
+call, each checked to need no capability at all (it computes, and reaches
+nothing), and compiled into a sae of the app's own by
+`tools/saehost.sh <dir>` (`target/hosts/<name>/target/build/bin/sae`).
+Nothing is loaded at run time, so the same holds where no code may be
+loaded (iOS). A page that seeks `native <name>` gets `natives.<name>`; on a
+sae without the module, a page that can do without it has no `natives`.
 
 Pages are `app:` URLs, mapped like the dev page server maps
 a site: `app:/about` is `<dir>/about.ts` (or `.js`), `app:/` the index, a

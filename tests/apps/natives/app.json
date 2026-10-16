@@ -1,0 +1,10 @@
+{
+  "name": "Natives demo",
+  "width": 520, "height": 420,
+  "natives": {
+    "calc": {
+      "module": "native/calc.ae",
+      "functions": ["sum", "upper", "spin", "refuse"]
+    }
+  }
+}

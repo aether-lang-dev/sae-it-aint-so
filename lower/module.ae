@@ -968,8 +968,10 @@ names_of_(list: string) -> string {
 // page-API object each one unlocks. ui, vg, storage and browserContext every
 // page has, so they are not sought. "database" takes the database's name
 // ("seeks database fred", one line per database) and unlocks sqlite.fred;
-// it is kept as "database fred" in the sought and optional lists.
-const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,database:sqlite,documents:documents,clipboard:clipboard,clipboard-read:clipboard,control-bus:bus,"
+// it is kept as "database fred" in the sought and optional lists. "native"
+// takes a native module's name the same way ("seeks native engine",
+// natives.engine: docs/natives.md).
+const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,database:sqlite,native:natives,documents:documents,clipboard:clipboard,clipboard-read:clipboard,control-bus:bus,"
 const PRIVILEGED = ",fs,http,shell,sqlite,documents,clipboard,bus,"
 
 // The object a privilege unlocks ("local-filesystem" -> "fs"), or "".
@@ -1089,7 +1091,7 @@ page_seeks_(x: *Lx) {
         }
         obj = object_of_(nm)
         if obj == "" {
-            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls, database <name>, documents, clipboard, clipboard-read, control-bus)")
+            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls, database <name>, native <name>, documents, clipboard, clipboard-read, control-bus)")
             return
         }
         scoped = 0
@@ -1101,6 +1103,14 @@ page_seeks_(x: *Lx) {
                 return
             }
             nm = "database ${strarr.get(ws, 1)}"
+            nw = 1
+        } else if nm == "native" {
+            // The same for a native module: "native engine" is one privilege.
+            if nw != 2 || db_name_ok_(strarr.get(ws, 1)) == 0 {
+                fail_at_(x, tk_start_(x, j), "\"seeks native\" takes the module's name, as app.json natives spells it: \"seeks native engine\"")
+                return
+            }
+            nm = "native ${strarr.get(ws, 1)}"
             nw = 1
         }
         if nw > 1 {

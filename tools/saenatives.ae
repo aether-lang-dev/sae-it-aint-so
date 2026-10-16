@@ -1,0 +1,167 @@
+// saenatives: an app's native modules made ready for its own host
+// (docs/natives.md). tools/saehost.sh runs it, then builds the host.
+//
+//   saenatives <app dir> <stage dir>
+//
+// Reads <app dir>/app.json's "natives":
+//
+//   "natives": { "engine": { "module": "native/engine.ae", "functions": ["search", "perft"] } }
+//
+// and for each module: its file is inside the app (no "..", no absolute
+// path); `ae inspect` says it is a module (no main) that needs no
+// capability at all ("capability-empty": no files, no network, no clock,
+// no system, no `extern` C), so it can compute and nothing else; and each
+// declared function is one it exports, taking one string and giving two
+// (the answer, and "" or why there is none). Then it copies each module to
+// <stage dir>/app_natives/<name>/module.ae and writes
+// <stage dir>/natives/module.ae, the natives module sae's kernel calls (the
+// stub in sae's own tree has none): an import per module, functions()
+// listing what was declared, and call() dispatching to each. The kernel
+// gives a page only what app.json declares and the page seeks.
+//
+// Exit status 0 when the stage is ready; 1, saying why, when a module is
+// refused; 2 for a usage or app.json that is wrong.
+
+import std.fs
+import std.io
+import std.json
+import std.list
+import std.os
+import std.string
+
+extern exit(code: int)
+
+fail_(code: int, why: string) {
+    _w = io.stderr_write("saenatives: ${why}\n")
+    exit(code)
+}
+
+// A letter or "_", then letters, digits and "_" (the kernel's rule for a
+// module's and a function's name).
+name_ok_(s: string) -> int {
+    n = string.length(s)
+    if n == 0 || n > 64 { return 0 }
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        ok = 0
+        if c >= 97 && c <= 122 { ok = 1 }
+        if c >= 65 && c <= 90 { ok = 1 }
+        if c == 95 { ok = 1 }
+        if i > 0 && c >= 48 && c <= 57 { ok = 1 }
+        if ok == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// What `ae inspect` says of the module at `path`: its whole report.
+inspect_(path: string) -> string {
+    ae = os.getenv("AE")
+    if ae == null || ae == "" { ae = "ae" }
+    argv = list.new()
+    list.add(argv, "inspect")
+    list.add(argv, path)
+    out, status, err = os.run_capture(ae, argv, null)
+    if err != "" || status != 0 { fail_(1, "${path}: ae inspect failed (${err}${out})") }
+    return out
+}
+
+// The module at `path` for the native `name`, with the functions `fns`
+// (",search,perft,"): refused unless it needs nothing and exports each.
+check_(name: string, path: string, fns: string) {
+    r = inspect_(path)
+    if string.contains(r, "artifact:  library / module") == 0 {
+        fail_(1, "native ${name}: ${path} is a program (it has main), not a module: a native module is functions a page calls")
+    }
+    if string.contains(r, "capabilities required: none (capability-empty)") == 0 {
+        at = string.index_of(r, "capabilities required")
+        said = ""
+        if at >= 0 {
+            end = string.index_of(string.substring(r, at, string.length(r)), "\n")
+            if end > 0 { said = string.substring(r, at, at + end) }
+        }
+        fail_(1, "native ${name}: ${path} needs a capability (${said}): a native module may compute and nothing else (no files, network, clock, system or extern C)")
+    }
+    parts = string.split(fns, ",")
+    n = string.array_size(parts)
+    i = 0
+    while i < n {
+        f = string.array_get(parts, i)
+        i = i + 1
+        if f == "" { continue }
+        if string.contains(r, "\n    ${f}\n") == 0 {
+            fail_(1, "native ${name}: ${path} does not export ${f}, which app.json declares")
+        }
+        if string.contains(r, "\n    ${f}(") == 1 {
+            sig_at = string.index_of(r, "\n    ${f}(")
+            rest = string.substring(r, sig_at + 5, string.length(r))
+            line_end = string.index_of(rest, "\n")
+            sig = rest
+            if line_end >= 0 { sig = string.substring(rest, 0, line_end) }
+            colon = string.index_of(sig, ": string) -> (string, string)")
+            if colon < 0 || string.contains(sig, ",") == 1 && string.index_of(sig, ",") < colon {
+                fail_(1, "native ${name}: ${f} is ${sig}; a native function takes one string and gives two: ${f}(arg: string) -> (string, string)")
+            }
+        }
+    }
+    string.array_free(parts)
+}
+
+main() {
+    if os.args_count() < 3 { fail_(2, "usage: saenatives <app dir> <stage dir>") }
+    app = os.args_get(1)
+    stage = os.args_get(2)
+    text, rerr = fs.read("${app}/app.json")
+    if rerr != "" { fail_(2, "${app}/app.json: ${rerr}") }
+    manifest, jerr = json.parse(text)
+    if jerr != "" || manifest == null { fail_(2, "${app}/app.json is not JSON: ${jerr}") }
+    decl = json.json_object_get_raw(manifest, "natives")
+    if decl == null || json.json_type(decl) != 5 { fail_(2, "${app}/app.json declares no \"natives\" (an object: { \"<name>\": { \"module\": \"<file>.ae\", \"functions\": [...] } })") }
+    _m1 = fs.mkdir_p("${stage}/natives")
+    imports = ""
+    listed = ","
+    dispatch = ""
+    n = json.json_object_size_raw(decl)
+    i = 0
+    while i < n {
+        name = json.json_object_key_at(decl, i)
+        spec_ = json.json_object_value_at(decl, i)
+        i = i + 1
+        if name_ok_(name) == 0 { fail_(2, "app.json natives: \"${name}\" is not a module name (a letter or _, then letters, digits and _)") }
+        if json.json_type(spec_) != 5 { fail_(2, "app.json natives.${name} must be an object with \"module\" and \"functions\"") }
+        file, ferr = json.get_string(json.json_object_get_raw(spec_, "module"))
+        if ferr != "" || file == "" { fail_(2, "app.json natives.${name}.module: the module's file in the app, like \"native/${name}.ae\"") }
+        if string.starts_with(file, "/") == 1 || string.contains(file, "..") == 1 || string.contains(file, "\\") == 1 || string.ends_with(file, ".ae") == 0 {
+            fail_(2, "app.json natives.${name}.module: ${file}: a .ae file inside the app (no \"..\", no absolute path)")
+        }
+        fl = json.json_object_get_raw(spec_, "functions")
+        if fl == null || json.json_type(fl) != 4 || json.json_array_size(fl) == 0 { fail_(2, "app.json natives.${name}.functions: the functions a page may call, as a list of names") }
+        fns = ","
+        nf = json.json_array_size(fl)
+        k = 0
+        branch = ""
+        while k < nf {
+            f, e2 = json.get_string(json.json_array_get_raw(fl, k))
+            k = k + 1
+            if e2 != "" || name_ok_(f) == 0 { fail_(2, "app.json natives.${name}.functions: each a function's name") }
+            fns = string.concat(fns, "${f},")
+            listed = string.concat(listed, "${name}.${f},")
+            branch = string.concat(branch, "        if fn == \"${f}\" { return native_${name}.${f}(arg) }\n")
+        }
+        path = "${app}/${file}"
+        if fs.exists(path) == 0 { fail_(2, "app.json natives.${name}.module: no ${path}") }
+        check_(name, path, fns)
+        body, berr = fs.read(path)
+        if berr != "" { fail_(2, "${path}: ${berr}") }
+        _m2 = fs.mkdir_p("${stage}/app_natives/${name}")
+        werr = fs.write("${stage}/app_natives/${name}/module.ae", body)
+        if werr != "" { fail_(2, "${stage}/app_natives/${name}/module.ae: ${werr}") }
+        imports = string.concat(imports, "import app_natives.${name} as native_${name}\n")
+        dispatch = string.concat(dispatch, "    if unit == \"${name}\" {\n${branch}    }\n")
+        println("saenatives: native ${name}: ${path} (capability-empty), ${string.substring(fns, 1, string.length(fns) - 1)}")
+    }
+    src = "// GENERATED by tools/saenatives.ae from ${app}/app.json: do not edit.\n// The natives module of this app's own host (sae's natives/module.ae is the\n// stub with none): docs/natives.md.\n\n${imports}\nexports (functions, call)\n\nfunctions() -> string {\n    return \"${listed}\"\n}\n\ncall(unit: string, fn: string, arg: string) -> (string, string) {\n${dispatch}    return \"\", \"no native ${\"$\"}{unit}.${\"$\"}{fn}\"\n}\n"
+    werr2 = fs.write("${stage}/natives/module.ae", src)
+    if werr2 != "" { fail_(2, "${stage}/natives/module.ae: ${werr2}") }
+}

@@ -85,6 +85,8 @@ spec_app_scoped|SAE_TEST_APP=tests/apps/scoped|spec spec_app_scoped
 spec_app_scoped_path|SAE_TEST_APP=tests/apps/scoped_path|spec spec_app_scoped_path
 spec_app_seeks|SAE_TEST_APP=tests/apps/seeks|spec spec_app_seeks
 spec_app_sqlite|SAE_TEST_APP=tests/apps/sqlite_demo|spec spec_app_sqlite
+spec_app_natives|SAE_TEST_APP=tests/apps/natives SAE_TEST_BIN=$T/hosts/natives_demo/target/build/bin/sae-driver|host tests/apps/natives spec_app_natives
+spec_app_natives[absent]|SAE_TEST_APP=tests/apps/natives SAE_NATIVES_ABSENT=1|spec spec_app_natives
 spec_gitify|SAE_TEST_APP=tests/apps/gitify SAE_STORAGE_DIR=$T/spec-storage SAE_SHELL_LOG=$T/spec-shell.log|spec spec_gitify
 spec_pomatez|SAE_TEST_APP=examples/pomatez SAE_TIME_SCALE=60 SAE_STORAGE_DIR=$T/spec-storage|spec spec_pomatez
 spec_http_grants||aerun spec_http_grants
@@ -95,6 +97,7 @@ check_layers||check check_layers
 check_android_sources||check check_android_sources
 check_storage_scope||check check_storage_scope
 check_sqlite_relaunch||check check_sqlite_relaunch
+check_natives||check check_natives
 check_module_rules||check check_module_rules
 check_prelude||check check_prelude
 lower||lower
@@ -115,6 +118,8 @@ for line in $TABLE; do
     kind=$1; shift
     case "$kind" in
         spec)  set -- tests/run_spec.sh "$@" ;;
+        # an app's own host built first (tools/saehost.sh, docs/natives.md), then its spec
+        host)  set -- sh -c 'AETHER_UI_WITH_DRIVER=1 tools/saehost.sh "$1" && tests/run_spec.sh "$2"' host "$@" ;;
         aerun) set -- ae run "tests/$1.ae" ;;
         check) set -- sh "tests/$1.sh" ;;
         lower) set -- lower/run-tests.sh ;;

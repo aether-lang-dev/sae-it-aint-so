@@ -1,0 +1,68 @@
+// spec_app_natives.ae — an app's own native modules (docs/natives.md), end
+// to end, through a page: tests/apps/natives declares its module calc
+// (native/calc.ae) in app.json, tools/saehost.sh builds the app its own
+// sae with calc compiled in, and the page, seeking "native calc", gets
+// natives.calc with the declared functions only, each a string to a
+// promise of a string, answered off the UI thread.
+//
+//   AETHER_UI_WITH_DRIVER=1 tools/saehost.sh tests/apps/natives
+//   SAE_TEST_BIN=target/hosts/natives_demo/target/build/bin/sae-driver \
+//     SAE_TEST_APP=tests/apps/natives tests/run_spec.sh spec_app_natives
+//
+// SAE_NATIVES_ABSENT=1 runs it on sae's own sae-driver, which has no
+// native modules: the page, whose seek is required, is refused.
+import std.spec
+import std.string
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    absent = os_getenv("SAE_NATIVES_ABSENT")
+    if absent != null && absent == "1" {
+        spec.describe(fw, "app mode: native modules this sae was not built with") {
+            spec.it("the page that seeks native calc is refused, and the console says how to build the app's own") callback {
+                spec.assert_true(b.wait_for_console("sae: native calc: not in this sae (missing: sum upper spin refuse)"), "said at start")
+                spec.assert_true(b.wait_for_text("This page cannot run here:"), "the page refused")
+                spec.assert_true(b.wait_for_text("app:/ seeks native calc, which this app's app.json does not grant"), "and why")
+            }
+        }
+        return spec.run_summary(fw)
+    }
+    spec.describe(fw, "app mode: natives.<module>, compiled into the app's own sae") {
+        spec.it("the page gets natives.calc with the declared functions, no more") callback {
+            spec.assert_true(b.wait_for_console("sae: native calc: sum,upper,spin,refuse"), "declared and compiled in")
+            b.assert_text("natives: object calc: object functions: sum,upper,spin,refuse", "the page's object")
+        }
+        spec.it("a call is a promise of the function's answer") callback {
+            b.click("Sum")
+            b.assert_text("result: sum 45", "sum")
+            b.click("Upper")
+            b.assert_text("result: upper CHESS", "upper")
+        }
+        spec.it("calls answered in the order they were made") callback {
+            b.click("In order")
+            b.assert_text("result: in order 1 2 X 3", "in order")
+        }
+        spec.it("the module's error rejects the promise with an Error") callback {
+            b.click("Refuse")
+            b.assert_text("result: error: native calc.refuse: no, not this", "rejected")
+        }
+        spec.it("a function exported but not declared is not there") callback {
+            b.click("Hidden")
+            b.assert_text("result: hidden is undefined", "not on the object")
+        }
+        spec.it("a long call runs off the UI thread: the page answers clicks meanwhile") callback {
+            b.click("Spin")
+            b.assert_text("result: spinning", "started")
+            b.click("Bump")
+            b.click("Bump")
+            b.assert_text("ticks: 2", "two clicks handled while the module computes")
+            spec.assert_true(b.has_text("result: spinning") == 1, "and it still computes")
+            spec.assert_true(b.wait_for_text("result: spin 788060 primes, ticks 2, took time"), "then its answer, the clicks counted before it")
+        }
+    }
+    return spec.run_summary(fw)
+}
