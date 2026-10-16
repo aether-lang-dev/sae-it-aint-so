@@ -80,6 +80,14 @@ main() {
             b.click("Move B to E")
             spec.assert_true(b.wait_for_console("grid moved 2 to 5; view 5 shows model 2"), "on_col_move, and the model column")
         }
+        spec.it("a grid given half its height, and all of it again") callback {
+            b.click("Full height")
+            spec.assert_true(b.wait_for_console("grid height 360"), "fifteen rows of 24")
+            b.click("Half height")
+            spec.assert_true(b.wait_for_console("grid height 180"), "half: seven and a half rows' room")
+            b.click("Full height")
+            spec.assert_true(b.console_contains("grid height 360") == 1, "and all again")
+        }
         spec.it("several areas: one added from code, read back, and cleared") callback {
             b.click("Add an area")
             spec.assert_true(b.wait_for_console("grid areas 1,1,2,2; selection 5,3,6,4"), "the first kept as an area, the second the selection")
