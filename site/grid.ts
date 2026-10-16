@@ -63,6 +63,14 @@ btn("Add an area", () => {
   ui.datagrid_add_area(g, 5, 3, 6, 4);
   print(`grid areas ${ui.datagrid_areas(g)}; selection ${ui.datagrid_selection(g).join(",")}`);
 });
+btn("Freeze A", () => {
+  ui.datagrid_freeze_cols(g, 1);
+  print(`grid frozen columns ${ui.datagrid_frozen_cols(g)}`);
+});
+btn("Free columns", () => {
+  ui.datagrid_freeze_cols(g, 0);
+  print(`grid frozen columns now ${ui.datagrid_frozen_cols(g)}`);
+});
 btn("Half height", () => {
   ui.datagrid_set_height(g, Math.floor(ui.datagrid_height(g) / 2));
   print(`grid height ${ui.datagrid_height(g)}`);

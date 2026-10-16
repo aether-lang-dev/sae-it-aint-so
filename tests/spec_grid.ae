@@ -80,6 +80,12 @@ main() {
             b.click("Move B to E")
             spec.assert_true(b.wait_for_console("grid moved 2 to 5; view 5 shows model 2"), "on_col_move, and the model column")
         }
+        spec.it("a column frozen beside the row numbers, and freed") callback {
+            b.click("Freeze A")
+            spec.assert_true(b.wait_for_console("grid frozen columns 1"), "A frozen")
+            b.click("Free columns")
+            spec.assert_true(b.wait_for_console("grid frozen columns now 0"), "and freed")
+        }
         spec.it("a grid given half its height, and all of it again") callback {
             b.click("Full height")
             spec.assert_true(b.wait_for_console("grid height 360"), "fifteen rows of 24")
