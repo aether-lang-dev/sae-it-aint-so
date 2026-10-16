@@ -1,0 +1,38 @@
+// spec_app_menus.ae — an installed app's menu bar (ui.menu, ui.menu_item,
+// ui.menu_separator: tests/apps/menus): its menus and items on the window's
+// native bar (aether-ui's, read over the driver's /menus), an item's
+// activation running the page's function, and the refusals: a menu inside
+// a menu, an item outside one. A web page's ui.menu is refused (spec_nav).
+//   SAE_TEST_APP=tests/apps/menus tests/run_spec.sh spec_app_menus
+import std.spec
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "an installed app's menu bar") {
+        spec.it("the bar has the page's menus and their items") callback {
+            spec.assert_true(b.wait_for_text("Menus"), "the page is up")
+            body = uidriver.menus_body()
+            // The driver's /menus gives each menu's items, in order (not its label).
+            spec.assert_contains(body, "\"items\":[\"New game\",\"Flip board\"]", "the Game menu's two items, a separator between")
+            spec.assert_contains(body, "\"items\":[\"About\"]", "the Help menu's item")
+            spec.assert_true(uidriver.menu_handle_with("New game") > 0, "an item resolves to its menu")
+        }
+        spec.it("choosing an item runs the page's function") callback {
+            uidriver.menu_activate(uidriver.menu_handle_with("New game"), "New game")
+            spec.assert_true(b.wait_for_text("Actions taken: 1"), "New game ran")
+            spec.assert_true(b.wait_for_text("Last: new game"), "and said so")
+            uidriver.menu_activate(uidriver.menu_handle_with("Flip board"), "Flip board")
+            spec.assert_true(b.wait_for_text("Actions taken: 2"), "Flip board ran")
+            uidriver.menu_activate(uidriver.menu_handle_with("About"), "About")
+            spec.assert_true(b.wait_for_text("Last: about"), "an item of the second menu")
+        }
+        spec.it("a menu inside a menu, and an item outside one, are refused") callback {
+            spec.assert_true(b.wait_for_text("nested: ui.menu(label, fn): a menu inside a menu is not made yet"), "nested refused")
+            spec.assert_true(b.wait_for_text("stray: ui.menu_item(label, fn) must be called inside a ui.menu block"), "stray refused")
+        }
+    }
+    return spec.run_summary(fw)
+}

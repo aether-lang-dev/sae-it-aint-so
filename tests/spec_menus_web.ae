@@ -1,0 +1,21 @@
+// spec_menus_web.ae -- ui.menu in a web page (site/menus.ts) is refused:
+// only an installed app has a menu bar (spec_app_menus), and a page in the
+// browser may not change the browser's own menus.
+//   tests/run_spec.sh spec_menus_web
+import std.spec
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "ui.menu in a web page") {
+        spec.it("is refused, and says why") callback {
+            b.navigate(b.test_url("/menus"))
+            spec.assert_true(b.wait_for_text("Menus in a web page"), "the page ran")
+            spec.assert_true(b.wait_for_text("refused: ui.menu: only an installed app has a menu bar (a web page may not change the browser's)"), "refused")
+            spec.assert_eq(uidriver.menu_handle_with("New game"), 0, "no item on any bar")
+        }
+    }
+    return spec.run_summary(fw)
+}

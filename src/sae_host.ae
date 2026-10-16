@@ -523,6 +523,67 @@ sae_ui_btn(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
+// --- the page API: the menu bar (an installed app) ---
+//
+// ui.menu(label, fn): a menu on the app window's native menu bar
+// (aether-ui's menu_bar: GTK4's GtkPopoverMenuBar, AppKit's NSMenu,
+// Win32's menu), its items made by fn's ui.menu_item(label, fn) and
+// ui.menu_separator() calls. Only an installed app has one: a web page in
+// the browser may not touch the browser's own menus. The menus of one page
+// load make one bar; a later page's ui.menu starts a bar of its own, which
+// replaces it on the window. An item fires only for the page that made it
+// (a past page's item does nothing).
+var menu_bar_: int = 0        // the bar the menus go on, or 0
+var menu_bar_seq_: int = 0    // the page load that made it
+var menu_open_: int = 0       // the menu whose block is running, or 0
+var window_up_: int = 0       // 1 once window_run has made the window
+
+sae_ui_menu(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if app_dir_ == "" { return sae_throw_type_error(ctx, "ui.menu: only an installed app has a menu bar (a web page may not change the browser's)") }
+    if menu_open_ != 0 { return sae_throw_type_error(ctx, "ui.menu(label, fn): a menu inside a menu is not made yet") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.menu(label, fn): fn must be a function") }
+    p = page_of_(ctx)
+    m = ui.menu(arg_str_(ctx, argv, argc, 0))
+    menu_open_ = m
+    r = call_arg_(ctx, argv, 1)
+    menu_open_ = 0
+    if r < 0 { return rethrow_(ctx) }
+    if menu_bar_ == 0 || menu_bar_seq_ != p.seq {
+        menu_bar_ = ui.menu_bar()
+        menu_bar_seq_ = p.seq
+    }
+    ui.menu_bar_add(menu_bar_, m)
+    // A bar made once the window is up goes on it now; before, window_run
+    // attaches it as it makes the window.
+    if window_up_ == 1 { ui.attach_menu_bar_to_window(1, menu_bar_) }
+    return quickjs.new_int(ctx, m)
+}
+
+// ui.menu_item(label, fn): an item of the menu whose block is running.
+sae_ui_menu_item(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if menu_open_ == 0 { return sae_throw_type_error(ctx, "ui.menu_item(label, fn) must be called inside a ui.menu block") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.menu_item(label, fn): fn must be a function") }
+    p = page_of_(ctx)
+    seq = p.seq
+    ref = hold_arg_(ctx, argv, 1)
+    ui.menu_item(menu_open_, arg_str_(ctx, argv, argc, 0), || {
+        if ae_live_(ctx, seq) == 1 { fire_click_(ctx, ref) }
+    })
+    return 0
+}
+
+// ui.menu_separator(): a line between items of the menu whose block is running.
+sae_ui_menu_separator(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    if menu_open_ == 0 { return sae_throw_type_error(ctx, "ui.menu_separator() must be called inside a ui.menu block") }
+    ui.menu_separator(menu_open_)
+    return 0
+}
+
 // A modifier (margin, bg_color, onclick) acts on the innermost container or
 // widget the page opened. At the page's top level there is none: the top of
 // the stack is the browser's own content area, which a page must not
@@ -7195,6 +7256,9 @@ api_register_(p: *Page) {
     reg_(q, u, "onsubmit", 1, sae_ui_onsubmit)
     reg_(q, u, "on_drag", 2, sae_ui_on_drag)
     reg_(q, u, "reorderable", 2, sae_ui_reorderable)
+    reg_(q, u, "menu", 2, sae_ui_menu)
+    reg_(q, u, "menu_item", 2, sae_ui_menu_item)
+    reg_(q, u, "menu_separator", 0, sae_ui_menu_separator)
     reg_(q, u, "ondrag", 1, sae_ui_ondrag)
     reg_(q, u, "pointer_cursor", 2, sae_ui_pointer_cursor)
     reg_(q, u, "pointer_shape", 1, sae_ui_pointer_shape)
@@ -8242,6 +8306,14 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     // The first page may have started the control bus before the window
     // existed: its title says so from the start.
     if bus.listening() == 1 { title = "${title} - control bus on" }
+    window_up_ = 1
+    if menu_bar_ != 0 {
+        // The first page made menus: the window is made with its bar.
+        app_h = ui.app_create(title, w, h)
+        ui.attach_menu_bar(app_h, menu_bar_)
+        ui.app_start(app_h, root)
+        return 0
+    }
     ui.window_run(title, w, h, root)
     return 0
 }
