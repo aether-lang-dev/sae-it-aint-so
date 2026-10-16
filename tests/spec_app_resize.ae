@@ -1,0 +1,76 @@
+// spec_app_resize.ae — a page that follows the window (tests/apps/resize):
+// ui.on_resize gives it the window's size at first and after every resize,
+// and it sizes its vg scene with vg.resize, in place (the scene's click
+// still counts after); ui.on_layout gives a stack's width; vg.resize by a
+// button; the refusals.
+//   SAE_TEST_APP=tests/apps/resize tests/run_spec.sh spec_app_resize
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+canvas_w() -> int { return uidriver.widget_int_field_by_id(b.vg_canvas(), "w") }
+canvas_h() -> int { return uidriver.widget_int_field_by_id(b.vg_canvas(), "h") }
+
+// The text that starts with `prefix`, polled for up to 3 s; "" for none.
+text_starting(prefix: string) -> string {
+    i = 0
+    while i < 60 {
+        all = b.page_texts()
+        at = string.index_of(all, prefix)
+        if at >= 0 {
+            rest = string.substring(all, at, string.length(all))
+            nl = string.index_of(rest, "\n")
+            if nl >= 0 { return string.substring(rest, 0, nl) }
+            return rest
+        }
+        sleep(50)
+        i = i + 1
+    }
+    return ""
+}
+
+// 1 once the canvas is `w` x `h`.
+wait_canvas(w: int, h: int) -> int {
+    i = 0
+    while i < 60 {
+        if canvas_w() == w && canvas_h() == h { return 1 }
+        sleep(50)
+        i = i + 1
+    }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "ui.on_resize, ui.on_layout and vg.resize") {
+        spec.it("the window's size told at first, the scene sized to it") callback {
+            spec.assert_true(b.wait_for_text("Resize"), "the page is up")
+            spec.assert_true(b.wait_for_vg_canvas(), "the scene")
+            w0 = text_starting("window: ")
+            spec.assert_true(string.starts_with(w0, "window: ") == 1 && string.contains(w0, " x ") == 1 && string.contains(w0, "none") == 0, "told the window's size (${w0})")
+            s0 = text_starting("scene: ")
+            spec.assert_true(string.equals(s0, "scene: 200") == 0, "the scene sized from it (${s0})")
+            spec.assert_true(text_starting("row: ") != "" && string.contains(text_starting("row: "), "wide") == 1, "on_layout gave the row's width")
+        }
+        spec.it("a window resized: told, and the scene follows, in place") callback {
+            uidriver.resize_window(900, 800)
+            spec.assert_true(b.wait_for_text("window: 900 x 800") == 1 || string.starts_with(text_starting("window: 9"), "window: 9") == 1, "told the new size")
+            spec.assert_true(b.wait_for_text("scene: 600"), "the square that fits: min(900 - 40, 800 - 200)")
+            spec.assert_true(wait_canvas(600, 600), "the canvas 600 x 600 (${canvas_w()} x ${canvas_h()})")
+            uidriver.resize_window(500, 500)
+            spec.assert_true(b.wait_for_text("scene: 300"), "smaller: min(460, 300)")
+            spec.assert_true(wait_canvas(300, 300), "the canvas 300 x 300 (${canvas_w()} x ${canvas_h()})")
+            b.vg_click(b.vg_px_x(5.0, 10.0, 10.0), b.vg_px_y(5.0, 10.0, 10.0))
+            spec.assert_true(b.wait_for_text("clicks: 1"), "the same scene: its click still counts")
+        }
+        spec.it("vg.resize from a button; the refusals") callback {
+            b.click("Make it 120")
+            spec.assert_true(b.wait_for_text("scene: 120"), "said")
+            spec.assert_true(wait_canvas(120, 120), "the canvas 120 x 120 (${canvas_w()} x ${canvas_h()})")
+            spec.assert_true(b.wait_for_console("resize: refusals: vg.resize(h, w, h): h is not a scene or shape this page made | vg.resize(h, w, h): w and h must be 1 to 16384 px | ui.on_layout(h, fn): h is not a stack (vstack or hstack) this page made | ui.on_resize(fn): fn must be a function"), "each refused, saying why")
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -95,6 +95,9 @@ struct Browser {
     nav_timer: int
     page_mem: long
     last_ok: int     // did the last load fetch and run cleanly
+    root: int        // the window's own stack (chrome and content): its size is the window's
+    win_w: int       // the window's content size, as on_layout last gave it (0 before)
+    win_h: int
 }
 
 // One per loaded page: its QuickJS runtime (ctx), found again from the
@@ -136,6 +139,7 @@ struct Page {
     seq: int         // which load this is: an http reply for an older page is dropped
     http_res: int    // the page's response-object maker (http_helpers_), or 0
     http_req: int    // the page's request-object maker
+    on_resize: int   // the page's ui.on_resize handler (a held ref), or 0
     http_scopes: string // its outgoing-http scopes, "VERBS\tabsolute-pattern\n"
                      //   per line, or "" when it seeks outgoing-http unscoped
     absent: string   // privileges it can do without and was not granted, as
@@ -963,6 +967,64 @@ sae_ui_text_wrapped(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.width(h) / ui.height(h): a widget's laid-out size, in pixels.
+// ui.on_layout(h, fn(w, h)) -> h: a stack the page made was laid out at a
+// new size (w, h, in px): after its allocation settles and changes, not per
+// frame (aether-ui's on_layout, on every backend). Widgets may be built or
+// changed from the handler.
+sae_ui_on_layout(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(p, h) == 0 || own_stack_(p, h) == 0 || in_list_(p.grids, h) == 1 { return sae_throw_type_error(ctx, "ui.on_layout(h, fn): h is not a stack (vstack or hstack) this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.on_layout(h, fn): fn must be a function") }
+    ref = hold_arg_(ctx, argv, 1)
+    seq = p.seq
+    ui.on_layout(h) callback |w: int, hh: int| {
+        if ae_live_(ctx, seq) == 0 { return }
+        if call_nums_(ctx, ref, w * 1.0, hh * 1.0, 2) < 0 { report_exception_(ctx, "a layout handler") }
+        settle_(ctx)
+    }
+    return quickjs.new_int(ctx, h)
+}
+
+// ui.on_resize(fn(w, h)): the window's content was laid out at a new size
+// (w, h, in px; in the browser, the chrome included): told once soon after
+// with the size it is, then on every change. One handler a page; a second
+// replaces the first; it goes with the page.
+sae_ui_on_resize(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "ui.on_resize(fn): fn must be a function") }
+    p.on_resize = hold_arg_(ctx, argv, 0)
+    b = p.browser as *Browser
+    if b.win_w > 0 {
+        seq = p.seq
+        _t = ui.timer_once(1, || {
+            lp = page_of_(ctx)
+            if lp == null || lp.seq != seq || lp.on_resize == 0 { return }
+            lb = lp.browser as *Browser
+            resize_to_page_(lp, lb.win_w, lb.win_h)
+        })
+    }
+    return 0
+}
+
+// The window's size to the page's on_resize handler, if it has one.
+resize_to_page_(p: *Page, w: int, h: int) {
+    if p.on_resize == 0 { return }
+    if call_nums_(p.ctx, p.on_resize, w * 1.0, h * 1.0, 2) < 0 { report_exception_(p.ctx, "a resize handler") }
+    settle_(p.ctx)
+}
+
+// The window's stack laid out at a new size: kept, and told to the page.
+window_laid_out_(b: *Browser, w: int, h: int) {
+    b.win_w = w
+    b.win_h = h
+    if b.page != null { resize_to_page_(b.page as *Page, w, h) }
+}
+
 sae_ui_width(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -3290,6 +3352,29 @@ sae_vg_transform(ctx: ptr, this_val: int, argv: int) -> int {
     t = own_(arg_str_(ctx, argv, argc, 0))
     vg.transform(vg_top_(page_of_(ctx)), t)
     return 0
+}
+
+// vg.resize(h, w, hh) -> h: the scene h is in (h a scene or any shape of
+// it) asks for a canvas of w x hh px from now on, in place of the size it
+// was made at: its shapes, handlers and bindings stay, and it is drawn
+// again at the new size (its canvas pinned so, through aether-ui's width
+// and height, on every backend; the canvas's resize hook re-maps the
+// viewBox as a window resize does).
+sae_vg_resize(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    n = vg_node_of_(p, h)
+    if n == null { return sae_throw_type_error(ctx, "vg.resize(h, w, h): h is not a scene or shape this page made") }
+    w = arg_int_(ctx, argv, argc, 1, 0)
+    hh = arg_int_(ctx, argv, argc, 2, 0)
+    if w < 1 || hh < 1 || w > 16384 || hh > 16384 { return sae_throw_type_error(ctx, "vg.resize(h, w, h): w and h must be 1 to 16384 px") }
+    scene = vg.node_scene(n)
+    cw = ui.canvas_widget(vg.scene_canvas(scene))
+    _w = ui.width(cw, w)
+    _h = ui.height(cw, hh)
+    return quickjs.new_int(ctx, h)
 }
 
 // vg.on_click(fn(x, y)): x and y are where the click landed, in the scene's
@@ -7276,6 +7361,8 @@ api_register_(p: *Page) {
     reg_(q, u, "pointer_cursor", 2, sae_ui_pointer_cursor)
     reg_(q, u, "pointer_shape", 1, sae_ui_pointer_shape)
     reg_(q, u, "on_focus_change", 2, sae_ui_on_focus_change)
+    reg_(q, u, "on_layout", 2, sae_ui_on_layout)
+    reg_(q, u, "on_resize", 1, sae_ui_on_resize)
     reg_(q, u, "onfocuschange", 1, sae_ui_onfocuschange)
     reg_(q, u, "key_text", 1, sae_ui_key_text)
     reg_(q, u, "focus", 1, sae_ui_focus)
@@ -7287,6 +7374,7 @@ api_register_(p: *Page) {
 
     v = quickjs.new_object(q)
     reg_(q, v, "scene", 4, sae_vg_scene)
+    reg_(q, v, "resize", 3, sae_vg_resize)
     reg_(q, v, "circle", 4, sae_vg_circle)
     reg_(q, v, "rect", 5, sae_vg_rect)
     reg_(q, v, "rrect", 6, sae_vg_rrect)
@@ -7512,6 +7600,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.seq = page_seq_
     p.http_res = 0
     p.http_req = 0
+    p.on_resize = 0
     p.ctx = engine_new_(b.page_mem)
     if pages_ == null { pages_ = list.new() }
     list.add(pages_, p as ptr)
@@ -8278,6 +8367,9 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     browser_ = b as ptr
     stdlib.configure(lib_dir_(exe))   // wave1/imports: the sae: library
     root = aether_ui_vstack_create(6)
+    b.root = root
+    // The window's size, for ui.on_resize: its own stack's layout.
+    ui.on_layout(root) callback |w: int, h: int| { window_laid_out_(b, w, h) }
     sqlite_why = ""   // wave1/sqlite: why the app cannot start, if a database cannot be opened or migrated
     if app != "" {
         while string.string_ends_with(app, "/") == 1 { app = string.string_substring(app, 0, string.length(app) - 1) }

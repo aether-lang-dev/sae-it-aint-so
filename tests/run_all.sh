@@ -72,6 +72,7 @@ spec_app_caps|SAE_TEST_APP=tests/apps/caps SAE_APPDATA_DIR=$T/caps-appdata SAE_S
 spec_app_climb|SAE_TEST_APP=tests/apps/climb|spec spec_app_climb
 spec_app_documents|AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents|spec spec_app_documents
 spec_app_menus|SAE_TEST_APP=tests/apps/menus|spec spec_app_menus
+spec_app_resize|SAE_TEST_APP=tests/apps/resize|spec spec_app_resize
 spec_app_bus|SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$T/bus-appdata SAE_TEST_APP=tests/apps/bus|spec spec_app_bus
 spec_app_bus_off|SAE_APPDATA_DIR=$T/bus-off-appdata SAE_TEST_APP=tests/apps/bus|spec spec_app_bus_off
 spec_app_clipboard|AETHER_UI_HEADLESS=1 SAE_CLIP_READ=1 SAE_TEST_APP=tests/apps/clipboard|spec spec_app_clipboard
