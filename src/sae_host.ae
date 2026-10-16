@@ -752,6 +752,48 @@ sae_ui_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
+// ui.reorderable(h, fn(from, to)) -> h: the children of a vstack or hstack
+// the page made can be dragged among themselves (aether-ui's reorderable:
+// one gesture on the stack, so children rebuilt later are covered). Let go
+// and fn(from, to) runs with the child's index and the index it has after
+// the move, both in the order before it; a drop that moves nothing does not
+// call back. Nothing moves on its own: the page moves the item in its state
+// and rebuilds (each does, from its list). For a row built with each, h is
+// the handle each returned (its children are the rows). Arming again
+// replaces fn.
+sae_ui_reorderable(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    p = page_of_(ctx)
+    if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "ui.reorderable(h, fn): h is not a vstack or hstack this page made") }
+    kind = own_(aether_ui_widget_kind_impl(h))
+    if kind != "vstack" && kind != "hstack" { return sae_throw_type_error(ctx, "ui.reorderable(h, fn): h is not a vstack or hstack this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.reorderable(h, fn): fn must be a function (from, to) => void") }
+    ref = hold_arg_(ctx, argv, 1)
+    ui.reorderable(h) callback |from: int, to: int| {
+        was = gesture_
+        gesture_ = 1
+        call_ii_(ctx, ref, from, to, "a reorder handler")
+        settle_(ctx)
+        gesture_ = was
+    }
+    return quickjs.new_int(ctx, h)
+}
+
+// Call a held JS function with two numbers.
+call_ii_(ctx: ptr, ref: int, a: int, b: int, what: string) {
+    args = quickjs.new_array(ctx)
+    va = quickjs.new_int(ctx, a)
+    _a = quickjs.set_index(ctx, args, 0, va)
+    quickjs.release(ctx, va)
+    vb = quickjs.new_int(ctx, b)
+    _b = quickjs.set_index(ctx, args, 1, vb)
+    quickjs.release(ctx, vb)
+    if calln_(ctx, ref, args) < 0 { report_exception_(ctx, what) }
+    quickjs.release(ctx, args)
+}
+
 // Call a held JS function with one number.
 call_i_(ctx: ptr, ref: int, n: int, what: string) {
     args = quickjs.new_array(ctx)
@@ -4922,6 +4964,16 @@ sae_ae_widget_kind(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_string(ctx, own_(aether_ui_widget_kind_impl(h)))
 }
 
+// ui._top(): the container the next widget attaches to (0 outside a
+// block, or the page's root, which is not the page's own), for each() to
+// follow its direction.
+sae_ae_top(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    p = page_of_(ctx)
+    if p.depth < 1 { return quickjs.new_int(ctx, 0) }
+    return quickjs.new_int(ctx, top_(p))
+}
+
 // ui._remove_child(parent, child): for each()'s keyed reconciliation: a row
 // whose key has gone leaves its container; both must be the page's own.
 sae_ae_remove_child(ctx: ptr, this_val: int, argv: int) -> int {
@@ -6005,6 +6057,7 @@ ae_register_(p: *Page) {
     reg_(q, u, "_batch", 1, sae_ae_batch)
     reg_(q, u, "_bind", 4, sae_ae_bind)
     reg_(q, u, "_widget_kind", 1, sae_ae_widget_kind)
+    reg_(q, u, "_top", 0, sae_ae_top)
     reg_(q, u, "_remove_child", 2, sae_ae_remove_child)
     reg_(q, u, "set_enabled", 2, sae_ae_set_enabled)
     quickjs.release(q, u)
@@ -7141,6 +7194,7 @@ api_register_(p: *Page) {
     reg_(q, u, "on_submit", 2, sae_ui_on_submit)
     reg_(q, u, "onsubmit", 1, sae_ui_onsubmit)
     reg_(q, u, "on_drag", 2, sae_ui_on_drag)
+    reg_(q, u, "reorderable", 2, sae_ui_reorderable)
     reg_(q, u, "ondrag", 1, sae_ui_ondrag)
     reg_(q, u, "pointer_cursor", 2, sae_ui_pointer_cursor)
     reg_(q, u, "pointer_shape", 1, sae_ui_pointer_shape)

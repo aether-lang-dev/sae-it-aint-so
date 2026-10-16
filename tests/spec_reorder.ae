@@ -1,0 +1,132 @@
+// spec_reorder.ae -- ui.reorderable(stack, fn(from, to)) on site/reorder.ts,
+// over the driver's POST /widget/{child}/drag with the children's real
+// geometry (aether-ui's tests/reorderable_demo does the same for the DSL):
+//
+//   * a plain hstack of three buttons: the stack reports reorderable; A
+//     dragged past C lands at 2, the page saw (0, 2), rebuilt the row, and
+//     the rebuilt row is still reorderable (C to the front); a nudge beside
+//     a child moves nothing; a button still clicks;
+//   * a row built with each() inside an hstack is a row (not a column), and
+//     reorderable(each(...), fn) gets the list's indexes: Sheet1 past
+//     Sheet3 is (0, 2), each rebuilt in the new order;
+//   * a text is refused with a TypeError.
+//
+//   tests/run_spec.sh spec_reorder
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// The page's button labelled `txt` (the chrome has none of these names).
+tab(txt: string) -> int {
+    return uidriver.widget_id_last_of("button", txt)
+}
+
+// Drag the button `a` so its release lands just past the middle of button
+// `c` (to the right), through the stack's own gap rule.
+drag_past(a: int, c: int, what: string) {
+    ax = uidriver.widget_int_field_by_id(a, "x")
+    aw = uidriver.widget_int_field_by_id(a, "w")
+    ah = uidriver.widget_int_field_by_id(a, "h")
+    cx = uidriver.widget_int_field_by_id(c, "x")
+    cw = uidriver.widget_int_field_by_id(c, "w")
+    spec.assert_gt(aw, 0, "${what}: the dragged button is laid out")
+    spec.assert_gt(cx, ax, "${what}: the target is to the right")
+    px = aw / 2
+    dx = (cx + cw / 2 + 2) - (ax + px)
+    uidriver.post_ok("/widget/${a}/drag?x=${px}&y=${ah / 2}&dx=${dx}&dy=0", what)
+}
+
+// Drag the button `d` so its release lands just inside the left edge of
+// button `b` (gap 0 when b is first).
+drag_before(d: int, b: int, what: string) {
+    dx0 = uidriver.widget_int_field_by_id(d, "x")
+    dw = uidriver.widget_int_field_by_id(d, "w")
+    dh = uidriver.widget_int_field_by_id(d, "h")
+    bx = uidriver.widget_int_field_by_id(b, "x")
+    px = dw / 2
+    dx = (bx + 1) - (dx0 + px)
+    uidriver.post_ok("/widget/${d}/drag?x=${px}&y=${dh / 2}&dx=${dx}&dy=0", what)
+}
+
+// A rebuilt row is laid out on a later pass of the loop, so its new
+// children read x 0, w 0 for a moment: wait until the three buttons sit
+// left to right in this order, each with a width. 1 when they do.
+wait_row(l1: string, l2: string, l3: string) -> int {
+    i = 0
+    while i < 40 {
+        a = tab(l1)
+        b2 = tab(l2)
+        c = tab(l3)
+        if a > 0 && b2 > 0 && c > 0 {
+            ax = uidriver.widget_int_field_by_id(a, "x")
+            bx = uidriver.widget_int_field_by_id(b2, "x")
+            cx = uidriver.widget_int_field_by_id(c, "x")
+            cw = uidriver.widget_int_field_by_id(c, "w")
+            if ax < bx && bx < cx && cw > 0 { return 1 }
+        }
+        sleep(100)
+        i = i + 1
+    }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "ui.reorderable") {
+        spec.it("the plain row reports reorderable; a text is refused") callback {
+            b.navigate(b.test_url("/reorder"))
+            b.assert_page("Reorder", "200 ", "reorder page")
+            b.assert_text("plain order: A > B > C", "the row's order")
+            row = uidriver.widget_int_field_by_id(tab("A"), "parent")
+            spec.assert_gt(row, 0, "the row of A")
+            body = uidriver.get_body("/widget/${row}")
+            spec.assert_true(string.contains(body, "\"reorderable\":true"), "the row says reorderable")
+            b.assert_text("refused: TypeError", "reorderable(text, fn) threw a TypeError")
+        }
+        spec.it("A dragged past C lands at 2: the page saw (0, 2) and rebuilt the row") callback {
+            drag_past(tab("A"), tab("C"), "drag A past C")
+            spec.assert_true(b.wait_for_text("plain moved: 0 > 2"), "the callback got (0, 2)")
+            spec.assert_true(b.wait_for_text("plain order: B > C > A"), "the page's order followed")
+            spec.assert_true(wait_row("B", "C", "A"), "the rebuilt row is laid out B, C, A")
+        }
+        spec.it("a nudge beside a child moves nothing") callback {
+            c = tab("C")
+            cw = uidriver.widget_int_field_by_id(c, "w")
+            ch = uidriver.widget_int_field_by_id(c, "h")
+            uidriver.post_ok("/widget/${c}/drag?x=${cw / 2}&y=${ch / 2}&dx=3&dy=0", "nudge C")
+            b.assert_text("plain moved: 0 > 2", "no second callback")
+            b.assert_text("plain order: B > C > A", "order unchanged")
+        }
+        spec.it("the rebuilt row is still reorderable: A to the front, and a button still clicks") callback {
+            drag_before(tab("A"), tab("B"), "drag A to the front")
+            spec.assert_true(b.wait_for_text("plain moved: 2 > 0"), "the callback got (2, 0)")
+            spec.assert_true(b.wait_for_text("plain order: A > B > C"), "the order followed")
+            spec.assert_true(wait_row("A", "B", "C"), "the rebuilt row is laid out A, B, C")
+            b.click("B")
+            spec.assert_true(b.wait_for_text("clicked: B"), "B's own handler ran")
+        }
+        spec.it("a row built with each() in an hstack is a row, and reorderable with the list's indexes") callback {
+            s1 = tab("Sheet1")
+            s2 = tab("Sheet2")
+            spec.assert_gt(s1, 0, "Sheet1")
+            y1 = uidriver.widget_int_field_by_id(s1, "y")
+            y2 = uidriver.widget_int_field_by_id(s2, "y")
+            x2 = uidriver.widget_int_field_by_id(s2, "x")
+            x1 = uidriver.widget_int_field_by_id(s1, "x")
+            spec.assert_eq(y2, y1, "the tabs share a row (each followed its hstack)")
+            spec.assert_gt(x2, x1, "Sheet2 is right of Sheet1")
+            drag_past(s1, tab("Sheet3"), "drag Sheet1 past Sheet3")
+            spec.assert_true(b.wait_for_text("each moved: 0 > 2"), "the callback got the list's (0, 2)")
+            spec.assert_true(b.wait_for_text("each order: Sheet2 > Sheet3 > Sheet1 > Sheet4"), "each rebuilt in the new order")
+            spec.assert_true(wait_row("Sheet2", "Sheet3", "Sheet1"), "the rebuilt tabs are laid out in it")
+            drag_before(tab("Sheet4"), tab("Sheet2"), "drag Sheet4 to the front")
+            spec.assert_true(b.wait_for_text("each moved: 3 > 0"), "the rebuilt tabs still reorder: (3, 0)")
+            spec.assert_true(b.wait_for_text("each order: Sheet4 > Sheet2 > Sheet3 > Sheet1"), "in the new order")
+            b.click("Sheet3")
+            spec.assert_true(b.wait_for_text("clicked: Sheet3"), "a tab still clicks")
+        }
+    }
+    return spec.run_summary(fw)
+}

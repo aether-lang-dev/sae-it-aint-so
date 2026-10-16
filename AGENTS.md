@@ -101,6 +101,7 @@ tests/run_spec.sh spec_reactive                # state, computed, bind (one- and
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom
 tests/run_spec.sh spec_aevg_parity             # corpus pages (tools/gen-corpus.sh) against librsvg's PNGs: mean error
 tests/run_spec.sh spec_camera                  # demo 1b (site/camera.ts) and the clock components
+tests/run_spec.sh spec_reorder                 # ui.reorderable: a plain hstack and an each() row dragged over the driver (site/reorder.ts)
 ```
 
 Toolchain: Aether 0.814.0 or later (`pins`: enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer

@@ -110,9 +110,13 @@
   // a row whose key stays is kept (re-rendered only if its item is another
   // object or its index moved), a row whose key goes is removed, new keys at the end are
   // appended; a reorder or an insertion in the middle rebuilds the column.
+  // Inside an hstack it is a row of columns instead (a sheet's tabs). The
+  // container is what each returns: ui.reorderable(each(...), cb) lets the
+  // rows be dragged among themselves, cb's indexes being the list's.
   const each = (list, key, render) => {
     const keyOf = typeof key === "function" ? key : (it) => it[key];
-    const container = ui_.vstack(0, () => {});
+    const across = ui_._widget_kind(ui_._top()) === "hstack";
+    const container = across ? ui_.hstack(0, () => {}) : ui_.vstack(0, () => {});
     let rows = [];   // [{key, item, h}]
     const build = (item, i) => ui_.vstack(0, () => render(item, i));
     const apply = () => {

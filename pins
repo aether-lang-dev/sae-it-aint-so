@@ -86,4 +86,8 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # AETHER_UI_HEADLESS or AETHER_UI_TEST_CLIPBOARD), which demo 18's clipboard
 # spec reads and sets. Verified: spec_sheet, spec_app_clipboard on macOS and
 # aether-linux.
-AETHER_UI_REF=ba68c90c81fbc1643470b088b71e06515c8dd2bf
+# 23107360 (2026-10-15): reorderable(stack, cb), a stack's children dragged
+# among themselves (asks/aether-ui-drag-to-reorder.md in the spreadsheet),
+# which ui.reorderable binds and spec_reorder drives over the driver's
+# /widget/{child}/drag. Verified: tests/run_all.sh on macOS.
+AETHER_UI_REF=231073602696e26a8e92b5e3e3f20146ac32370d
