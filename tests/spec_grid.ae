@@ -80,6 +80,11 @@ main() {
             b.click("Move B to E")
             spec.assert_true(b.wait_for_console("grid moved 2 to 5; view 5 shows model 2"), "on_col_move, and the model column")
         }
+        spec.it("a header clicked, not dragged, is told with its model column") callback {
+            h = uidriver.widget_id_by_text("D")
+            uidriver.post_ok("/widget/${h}/drag?x=10&y=8&dx=0&dy=0", "press and let go D's header")
+            spec.assert_true(b.wait_for_console("grid header clicked 4"), "on_header_click heard model column 4")
+        }
         spec.it("and by dragging a header") callback {
             g = grip_of("C")
             spec.assert_contains(uidriver.get_body("/widget/${g}"), "\"cursor\":\"col-resize\"", "C's grip shows the col-resize pointer")

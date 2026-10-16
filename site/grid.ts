@@ -11,7 +11,7 @@
 // tooltips and the editor's text as it is typed; a textarea is bound to a
 // state. tests/spec_grid.ae drives it.
 const { text, btn, textfield, onsubmit, ondrag, pointer_shape, onfocuschange, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
-        on_cell_edit, on_col_resize, on_col_move, edit_text, cell_style } = ui;
+        on_cell_edit, on_col_resize, on_col_move, on_header_click, edit_text, cell_style } = ui;
 
 const letters = (c: number): string => {
   let s = "";
@@ -51,6 +51,7 @@ const g = ui.datagrid(1000000, 40, 15, 5, 1, () => {
   on_col_resize((c: number, w: number) => print(`grid resized ${c} to ${w}`));
   on_col_move((from: number, to: number) =>
     print(`grid moved ${from} to ${to}; view ${to} shows model ${ui.datagrid_col_model(g, to)}`));
+  on_header_click((c: number) => print(`grid header clicked ${c}`));
 });
 btn("Widen B", () => {
   ui.datagrid_set_col_width(g, 2, 150);

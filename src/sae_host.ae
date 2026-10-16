@@ -1199,7 +1199,8 @@ dg_headers_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
     return ""
 }
 
-// kind: 0 click, 1 select, 2 activate, 3 column resize, 4 column move.
+// kind: 0 click, 1 select, 2 activate, 3 column resize, 4 column move,
+// 5 a header clicked (fn(c): the second number is 0).
 dg_on_ii_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function of two numbers" }
     ref = hold_arg_(ctx, argv, i)
@@ -1212,6 +1213,12 @@ dg_on_ii_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string {
     if kind == 2 { _g = ui.datagrid_on_activate(g, fire) }
     if kind == 3 { _g = ui.datagrid_on_col_resize(g, fire) }
     if kind == 4 { _g = ui.datagrid_on_col_move(g, fire) }
+    if kind == 5 {
+        _g = ui.datagrid_on_header_click(g) callback |c: int| {
+            _s = call_ii_str_(ctx, ref, c, 0, "a ui.datagrid header-click handler")
+            settle_(ctx)
+        }
+    }
     return ""
 }
 
@@ -1337,6 +1344,18 @@ sae_ui_datagrid_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_col_move: g is not a grid this page made") }
     e = dg_on_ii_(ctx, g, argv, argc, 1, 4)
     if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_col_move(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_on_header_click(g, fn(c)): a column's header pressed and let
+// go without a drag; c the model column (0 the row numbers' corner).
+sae_ui_datagrid_on_header_click(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_header_click: g is not a grid this page made") }
+    e = dg_on_ii_(ctx, g, argv, argc, 1, 5)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_header_click(g, fn): ${e}") }
     return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
@@ -1813,6 +1832,17 @@ sae_ui_amb_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
     if g == null { return sae_throw_type_error(ctx, "on_col_move() must be called inside a datagrid's block") }
     e = dg_on_ii_(ctx, g, argv, argc, 0, 4)
     if e != "" { return sae_throw_type_error(ctx, "on_col_move(fn): ${e}") }
+    return 0
+}
+
+// on_header_click(fn(c)): ui.datagrid_on_header_click for the block's grid.
+sae_ui_amb_on_header_click(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_at_top_(page_of_(ctx))
+    if g == null { return sae_throw_type_error(ctx, "on_header_click() must be called inside a datagrid's block") }
+    e = dg_on_ii_(ctx, g, argv, argc, 0, 5)
+    if e != "" { return sae_throw_type_error(ctx, "on_header_click(fn): ${e}") }
     return 0
 }
 
@@ -7303,6 +7333,7 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_on_activate", 2, sae_ui_datagrid_on_activate)
     reg_(q, u, "datagrid_on_col_resize", 2, sae_ui_datagrid_on_col_resize)
     reg_(q, u, "datagrid_on_col_move", 2, sae_ui_datagrid_on_col_move)
+    reg_(q, u, "datagrid_on_header_click", 2, sae_ui_datagrid_on_header_click)
     reg_(q, u, "datagrid_on_edit", 2, sae_ui_datagrid_on_edit)
     reg_(q, u, "datagrid_scroll_to", 3, sae_ui_datagrid_scroll_to)
     reg_(q, u, "datagrid_refresh", 1, sae_ui_datagrid_refresh)
@@ -7346,6 +7377,7 @@ api_register_(p: *Page) {
     reg_(q, u, "on_cell_edit", 1, sae_ui_amb_on_cell_edit)
     reg_(q, u, "on_col_resize", 1, sae_ui_amb_on_col_resize)
     reg_(q, u, "on_col_move", 1, sae_ui_amb_on_col_move)
+    reg_(q, u, "on_header_click", 1, sae_ui_amb_on_header_click)
     reg_(q, u, "column_width", 1, sae_ui_amb_column_width)
     reg_(q, u, "column_limits", 2, sae_ui_amb_column_limits)
     reg_(q, u, "edit_text", 1, sae_ui_amb_edit_text)
