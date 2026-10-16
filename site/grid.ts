@@ -58,6 +58,15 @@ btn("Widen B", () => {
   print(`grid B is ${ui.datagrid_col_width(g, 2)} wide`);
 });
 btn("Move B to E", () => ui.datagrid_move_col(g, 2, 5));
+btn("Add an area", () => {
+  ui.datagrid_select_range(g, 1, 1, 2, 2);
+  ui.datagrid_add_area(g, 5, 3, 6, 4);
+  print(`grid areas ${ui.datagrid_areas(g)}; selection ${ui.datagrid_selection(g).join(",")}`);
+});
+btn("One area", () => {
+  ui.datagrid_clear_areas(g);
+  print(`grid areas now "${ui.datagrid_areas(g)}"`);
+});
 btn("Fit A", () => {
   ui.datagrid_fit_col(g, 1);
   print(`grid A fitted to ${ui.datagrid_col_width(g, 1)}; "A1" measures ${ui.text_measure(picked, "A1")}`);

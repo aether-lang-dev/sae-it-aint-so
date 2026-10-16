@@ -80,6 +80,12 @@ main() {
             b.click("Move B to E")
             spec.assert_true(b.wait_for_console("grid moved 2 to 5; view 5 shows model 2"), "on_col_move, and the model column")
         }
+        spec.it("several areas: one added from code, read back, and cleared") callback {
+            b.click("Add an area")
+            spec.assert_true(b.wait_for_console("grid areas 1,1,2,2; selection 5,3,6,4"), "the first kept as an area, the second the selection")
+            b.click("One area")
+            spec.assert_true(b.wait_for_console("grid areas now \"\""), "cleared")
+        }
         spec.it("a header clicked, not dragged, is told with its model column") callback {
             h = uidriver.widget_id_by_text("D")
             uidriver.post_ok("/widget/${h}/drag?x=10&y=8&dx=0&dy=0", "press and let go D's header")

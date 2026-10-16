@@ -1424,6 +1424,36 @@ sae_ui_datagrid_select_range(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
+// ui.datagrid_add_area(g, ar, ac, r, c): the selection kept as an area and
+// another added (as a Ctrl/Cmd click does); ui.datagrid_clear_areas(g): one
+// area again; ui.datagrid_areas(g) -> "ar,ac,r,c;..." the areas before the
+// current one ("" for none), rows model rows, columns on screen.
+sae_ui_datagrid_add_area(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_add_area: g is not a grid this page made") }
+    _g = ui.datagrid_add_area(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 0), arg_int_(ctx, argv, argc, 3, 0), arg_int_(ctx, argv, argc, 4, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+sae_ui_datagrid_clear_areas(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_clear_areas: g is not a grid this page made") }
+    _g = ui.datagrid_clear_areas(g)
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+sae_ui_datagrid_areas(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_areas: g is not a grid this page made") }
+    return quickjs.new_string(ctx, own_(ui.datagrid_areas(g)))
+}
+
 // ui.datagrid_selection(g) -> [anchorRow, anchorCol, row, col], the cursor
 // last; all -1 before anything is selected.
 sae_ui_datagrid_selection(ctx: ptr, this_val: int, argv: int) -> int {
@@ -7340,6 +7370,9 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_first", 1, sae_ui_datagrid_first)
     reg_(q, u, "datagrid_select", 3, sae_ui_datagrid_select)
     reg_(q, u, "datagrid_select_range", 5, sae_ui_datagrid_select_range)
+    reg_(q, u, "datagrid_add_area", 5, sae_ui_datagrid_add_area)
+    reg_(q, u, "datagrid_clear_areas", 1, sae_ui_datagrid_clear_areas)
+    reg_(q, u, "datagrid_areas", 1, sae_ui_datagrid_areas)
     reg_(q, u, "datagrid_selection", 1, sae_ui_datagrid_selection)
     reg_(q, u, "datagrid_col_width", 2, sae_ui_datagrid_col_width)
     reg_(q, u, "datagrid_set_col_width", 3, sae_ui_datagrid_set_col_width)
