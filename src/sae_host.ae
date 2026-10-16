@@ -5063,7 +5063,7 @@ sae_ae_set_enabled(ctx: ptr, this_val: int, argv: int) -> int {
 // ui.tooltip(h, text) -> h: what shows when the pointer rests on a widget
 // the page made (aether-ui's set_tooltip, every backend's own: GTK4's
 // tooltip text, AppKit's toolTip, Win32's tooltip control); "" takes it off.
-sae_ae_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = own_arg_(ctx, argv, argc)
@@ -6133,7 +6133,7 @@ ae_register_(p: *Page) {
     reg_(q, u, "_top", 0, sae_ae_top)
     reg_(q, u, "_remove_child", 2, sae_ae_remove_child)
     reg_(q, u, "set_enabled", 2, sae_ae_set_enabled)
-    reg_(q, u, "tooltip", 2, sae_ae_tooltip)
+    reg_(q, u, "tooltip", 2, sae_ui_tooltip)
     quickjs.release(q, u)
     v, _ve = quickjs.get_global(q, "vg")
     // These supersede the earlier registrations of the same names (see the

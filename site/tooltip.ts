@@ -10,7 +10,7 @@ tooltip(off, "Click to take this off");
 text(`returns its widget: ${save > 0 ? "yes" : "no"}`);
 let why = "";
 try {
-  tooltip(99999, "x");
+  tooltip(0, "x");
 } catch (e) {
   why = String((e as Error).message);
 }
