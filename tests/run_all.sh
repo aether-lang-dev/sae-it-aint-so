@@ -63,6 +63,7 @@ spec_grid||spec spec_grid
 spec_reorder||spec spec_reorder
 spec_menus_web||spec spec_menus_web
 spec_tooltip||spec spec_tooltip
+spec_a11y||spec spec_a11y
 spec_aevg||spec spec_aevg
 spec_aevg_parity||spec spec_aevg_parity
 spec_camera||spec spec_camera

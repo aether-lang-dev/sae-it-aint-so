@@ -62,6 +62,10 @@ extern aether_ui_current_sheet_set_impl(sheet: ptr)
 extern aether_ui_widget_parent_impl(handle: int) -> int
 
 const STACK_MAX = 64
+// A vg handle is VG_BASE + its index in the page's vg_nodes: apart from every
+// widget handle (aether-ui numbers widgets from 1, one at a time), so a
+// function that takes either (ui.a11y_label(h, ...)) knows which it was given.
+const VG_BASE = 1073741824
 // A page's runtime: its heap cap, and how long one entry into its JS (the
 // page's run, a handler, a timer, an http callback) may take before it is
 // stopped. A page that loops forever is interrupted, not the browser hung.
@@ -115,7 +119,8 @@ struct Page {
     // shape with a block pushes itself; fill/stroke/... act on the top.
     vg_stack: ptr    // STACK_MAX node pointers
     vg_depth: int
-    vg_nodes: ptr    // std.list: the nodes handed to the page (handle = index + 1)
+    vg_nodes: ptr    // std.list: the nodes handed to the page (handle = VG_BASE + index + 1)
+    vg_keys: ptr     // std.list of *VgKey: the canvases vg.on_key hears, one entry each
     // Widget handles are never reused, so every widget this page made has a
     // handle at least first_handle. A page may name only those: not the
     // address bar, the status line, the driver's banner or a past page's.
@@ -749,6 +754,181 @@ keys_deliver_(k: string, m: int) {
         }
         i = i + 1
     }
+}
+
+// ===== accessibility: what a screen reader is told (aether-ui's a11y_*) =====
+//
+// ui.a11y_label(h, text), ui.a11y_role(h, role), ui.a11y_description(h,
+// text) and ui.a11y_announce(h, text), each -> h. h is one of the page's
+// widgets, or a vg scene it made (its handle, or any shape's of it): a scene
+// is one canvas, one element to a screen reader, named and described as a
+// whole, as a drawn chess board is. The name and description are the
+// platform's own (aether-ui: GTK4's accessible properties, AppKit's and
+// UIKit's accessibility label and help, MSAA on Win32, Android's content
+// description); an announcement is spoken now, without moving the focus.
+// The driver reads them back at GET /widget/{id}/a11y (a scene's id is its
+// canvas's).
+
+// The widget an a11y call speaks for, or 0 when h is no widget or vg shape
+// of this page's.
+a11y_widget_(p: *Page, h: int) -> int {
+    if h > VG_BASE {
+        n = vg_node_of_(p, h)
+        if n == null { return 0 }
+        cid = vg.scene_canvas(vg.node_scene(n))
+        if cid == 0 { return 0 }
+        return ui.canvas_widget(cid)
+    }
+    if h < 1 || owned_(p, h) == 0 { return 0 }
+    return h
+}
+
+// aether-ui's role vocabulary (its docs/design/accessibility.md), each
+// mapped to the platform's on every backend.
+a11y_role_ok_(r: string) -> int {
+    return string.contains(",button,checkbox,radio,link,heading,image,group,list,listitem,tab,tablist,menu,menuitem,dialog,alert,textbox,slider,progressbar,grid,row,gridcell,columnheader,table,none,", ",${r},")
+}
+
+// One of the four: kind 0 the name, 1 the role, 2 the description, 3 an
+// announcement.
+a11y_set_(ctx: ptr, argv: int, argc: int, kind: int, what: string) -> int {
+    p = page_of_(ctx)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    w = a11y_widget_(p, h)
+    if w == 0 { return sae_throw_type_error(ctx, "${what}: h is not a widget or vg scene this page made") }
+    if argc < 2 { return sae_throw_type_error(ctx, "${what}: the text is missing") }
+    t = own_(arg_str_(ctx, argv, argc, 1))
+    if string.length(t) > 4000 { return sae_throw_type_error(ctx, "${what}: the text is over 4000 bytes") }
+    if kind == 1 {
+        if a11y_role_ok_(t) == 0 { return sae_throw_type_error(ctx, "${what}: \"${t}\" is not a role (button, checkbox, radio, link, heading, image, group, list, listitem, tab, tablist, menu, menuitem, dialog, alert, textbox, slider, progressbar, grid, row, gridcell, columnheader, table, none)") }
+        _r = ui.a11y_role(w, t)
+    } else if kind == 0 {
+        _l = ui.a11y_label(w, t)
+    } else if kind == 2 {
+        _d = ui.a11y_description(w, t)
+    } else {
+        if t == "" { return quickjs.new_int(ctx, h) }
+        _a = ui.a11y_announce(w, t)
+    }
+    return quickjs.new_int(ctx, h)
+}
+
+// ui.a11y_label(h, text) -> h: the accessible name, what a screen reader
+// calls it (an icon button's, a drawn board's).
+sae_ui_a11y_label(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return a11y_set_(ctx, argv, argc, 0, "ui.a11y_label(h, text)")
+}
+
+// ui.a11y_role(h, role) -> h: what it is to a screen reader ("button",
+// "heading", "group", "image", ...; "none" hides a decorative one).
+sae_ui_a11y_role(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return a11y_set_(ctx, argv, argc, 1, "ui.a11y_role(h, role)")
+}
+
+// ui.a11y_description(h, text) -> h: the longer account read after the
+// name (a board's position, square by square).
+sae_ui_a11y_description(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return a11y_set_(ctx, argv, argc, 2, "ui.a11y_description(h, text)")
+}
+
+// ui.a11y_announce(h, text) -> h: the screen reader says text now, from h,
+// the focus left where it is (a move made, the square under a keyboard
+// cursor). "" says nothing.
+sae_ui_a11y_announce(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    return a11y_set_(ctx, argv, argc, 3, "ui.a11y_announce(h, text)")
+}
+
+// ===== vg.on_key: keys on a scene's canvas =====
+//
+// vg.on_key(h, fn(key)) -> h: fn hears each key pressed while the scene's
+// canvas (h the scene, or any shape of it) has the keyboard focus, by
+// aether-ui's names ("Left", "Up", "Return", "space", "Escape", "a"). The
+// canvas takes the focus: it is made focusable, and takes it when shown, or
+// when clicked or touched (aether-ui's canvas_on_key, real on GTK4, AppKit,
+// Win32, UIKit and Android). One function a canvas; a second call replaces
+// the first. A key typed into the browser's own widgets never reaches it,
+// since they, not the canvas, have the focus then.
+struct VgKey {
+    cid: int     // the canvas
+    ref: int     // the page's function (held), or 0 once the page is gone
+    ctx: ptr
+}
+
+sae_vg_on_key(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    n = vg_node_of_(p, h)
+    if n == null { return sae_throw_type_error(ctx, "vg.on_key(h, fn): h is not a scene or shape this page made") }
+    if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "vg.on_key(h, fn): fn must be a function") }
+    cid = vg.scene_canvas(vg.node_scene(n))
+    if cid == 0 { return sae_throw_type_error(ctx, "vg.on_key(h, fn): the scene has no canvas yet") }
+    i = 0
+    while i < list.size(p.vg_keys) {
+        ev, _e = list.get(p.vg_keys, i)
+        e = ev as *VgKey
+        if e.cid == cid {
+            quickjs.release(ctx, e.ref)
+            e.ref = hold_arg_(ctx, argv, 1)
+            return quickjs.new_int(ctx, h)
+        }
+        i = i + 1
+    }
+    k = heap.new(VgKey)
+    k.cid = cid
+    k.ctx = ctx
+    k.ref = hold_arg_(ctx, argv, 1)
+    list.add(p.vg_keys, k as ptr)
+    vg_key_hook_(k as ptr)
+    return quickjs.new_int(ctx, h)
+}
+
+// The canvas's one key handler, reading the entry at each key: the
+// function a later vg.on_key gave, or nothing once the page is gone.
+vg_key_hook_(kp: @keep ptr) {
+    k = kp as *VgKey
+    ui.canvas_on_key(k.cid, |name: string| { vg_key_fire_(kp, name) })
+}
+
+vg_key_fire_(kp: ptr, name: string) {
+    k = kp as *VgKey
+    if k.ref == 0 { return }
+    ctx = k.ctx
+    args = quickjs.new_array(ctx)
+    ks = quickjs.new_string(ctx, name)
+    _a = quickjs.set_index(ctx, args, 0, ks)
+    quickjs.release(ctx, ks)
+    // A key is a gesture, as ui.on_key's are.
+    was = gesture_
+    gesture_ = 1
+    r = calln_(ctx, k.ref, args)
+    quickjs.release(ctx, args)
+    if r < 0 { report_exception_(ctx, "a vg key handler") }
+    settle_(ctx)
+    gesture_ = was
+}
+
+// With the page: each entry's function let go, the entry kept (its canvas
+// may outlive the page by a moment, and a key then finds ref 0).
+vg_keys_free_(p: *Page) {
+    i = 0
+    while i < list.size(p.vg_keys) {
+        ev, _e = list.get(p.vg_keys, i)
+        e = ev as *VgKey
+        if e.ref != 0 { quickjs.release(p.ctx, e.ref) }
+        e.ref = 0
+        i = i + 1
+    }
+    list.free(p.vg_keys)
 }
 
 // ui.on_submit(field, fn(text)): Return in one of the page's text fields.
@@ -2099,8 +2279,9 @@ vg_push_(p: *Page, node: ptr) -> int {
 }
 
 vg_node_of_(p: *Page, h: int) -> ptr {
-    if h < 1 || h > list.size(p.vg_nodes) { return null }
-    n, _ = list.get(p.vg_nodes, h - 1)
+    i = h - VG_BASE
+    if i < 1 || i > list.size(p.vg_nodes) { return null }
+    n, _ = list.get(p.vg_nodes, i - 1)
     return n
 }
 
@@ -2109,7 +2290,7 @@ vg_node_of_(p: *Page, h: int) -> ptr {
 vg_shape_done_(ctx: ptr, argv: int, argc: int, fn_at: int, node: ptr) -> int {
     p = page_of_(ctx)
     list.add(p.vg_nodes, node)
-    h = list.size(p.vg_nodes)
+    h = VG_BASE + list.size(p.vg_nodes)
     if argc > fn_at {
         if is_fn_arg_(ctx, argv, fn_at) == 0 {
             return sae_throw_type_error(ctx, "a vg shape's block must be a function")
@@ -4937,7 +5118,7 @@ const RASTER_MAX_DIM = 4096
 
 extern aether_ui_image_decode_rgba_impl(data: ptr, length: int, out_w: ptr, out_h: ptr) -> ptr
 
-// One raster a page made: its vg node (handle = its index in p.vg_nodes),
+// One raster a page made: its vg node (handle = VG_BASE + its index in p.vg_nodes),
 // the buffer (ours for vg.raster, the element's for vg.image: pix null) and
 // its size against the page's budget.
 struct PageRaster {
@@ -5061,7 +5242,7 @@ sae_vg_raster(ctx: @keep ptr, this_val: int, argv: int) -> int {
     _c = mem.copy(pix, b, n as long)
     node = vg.image(vg_top_(p), 0.0, 0.0, w as float, h as float)
     vg.image_pixels(node, pix, w, h)
-    raster_add_(ctx, list.size(p.vg_nodes) + 1, node, pix, n, w, h)
+    raster_add_(ctx, VG_BASE + list.size(p.vg_nodes) + 1, node, pix, n, w, h)
     return vg_shape_done_(ctx, argv, argc, 3, node)
 }
 
@@ -5103,7 +5284,7 @@ sae_vg_image(ctx: @keep ptr, this_val: int, argv: int) -> int {
         return sae_throw_type_error(ctx, why)
     }
     vg.image_box(node, 0.0, 0.0, pw as float, ph as float)
-    raster_add_(ctx, list.size(p.vg_nodes) + 1, node, null, pw * ph * 4, pw, ph)
+    raster_add_(ctx, VG_BASE + list.size(p.vg_nodes) + 1, node, null, pw * ph * 4, pw, ph)
     return vg_shape_done_(ctx, argv, argc, 1, node)
 }
 
@@ -7710,6 +7891,10 @@ api_register_(p: *Page) {
     reg_(q, u, "ui_set", 2, sae_ui_set)
     reg_(q, u, "text_bound", 3, sae_ui_text_bound)
     reg_(q, u, "on_key", 1, sae_ui_on_key)
+    reg_(q, u, "a11y_label", 2, sae_ui_a11y_label)
+    reg_(q, u, "a11y_role", 2, sae_ui_a11y_role)
+    reg_(q, u, "a11y_description", 2, sae_ui_a11y_description)
+    reg_(q, u, "a11y_announce", 2, sae_ui_a11y_announce)
     reg_(q, u, "datagrid", 6, sae_ui_datagrid)
     reg_(q, u, "datagrid_cells", 2, sae_ui_datagrid_cells)
     reg_(q, u, "datagrid_header", 2, sae_ui_datagrid_header)
@@ -7799,6 +7984,7 @@ api_register_(p: *Page) {
     v = quickjs.new_object(q)
     reg_(q, v, "scene", 4, sae_vg_scene)
     reg_(q, v, "resize", 3, sae_vg_resize)
+    reg_(q, v, "on_key", 2, sae_vg_on_key)
     reg_(q, v, "circle", 4, sae_vg_circle)
     reg_(q, v, "rect", 5, sae_vg_rect)
     reg_(q, v, "rrect", 6, sae_vg_rrect)
@@ -8016,6 +8202,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.vg_stack = malloc(STACK_MAX * 8)
     p.vg_depth = 0
     p.vg_nodes = list.new()
+    p.vg_keys = list.new()
     p.stacks = list.new()
     p.grids = list.new()
     p.sheet = null
@@ -8061,6 +8248,7 @@ page_free_(p: *Page) {
     timers_free_(p)
     modules_free_(p)   // wave1/imports: its module registry
     raster_page_free_(p)   // wave1/raster: its rasters' buffers
+    vg_keys_free_(p)
     list.free(p.vg_nodes)
     list.free(p.stacks)
     list.free(p.grids)

@@ -38,7 +38,8 @@ exports(
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
     console_count, wait_for_console_n,
     vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool, vg_px_x_in, vg_px_y_in, wait_for_vg_canvas,
-    screenshot, console_contains, wait_for_console, url_encode, vg_nodes
+    screenshot, console_contains, wait_for_console, url_encode, vg_nodes,
+    vg_key, vg_a11y, wait_for_vg_a11y
 )
 
 import std.string
@@ -519,6 +520,23 @@ vg_release(x: int, y: int) {
 
 vg_scroll(dx: int, dy: int) {
     uidriver.post_ok("/canvas/${vg_handle()}/scroll?dx=${dx}&dy=${dy}", "POST canvas scroll")
+}
+
+// A key pressed on the vg canvas (aether-ui's names: "Left", "Return",
+// "space", "Escape", "a"): runs the scene's vg.on_key function.
+vg_key(name: string) {
+    uidriver.post_ok("/canvas/${vg_handle()}/key?name=${url_encode(name)}", "POST canvas key ${name}")
+}
+
+// What a screen reader is told of the vg canvas: aether-ui's
+// GET /widget/{id}/a11y, {role, name, description, announced, announcements}.
+vg_a11y() -> string {
+    return uidriver.get_body("/widget/${vg_canvas()}/a11y")
+}
+
+// 1 once vg_a11y() holds `needle` (tried every 150 ms, about 12 s).
+wait_for_vg_a11y(needle: string) -> int {
+    return uidriver.wait_body_contains("/widget/${vg_canvas()}/a11y", needle, 80)
 }
 
 // The canvas's rendered pixels on a grid: one 8-hex-digit AARRGGBB per

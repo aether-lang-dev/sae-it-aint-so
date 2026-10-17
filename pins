@@ -110,4 +110,8 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # dcc1bd48 (2026-10-16): aether-ui on Aether 0.818.0, `@keep` on every ptr
 # parameter it keeps; nothing older than 0.818 parses it. Verified:
 # tests/run_all.sh on macOS, 58/58.
-AETHER_UI_REF=dcc1bd48994a6313da457ff277b994190a3a6bf8
+# 2efaa85c (2026-10-17): a canvas hears a hardware keyboard on UIKit
+# (canvas_on_key had only stored its handler there), which vg.on_key is
+# built on, and AppKit's canvas its key release. Verified: tests/run_all.sh
+# on macOS, 59/59.
+AETHER_UI_REF=2efaa85ca64e39ec7c33575f75d5b179304eb35f

@@ -1,0 +1,96 @@
+// spec_a11y.ae -- site/a11y.ts: ui.a11y_label, a11y_role, a11y_description
+// and a11y_announce on a widget and on a vg scene, and vg.on_key, read back
+// as aether-ui reports what each backend was given (GET /widget/{id}/a11y:
+// the platform's own role, name and description, the last announcement and
+// how many). A board of 3 x 3 squares played from the keyboard alone: the
+// arrows move its cursor, Return marks a square, each square announced.
+//   tests/run_spec.sh spec_a11y
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// 1 when the cursor's blue is drawn within a viewBox unit of (x, y) along x.
+outline_near_(x: float, y: float) -> int {
+    sleep(300)
+    d = 0.0 - 1.0
+    while d <= 1.0 {
+        if b.vg_pixel_near(b.vg_px_x(x + d, 30.0, 30.0), b.vg_px_y(y, 30.0, 30.0), 1073360, 24) == 1 { return 1 }
+        d = d + 0.1
+    }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "ui.a11y_* on a widget") {
+        spec.it("a heading, and an icon button named and described") callback {
+            b.navigate(b.test_url("/a11y"))
+            spec.assert_true(b.wait_for_text("Accessibility"), "the page ran")
+            t = uidriver.widget_id_by_text("Accessibility")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${t}/a11y", "\"role\":\"heading\"", 40), "the title is a heading")
+            g = uidriver.widget_id_of("button", "⚙")
+            r = uidriver.get_body("/widget/${g}/a11y")
+            spec.assert_true(string.contains(r, "\"name\":\"Settings\"") == 1, "named, not by its glyph: ${r}")
+            spec.assert_true(string.contains(r, "\"description\":\"Opens the settings\"") == 1, "described")
+            spec.assert_true(string.contains(r, "\"announcements\":0") == 1, "nothing said yet")
+            spec.assert_true(b.wait_for_text("returns its handle: yes"), "each returns its handle")
+        }
+        spec.it("a11y_announce: the screen reader is told, from the button") callback {
+            b.click("⚙")
+            g = uidriver.widget_id_of("button", "⚙")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${g}/a11y", "\"announced\":\"Settings saved\"", 40), "said")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${g}/a11y", "\"announcements\":1", 40), "once")
+        }
+    }
+    spec.describe(fw, "a vg scene as one element") {
+        spec.it("the scene's canvas has the role, name and description given to its handle") callback {
+            spec.assert_true(b.wait_for_vg_canvas(), "the board")
+            r = b.vg_a11y()
+            spec.assert_true(string.contains(r, "\"role\":\"group\"") == 1, "a group: ${r}")
+            spec.assert_true(string.contains(r, "\"name\":\"Board, a3, empty\"") == 1, "named for the cursor's square")
+            spec.assert_true(string.contains(r, "\"description\":\"Marked: none\"") == 1, "described")
+        }
+    }
+    spec.describe(fw, "vg.on_key: the board from the keyboard") {
+        spec.it("an arrow moves the cursor, and the square is announced") callback {
+            b.vg_key("Right")
+            spec.assert_true(b.wait_for_console("a11y key: Right a3 to b3"), "the page heard Right")
+            spec.assert_true(b.wait_for_vg_a11y("\"announced\":\"b3, empty\""), "b3 announced")
+            spec.assert_true(b.wait_for_vg_a11y("\"name\":\"Board, b3, empty\""), "the board's name follows")
+            b.vg_key("Down")
+            spec.assert_true(b.wait_for_vg_a11y("\"announced\":\"b2, empty\""), "down to b2")
+            spec.assert_true(b.wait_for_vg_a11y("\"announcements\":2"), "two said")
+        }
+        spec.it("the cursor is drawn where it went") callback {
+            // b2 is the middle square, viewBox (10..20, 10..20): its outline's
+            // left side near x = 10.5 (a stroke is drawn in canvas pixels).
+            spec.assert_true(outline_near_(10.5, 15.0) == 1, "the outline at b2")
+            spec.assert_true(outline_near_(10.5, 5.0) == 0, "not at b3, where it was")
+        }
+        spec.it("Return marks the square, said, and the description says so") callback {
+            b.vg_key("Return")
+            spec.assert_true(b.wait_for_vg_a11y("\"announced\":\"b2 marked\""), "b2 marked")
+            spec.assert_true(b.wait_for_vg_a11y("\"description\":\"Marked: b2\""), "described")
+            b.vg_key("space")
+            spec.assert_true(b.wait_for_vg_a11y("\"announced\":\"b2 cleared\""), "space clears it")
+        }
+        spec.it("the edge holds, and other keys are the page's to ignore") callback {
+            b.vg_key("Left")
+            b.vg_key("Left")
+            spec.assert_true(b.wait_for_vg_a11y("\"announced\":\"a2, empty\""), "a2, and no further")
+            spec.assert_true(b.wait_for_console("a11y key: Left a2 to a2"), "the second Left stays")
+            b.vg_key("q")
+            spec.assert_true(b.wait_for_console("a11y key: q not a move"), "q heard")
+        }
+    }
+    spec.describe(fw, "refusals") {
+        spec.it("a handle the page did not make, a role that is none, a key handler on no scene") callback {
+            spec.assert_true(b.wait_for_text("refused widget: ui.a11y_label(h, text): h is not a widget or vg scene this page made"), "a11y_label(0)")
+            spec.assert_true(b.has_text("refused role: ui.a11y_role(h, role): \"spaceship\" is not a role (button, checkbox, radio, link, heading, image, group, list, listitem, tab, tablist, menu, menuitem, dialog, alert, textbox, slider, progressbar, grid, row, gridcell, columnheader, table, none)"), "an unknown role")
+            spec.assert_true(b.has_text("refused key: vg.on_key(h, fn): h is not a scene or shape this page made"), "vg.on_key(0)")
+        }
+    }
+    return spec.run_summary(fw)
+}

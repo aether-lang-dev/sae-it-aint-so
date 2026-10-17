@@ -106,6 +106,7 @@ tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade
 tests/run_spec.sh spec_aevg_parity             # corpus pages (tools/gen-corpus.sh) against librsvg's PNGs: mean error
 tests/run_spec.sh spec_camera                  # demo 1b (site/camera.ts) and the clock components
 tests/run_spec.sh spec_reorder                 # ui.reorderable: a plain hstack and an each() row dragged over the driver (site/reorder.ts)
+tests/run_spec.sh spec_a11y                    # ui.a11y_label/role/description/announce on a widget and a vg scene; vg.on_key: a board from the keyboard (site/a11y.ts)
 ```
 
 Toolchain: Aether 0.818.0 or later (`pins`: `@keep ptr` parameters, aether#2926, which aether-ui and sae now declare; enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
