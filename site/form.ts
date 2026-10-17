@@ -9,6 +9,12 @@ ui.hstack(() => {
   ui.fill_width(textfield("wide", () => {}));
   btn("End", () => {});
 });
+// A row of two small drawn swatches, each a vg scene held at 30 wide (a
+// scene's canvas otherwise takes its row's spare width).
+ui.hstack(() => {
+  ui.a11y_label(ui.set_width(vg.scene("0 0 10 10", 30, 30, () => vg.rect(0, 0, 10, 10, () => vg.fill("#2060c0"))), 30), "swatch one");
+  ui.a11y_label(ui.set_width(vg.scene("0 0 10 10", 30, 30, () => vg.rect(0, 0, 10, 10, () => vg.fill("#c06020"))), 30), "swatch two");
+});
 const field = textfield("your name", (s: string) => set_text(echo, `echo: ${s}`));
 const shown = text("read: ");
 btn("Read", () => set_text(shown, `read: ${get_text(field)}`));

@@ -44,6 +44,8 @@ expect_imports services/secure_channel/module.ae \
     "import std.bytes|import std.string (string_length, string_char_at, string_index_of, string_substring, string_equals, string_from_char, string_from_long, to_long)|import std.cryptography.ascon_aead128 (aead_seal, aead_open)|import std.cryptography.hkdf (hkdf)|import std.cryptography (random_bytes)|import std.time (now_ms)"
 expect_imports services/shell/module.ae \
     "import ui (open_url)|import std.fs (read, write_atomic)|import std.string|import std.strarr"
+expect_imports services/print/module.ae \
+    "import ui (print_pdf)|import std.fs (write_atomic)|import std.string|import std.encoding"
 expect_imports services/net/module.ae \
     "import std.http.client (request)|import std.string|import std.strarr"
 expect_imports services/sqlite/module.ae \
@@ -100,6 +102,19 @@ if [ -n "$hits" ]; then
     fail=1
 else
     echo "ok   open_url is named only in services/shell"
+fi
+
+# ui.print_pdf, or a bare print_pdf from a selective import, only in
+# services/print: every print request is checked against capabilities.print.
+hits=$(grep -rnE '(^|[^_a-zA-Z0-9])print_pdf[[:space:]]*\(|import ui \([^)]*print_pdf' \
+        --include='*.ae' src services lower tools gen 2>/dev/null \
+      | grep -v '^services/print/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+if [ -n "$hits" ]; then
+    echo "FAIL print_pdf named outside services/print:"
+    echo "$hits" | sed 's/^/       /'
+    fail=1
+else
+    echo "ok   print_pdf is named only in services/print"
 fi
 
 # client.request (building an outgoing request), or a bare request() from a

@@ -34,6 +34,7 @@ import services.documents
 import services.clipboard
 import services.bus
 import services.shell
+import services.print as printing
 import services.net
 import services.sqlite
 import services.stdlib
@@ -1277,18 +1278,20 @@ sae_ui_set_width(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
-    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.set_width(h, px): h is not a widget this page made") }
+    w = a11y_widget_(page_of_(ctx), h)
+    if w == 0 { return sae_throw_type_error(ctx, "ui.set_width(h, px): h is not a widget or vg scene this page made") }
     px = arg_int_(ctx, argv, argc, 1, 0)
     if px < 0 || px > 8000 { return sae_throw_type_error(ctx, "ui.set_width(h, px): px is 0 to 8000") }
-    _w = ui.width(h, px)
+    _w = ui.width(w, px)
     return quickjs.new_int(ctx, h)
 }
 sae_ui_fill_width(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
-    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.fill_width(h): h is not a widget this page made") }
-    _f = ui.fill_width(h)
+    w = a11y_widget_(page_of_(ctx), h)
+    if w == 0 { return sae_throw_type_error(ctx, "ui.fill_width(h): h is not a widget or vg scene this page made") }
+    _f = ui.fill_width(w)
     return quickjs.new_int(ctx, h)
 }
 sae_ui_height(ctx: ptr, this_val: int, argv: int) -> int {
@@ -1436,7 +1439,8 @@ dg_cells_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int) -> string 
     return ""
 }
 
-// kind: 0 edit text, 1 cell style, 2 tooltip. Each (row, model col) -> string.
+// kind: 0 edit text, 1 cell style, 2 tooltip, 3 picture (base64). Each
+// (row, model col) -> string.
 dg_rc_str_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int, kind: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (row, col) => string" }
     ref = hold_arg_(ctx, argv, i)
@@ -1446,6 +1450,7 @@ dg_rc_str_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int, kind: int
     if kind == 0 { _g = ui.datagrid_edit_text(g, f) }
     if kind == 1 { _g = ui.datagrid_cell_style(g, f) }
     if kind == 2 { _g = ui.datagrid_cell_tooltip(g, f) }
+    if kind == 3 { _g = ui.datagrid_cell_picture(g, f) }
     return ""
 }
 
@@ -1692,6 +1697,72 @@ sae_ui_datagrid_freeze_cols(ctx: ptr, this_val: int, argv: int) -> int {
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_freeze_cols: g is not a grid this page made") }
     _g = ui.datagrid_freeze_cols(g, arg_int_(ctx, argv, argc, 1, 0))
     return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_selection_glide(g, ms): the cursor's box glides to a new cell
+// over ms (0 jumps, as made); ui.datagrid_gliding(g): true while it does,
+// ui.datagrid_glide_box(g): where ("r,c", a row and a view column).
+sae_ui_datagrid_selection_glide(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_selection_glide: g is not a grid this page made") }
+    _g = ui.datagrid_selection_glide(g, arg_int_(ctx, argv, argc, 1, 0))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+sae_ui_datagrid_gliding(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_gliding: g is not a grid this page made") }
+    return quickjs.new_bool(ctx, ui.datagrid_gliding(g))
+}
+
+sae_ui_datagrid_glide_box(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_glide_box: g is not a grid this page made") }
+    return quickjs.new_string(ctx, ui.datagrid_glide_box(g))
+}
+
+// ui.datagrid_show_header(g, on): the column headers shown or not (View >
+// Headings); ui.datagrid_header_shown(g).
+sae_ui_datagrid_show_header(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_show_header: g is not a grid this page made") }
+    _g = ui.datagrid_show_header(g, arg_int_(ctx, argv, argc, 1, 1))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+sae_ui_datagrid_header_shown(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_header_shown: g is not a grid this page made") }
+    return quickjs.new_bool(ctx, ui.datagrid_header_shown(g))
+}
+
+// ui.datagrid_set_row_heights(g, h): every row's height the grid's own (a
+// zoom's), rows given their own keeping theirs; ui.datagrid_row_heights(g).
+sae_ui_datagrid_set_row_heights(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_set_row_heights: g is not a grid this page made") }
+    _g = ui.datagrid_set_row_heights(g, arg_int_(ctx, argv, argc, 1, 24))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+sae_ui_datagrid_row_heights(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_row_heights: g is not a grid this page made") }
+    return quickjs.new_int(ctx, ui.datagrid_row_heights(g))
 }
 
 sae_ui_datagrid_frozen_cols(ctx: ptr, this_val: int, argv: int) -> int {
@@ -2019,6 +2090,18 @@ sae_ui_datagrid_cell_tooltip(ctx: @keep ptr, this_val: int, argv: int) -> int {
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_cell_tooltip: g is not a grid this page made") }
     e = dg_rc_str_(ctx, g, argv, argc, 1, 2)
     if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_cell_tooltip(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+// ui.datagrid_cell_picture(g, fn(r, c) -> string): a cell's picture, its
+// PNG, JPEG, GIF or BMP bytes as base64 ("" none), drawn over the cell
+// fitted to it (a spreadsheet's Place in Cell, its IMAGE function).
+sae_ui_datagrid_cell_picture(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_cell_picture: g is not a grid this page made") }
+    e = dg_rc_str_(ctx, g, argv, argc, 1, 3)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_cell_picture(g, fn): ${e}") }
     return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 // ui.datagrid_on_edit_change(g, fn(text, caret)): the open editor's text as
@@ -3563,6 +3646,17 @@ sae_fs_remove(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     err = files.remove(own_(arg_str_(ctx, argv, argc, 0)))
     if err != "" { return sae_throw_type_error(ctx, err) }
+    return 0
+}
+
+// printing.pdf(base64, title): a PDF the page made (its bytes as base64) to
+// the system's print dialog, its job named title, if capabilities.print
+// lets the app print. App mode only.
+sae_printing_pdf(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    why = printing.pdf(own_(arg_str_(ctx, argv, argc, 0)), own_(arg_str_(ctx, argv, argc, 1)))
+    if why != "" { return sae_throw_type_error(ctx, why) }
     return 0
 }
 
@@ -7485,6 +7579,7 @@ available_(nm: string) -> int {
         return bus.declared()
     }
     if nm == "open-urls" { return shell.granted() }
+    if nm == "print" { return printing.granted() }
     if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
     if string.string_starts_with(nm, "native ") == 1 { return natives_granted_(string.string_substring(nm, 7, string.length(nm))) }   // wave1/natives
     return 0
@@ -7575,7 +7670,7 @@ absent_of_(optional: string) -> string {
 // ("local-filesystem,open-urls,"), to leave out with the absent ones.
 unsought_(seeks: string, optional: string) -> string {
     out = ""
-    names = string.split("outgoing-http,local-filesystem,open-urls,documents,clipboard,clipboard-read,control-bus", ",")
+    names = string.split("outgoing-http,local-filesystem,open-urls,print,documents,clipboard,clipboard-read,control-bus", ",")
     n = string.string_array_size(names)
     i = 0
     while i < n {
@@ -7627,6 +7722,9 @@ read_capabilities_(manifest: ptr) {
     // capabilities.documents ({}): pages may ask the person to pick files
     // (services/documents); what they read and write is what was picked.
     if json.json_object_get_raw(caps, "documents") != null { documents.configure(1) }
+    // capabilities.print ({}): pages may hand a PDF to the system's print
+    // dialog (services/print), its file written in the app's data folder.
+    if json.json_object_get_raw(caps, "print") != null { printing.configure(1, app_data_dir_()) }
     // capabilities.controlBus ({ "name": ..., "maxRequestBytes": ... }): the
     // app may be driven by other programs on this machine, while the person
     // has switched it on (--control-bus). services/bus.
@@ -8009,6 +8107,13 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_set_height", 2, sae_ui_datagrid_set_height)
     reg_(q, u, "datagrid_freeze_cols", 2, sae_ui_datagrid_freeze_cols)
     reg_(q, u, "datagrid_frozen_cols", 1, sae_ui_datagrid_frozen_cols)
+    reg_(q, u, "datagrid_selection_glide", 2, sae_ui_datagrid_selection_glide)
+    reg_(q, u, "datagrid_gliding", 1, sae_ui_datagrid_gliding)
+    reg_(q, u, "datagrid_glide_box", 1, sae_ui_datagrid_glide_box)
+    reg_(q, u, "datagrid_show_header", 2, sae_ui_datagrid_show_header)
+    reg_(q, u, "datagrid_header_shown", 1, sae_ui_datagrid_header_shown)
+    reg_(q, u, "datagrid_set_row_heights", 2, sae_ui_datagrid_set_row_heights)
+    reg_(q, u, "datagrid_row_heights", 1, sae_ui_datagrid_row_heights)
     reg_(q, u, "datagrid_height", 1, sae_ui_datagrid_height)
     reg_(q, u, "datagrid_clear_areas", 1, sae_ui_datagrid_clear_areas)
     reg_(q, u, "datagrid_areas", 1, sae_ui_datagrid_areas)
@@ -8037,6 +8142,7 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_set_row_height", 3, sae_ui_datagrid_set_row_height)
     reg_(q, u, "datagrid_fit_row", 2, sae_ui_datagrid_fit_row)
     reg_(q, u, "datagrid_cell_tooltip", 2, sae_ui_datagrid_cell_tooltip)
+    reg_(q, u, "datagrid_cell_picture", 2, sae_ui_datagrid_cell_picture)
     reg_(q, u, "datagrid_on_edit_change", 2, sae_ui_datagrid_on_edit_change)
     reg_(q, u, "datagrid_edit_insert", 2, sae_ui_datagrid_edit_insert)
     reg_(q, u, "_textarea", 2, sae_ui_textarea)
@@ -8192,6 +8298,12 @@ api_register_(p: *Page) {
         quickjs.release(q, br)
         bw, _bwe = quickjs.eval(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
         quickjs.release(q, bw)
+    }
+    if app_dir_ != "" && string.contains(p.absent, ",print,") == 0 {
+        pro = quickjs.new_object(q)
+        reg_(q, pro, "pdf", 2, sae_printing_pdf)
+        quickjs.set_global(q, "printing", pro)
+        quickjs.release(q, pro)
     }
     if app_dir_ != "" && string.contains(p.absent, ",open-urls,") == 0 {
         sho = quickjs.new_object(q)
@@ -8974,6 +9086,8 @@ build_chrome_(b: *Browser, root: int) {
     ui.btn(bctx, "Forward", || { request_nav_(b, NAV_FORWARD, "") })
     ui.btn(bctx, "Reload", || { request_nav_(b, NAV_RELOAD, "") })
     b.addr = ui.textfield(bctx, "address", |s: string| { })
+    // The bar's spare width (a field's own is its natural 140 px).
+    _fa = ui.fill_width(b.addr)
     ui.btn(bctx, "Go", || {
         typed = ui.get_text(b.addr)
         base = ""

@@ -42,6 +42,7 @@ const g = ui.datagrid(1000000, 40, 15, 5, 1, () => {
   on_cell_select((r: number, c: number) => {
     const [ar, ac] = ui.datagrid_selection(g);
     print(`grid selected ${ar},${ac} to ${r},${c}`);
+    if (ui.datagrid_gliding(g)) print(`grid gliding from ${ui.datagrid_glide_box(g)}`);
   });
   on_cell_activate((r: number, c: number) => print(`grid activated ${r},${c}`));
   on_cell_edit((r: number, c: number, t: string) => {
@@ -70,6 +71,28 @@ btn("Freeze A", () => {
 btn("Free columns", () => {
   ui.datagrid_freeze_cols(g, 0);
   print(`grid frozen columns now ${ui.datagrid_frozen_cols(g)}`);
+});
+// The cursor's box gliding to a new cell, and the headers hidden.
+btn("Glide", () => {
+  ui.datagrid_selection_glide(g, 300);
+  print("grid glides 300 ms");
+});
+// A picture in row 3's column C (a red square), set and taken away.
+let pictured = false;
+const RED = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4oaGBFTEMLQkAgl1GAWqNFmsAAAAASUVORK5CYII=";
+ui.datagrid_cell_picture(g, (r: number, c: number) => (pictured && r === 2 && c === 3 ? RED : ""));
+btn("Picture", () => {
+  pictured = !pictured;
+  ui.datagrid_refresh(g);
+  print(`grid picture ${pictured ? "on" : "off"}`);
+});
+btn("Taller rows", () => {
+  ui.datagrid_set_row_heights(g, ui.datagrid_row_heights(g) === 24 ? 36 : 24);
+  print(`grid rows ${ui.datagrid_row_heights(g)} high`);
+});
+btn("Headers", () => {
+  ui.datagrid_show_header(g, !ui.datagrid_header_shown(g));
+  print(`grid headers shown ${ui.datagrid_header_shown(g)}`);
 });
 btn("Half height", () => {
   ui.datagrid_set_height(g, Math.floor(ui.datagrid_height(g) / 2));

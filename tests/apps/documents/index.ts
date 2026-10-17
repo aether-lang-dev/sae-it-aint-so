@@ -1,4 +1,5 @@
 "seeks documents";
+"seeks print";
 // A test app for spec_app_documents: each button asks the person (the spec,
 // answering the picker) for a file, and shows what the page got. See
 // app.json and docs/page-services.md, section 5.
@@ -37,3 +38,9 @@ attempt("what a handle shows", async () => {
 // fs by a computed name: naming it would need "seeks local-filesystem".
 const g: any = globalThis;
 attempt("what else is there", async () => `fs ${typeof g["f" + "s"]}, raw ${typeof g.__sae_documents}, frozen ${Object.isFrozen(documents)}`);
+// A PDF made here handed to the system's print dialog (capabilities.print);
+// under a test aether-ui records it (GET /printed).
+const PDF = "JVBERi0xLjQKMSAwIG9iaiA8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4gZW5kb2JqCjIgMCBvYmogPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4gZW5kb2JqCjMgMCBvYmogPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAyMDAgMjAwXSA+PiBlbmRvYmoKdHJhaWxlciA8PCAvUm9vdCAxIDAgUiA+PgolJUVPRgo=";  // a one-page PDF, as base64
+attempt("print", async () => { printing.pdf(PDF, "A test page"); return "asked"; });
+attempt("print not a PDF", async () => { printing.pdf("aGVsbG8=", "x"); return "asked"; });
+

@@ -1,6 +1,7 @@
 {
   "name": "Documents test",
   "capabilities": {
-    "documents": {}
+    "documents": {},
+    "print": {}
   }
 }

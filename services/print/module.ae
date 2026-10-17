@@ -1,0 +1,40 @@
+// services/print — the one place sae hands a document to the system's
+// printing (the page API's `printing.pdf`, app mode, capabilities.print).
+// It imports exactly one UI name, ui.print_pdf (AppKit's print panel, GTK's
+// print dialog, the file's Print verb on Win32, UIKit's print interaction),
+// and writes the PDF the page made to a file of its own for it. Under a
+// test aether-ui records the request (the driver's GET /printed) instead of
+// showing the dialog.
+import ui (print_pdf)
+import std.fs (write_atomic)
+import std.string
+import std.encoding
+
+exports (configure, granted, pdf)
+
+var enabled_: int = 0     // 0 without capabilities.print, and in the browser
+var dir_: string = ""     // where the files to print are written
+var n_: int = 0
+
+// Set up for an app that may print (enabled 1), its files written in dir.
+configure(enabled: int, dir: string) {
+    enabled_ = enabled
+    dir_ = string.copy(dir)
+}
+
+granted() -> int { return enabled_ }
+
+// A PDF (its bytes as base64) to the system's print dialog, its job named
+// title: "" when the dialog was asked for, else why not.
+pdf(b64: string, title: string) -> string {
+    if enabled_ == 0 { return "printing.pdf: this app may not print (app.json capabilities.print)" }
+    raw, derr = encoding.base64_decode(b64)
+    if derr != "" { return "printing.pdf: not base64" }
+    if string.length(raw) < 5 || string.starts_with(raw, "%PDF-") == 0 { return "printing.pdf: not a PDF" }
+    n_ = n_ + 1
+    path = "${dir_}/sae-print-${n_}.pdf"
+    err = write_atomic(path, string.bytes(raw))
+    if err != "" { return "printing.pdf: ${err}" }
+    if print_pdf(path, title) == 0 { return "printing.pdf: this system has no print dialog for it" }
+    return ""
+}

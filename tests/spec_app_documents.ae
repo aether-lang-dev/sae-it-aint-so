@@ -67,6 +67,14 @@ main() {
             b.click("what else is there")
             b.assert_text("what else is there: fs undefined, raw undefined, frozen true", "only documents")
         }
+        spec.it("printing.pdf: the system's print dialog asked for, with the job's title; not a PDF refused") callback {
+            b.click("print")
+            b.assert_text("print: asked", "asked")
+            spec.assert_true(uidriver.wait_body_contains("/printed", "A test page", 20), "the dialog asked for, its title")
+            spec.assert_true(uidriver.wait_body_contains("/printed", "sae-print-1.pdf", 20), "its file the app's own")
+            b.click("print not a PDF")
+            b.assert_text("print not a PDF: refused: printing.pdf: not a PDF", "refused")
+        }
     }
     return spec.run_summary(fw)
 }

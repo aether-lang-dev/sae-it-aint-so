@@ -6,6 +6,7 @@ import std.spec
 import std.string
 import saedriver as b
 import uidriver
+import std.json
 
 const HOME: string = "Welcome to Sae it ain't so"
 
@@ -18,6 +19,21 @@ key_at_(label: string, f: string) -> int {
     return uidriver.widget_int_field_by_id(uidriver.widget_id_of("button", label), f)
 }
 
+// The widget a screen reader names `name`, or 0.
+id_by_a11y(name: string) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "a11y_name"), name) == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -27,6 +43,8 @@ main() {
             b.assert_page(string.concat("You are at ", b.test_url("/")), "200 ", "home")
             b.assert_url(b.test_url("/"), "status line")
             spec.assert_str_eq(b.current_url(), b.test_url("/"), "address field")
+            aw = uidriver.widget_int_field_by_id(b.field_id_by("address"), "w")
+            spec.assert_true(aw > 400, "the address field takes the bar's spare width (${aw})")
         }
         spec.it("a page link changes page") callback {
             b.click("About")
@@ -213,6 +231,10 @@ main() {
             ww = uidriver.widget_int_field_by_id(wide, "w")
             spec.assert_true(cw >= 55 && cw <= 66, "set_width holds a field at 60 (${cw})")
             spec.assert_true(ww > 300, "fill_width gives a field the row's spare width (${ww})")
+            s1 = id_by_a11y("swatch one")
+            s2 = id_by_a11y("swatch two")
+            spec.assert_true(s1 > 0 && s2 > 0, "two swatches, named")
+            spec.assert_true(uidriver.widget_int_field_by_id(s1, "w") <= 34 && uidriver.widget_int_field_by_id(s2, "w") <= 34, "set_width holds a vg scene at 30 (${uidriver.widget_int_field_by_id(s1, "w")})")
 
             uidriver.post_ok("/appearance?dark=1", "the system turned dark")
             spec.assert_true(b.wait_for_text("appearance: dark"), "ui.on_appearance told of dark")
