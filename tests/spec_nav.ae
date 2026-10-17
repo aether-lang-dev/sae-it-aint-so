@@ -199,7 +199,7 @@ main() {
             spec.assert_true(wd >= -1 && wd <= 1, "equal cells, to the pixel (C ${key_at_("C", "w")}, 7 ${key_at_("7", "w")})")
             go_home("home from calculator")
         }
-        spec.it("a text field's handler, get_text, and a scroll block") callback {
+        spec.it("a text field's handler, get_text, a securefield, and a scroll block") callback {
             b.click("Form")
             b.assert_page("echo: ", "200 ", "form")
             b.set_field("Ada Lovelace & co")
@@ -207,6 +207,11 @@ main() {
             b.click("Read")
             b.assert_text("read: Ada Lovelace & co", "get_text reads the field")
             b.assert_text("row 29", "scroll block built its rows")
+            b.set_field_by("password", "open sesame")
+            b.assert_text("secret: 11 characters", "a securefield's handler gets its text")
+            b.click("Check")
+            b.assert_text("secret: right", "get_text reads it")
+            spec.assert_eq(string.contains(b.page_texts(), "open sesame"), 0, "and the page shows it nowhere")
             go_home("home from form")
         }
     }

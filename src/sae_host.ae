@@ -692,6 +692,33 @@ sae_ui_textfield(ctx: @keep ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
+// securefield(placeholder, onChange?): a field whose text is not shown (a
+// password), onChange(text) on every edit, get_text reading it; the
+// platform's own secure field on every backend (aether-ui's securefield).
+sae_ui_securefield(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    placeholder = own_(arg_str_(ctx, argv, argc, 0))
+    has_fn = 0
+    ref = 0
+    if argc >= 2 && is_fn_arg_(ctx, argv, 1) != 0 {
+        has_fn = 1
+        ref = hold_arg_(ctx, argv, 1)
+    }
+    on_change = |s: string| {
+        if has_fn == 1 {
+            r = call1_str_(ctx, ref, s)
+            if r < 0 { report_exception_(ctx, "a securefield handler") }
+            settle_(ctx)
+        }
+    }
+    long t = now_ns_()
+    h = ui.securefield(mem.long_to_ptr(top_(p)), placeholder, on_change)
+    ui_done_(p, t)
+    return quickjs.new_int(ctx, h)
+}
+
 // ===== keys, Return, focus, wrapping and size (the cloud wishlist, 2026-10-10) =====
 
 // ui.on_key(fn(key, mods)): every key the window gets while the page has the
@@ -7876,6 +7903,7 @@ api_register_(p: *Page) {
     reg_(q, u, "scroll", 1, sae_ui_scroll)
     reg_(q, u, "spacer", 0, sae_ui_spacer)
     reg_(q, u, "textfield", 2, sae_ui_textfield)
+    reg_(q, u, "securefield", 2, sae_ui_securefield)
     reg_(q, u, "get_text", 1, sae_ui_get_text)
     reg_(q, u, "set_text", 2, sae_ui_set_text)
     reg_(q, u, "clear", 1, sae_ui_clear)

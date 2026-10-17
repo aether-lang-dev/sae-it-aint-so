@@ -62,7 +62,7 @@ The `ui` object (each builder returns its widget handle):
 | | |
 |---|---|
 | containers | `vstack([spacing,] fn)`, `hstack([spacing,] fn)`, `grid(cols, [spacing,] fn)` (the block's widgets fill it row by row), `scroll(fn)`, `button(label, fn)` (the block styles the button) |
-| widgets | `text(s)`, `btn(label, onPress)`, `divider()`, `spacer()`, `textfield(placeholder, onChange(text))`, `textarea(placeholder, onChange(text)?)` (several lines; `bind` binds it both ways to a string state) |
+| widgets | `text(s)`, `btn(label, onPress)`, `divider()`, `spacer()`, `textfield(placeholder, onChange(text))`, `securefield(placeholder, onChange(text))` (its text not shown: a password; `get_text` reads it), `textarea(placeholder, onChange(text)?)` (several lines; `bind` binds it both ways to a string state) |
 | modifiers (inside a block) | `margin(t, r, b, l)`, `bg_color(r, g, b, a)`, `onclick(fn)`, `ondrag(fn(phase, x, y))` (press at (x, y) in the widget, then moves and the release as offsets), `onsubmit(fn(text))` (in a field's block), `onfocuschange(fn(inside))` (focus came into the widget or left it; or `ui.on_focus_change(h, fn)`), `pointer_shape(name)` (the mouse pointer over the widget: "col-resize", "row-resize", "move", "grab", "pointer", "text", "crosshair", "not-allowed", "wait", "default"; or `ui.pointer_cursor(h, name)`), `equal_cells()` (in a grid: one width per column, one height per row, for all). `text(label, block)` and `textfield(placeholder, onChange, block)` take blocks of their own |
 | reading and writing | `get_text(h)`, `set_text(h, s)`: synchronous, no `await` |
 | rebuilding | `clear(h)` empties a `vstack`/`hstack`/`grid` the page made; `into(h, fn)` builds into it again |
