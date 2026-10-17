@@ -21,6 +21,15 @@ attempt("save", async () => {
   await d.write_text(`{"saved":true}`);
   return `saved ${d.name}`;
 });
+// A binary file's bytes, as base64 both ways.
+attempt("bytes", async () => {
+  const d = await documents.pick_open("Open a binary file");
+  if (!d) return "cancelled";
+  const b64 = await d.read_base64();
+  const out = await documents.pick_save("copy.bin");
+  if (out) await out.write_base64(b64);
+  return `${d.name} is ${b64}`;
+});
 attempt("what a handle shows", async () => {
   const d = await documents.pick_open();
   return d ? Object.keys(d).sort().join(",") : "cancelled";

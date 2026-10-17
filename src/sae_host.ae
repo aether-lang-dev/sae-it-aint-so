@@ -3430,6 +3430,22 @@ sae_docs_write_text(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
+sae_docs_read_base64(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    b64, err = documents.read_base64(arg_int_(ctx, argv, argc, 0, 0))
+    if err != "" { return sae_throw_type_error(ctx, err) }
+    return quickjs.new_string(ctx, b64)
+}
+
+sae_docs_write_base64(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    err = documents.write_base64(arg_int_(ctx, argv, argc, 0, 0), own_(arg_str_(ctx, argv, argc, 1)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
+    return 0
+}
+
 sae_fs_write_text(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -8060,9 +8076,11 @@ api_register_(p: *Page) {
         reg_(q, dr, "name", 1, sae_docs_name)
         reg_(q, dr, "read", 1, sae_docs_read_text)
         reg_(q, dr, "write", 2, sae_docs_write_text)
+        reg_(q, dr, "read64", 1, sae_docs_read_base64)
+        reg_(q, dr, "write64", 2, sae_docs_write_base64)
         quickjs.set_global(q, "__sae_documents", dr)
         quickjs.release(q, dr)
-        dw, _dwe = quickjs.eval(q, "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;", "sae:documents")
+        dw, _dwe = quickjs.eval(q, "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); }, read_base64: function () { return Promise.resolve().then(function () { return raw.read64(h); }); }, write_base64: function (t) { return Promise.resolve().then(function () { raw.write64(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;", "sae:documents")
         quickjs.release(q, dw)
     }
     // clipboard: writes while the person clicks or types, reads only their

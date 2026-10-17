@@ -1,10 +1,12 @@
 // spec_app_documents.ae — the documents page API: the person picks, the page
-// gets a handle (a name and its text), never a path; a cancel is null.
+// gets a handle (a name and its text, or its bytes as base64), never a
+// path; a cancel is null.
 // Headless, so each picker takes the answer the spec queued.
 //   AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents tests/run_spec.sh spec_app_documents
 import std.spec
 import std.string
 import std.fs
+import std.encoding
 import std.os (os_getenv)
 import saedriver as b
 import uidriver
@@ -23,6 +25,9 @@ main() {
     _m = fs.mkdir_p(dir)
     _w = fs.write("${dir}/costs.json", "the costs")
     _d = fs.delete("${dir}/budget.json")
+    raw, _de = encoding.base64_decode("AQIAAP9C")   // 01 02 00 00 ff 42
+    _b = fs.write_binary("${dir}/bytes.bin", string.bytes(raw))
+    _c = fs.delete("${dir}/copy.bin")
     spec.describe(fw, "documents: picked files, as handles") {
         spec.it("pick_open: the person picks, the page reads it by name") callback {
             uidriver.answer_prompt("open", "${dir}/costs.json")
@@ -43,10 +48,19 @@ main() {
             b.click("open")
             b.assert_text("open: cancelled", "null")
         }
-        spec.it("a handle shows a name and its two calls, not a path") callback {
+        spec.it("read_base64 and write_base64: a binary file's bytes, a NUL among them, as base64 both ways") callback {
+            uidriver.answer_prompt("open", "${dir}/bytes.bin")
+            uidriver.answer_prompt("save", "${dir}/copy.bin")
+            b.click("bytes")
+            b.assert_text("bytes: bytes.bin is AQIAAP9C", "its bytes as base64")
+            back, n, _e = fs.read_binary("${dir}/copy.bin")
+            spec.assert_eq(n, 6, "written back whole, its NULs too")
+            spec.assert_eq(string.char_at(back, 4), 255, "a byte over 127 kept")
+        }
+        spec.it("a handle shows a name and its four calls, not a path") callback {
             uidriver.answer_prompt("open", "${dir}/costs.json")
             b.click("what a handle shows")
-            b.assert_text("what a handle shows: name,read_text,write_text", "nothing else")
+            b.assert_text("what a handle shows: name,read_base64,read_text,write_base64,write_text", "nothing else")
             spec.assert_eq(string.contains(b.page_texts(), dir), 0, "no path on the page")
         }
         spec.it("no fs, no raw gates, and documents cannot be changed") callback {

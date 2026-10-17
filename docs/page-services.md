@@ -279,7 +279,8 @@ APIs, split by who chooses the files, not by device:
   verb-and-glob scopes (`seeks local-filesystem read ~/.ssh/*.pub`) remain
   its next step.
 - **`documents`: files the person picks.** `pick_open`, `pick_save` (later
-  `pick_folder`), giving handles (`name`, `read_text`, `write_text`; a
+  `pick_folder`), giving handles (`name`, `read_text`, `write_text`,
+  `read_base64`, `write_base64` for a binary file's bytes; a
   folder's `list`, `create`, ...). The page never sees a path. Every
   platform has a picker (NSOpenPanel, GtkFileDialog, IFileOpenDialog,
   Android's document picker, UIDocumentPickerViewController), so this runs

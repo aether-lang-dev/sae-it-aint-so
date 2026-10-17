@@ -334,10 +334,11 @@ service touches files, and each of its operations runs inside Aether's
   grant. `$APPDATA` is the app's own folder.
 - `documents.pick_open(title)` and `documents.pick_save(name)`: the
   system's picker; a promise of a handle (`name`, `read_text()`,
-  `write_text(text)`, both promises) or null when the person cancels. A
-  page never sees a path, and a handle reaches that one file only. The
-  spreadsheet (RexxJS/example-app-spreadsheet, once demo 18) opens, saves
-  and exports CSV through it.
+  `write_text(text)`, and for a binary file `read_base64()` and
+  `write_base64(b64)`, its bytes as base64 text: all promises) or null
+  when the person cancels. A page never sees a path, and a handle reaches
+  that one file only. The spreadsheet (aether-lang-dev/spraedsheet) opens,
+  saves and exports CSV and XLSX through it.
 - `shell.open(url)`: hands a URL to the system (the default browser), for
   the granted prefixes.
 - `sqlite.<name>`: the app's databases, declared in `app.json` under

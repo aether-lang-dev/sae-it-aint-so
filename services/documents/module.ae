@@ -4,22 +4,26 @@
 //
 // A page never sees a path. The kernel's picker hands the path the person
 // chose to adopt(), which keeps it and gives back a handle (a number from
-// 1); name, read_text and write_text take that handle. Each read or write
+// 1); name, read_text and write_text take that handle (and read_base64 and
+// write_base64, a binary file's bytes as base64 text, as an XLSX's are:
+// the page's engine holds text). Each read or write
 // runs inside std.sandbox's enforce with a grant for that one file and
 // nothing else, so a slip here still cannot reach another file
 // (aether/docs/containment-sandbox.md: the contained cannot reach the
 // container).
 //
 // What this module can reach is its imports: std.fs for the work,
-// std.sandbox to fence it, std.string and std.strarr to keep the handles.
+// std.sandbox to fence it, std.string and std.strarr to keep the handles,
+// std.encoding for a binary file's base64.
 // tests/check_layers.sh holds the import list to that.
 
 import std.fs
 import std.string
 import std.strarr
 import std.sandbox
+import std.encoding
 
-exports (configure, granted, adopt, name, read_text, write_text)
+exports (configure, granted, adopt, name, read_text, write_text, read_base64, write_base64)
 
 var enabled_: int = 0     // 0 in the browser, or an app whose app.json does not grant documents
 var paths_: ptr = null    // strarr: the picked paths; handle h is paths_[h - 1]
@@ -86,5 +90,42 @@ write_text(h: int, text: string) -> string {
     }
     sandbox.free(one)
     if err != "" { return "documents.write_text ${name(h)}: ${err}" }
+    return ""
+}
+
+// A binary file's bytes as base64: (its base64, "") or ("", why).
+read_base64(h: int) -> (string, string) {
+    data = ""
+    n = 0
+    err = ""
+    p = path_(h)
+    if p == "" { return "", "documents: no document ${h}" }
+    one = sandbox.new("documents: one file") {
+        grant_fs_read(p)
+    }
+    sandbox.enforce(one) callback {
+        data, n, err = fs.read_binary(p)
+    }
+    sandbox.free(one)
+    if err != "" { return "", "documents.read_base64 ${name(h)}: ${err}" }
+    if n == 0 { return "", "" }
+    return encoding.base64_encode_padded(string.bytes(data)), ""
+}
+
+// Bytes given as base64 written: "" or why.
+write_base64(h: int, b64: string) -> string {
+    err = ""
+    p = path_(h)
+    if p == "" { return "documents: no document ${h}" }
+    raw, derr = encoding.base64_decode(b64)
+    if derr != "" { return "documents.write_base64 ${name(h)}: not base64" }
+    one = sandbox.new("documents: one file") {
+        grant_fs_write(p)
+    }
+    sandbox.enforce(one) callback {
+        err = fs.write_atomic(p, string.bytes(raw))
+    }
+    sandbox.free(one)
+    if err != "" { return "documents.write_base64 ${name(h)}: ${err}" }
     return ""
 }
