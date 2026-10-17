@@ -118,4 +118,10 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # style changed under the cursor (the spreadsheet's stale blue boxes), and
 # AppKit's vertical slider track left unfilled (a grid's scrollbar drew a
 # long blue line). Verified: tests/run_all.sh on macOS, 59/59.
-AETHER_UI_REF=0adcb375b823d2a28c52274e33a69f459eec1b59
+# c78c7ce7 (2026-10-17): one datagrid editor at a time when on_select opens
+# one while datagrid_edit moves the cursor (the spreadsheet's point mode left
+# a bordered editor over each cell it pointed at), and AppKit's text field
+# has a natural width (two in a row left one 0 px wide: the spreadsheet's
+# formula field and its panels' second fields). Verified: tests/run_all.sh
+# on macOS.
+AETHER_UI_REF=c78c7ce7e6a60a91984fa37964ff503c956f7d79
