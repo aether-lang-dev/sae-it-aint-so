@@ -234,11 +234,12 @@ main() {
         spec.it("the selection glides once asked; the headers hide and show") callback {
             b.click("Glide")
             spec.assert_true(b.wait_for_console("grid glides 300 ms"), "asked")
-            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("n2:1")}/click", "click n2:1")
-            uidriver.post_ok("/window/key?combo=Right", "a step right")
+            // The grid is at its last rows (the scrollbar's case above).
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("J999999")}/click", "click J999999")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("L999999")}/click", "click L999999, two to the right")
             spec.assert_true(b.wait_for_console("grid gliding from "), "the box glides from where it was")
             b.click("Picture")
-            spec.assert_true(b.wait_for_console("grid picture on"), "a picture asked for")
+            spec.assert_true(b.wait_for_console("grid picture on 999998,12"), "a picture asked for, in the cell selected")
             spec.assert_true(uidriver.wait_body_contains("/widgets", "\"type\":\"image\"", 40), "drawn over its cell")
             b.click("Picture")
             spec.assert_true(b.wait_for_console("grid picture off"), "and taken away")

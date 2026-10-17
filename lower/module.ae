@@ -971,8 +971,8 @@ names_of_(list: string) -> string {
 // it is kept as "database fred" in the sought and optional lists. "native"
 // takes a native module's name the same way ("seeks native engine",
 // natives.engine: docs/natives.md).
-const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,database:sqlite,native:natives,documents:documents,clipboard:clipboard,clipboard-read:clipboard,control-bus:bus,"
-const PRIVILEGED = ",fs,http,shell,sqlite,documents,clipboard,bus,"
+const SEEKABLE = ",local-filesystem:fs,outgoing-http:http,open-urls:shell,print:printing,database:sqlite,native:natives,documents:documents,clipboard:clipboard,clipboard-read:clipboard,control-bus:bus,"
+const PRIVILEGED = ",fs,http,shell,printing,sqlite,documents,clipboard,bus,"
 
 // The object a privilege unlocks ("local-filesystem" -> "fs"), or "".
 object_of_(privilege: string) -> string {
@@ -1091,7 +1091,7 @@ page_seeks_(x: *Lx) {
         }
         obj = object_of_(nm)
         if obj == "" {
-            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls, database <name>, native <name>, documents, clipboard, clipboard-read, control-bus)")
+            fail_at_(x, tk_start_(x, j), "\"seeks ${nm}\": not something a page can seek (local-filesystem, outgoing-http, open-urls, print, database <name>, native <name>, documents, clipboard, clipboard-read, control-bus)")
             return
         }
         scoped = 0

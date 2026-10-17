@@ -77,14 +77,16 @@ btn("Glide", () => {
   ui.datagrid_selection_glide(g, 300);
   print("grid glides 300 ms");
 });
-// A picture in row 3's column C (a red square), set and taken away.
-let pictured = false;
+// A picture (a red square) in the cell selected when asked, set and taken
+// away.
+let pictured: [number, number] | null = null;
 const RED = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4oaGBFTEMLQkAgl1GAWqNFmsAAAAASUVORK5CYII=";
-ui.datagrid_cell_picture(g, (r: number, c: number) => (pictured && r === 2 && c === 3 ? RED : ""));
+ui.datagrid_cell_picture(g, (r: number, c: number) => (pictured && r === pictured[0] && c === pictured[1] ? RED : ""));
 btn("Picture", () => {
-  pictured = !pictured;
+  const [, , r, c] = ui.datagrid_selection(g);
+  pictured = pictured ? null : [r, ui.datagrid_col_model(g, c)];
   ui.datagrid_refresh(g);
-  print(`grid picture ${pictured ? "on" : "off"}`);
+  print(`grid picture ${pictured ? `on ${pictured[0]},${pictured[1]}` : "off"}`);
 });
 btn("Taller rows", () => {
   ui.datagrid_set_row_heights(g, ui.datagrid_row_heights(g) === 24 ? 36 : 24);

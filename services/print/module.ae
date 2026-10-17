@@ -6,7 +6,7 @@
 // test aether-ui records the request (the driver's GET /printed) instead of
 // showing the dialog.
 import ui (print_pdf)
-import std.fs (write_atomic)
+import std.fs (write_atomic, mkdir_p)
 import std.string
 import std.encoding
 
@@ -31,6 +31,9 @@ pdf(b64: string, title: string) -> string {
     raw, derr = encoding.base64_decode(b64)
     if derr != "" { return "printing.pdf: not base64" }
     if string.length(raw) < 5 || string.starts_with(raw, "%PDF-") == 0 { return "printing.pdf: not a PDF" }
+    // The app's data folder exists only once something wrote there.
+    merr = mkdir_p(dir_)
+    if merr != "" { return "printing.pdf: ${merr} ${dir_}" }
     n_ = n_ + 1
     path = "${dir_}/sae-print-${n_}.pdf"
     err = write_atomic(path, string.bytes(raw))
