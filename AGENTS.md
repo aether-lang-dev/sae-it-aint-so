@@ -108,13 +108,13 @@ tests/run_spec.sh spec_camera                  # demo 1b (site/camera.ts) and th
 tests/run_spec.sh spec_reorder                 # ui.reorderable: a plain hstack and an each() row dragged over the driver (site/reorder.ts)
 ```
 
-Toolchain: Aether 0.814.0 or later (`pins`: enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
+Toolchain: Aether 0.818.0 or later (`pins`: `@keep ptr` parameters, aether#2926, which aether-ui and sae now declare; enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
 and column API, contrib.quickjs's `arg_bytes`), installed, or a dev tree
 (`$SAE_AETHER_HOME`, default `../aether`, built with `make compiler ae
 stdlib contrib`; `SAE_AETHER_HOME=none` builds against the installed one even when
-`../aether` exists; the bare 0.801.0 release does not link yet, as it ships
-contrib/sqlite's source without its archive), and aeb v0.326 or
-later (it compiles the C contrib.quickjs ships), installed privately under `target/toolchain`.
+`../aether` exists; the bare release still does not link (0.818.0 too), as it ships
+contrib/sqlite's source without its archive), and aeb at `AEB_REF` or
+later (it compiles the C contrib.quickjs ships, and builds under 0.818), installed privately under `target/toolchain`.
 aeb's install runs `ae`, so put one on `PATH` first (here the dev tree's):
 
 ```sh

@@ -35,7 +35,16 @@
 # was refused everywhere, the kernel's included. Verified: the dev tree at
 # 0.814.0, run_all and the file specs (spec_app_caps, spec_app_documents,
 # spec_app_sheet_files) on macOS and aether-linux.
-AE_PIN=0.814.0
+# 0.818.0 (2026-10-16): a real floor move. 0.818's ownership rework
+# (aether #2916/#2926) borrows a `ptr` parameter for the call unless it is
+# declared `p: @keep ptr` (E0902); src/sae_host.ae and aevg now declare it
+# on every one they keep (a page-API function's ctx, captured by the
+# callbacks it registers, and the scene plumbing), and so does aether-ui.
+# 0.817 and older cannot parse `@keep`. The bare release still does not
+# link (no libaether_sqlite), so sae builds against a 0.818 dev tree.
+# Verified: the dev tree at 0.818.0 (2a39e091), tests/run_all.sh 58/58 on
+# macOS.
+AE_PIN=0.818.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
@@ -46,7 +55,10 @@ AE_PIN=0.814.0
 # has it.
 # v0.326 (2026-10-10): the first tag with 350dfc4, released alongside Aether
 # 0.801.0 and moved with it.
-AEB_REF=v0.326
+# db99a6f (2026-10-16): aeb under 0.818.0 (its own @keep annotations and
+# floor move). No tag carries it yet; a commit is pinned until one does
+# (tools/setup-siblings.sh fetches a SHA).
+AEB_REF=db99a6ff8562c9fdc38dd98d7d7f53650884cf3d
 
 # Sibling checkouts, reached through the aether-ui symlink. c4858fbe adds
 # ui.timer_once and the frame clock (ui.on_frame), which sae's timers use.
@@ -95,4 +107,7 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # asks/aecs-button-fg-and-field-bg-not-drawn.md, from the chess app's dark
 # look through ui.styles), and ci.sh's heap(1) step time-bounded.
 # Verified: tests/run_all.sh on macOS, 54/54.
-AETHER_UI_REF=e0fa5123dd620307a47d269445e94dbcb8a05f60
+# dcc1bd48 (2026-10-16): aether-ui on Aether 0.818.0, `@keep` on every ptr
+# parameter it keeps; nothing older than 0.818 parses it. Verified:
+# tests/run_all.sh on macOS, 58/58.
+AETHER_UI_REF=dcc1bd48994a6313da457ff277b994190a3a6bf8

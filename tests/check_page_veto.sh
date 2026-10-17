@@ -45,7 +45,9 @@ fns=$(awk '/^api_register_\(/ { on = 1; next } on && /^}/ { exit }
            on && /(reg_|glob_fn_|quickjs\.function)\(/ { line = $0; sub(/\)[[:space:]]*$/, "", line); n = split(line, a, ","); f = a[n]; gsub(/[[:space:]]/, "", f); print f }' "$HOST" | sort -u)
 for fn in $fns; do
     n=$((n + 1))
-    first=$(awk -v fn="$fn" 'index($0, fn "(ctx: ptr") == 1 { getline; print; exit }' "$HOST")
+    # A function that keeps its ctx (a callback captures it) declares it
+    # `@keep ptr` (Aether 0.818, #2926).
+    first=$(awk -v fn="$fn" 'index($0, fn "(ctx: ptr") == 1 || index($0, fn "(ctx: @keep ptr") == 1 { getline; print; exit }' "$HOST")
     if [ "$first" != "$veto" ]; then
         bad "$fn: does not open with the page veto (has: ${first:-nothing})"
     fi

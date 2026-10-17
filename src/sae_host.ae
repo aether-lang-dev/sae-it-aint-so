@@ -512,7 +512,7 @@ sae_ui_divider(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
-sae_ui_btn(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_btn(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -567,7 +567,7 @@ sae_ui_menu(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.menu_item(label, fn): an item of the menu whose block is running.
-sae_ui_menu_item(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_menu_item(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if menu_open_ == 0 { return sae_throw_type_error(ctx, "ui.menu_item(label, fn) must be called inside a ui.menu block") }
@@ -655,7 +655,7 @@ sae_ui_spacer(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // textfield(placeholder, onChange?): onChange(text) on every edit.
-sae_ui_textfield(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_textfield(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -752,7 +752,7 @@ keys_deliver_(k: string, m: int) {
 }
 
 // ui.on_submit(field, fn(text)): Return in one of the page's text fields.
-sae_ui_on_submit(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_on_submit(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
@@ -763,7 +763,7 @@ sae_ui_on_submit(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
-submit_to_(ctx: ptr, h: int, ref: int) {
+submit_to_(ctx: @keep ptr, h: int, ref: int) {
     _h = ui.on_submit(h) callback |t: string| {
         r = call1_str_(ctx, ref, t)
         if r < 0 { report_exception_(ctx, "a submit handler") }
@@ -772,7 +772,7 @@ submit_to_(ctx: ptr, h: int, ref: int) {
 }
 
 // onsubmit(fn(text)): on_submit for the field whose block this is.
-sae_ui_onsubmit(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_onsubmit(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "onsubmit")
@@ -798,7 +798,7 @@ call_iff_(ctx: ptr, ref: int, a: int, x: float, y: float, what: string) {
     quickjs.release(ctx, args)
 }
 
-drag_to_(ctx: ptr, h: int, ref: int) {
+drag_to_(ctx: @keep ptr, h: int, ref: int) {
     _h = ui.on_drag(h) callback |phase: int, x: float, y: float| {
         call_iff_(ctx, ref, phase, x, y, "a drag handler")
         settle_(ctx)
@@ -808,7 +808,7 @@ drag_to_(ctx: ptr, h: int, ref: int) {
 // ui.on_drag(h, fn(phase, x, y)) -> h: a press (phase 0, at (x, y) in the
 // widget), moves (1) and the release (2), those two as offsets from the
 // press.
-sae_ui_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_on_drag(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
@@ -827,7 +827,7 @@ sae_ui_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
 // and rebuilds (each does, from its list). For a row built with each, h is
 // the handle each returned (its children are the rows). Arming again
 // replaces fn.
-sae_ui_reorderable(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_reorderable(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
@@ -870,7 +870,7 @@ call_i_(ctx: ptr, ref: int, n: int, what: string) {
     quickjs.release(ctx, args)
 }
 
-focus_to_(ctx: ptr, h: int, ref: int) {
+focus_to_(ctx: @keep ptr, h: int, ref: int) {
     _h = ui.on_focus_change(h) callback |inside: int| {
         call_i_(ctx, ref, inside, "a focus handler")
         settle_(ctx)
@@ -880,7 +880,7 @@ focus_to_(ctx: ptr, h: int, ref: int) {
 // ui.on_focus_change(h, fn(inside)) -> h: keyboard focus came into the
 // widget or anything inside it (1), or left (0). Focus leaving the browser
 // for another application is not a change.
-sae_ui_on_focus_change(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_on_focus_change(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
@@ -892,7 +892,7 @@ sae_ui_on_focus_change(ctx: ptr, this_val: int, argv: int) -> int {
 
 // onfocuschange(fn(inside)): ui.on_focus_change for the widget whose block
 // this is.
-sae_ui_onfocuschange(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_onfocuschange(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "onfocuschange")
@@ -933,7 +933,7 @@ sae_ui_pointer_shape(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ondrag(fn(phase, x, y)): on_drag for the widget whose block this is.
-sae_ui_ondrag(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_ondrag(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "ondrag")
@@ -972,7 +972,7 @@ sae_ui_text_wrapped(ctx: ptr, this_val: int, argv: int) -> int {
 // new size (w, h, in px): after its allocation settles and changes, not per
 // frame (aether-ui's on_layout, on every backend). Widgets may be built or
 // changed from the handler.
-sae_ui_on_layout(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_on_layout(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -993,7 +993,7 @@ sae_ui_on_layout(ctx: ptr, this_val: int, argv: int) -> int {
 // (w, h, in px; in the browser, the chrome included): told once soon after
 // with the size it is, then on every change. One handler a page; a second
 // replaces the first; it goes with the page.
-sae_ui_on_resize(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_on_resize(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -1169,7 +1169,7 @@ dgrid_arg_(ctx: ptr, argv: int, argc: int) -> ptr {
 // verbs: each takes its function from argument i and returns "" or what is
 // wrong with it.
 
-dg_cells_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
+dg_cells_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (row, col) => string" }
     ref = hold_arg_(ctx, argv, i)
     _g = ui.datagrid_cells(g) callback |r: int, c: int| {
@@ -1179,7 +1179,7 @@ dg_cells_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
 }
 
 // kind: 0 edit text, 1 cell style, 2 tooltip. Each (row, model col) -> string.
-dg_rc_str_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string {
+dg_rc_str_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int, kind: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (row, col) => string" }
     ref = hold_arg_(ctx, argv, i)
     f = |r: int, c: int| {
@@ -1191,7 +1191,7 @@ dg_rc_str_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string 
     return ""
 }
 
-dg_headers_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
+dg_headers_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (col) => string" }
     ref = hold_arg_(ctx, argv, i)
     _g = ui.datagrid_header(g) callback |c: int| {
@@ -1202,7 +1202,7 @@ dg_headers_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
 
 // kind: 0 click, 1 select, 2 activate, 3 column resize, 4 column move,
 // 5 a header clicked (fn(c): the second number is 0).
-dg_on_ii_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string {
+dg_on_ii_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int, kind: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function of two numbers" }
     ref = hold_arg_(ctx, argv, i)
     fire = |a: int, b: int| {
@@ -1223,7 +1223,7 @@ dg_on_ii_(ctx: ptr, g: ptr, argv: int, argc: int, i: int, kind: int) -> string {
     return ""
 }
 
-dg_on_edit_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
+dg_on_edit_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function (row, col, text) => void" }
     ref = hold_arg_(ctx, argv, i)
     _g = ui.datagrid_on_edit(g) callback |r: int, c: int, t: string| {
@@ -1238,7 +1238,7 @@ dg_on_edit_(ctx: ptr, g: ptr, argv: int, argc: int, i: int) -> string {
 // is shown, so a model of millions of rows costs nothing until scrolled to.
 // The block configures it (cells, headers, on_cell_*, column_width, ...);
 // a function of one or more parameters there is the cell function itself.
-sae_ui_datagrid(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -1272,7 +1272,7 @@ sae_ui_datagrid(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.datagrid_cells(g, fn(r, c) -> string): the cells' text (c a model column).
-sae_ui_datagrid_cells(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_cells(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1283,7 +1283,7 @@ sae_ui_datagrid_cells(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.datagrid_header(g, fn(c) -> string): the header row's text.
-sae_ui_datagrid_header(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_header(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1294,7 +1294,7 @@ sae_ui_datagrid_header(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.datagrid_on_click(g, fn(a, b)): a click on a cell, with its row and column.
-sae_ui_datagrid_on_click(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_on_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1305,7 +1305,7 @@ sae_ui_datagrid_on_click(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.datagrid_on_select(g, fn(a, b)): the selection changed; the cursor is at (r, c).
-sae_ui_datagrid_on_select(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_on_select(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1316,7 +1316,7 @@ sae_ui_datagrid_on_select(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.datagrid_on_activate(g, fn(a, b)): Return on the cursor cell (a grid without editing).
-sae_ui_datagrid_on_activate(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_on_activate(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1327,7 +1327,7 @@ sae_ui_datagrid_on_activate(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.datagrid_on_col_resize(g, fn(a, b)): a header drag gave view column c width w.
-sae_ui_datagrid_on_col_resize(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_on_col_resize(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1338,7 +1338,7 @@ sae_ui_datagrid_on_col_resize(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui.datagrid_on_col_move(g, fn(a, b)): a column moved.
-sae_ui_datagrid_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_on_col_move(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1350,7 +1350,7 @@ sae_ui_datagrid_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
 
 // ui.datagrid_on_header_click(g, fn(c)): a column's header pressed and let
 // go without a drag; c the model column (0 the row numbers' corner).
-sae_ui_datagrid_on_header_click(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_on_header_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1363,7 +1363,7 @@ sae_ui_datagrid_on_header_click(ctx: ptr, this_val: int, argv: int) -> int {
 // ui.datagrid_on_edit(g, fn(r, c, text)): makes the grid editable; an edit
 // of row r, MODEL column c committed with this text (store it; the cell
 // function is asked again).
-sae_ui_datagrid_on_edit(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_on_edit(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1629,7 +1629,7 @@ focus_within_(w: int) -> int {
 // ui.datagrid_edit_text(g, fn(r, c) -> string): what an editor opened by F2,
 // a double click or Return starts with (c a model column), when that is not
 // what the cell shows (a formula behind its value).
-sae_ui_datagrid_edit_text(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_edit_text(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1642,7 +1642,7 @@ sae_ui_datagrid_edit_text(ctx: ptr, this_val: int, argv: int) -> int {
 // ui.datagrid_cell_style(g, fn(r, c) -> string): a cell's style from the
 // model, as AeCS properties ("background: #ffe0e0; color: #b00000;
 // font-weight: bold; text-align: end"; "" for the grid's own).
-sae_ui_datagrid_cell_style(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_cell_style(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1754,7 +1754,7 @@ sae_ui_datagrid_fit_row(ctx: ptr, this_val: int, argv: int) -> int {
 }
 // ui.datagrid_cell_tooltip(g, fn(r, c) -> string): what shows when the
 // pointer rests on a cell; "" for none.
-sae_ui_datagrid_cell_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_cell_tooltip(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1765,7 +1765,7 @@ sae_ui_datagrid_cell_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
 }
 // ui.datagrid_on_edit_change(g, fn(text, caret)): the open editor's text as
 // it is typed (and as it opens), with its caret.
-sae_ui_datagrid_on_edit_change(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_datagrid_on_edit_change(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_arg_(ctx, argv, argc)
@@ -1791,7 +1791,7 @@ sae_ui_datagrid_edit_insert(ctx: ptr, this_val: int, argv: int) -> int {
 
 // ui._textarea(placeholder, onChange?): a multi-line field; onChange(text)
 // on every edit. The prelude's ui.textarea wraps it, so bind() knows it.
-sae_ui_textarea(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_textarea(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -1828,7 +1828,7 @@ sae_ui_text_measure(ctx: ptr, this_val: int, argv: int) -> int {
 // the receiver, as a button is inside button("OK", () => { ... }).
 
 // cells(fn(r, c) -> string): the grid's cell function (c a model column).
-sae_ui_amb_cells(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_cells(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1839,7 +1839,7 @@ sae_ui_amb_cells(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // headers(fn(c) -> string): the header row's text.
-sae_ui_amb_headers(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_headers(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1850,7 +1850,7 @@ sae_ui_amb_headers(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // on_cell_click(fn(a, b)): ui.datagrid_on_click for the block's grid.
-sae_ui_amb_on_cell_click(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_on_cell_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1861,7 +1861,7 @@ sae_ui_amb_on_cell_click(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // on_cell_select(fn(a, b)): ui.datagrid_on_select for the block's grid.
-sae_ui_amb_on_cell_select(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_on_cell_select(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1872,7 +1872,7 @@ sae_ui_amb_on_cell_select(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // on_cell_activate(fn(a, b)): ui.datagrid_on_activate for the block's grid.
-sae_ui_amb_on_cell_activate(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_on_cell_activate(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1883,7 +1883,7 @@ sae_ui_amb_on_cell_activate(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // on_col_resize(fn(a, b)): ui.datagrid_on_col_resize for the block's grid.
-sae_ui_amb_on_col_resize(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_on_col_resize(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1894,7 +1894,7 @@ sae_ui_amb_on_col_resize(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // on_col_move(fn(a, b)): ui.datagrid_on_col_move for the block's grid.
-sae_ui_amb_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_on_col_move(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1905,7 +1905,7 @@ sae_ui_amb_on_col_move(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // on_header_click(fn(c)): ui.datagrid_on_header_click for the block's grid.
-sae_ui_amb_on_header_click(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_on_header_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1916,7 +1916,7 @@ sae_ui_amb_on_header_click(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // on_cell_edit(fn(r, c, text)): makes the block's grid editable.
-sae_ui_amb_on_cell_edit(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_on_cell_edit(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1928,7 +1928,7 @@ sae_ui_amb_on_cell_edit(ctx: ptr, this_val: int, argv: int) -> int {
 
 // edit_text(fn(r, c) -> string) / cell_style(fn(r, c) -> string): the
 // block's grid's editor starting text and cell style.
-sae_ui_amb_edit_text(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_edit_text(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -1938,7 +1938,7 @@ sae_ui_amb_edit_text(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ui_amb_cell_style(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_amb_cell_style(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     g = dgrid_at_top_(page_of_(ctx))
@@ -2015,7 +2015,7 @@ sae_ui_into(ctx: ptr, this_val: int, argv: int) -> int {
     return container_(ctx, argv, argc, h)
 }
 
-sae_ui_onclick(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_onclick(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     target = modifier_target_(ctx, "onclick")
@@ -2185,7 +2185,7 @@ own_arg_(ctx: ptr, argv: int, argc: int) -> int {
 // --- the page API: inputs and indicators (aether-ui's names) ---
 
 // toggle(label, onChange(on)): a checkbox; on is 1 or 0.
-sae_ui_toggle(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_toggle(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -2198,7 +2198,7 @@ sae_ui_toggle(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // slider(min, max, initial, onChange(value))
-sae_ui_slider(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_slider(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -2211,7 +2211,7 @@ sae_ui_slider(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // picker(onChange(index)): a drop-down; fill it with picker_add.
-sae_ui_picker(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_picker(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -2888,7 +2888,7 @@ rafs_frame_(ctx: ptr) {
 
 // requestAnimationFrame(fn) / ui.frame(fn): call fn(timestamp) once, on the
 // next display frame. Returns an id for cancelAnimationFrame.
-sae_request_frame(ctx: ptr, this_val: int, argv: int) -> int {
+sae_request_frame(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -3478,7 +3478,7 @@ sae_vg_resize(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.on_click(fn(x, y)): x and y are where the click landed, in the scene's
 // viewBox coordinates.
-sae_vg_on_click(ctx: ptr, this_val: int, argv: int) -> int {
+sae_vg_on_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_shape_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.on_click() must be called inside a shape's block") }
@@ -4985,7 +4985,7 @@ raster_of_(ctx: ptr, h: int) -> *PageRaster {
     return null
 }
 
-raster_add_(ctx: ptr, h: int, node: ptr, pix: ptr, bytes: int, pw: int, ph: int) {
+raster_add_(ctx: @keep ptr, h: int, node: @keep ptr, pix: @keep ptr, bytes: int, pw: int, ph: int) {
     r = heap.new(PageRaster)
     r.ctx = ctx
     r.handle = h
@@ -5045,7 +5045,7 @@ bytes_refusal_(what: string, n: int) -> string {
 // one unit a pixel, drawing a copy of rgba (w*h*4 bytes). Returns its
 // handle; the block's vg.box / vg.fit / vg.on_click / vg.transform / ...
 // apply to it.
-sae_vg_raster(ctx: ptr, this_val: int, argv: int) -> int {
+sae_vg_raster(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.raster() must be called inside vg.scene()") }
@@ -5084,7 +5084,7 @@ sae_vg_raster_update(ctx: ptr, this_val: int, argv: int) -> int {
 // vg.image(bytes, block?): an encoded image (PNG, JPEG, GIF, BMP) decoded
 // by the toolkit into an element at viewBox (0, 0), one unit a pixel,
 // sized as the picture is. Returns its handle.
-sae_vg_image(ctx: ptr, this_val: int, argv: int) -> int {
+sae_vg_image(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.image() must be called inside vg.scene()") }
@@ -5151,7 +5151,7 @@ sae_vg_raster_size(ctx: ptr, this_val: int, argv: int) -> int {
 // ui.image(bytes, block?): an encoded image as a widget under the current
 // container, at its own size. The picture is decoded once more to count
 // its pixels against the page's budget (the widget keeps its own copy).
-sae_ui_image(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ui_image(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -5237,7 +5237,7 @@ var ae_pages_: ptr = null
 // The page's wave1/aevg record, made on first use, dropped when its page is
 // gone (the runtime pointer may be reused by a later page; the sequence
 // number tells them apart).
-ae_page_(ctx: ptr) -> *AePage {
+ae_page_(ctx: @keep ptr) -> *AePage {
     if ae_pages_ == null { ae_pages_ = list.new() }
     p = page_of_(ctx)
     // Prune the dead: entries whose page is no longer live.
@@ -5288,13 +5288,13 @@ ae_page_free_(ap: *AePage) {
     heap.free(ap)
 }
 
-ae_model_(ctx: ptr) -> *AeModel {
+ae_model_(ctx: @keep ptr) -> *AeModel {
     return ae_page_(ctx).model as *AeModel
 }
 
 // The record of the node on top of the vg stack (the open shape, group or
 // scene root), or null.
-ae_top_rec_(ctx: ptr) -> *AeRec {
+ae_top_rec_(ctx: @keep ptr) -> *AeRec {
     p = page_of_(ctx)
     if p.vg_depth < 1 { return null }
     m = ae_model_(ctx)
@@ -5311,14 +5311,14 @@ ae_top_rec_(ctx: ptr) -> *AeRec {
 }
 
 // The record of a handle a page holds, or null.
-ae_rec_of_handle_(ctx: ptr, h: int) -> *AeRec {
+ae_rec_of_handle_(ctx: @keep ptr, h: int) -> *AeRec {
     n = vg_node_of_(page_of_(ctx), h)
     if n == null { return null }
     return aevg.rec_of(ae_model_(ctx), n)
 }
 
 // Repaint whatever the call changed.
-ae_repaint_(ctx: ptr) {
+ae_repaint_(ctx: @keep ptr) {
     aevg.repaint_dirty(ae_model_(ctx))
 }
 
@@ -5465,7 +5465,7 @@ sae_ae_cell_set(ctx: ptr, this_val: int, argv: int) -> int {
 // ui._computed(fn, a, b): run fn now, and again whenever cell a or b
 // changes (once per batch). aether-ui's computed_s, whose observer watches
 // two cells; the prelude registers one per pair for more inputs.
-sae_ae_computed(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_computed(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     ref = held_fn_(ctx, argv, argc, 0)
@@ -5484,7 +5484,7 @@ sae_ae_computed(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ui._batch(fn): aether-ui's ui_batch: observers run once at the end.
-sae_ae_batch(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_batch(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "batch(fn): fn must be a function") }
@@ -5575,7 +5575,7 @@ sae_ui_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.scene(viewBox, w, h, fn): as before, plus the record and the canvas
 // events beyond click: hover (and the tooltip), drag, scroll, resize.
-sae_ae_scene(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_scene(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
@@ -5600,7 +5600,7 @@ sae_ae_scene(ctx: ptr, this_val: int, argv: int) -> int {
 // within 400 ms and 6 px is also a double click. A press on a shape with a
 // drag handler captures it until the release. Repaints are held while the
 // handlers run (aevg.hold_repaints): each hook repaints once, after them.
-ae_wire_canvas_(ctx: ptr, sc: *AeScene) {
+ae_wire_canvas_(ctx: @keep ptr, sc: *AeScene) {
     scene = sc.scene
     cid = sc.cid
     seq = page_of_(ctx).seq
@@ -5731,7 +5731,7 @@ ae_live_(ctx: ptr, seq: int) -> int {
 
 // A shape under the open node: record it (inheriting the group's transform,
 // opacity and paint), then run its block as vg_shape_done_ does.
-ae_shape_done_(ctx: ptr, argv: int, argc: int, fn_at: int, node: ptr, kind: int) -> int {
+ae_shape_done_(ctx: @keep ptr, argv: int, argc: int, fn_at: int, node: @keep ptr, kind: int) -> int {
     m = ae_model_(ctx)
     parent = ae_top_rec_(ctx)
     sc = null
@@ -5740,7 +5740,7 @@ ae_shape_done_(ctx: ptr, argv: int, argc: int, fn_at: int, node: ptr, kind: int)
     return vg_shape_done_(ctx, argv, argc, fn_at, node)
 }
 
-sae_ae_circle(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_circle(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.circle() must be called inside vg.scene()") }
@@ -5749,7 +5749,7 @@ sae_ae_circle(ctx: ptr, this_val: int, argv: int) -> int {
     return ae_shape_done_(ctx, argv, argc, 3, n, K_SHAPE)
 }
 
-sae_ae_rect(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_rect(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rect() must be called inside vg.scene()") }
@@ -5758,7 +5758,7 @@ sae_ae_rect(ctx: ptr, this_val: int, argv: int) -> int {
     return ae_shape_done_(ctx, argv, argc, 4, n, K_SHAPE)
 }
 
-sae_ae_rrect(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_rrect(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.rrect() must be called inside vg.scene()") }
@@ -5767,7 +5767,7 @@ sae_ae_rrect(ctx: ptr, this_val: int, argv: int) -> int {
     return ae_shape_done_(ctx, argv, argc, 5, n, K_SHAPE)
 }
 
-sae_ae_line(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_line(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.line() must be called inside vg.scene()") }
@@ -5776,7 +5776,7 @@ sae_ae_line(ctx: ptr, this_val: int, argv: int) -> int {
     return ae_shape_done_(ctx, argv, argc, 4, n, K_SHAPE)
 }
 
-sae_ae_path(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_path(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.path() must be called inside vg.scene()") }
@@ -5811,7 +5811,7 @@ ae_points_arg_(ctx: ptr, argv: int, argc: int) -> string {
     return strbuilder.finish(sb)
 }
 
-sae_ae_polygon(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_polygon(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.polygon() must be called inside vg.scene()") }
@@ -5820,7 +5820,7 @@ sae_ae_polygon(ctx: ptr, this_val: int, argv: int) -> int {
     return ae_shape_done_(ctx, argv, argc, 1, n, K_SHAPE)
 }
 
-sae_ae_polyline(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_polyline(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.polyline() must be called inside vg.scene()") }
@@ -5830,7 +5830,7 @@ sae_ae_polyline(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // ellipse(cx, cy, rx, ry, fn?): two arcs, as the transpiler emits it.
-sae_ae_ellipse(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_ellipse(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.ellipse() must be called inside vg.scene()") }
@@ -5845,7 +5845,7 @@ sae_ae_ellipse(ctx: ptr, this_val: int, argv: int) -> int {
 // the engine's default), anchor "start", "middle" or "end". The size and
 // anchor are part of the text's record, so they are arguments, not block
 // modifiers.
-sae_ae_text(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_text(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text() must be called inside vg.scene()") }
@@ -5855,7 +5855,7 @@ sae_ae_text(ctx: ptr, this_val: int, argv: int) -> int {
     return ae_shape_done_(ctx, argv, argc, 3, n, K_TEXT)
 }
 
-sae_ae_text_sized(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_text_sized(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text_sized() must be called inside vg.scene()") }
@@ -5865,7 +5865,7 @@ sae_ae_text_sized(ctx: ptr, this_val: int, argv: int) -> int {
     return ae_shape_done_(ctx, argv, argc, 4, n, K_TEXT)
 }
 
-sae_ae_text_anchored(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_text_anchored(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.text_anchored() must be called inside vg.scene()") }
@@ -5878,7 +5878,7 @@ sae_ae_text_anchored(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.g(fn): a group. Its block's fill, stroke, opacity and transform reach
 // the shapes made inside it (and set_transform(g, t) turns them all later).
-sae_ae_g(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_g(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.g() must be called inside vg.scene()") }
@@ -5889,7 +5889,7 @@ sae_ae_g(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.into(h, fn): run fn with a group (or the scene root) the page made on
 // top, so its shapes land there: components rendered again, data joins.
-sae_ae_into(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_into(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
@@ -5906,12 +5906,12 @@ sae_ae_into(ctx: ptr, this_val: int, argv: int) -> int {
 
 // The modifiers: fill, stroke, opacity and transform on the open node, with
 // the group cascade.
-ae_modifier_rec_(ctx: ptr, name: string) -> *AeRec {
+ae_modifier_rec_(ctx: @keep ptr, name: string) -> *AeRec {
     if vg_shape_open_(ctx) == 0 { return null }
     return ae_top_rec_(ctx)
 }
 
-sae_ae_fill(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_fill(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "fill")
@@ -5920,7 +5920,7 @@ sae_ae_fill(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ae_stroke(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_stroke(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "stroke")
@@ -5929,7 +5929,7 @@ sae_ae_stroke(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ae_opacity(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_opacity(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "opacity")
@@ -5940,7 +5940,7 @@ sae_ae_opacity(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.clip(id): in a shape's or a group's block, clip it to the clip path
 // `id` from vg.defs (vg.clip_path). Only what lies inside the outline draws.
-sae_ae_clip(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_clip(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "clip")
@@ -5952,7 +5952,7 @@ sae_ae_clip(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ae_transform(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_transform(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "transform")
@@ -5963,7 +5963,7 @@ sae_ae_transform(ctx: ptr, this_val: int, argv: int) -> int {
 
 // linecap("round"|"square"|"butt"), linejoin("round"|"bevel"|"miter"): on
 // the open shape, or on a group for the shapes made inside it afterwards.
-sae_ae_linecap(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_linecap(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "linecap")
@@ -5972,7 +5972,7 @@ sae_ae_linecap(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ae_linejoin(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_linejoin(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "linejoin")
@@ -5984,7 +5984,7 @@ sae_ae_linejoin(ctx: ptr, this_val: int, argv: int) -> int {
 // tooltip(s) and cursor(s) on the open shape. The tooltip shows on hover
 // (natively on the canvas, or drawn where aether-ui draws them); the cursor
 // is kept on the element for aether-ui to apply when its canvases can.
-sae_ae_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_tooltip(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "tooltip")
@@ -5994,7 +5994,7 @@ sae_ae_tooltip(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ae_cursor(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_cursor(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_modifier_rec_(ctx, "cursor")
@@ -6007,7 +6007,7 @@ sae_ae_cursor(ctx: ptr, this_val: int, argv: int) -> int {
 // --- vg events: click (as before), hover, double and right click, drag, scroll ---
 
 // The handler's shape and its scene, for a modifier that takes fn.
-ae_event_rec_(ctx: ptr, argv: int, argc: int, name: string) -> *AeRec {
+ae_event_rec_(ctx: @keep ptr, argv: int, argc: int, name: string) -> *AeRec {
     r = ae_modifier_rec_(ctx, name)
     if r == null || r.el == null { return null }
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return null }
@@ -6015,7 +6015,7 @@ ae_event_rec_(ctx: ptr, argv: int, argc: int, name: string) -> *AeRec {
     return r
 }
 
-sae_ae_on_click(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_on_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_click")
@@ -6024,7 +6024,7 @@ sae_ae_on_click(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ae_on_double_click(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_on_double_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_double_click")
@@ -6035,7 +6035,7 @@ sae_ae_on_double_click(ctx: ptr, this_val: int, argv: int) -> int {
 
 // on_right_click(fn): kept on the record; no aether-ui canvas reports a
 // right click yet, so it waits for that hook.
-sae_ae_on_right_click(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_on_right_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_right_click")
@@ -6046,7 +6046,7 @@ sae_ae_on_right_click(ctx: ptr, this_val: int, argv: int) -> int {
 
 // on_hover(fn(inside)): inside is true as the pointer enters, false as it
 // leaves.
-sae_ae_on_hover(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_on_hover(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_hover")
@@ -6058,7 +6058,7 @@ sae_ae_on_hover(ctx: ptr, this_val: int, argv: int) -> int {
 // on_drag(fn(x, y, dx, dy)): the pointer moving with the button down over
 // this shape, in viewBox units (once at the press, with zero deltas, then
 // per move); on_drag_end(fn(x, y)) when it is released.
-sae_ae_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_on_drag(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_drag")
@@ -6067,7 +6067,7 @@ sae_ae_on_drag(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ae_on_drag_end(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_on_drag_end(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_drag_end")
@@ -6078,7 +6078,7 @@ sae_ae_on_drag_end(ctx: ptr, this_val: int, argv: int) -> int {
 
 // on_scroll(fn(dx, dy)): the wheel over this shape; dy < 0 is away from
 // the user (zoom in, by convention), in canvas pixels.
-sae_ae_on_scroll(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_on_scroll(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_event_rec_(ctx, argv, argc, "on_scroll")
@@ -6091,7 +6091,7 @@ sae_ae_on_scroll(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.set_transform(h, t): a shape's or group's own transform; a group's
 // children follow (the mode dial turns as one).
-sae_ae_set_transform(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_set_transform(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
@@ -6101,7 +6101,7 @@ sae_ae_set_transform(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-sae_ae_set_visible(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_set_visible(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
@@ -6112,7 +6112,7 @@ sae_ae_set_visible(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // vg.remove(h): the node is hidden and done with (a data join's exit).
-sae_ae_remove(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_remove(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
@@ -6221,7 +6221,7 @@ ae_apply_obj_(ctx: ptr, r: *AeRec, obj: int) {
 
 // vg.set(h, { fill, stroke: [c, w], opacity, transform, text, visible, cx,
 // cy, r, x, y, w, h, x1, y1, x2, y2 }): several changes, one repaint.
-sae_ae_set(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_set(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
@@ -6236,7 +6236,7 @@ sae_ae_set(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.get(h): what the node currently has: fill, opacity, transform (its
 // own), visible, text, and its geometry once drawn.
-sae_ae_get(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_get(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
@@ -6297,7 +6297,7 @@ ae_put_num_(ctx: ptr, o: int, k: string, v: float) {
 
 // A binding modifier: bind_fill(fn) inside a shape's block, or
 // bind_fill(h, fn) from anywhere. Returns the record and holds fn.
-ae_bind_args_(ctx: ptr, argv: int, argc: int, name: string) -> (ptr, int) {
+ae_bind_args_(ctx: @keep ptr, argv: int, argc: int, name: string) -> (ptr, int) {
     if argc >= 2 && is_fn_arg_(ctx, argv, 1) == 1 {
         r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
         if r == null { return null, 0 }
@@ -6311,7 +6311,7 @@ ae_bind_args_(ctx: ptr, argv: int, argc: int, name: string) -> (ptr, int) {
     return null, 0
 }
 
-ae_bind_add_(ctx: ptr, r: *AeRec, kind: int, fn_h: int) {
+ae_bind_add_(ctx: @keep ptr, r: *AeRec, kind: int, fn_h: int) {
     b = heap.new(AeBind)
     b.rec = r as ptr
     b.scene = r.scene
@@ -6320,7 +6320,7 @@ ae_bind_add_(ctx: ptr, r: *AeRec, kind: int, fn_h: int) {
     list.add(ae_page_(ctx).binds, b as ptr)
 }
 
-ae_bind_(ctx: ptr, argv: int, kind: int, name: string) -> int {
+ae_bind_(ctx: @keep ptr, argv: int, kind: int, name: string) -> int {
     argc = quickjs.arg_count(ctx, argv)
     rp, fn_h = ae_bind_args_(ctx, argv, argc, name)
     r = rp as *AeRec
@@ -6331,44 +6331,44 @@ ae_bind_(ctx: ptr, argv: int, kind: int, name: string) -> int {
     return 0
 }
 
-sae_ae_bind_fill(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_bind_fill(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return ae_bind_(ctx, argv, AB_FILL, "bind_fill")
 }
 
-sae_ae_bind_stroke(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_bind_stroke(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return ae_bind_(ctx, argv, AB_STROKE, "bind_stroke")
 }
 
-sae_ae_bind_opacity(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_bind_opacity(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return ae_bind_(ctx, argv, AB_OPACITY, "bind_opacity")
 }
 
-sae_ae_bind_text(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_bind_text(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return ae_bind_(ctx, argv, AB_TEXT, "bind_text")
 }
 
-sae_ae_bind_pos(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_bind_pos(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return ae_bind_(ctx, argv, AB_POS, "bind_pos")
 }
 
-sae_ae_bind_transform(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_bind_transform(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return ae_bind_(ctx, argv, AB_TRANSFORM, "bind_transform")
 }
 
-sae_ae_visible_when(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_visible_when(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return ae_bind_(ctx, argv, AB_WHEN, "visible_when")
 }
 
 // vg.view_box(fn): inside a scene's block: the viewBox follows fn's string
 // (zoom and pan as state; the prelude accepts a state too).
-sae_ae_view_box(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_view_box(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.view_box(fn) must be called inside vg.scene()") }
@@ -6381,7 +6381,7 @@ sae_ae_view_box(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.set_view_box(scene, "x y w h"): the scene handle is what vg.scene()
 // returned.
-sae_ae_set_view_box(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_set_view_box(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(ctx, arg_int_(ctx, argv, argc, 0, 0))
@@ -6392,7 +6392,7 @@ sae_ae_set_view_box(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // Evaluate one binding: call its function, apply the value.
-ae_eval_bind_(ctx: ptr, r: *AeRec, kind: int, fn_h: int) {
+ae_eval_bind_(ctx: @keep ptr, r: *AeRec, kind: int, fn_h: int) {
     v = ae_call_value_(ctx, fn_h, "a vg binding")
     if v == 0 { return }
     t = quickjs.type_of(ctx, v)
@@ -6425,7 +6425,7 @@ ae_eval_bind_(ctx: ptr, r: *AeRec, kind: int, fn_h: int) {
 
 // vg.refresh(): re-evaluate every binding and repaint what changed. The
 // prelude calls it after a state is set (once per batch).
-sae_ae_refresh(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_refresh(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ap = ae_page_(ctx)
     n = list.size(ap.binds)
@@ -6444,7 +6444,7 @@ sae_ae_refresh(ctx: ptr, this_val: int, argv: int) -> int {
 
 // vg.defs(fn): inside a scene's block; the gradients and clip paths declared
 // in fn are registered together (a gradient may href one declared before it).
-sae_ae_defs(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_defs(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.defs(fn) must be called inside vg.scene()") }
@@ -6463,7 +6463,7 @@ sae_ae_defs(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // The open defs block's builder, or null (with the error thrown).
-ae_defs_sb_(ctx: ptr, name: string) -> ptr {
+ae_defs_sb_(ctx: @keep ptr, name: string) -> ptr {
     ap = ae_page_(ctx)
     return ap.defs_sb
 }
@@ -6505,7 +6505,7 @@ ae_gradient_opts_(ctx: ptr, sb: ptr, argv: int, argc: int, at: int) {
 // vg.linear_gradient(id, x1, y1, x2, y2, stops, opts?): coordinates as
 // fractions of the shape's box, or in viewBox units with
 // { units: "userSpaceOnUse" }. A shape uses it with fill("url(#id)").
-sae_ae_linear_gradient(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_linear_gradient(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     sb = ae_defs_sb_(ctx, "linear_gradient")
@@ -6528,7 +6528,7 @@ sae_ae_linear_gradient(ctx: ptr, this_val: int, argv: int) -> int {
 }
 
 // vg.radial_gradient(id, cx, cy, r, stops, opts?): opts may add fx and fy.
-sae_ae_radial_gradient(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_radial_gradient(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     sb = ae_defs_sb_(ctx, "radial_gradient")
@@ -6562,7 +6562,7 @@ sae_ae_radial_gradient(ctx: ptr, this_val: int, argv: int) -> int {
 // ["polygon", points]]. A shape or a group is clipped to it with vg.clip(id)
 // in its block (aether-ui's live scenes have carried clip paths since
 // c42a8914).
-sae_ae_clip_path(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_clip_path(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     sb = ae_defs_sb_(ctx, "clip_path")
@@ -6608,7 +6608,7 @@ sae_ae_clip_path(ctx: ptr, this_val: int, argv: int) -> int {
 // vg.css(text): CSS rules for the open scene (kind selectors such as
 // `path { stroke: #000 }`; class selectors wait for a class attribute on
 // shapes, as clip paths do).
-sae_ae_css(ctx: ptr, this_val: int, argv: int) -> int {
+sae_ae_css(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(ctx) == 0 { return sae_throw_type_error(ctx, "vg.css(text) must be called inside vg.scene()") }
@@ -6977,7 +6977,7 @@ http_refusal_(page_url: string, scopes: string, method: string, url: string) -> 
     return ""
 }
 
-http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: string, headers: ptr, ref: int) -> int {
+http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: string, headers: @keep ptr, ref: int) -> int {
     p = page_of_(ctx)
     if ref == 0 { return sae_throw_type_error(ctx, "http: the last argument must be a function") }
     url = resolve_(p.url, url_arg)

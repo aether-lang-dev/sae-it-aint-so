@@ -182,7 +182,7 @@ hit_at(m: *AeModel, sc: *AeScene, ev: int, x: float, y: float) -> *AeRec {
 
 // Register a live scene the host made with live.vg(): its record, and the
 // root node's record (kind K_SCENE) so shapes at the top level have a parent.
-scene_add(m: *AeModel, scene: ptr, root: ptr, cid: int, vb: string, w: int, h: int) -> *AeScene {
+scene_add(m: *AeModel, scene: @keep ptr, root: @keep ptr, cid: int, vb: string, w: int, h: int) -> *AeScene {
     sc = heap.new(AeScene)
     sc.scene = scene
     sc.root = root
@@ -227,7 +227,7 @@ rec_of(m: *AeModel, node: ptr) -> *AeRec {
 // Record a node under `parent` (an *AeRec, or null for a root) and apply what
 // it inherits: the parent's effective transform and opacity, and its fill and
 // stroke (which the node's own block may override afterwards).
-rec_add(m: *AeModel, node: ptr, el: ptr, kind: int, parent: *AeRec, sc: *AeScene) -> *AeRec {
+rec_add(m: *AeModel, node: @keep ptr, el: @keep ptr, kind: int, parent: *AeRec, sc: *AeScene) -> *AeRec {
     r = heap.new(AeRec)
     r.node = node
     r.el = el

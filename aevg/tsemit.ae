@@ -308,7 +308,7 @@ index_gradients(e: *Emit, node: ptr) {
 }
 
 // The node whose <stop>s a gradient uses: its own, else its href's (chained).
-stops_node(e: *Emit, node: ptr, depth: int) -> ptr {
+stops_node(e: *Emit, node: @keep ptr, depth: int) -> ptr {
     if count_stops(node) > 0 || depth > 8 { return node }
     href = href_of(node)
     if string.length(href) == 0 { return node }
@@ -593,7 +593,7 @@ use_transform(node: ptr) -> string {
     return "${tf} ${own}"
 }
 
-find_by_id(node: ptr, id: string) -> ptr {
+find_by_id(node: @keep ptr, id: string) -> ptr {
     if parser.node_has_attr(node, "id") == 1 {
         if string.trim(parser.node_attr(node, "id")) == id { return node }
     }
