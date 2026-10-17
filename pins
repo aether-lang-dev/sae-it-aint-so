@@ -124,4 +124,10 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # has a natural width (two in a row left one 0 px wide: the spreadsheet's
 # formula field and its panels' second fields). Verified: tests/run_all.sh
 # on macOS.
-AETHER_UI_REF=c78c7ce7e6a60a91984fa37964ff503c956f7d79
+# be93a25c (2026-10-17): print_pdf (the system's print dialog for a PDF, on
+# every backend; recorded under a test, GET /printed), which services/print
+# calls; the datagrid's row heights, selection glide, headers shown or hidden
+# and cell pictures (ui.datagrid_set_row_heights, datagrid_selection_glide,
+# datagrid_show_header, datagrid_cell_picture); a canvas's own handle in the
+# driver's /widgets. Verified: tests/run_all.sh on macOS.
+AETHER_UI_REF=be93a25caa81768ce104e70b2d45aa6a288f3893
