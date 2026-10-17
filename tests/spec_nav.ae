@@ -214,6 +214,10 @@ main() {
             spec.assert_true(cw >= 55 && cw <= 66, "set_width holds a field at 60 (${cw})")
             spec.assert_true(ww > 300, "fill_width gives a field the row's spare width (${ww})")
 
+            uidriver.post_ok("/appearance?dark=1", "the system turned dark")
+            spec.assert_true(b.wait_for_text("appearance: dark"), "ui.on_appearance told of dark")
+            uidriver.post_ok("/appearance?dark=0", "and light again")
+            spec.assert_true(b.wait_for_text("appearance: light"), "and of light")
             b.set_field_by("password", "open sesame")
             b.assert_text("secret: 11 characters", "a securefield's handler gets its text")
             b.click("Check")

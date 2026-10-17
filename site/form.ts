@@ -16,6 +16,9 @@ btn("Read", () => set_text(shown, `read: ${get_text(field)}`));
 const secret = text("secret: none");
 const pw = securefield("password", (s: string) => set_text(secret, `secret: ${s.length} characters`));
 btn("Check", () => set_text(secret, `secret: ${get_text(pw) === "open sesame" ? "right" : "wrong"}`));
+// The system's light or dark (ui.dark_mode), said again when it flips.
+const look = text(`appearance: ${ui.dark_mode() ? "dark" : "light"}`);
+ui.on_appearance((dark: boolean) => set_text(look, `appearance: ${dark ? "dark" : "light"}`));
 btn("Home", () => browserContext.changePage("/"));
 scroll(() => {
   for (let i = 0; i < 30; i++) text(`row ${i}`);

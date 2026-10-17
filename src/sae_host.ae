@@ -146,6 +146,7 @@ struct Page {
     http_res: int    // the page's response-object maker (http_helpers_), or 0
     http_req: int    // the page's request-object maker
     on_resize: int   // the page's ui.on_resize handler (a held ref), or 0
+    on_appearance: int   // the page's ui.on_appearance handler (a held ref), or 0
     http_scopes: string // its outgoing-http scopes, "VERBS\tabsolute-pattern\n"
                      //   per line, or "" when it seeks outgoing-http unscoped
     absent: string   // privileges it can do without and was not granted, as
@@ -1217,6 +1218,34 @@ sae_ui_on_resize(ctx: @keep ptr, this_val: int, argv: int) -> int {
         })
     }
     return 0
+}
+
+// ui.dark_mode(): whether the system shows dark (macOS Dark, GTK's
+// prefer-dark, Windows' apps in dark), or the driver says so
+// (POST /appearance?dark=N). ui.on_appearance(fn(dark)): told when that
+// changes. One handler a page; a second replaces the first; it goes with
+// the page. A page draws its own colours (vg, styles) by it.
+sae_ui_dark_mode(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_bool(ctx, ui.is_dark_mode())
+}
+
+sae_ui_on_appearance(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "ui.on_appearance(fn): fn must be a function") }
+    p.on_appearance = hold_arg_(ctx, argv, 0)
+    return 0
+}
+
+// The system's appearance flipped: told to the page, if it listens.
+appearance_to_page_(b: *Browser, dark: int) {
+    if b.page == null { return }
+    p = b.page as *Page
+    if p.on_appearance == 0 { return }
+    if ae_call_bool_(p.ctx, p.on_appearance, dark) < 0 { report_exception_(p.ctx, "an appearance handler") }
+    settle_(p.ctx)
 }
 
 // The window's size to the page's on_resize handler, if it has one.
@@ -8038,6 +8067,8 @@ api_register_(p: *Page) {
     reg_(q, u, "on_focus_change", 2, sae_ui_on_focus_change)
     reg_(q, u, "on_layout", 2, sae_ui_on_layout)
     reg_(q, u, "on_resize", 1, sae_ui_on_resize)
+    reg_(q, u, "dark_mode", 0, sae_ui_dark_mode)
+    reg_(q, u, "on_appearance", 1, sae_ui_on_appearance)
     reg_(q, u, "onfocuschange", 1, sae_ui_onfocuschange)
     reg_(q, u, "key_text", 1, sae_ui_key_text)
     reg_(q, u, "focus", 1, sae_ui_focus)
@@ -8297,6 +8328,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.http_res = 0
     p.http_req = 0
     p.on_resize = 0
+    p.on_appearance = 0
     p.ctx = engine_new_(b.page_mem)
     if pages_ == null { pages_ = list.new() }
     list.add(pages_, p as ptr)
@@ -9067,6 +9099,8 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     b.root = root
     // The window's size, for ui.on_resize: its own stack's layout.
     ui.on_layout(root) callback |w: int, h: int| { window_laid_out_(b, w, h) }
+    // The system's light or dark, for ui.on_appearance.
+    ui.on_appearance_change(|dark: int| { appearance_to_page_(b, dark) })
     sqlite_why = ""   // wave1/sqlite: why the app cannot start, if a database cannot be opened or migrated
     if app != "" {
         while string.string_ends_with(app, "/") == 1 { app = string.string_substring(app, 0, string.length(app) - 1) }
