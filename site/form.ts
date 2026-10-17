@@ -3,6 +3,12 @@
 const { text, textfield, securefield, btn, get_text, set_text, scroll } = ui;
 
 const echo = text("echo: ");
+// A row: a narrow label field, then one that takes the rest of the width.
+ui.hstack(() => {
+  ui.set_width(textfield("code", () => {}), 60);
+  ui.fill_width(textfield("wide", () => {}));
+  btn("End", () => {});
+});
 const field = textfield("your name", (s: string) => set_text(echo, `echo: ${s}`));
 const shown = text("read: ");
 btn("Read", () => set_text(shown, `read: ${get_text(field)}`));

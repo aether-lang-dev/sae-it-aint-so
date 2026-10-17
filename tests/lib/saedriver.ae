@@ -31,7 +31,7 @@
 exports(
     test_url, navigate, back, forward, reload,
     current_url, status_line, status_code, status_url,
-    click, click_nth, button_exists, set_field, set_field_by, field_text, check, slide_to, slide_nth, pick,
+    click, click_nth, button_exists, set_field, set_field_by, field_id_by, field_text, check, slide_to, slide_nth, pick,
     has_text, page_texts, widget_count, style_of,
     wait_for_url, wait_for_page, wait_for_text, wait_for_text_gone, wait_for_widget_count,
     assert_url, assert_page, assert_text, assert_no_text,
@@ -196,8 +196,9 @@ set_field(text: string) {
     set_text_of(id, text)
 }
 
-// Set the text field whose placeholder is `placeholder` (a form with several).
-set_field_by(placeholder: string, text: string) {
+// The text field (or text area, or secure field) whose placeholder is
+// `placeholder`, or 0.
+field_id_by(placeholder: string) -> int {
     v, _jerr = json.parse(uidriver.get_body("/widgets"))
     id = 0
     if v != null {
@@ -213,6 +214,12 @@ set_field_by(placeholder: string, text: string) {
         }
         json.json_free(v)
     }
+    return id
+}
+
+// Set the text field whose placeholder is `placeholder` (a form with several).
+set_field_by(placeholder: string, text: string) {
+    id = field_id_by(placeholder)
     spec.assert_gt(id, 0, "page has a text field: ${placeholder}")
     if id > 0 { set_text_of(id, text) }
 }

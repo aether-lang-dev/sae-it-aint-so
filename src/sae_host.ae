@@ -1240,6 +1240,28 @@ sae_ui_width(ctx: ptr, this_val: int, argv: int) -> int {
     if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.width(h): h is not a widget this page made") }
     return quickjs.new_int(ctx, ui.get_width(h))
 }
+// ui.set_width(h, px): the widget held at px wide; ui.fill_width(h): it
+// takes its row's spare width, growing with the window (aether-ui's
+// width and fill_width: a stack's expanding child on every backend).
+// Both give the widget back.
+sae_ui_set_width(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.set_width(h, px): h is not a widget this page made") }
+    px = arg_int_(ctx, argv, argc, 1, 0)
+    if px < 0 || px > 8000 { return sae_throw_type_error(ctx, "ui.set_width(h, px): px is 0 to 8000") }
+    _w = ui.width(h, px)
+    return quickjs.new_int(ctx, h)
+}
+sae_ui_fill_width(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.fill_width(h): h is not a widget this page made") }
+    _f = ui.fill_width(h)
+    return quickjs.new_int(ctx, h)
+}
 sae_ui_height(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -8021,6 +8043,8 @@ api_register_(p: *Page) {
     reg_(q, u, "focus", 1, sae_ui_focus)
     reg_(q, u, "text_wrapped", 2, sae_ui_text_wrapped)
     reg_(q, u, "width", 1, sae_ui_width)
+    reg_(q, u, "set_width", 2, sae_ui_set_width)
+    reg_(q, u, "fill_width", 1, sae_ui_fill_width)
     reg_(q, u, "height", 1, sae_ui_height)
     quickjs.set_global(q, "ui", u)
     quickjs.release(q, u)

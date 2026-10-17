@@ -114,4 +114,8 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # (canvas_on_key had only stored its handler there), which vg.on_key is
 # built on, and AppKit's canvas its key release. Verified: tests/run_all.sh
 # on macOS, 59/59.
-AETHER_UI_REF=2efaa85ca64e39ec7c33575f75d5b179304eb35f
+# 0adcb375 (2026-10-17): a datagrid cell keeps no cursor box after its
+# style changed under the cursor (the spreadsheet's stale blue boxes), and
+# AppKit's vertical slider track left unfilled (a grid's scrollbar drew a
+# long blue line). Verified: tests/run_all.sh on macOS, 59/59.
+AETHER_UI_REF=0adcb375b823d2a28c52274e33a69f459eec1b59
