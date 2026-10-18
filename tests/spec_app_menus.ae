@@ -29,6 +29,22 @@ main() {
             uidriver.menu_activate(uidriver.menu_handle_with("About"), "About")
             spec.assert_true(b.wait_for_text("Last: about"), "an item of the second menu")
         }
+        spec.it("an item's accelerator: the platform's own, the key and the item the same command") callback {
+            body = uidriver.menus_body()
+            spec.assert_contains(body, "\"items\":[\"Save\"],\"accels\":[\"Primary+S\"]", "Save, with Primary+S beside it")
+            spec.assert_true(uidriver.window_key("Primary+S") == 1, "the key was taken")
+            spec.assert_true(b.wait_for_text("Last: saved"), "the key ran Save")
+            spec.assert_true(b.wait_for_text("Actions taken: 3"), "once")
+            uidriver.menu_activate(uidriver.menu_handle_with("Save"), "Save")
+            spec.assert_true(b.wait_for_text("Actions taken: 4"), "and the item runs the same")
+        }
+        spec.it("a chord: two keys in turn") callback {
+            uidriver.menu_activate(uidriver.menu_handle_with("About"), "About")
+            spec.assert_true(b.wait_for_text("Last: about"), "said about first")
+            uidriver.window_key("Primary+K")
+            uidriver.window_key("Primary+B")
+            spec.assert_true(b.wait_for_text("Last: chord"), "Primary+K then Primary+B ran it")
+        }
         spec.it("a menu inside a menu, and an item outside one, are refused") callback {
             spec.assert_true(b.wait_for_text("nested: ui.menu(label, fn): a menu inside a menu is not made yet"), "nested refused")
             spec.assert_true(b.wait_for_text("stray: ui.menu_item(label, fn) must be called inside a ui.menu block"), "stray refused")

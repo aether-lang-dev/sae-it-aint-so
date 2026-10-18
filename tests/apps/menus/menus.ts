@@ -8,6 +8,9 @@ ui.menu("Game", () => {
   ui.menu_separator();
   ui.menu_item("Flip board", () => { taken.set(taken.value + 1); said.set("flipped"); });
 });
+ui.menu("File", () => {
+  ui.menu_item_accel("Save", "Primary+S", () => { taken.set(taken.value + 1); said.set("saved"); });
+});
 ui.menu("Help", () => {
   ui.menu_item("About", () => said.set("about"));
 });
@@ -24,6 +27,9 @@ try {
 } catch (e) {
   stray = String((e as Error).message);
 }
+
+// A two-key sequence: Primary+K, then Primary+B.
+ui.shortcut_chord("Primary+K", "Primary+B", () => said.set("chord"));
 
 ui.text("Menus");
 bind(ui.text(""), computed(() => `Actions taken: ${taken.value}`, taken));

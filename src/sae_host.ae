@@ -574,6 +574,7 @@ sae_ui_btn(ctx: @keep ptr, this_val: int, argv: int) -> int {
 // (a past page's item does nothing).
 var menu_bar_: int = 0        // the bar the menus go on, or 0
 var menu_bar_seq_: int = 0    // the page load that made it
+var app_menus_: ptr = null   // the menus of the current page's bar (ui.menu), emptied with the next page's
 var menu_open_: int = 0       // the menu whose block is running, or 0
 var window_up_: int = 0       // 1 once window_run has made the window
 
@@ -590,9 +591,22 @@ sae_ui_menu(ctx: ptr, this_val: int, argv: int) -> int {
     menu_open_ = 0
     if r < 0 { return rethrow_(ctx) }
     if menu_bar_ == 0 || menu_bar_seq_ != p.seq {
+        // A new page's bar: the last page's menus emptied first, so none of
+        // their accelerators (a key GTK maps to an action, the driver's
+        // registry) outlives the page that made them.
+        if app_menus_ == null { app_menus_ = list.new() }
+        k = 0
+        while k < list.size(app_menus_) {
+            hv, _ = list.get(app_menus_, k)
+            ui.menu_clear(mem.ptr_to_long(hv) as int)
+            k = k + 1
+        }
+        list.free(app_menus_)
+        app_menus_ = list.new()
         menu_bar_ = ui.menu_bar()
         menu_bar_seq_ = p.seq
     }
+    list.add(app_menus_, mem.long_to_ptr(m * 1))
     ui.menu_bar_add(menu_bar_, m)
     // A bar made once the window is up goes on it now; before, window_run
     // attaches it as it makes the window.
@@ -613,6 +627,49 @@ sae_ui_menu_item(ctx: @keep ptr, this_val: int, argv: int) -> int {
         if ae_live_(ctx, seq) == 1 { fire_click_(ctx, ref) }
     })
     return 0
+}
+
+// ui.menu_item_accel(label, accel, fn): an item with its accelerator, the
+// platform's own ("Primary+S": Command on macOS, Ctrl elsewhere): drawn in
+// the menu, and the key runs the item, once.
+sae_ui_menu_item_accel(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if menu_open_ == 0 { return sae_throw_type_error(ctx, "ui.menu_item_accel(label, accel, fn) must be called inside a ui.menu block") }
+    if argc < 3 || is_fn_arg_(ctx, argv, 2) == 0 { return sae_throw_type_error(ctx, "ui.menu_item_accel(label, accel, fn): fn must be a function") }
+    p = page_of_(ctx)
+    seq = p.seq
+    ref = hold_arg_(ctx, argv, 2)
+    ui.menu_item_accel(menu_open_, arg_str_(ctx, argv, argc, 0), arg_str_(ctx, argv, argc, 1), || {
+        if ae_live_(ctx, seq) == 1 { fire_click_(ctx, ref) }
+    })
+    return 0
+}
+
+// ui.shortcut_chord(first, second, fn): a two-key sequence ("Primary+K",
+// then "Primary+S") within about a second and a half. An installed app's
+// (window keys outlive a web page, which keeps to ui.on_key).
+sae_ui_shortcut_chord(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    if app_dir_ == "" { return sae_throw_type_error(ctx, "ui.shortcut_chord: only an installed app binds window keys (a web page has ui.on_key)") }
+    if argc < 3 || is_fn_arg_(ctx, argv, 2) == 0 { return sae_throw_type_error(ctx, "ui.shortcut_chord(first, second, fn): fn must be a function") }
+    p = page_of_(ctx)
+    seq = p.seq
+    ref = hold_arg_(ctx, argv, 2)
+    ui.shortcut_chord(chord_key_(arg_str_(ctx, argv, argc, 0)), chord_key_(arg_str_(ctx, argv, argc, 1)), || {
+        if ae_live_(ctx, seq) == 1 { fire_click_(ctx, ref) }
+    })
+    return 0
+}
+
+// A chord's key as aether-ui's shortcut syntax names it: Primary is
+// Command on macOS (and iOS), Ctrl elsewhere.
+chord_key_(k: string) -> string {
+    b = ui.backend_name()
+    primary = "Ctrl"
+    if b == "macos" || b == "uikit" { primary = "Cmd" }
+    return string.string_replace_all(k, "Primary", primary)
 }
 
 // ui.menu_separator(): a line between items of the menu whose block is running.
@@ -8560,6 +8617,8 @@ api_register_(p: *Page) {
     reg_(q, u, "reorderable", 2, sae_ui_reorderable)
     reg_(q, u, "menu", 2, sae_ui_menu)
     reg_(q, u, "menu_item", 2, sae_ui_menu_item)
+    reg_(q, u, "menu_item_accel", 3, sae_ui_menu_item_accel)
+    reg_(q, u, "shortcut_chord", 3, sae_ui_shortcut_chord)
     reg_(q, u, "menu_separator", 0, sae_ui_menu_separator)
     reg_(q, u, "ondrag", 1, sae_ui_ondrag)
     reg_(q, u, "pointer_cursor", 2, sae_ui_pointer_cursor)
