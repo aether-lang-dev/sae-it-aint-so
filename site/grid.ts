@@ -88,6 +88,24 @@ btn("Picture", () => {
   ui.datagrid_refresh(g);
   print(`grid picture ${pictured ? `on ${pictured[0]},${pictured[1]}` : "off"}`);
 });
+// A red box floating over the grid from the cell at row 3, model column 2:
+// it scrolls with the cells and the pointer passes through it.
+let floating = 0;
+btn("Float", () => {
+  if (floating) {
+    ui.datagrid_float_remove(g, floating);
+    floating = 0;
+    print("grid float off");
+    return;
+  }
+  floating = ui.datagrid_float(g, 3, 2, 2, 2, 50, 30);
+  ui.into(floating, () => {
+    vg.scene("0 0 50 30", 50, 30, () => {
+      vg.rect(0, 0, 50, 30, () => vg.fill("#d82626"));
+    });
+  });
+  print(`grid float on, ${ui.datagrid_floats(g)} over the grid`);
+});
 btn("Taller rows", () => {
   ui.datagrid_set_row_heights(g, ui.datagrid_row_heights(g) === 24 ? 36 : 24);
   print(`grid rows ${ui.datagrid_row_heights(g)} high`);

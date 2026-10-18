@@ -165,4 +165,9 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # the platform's (real arrows moved the cursor once, then GTK's and
 # AppKit's focus navigation moved the focus out of the grid); Tab moves
 # along the row; style_typography. Verified: tests/run_all.sh on macOS.
-AETHER_UI_REF=674a482a6d48817415db150d772e6f9e27688f39
+# dd35a22e (2026-10-18): font-family in a datagrid cell's style (and an empty
+# family takes a widget's own font back); datagrid_float and its zstack_place
+# and click_through, on every backend: sae's ui.datagrid_float,
+# ui.datagrid_float_move, ui.datagrid_float_remove, ui.datagrid_floats and
+# ui.click_through. Verified: tests/run_all.sh on macOS.
+AETHER_UI_REF=dd35a22e88d7106c7843162838cf25880ad42dd6
