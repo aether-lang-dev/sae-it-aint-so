@@ -142,4 +142,9 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # dcf21e00 (2026-10-18): aether-ui on Aether 0.824.0 (CI and bootstrap),
 # the datagrid glide robust to a stale first frame time, its spec and
 # insets_demo's made to wait. Verified: tests/run_all.sh on macOS.
-AETHER_UI_REF=dcf21e00501c63fb8dfc712f8935f09d441a8f5f
+# 8ca06029 (2026-10-18): a click into a datagrid no longer scrolls the page
+# away on GTK, and real keys reach a page's on_key there (its controller
+# attached only if the window already existed: a sae page registers before
+# it does); AppKit installs its key monitor for any-key handlers; the driver
+# makes real input on ?real=1. Verified: tests/run_all.sh on macOS.
+AETHER_UI_REF=8ca060293dff9ea6c73ee342ac844bb9887c7a0a
