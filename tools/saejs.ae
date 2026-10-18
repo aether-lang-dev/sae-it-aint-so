@@ -6,6 +6,7 @@
 import contrib.quickjs
 import std.fs
 import std.os
+import std.string
 
 extern exit(code: int)
 extern putchar(c: int) -> int
@@ -33,8 +34,24 @@ main() {
         println("saejs: cannot read ${path}: ${err}")
         exit(2)
     }
-    q = quickjs.runtime(65536, 0)
-    quickjs.set_time_limit(q, 10000)
+    // The heap, 64 MB, or SAE_PAGE_MEM's bytes (an app may ask its page
+    // for more: app.json's memory, which a test of it runs with).
+    kb = 65536
+    mv = os.getenv("SAE_PAGE_MEM")
+    if mv != null {
+        n, nerr = string.to_int(mv)
+        if nerr == "" && n >= 1048576 { kb = n / 1024 }
+    }
+    q = quickjs.runtime(kb, 0)
+    // The time limit, 10 s, or SAE_TIME_LIMIT's ms (a test that times a big
+    // workbook's steps, which together take longer).
+    limit = 10000
+    lv = os.getenv("SAE_TIME_LIMIT")
+    if lv != null {
+        ln, lerr = string.to_int(lv)
+        if lerr == "" && ln >= 1000 { limit = ln }
+    }
+    quickjs.set_time_limit(q, limit)
     pf = quickjs.function(q, "print", 1, print_)
     quickjs.set_global(q, "print", pf)
     quickjs.release(q, pf)

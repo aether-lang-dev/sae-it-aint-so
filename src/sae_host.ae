@@ -9702,6 +9702,16 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         app_key_ = app_storage_key_(app, exe, bundled)
         w = app_setting_int_(manifest, "width", 800)
         h = app_setting_int_(manifest, "height", 600)
+        // memory (MB): an installed app's page may have more heap than a web
+        // page's 32 MB (a spreadsheet of 100,000 cells needs some hundreds),
+        // from 32 to 2048; SAE_PAGE_MEM, a test's, still comes first.
+        if env_("SAE_PAGE_MEM") == "" {
+            mb = app_setting_int_(manifest, "memory", 32)
+            if mb < 32 { mb = 32 }
+            if mb > 2048 { mb = 2048 }
+            long mbl = mb
+            b.page_mem = mbl * 1048576
+        }
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
         read_capabilities_(manifest)
         sqlite_why = sqlite_start_(manifest)   // wave1/sqlite: before any page runs

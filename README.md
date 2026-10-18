@@ -753,8 +753,11 @@ no Back/Forward/Reload, the window titled and sized from `<dir>/app.json`:
 ```
 
 (all optional). `name` titles the window, `start` is the first page (an
-app's own: `app:/`-relative), `width` and `height` size the window, and
-`capabilities` grants what the app may do beyond its pages (below).
+app's own: `app:/`-relative), `width` and `height` size the window,
+`memory` is its pages' heap in MB (32, a web page's, to 2048; a
+spreadsheet of 100,000 cells wants some hundreds; `SAE_PAGE_MEM`, in
+bytes, still comes first), and `capabilities` grants what the app may do
+beyond its pages (below).
 `capabilities.http` is the app's whole network, a list of URL prefixes
 after Tauri's HTTP-plugin scopes:
 
