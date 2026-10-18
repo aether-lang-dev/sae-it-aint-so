@@ -324,6 +324,26 @@ main() {
             b.click("Read Slider")
             spec.assert_true(b.wait_for_console("slider reads 0"), "get_slider reads it")
         }
+        spec.it("a scrollbar: a person's move, clamped; set and stepped from code") callback {
+            sb = uidriver.widget_id_of("scrollbar", "")
+            spec.assert_gt(sb, 0, "a scrollbar widget")
+            spec.assert_contains(uidriver.get_body("/widget/${sb}"), "\"page\":10.00", "a 10-row window")
+            uidriver.post_ok("/widget/${sb}/set_value?v=30", "moved to 30")
+            b.assert_text("Scrollbar: 30", "onChange heard 30")
+            uidriver.post_ok("/widget/${sb}/set_value?v=500", "moved past the end")
+            b.assert_text("Scrollbar: 90", "clamped to the last window, 90")
+            uidriver.post_ok("/widget/${sb}/scroll?by=-page", "a page up")
+            b.assert_text("Scrollbar: 80", "a page is the window")
+            b.click("Scrollbar steps 2/5")
+            uidriver.post_ok("/widget/${sb}/scroll?by=-page", "a page up")
+            b.assert_text("Scrollbar: 75", "the page step set")
+            uidriver.post_ok("/widget/${sb}/scroll?by=step", "a step down")
+            b.assert_text("Scrollbar: 77", "the step set")
+            b.click("Scrollbar to 20 rows")
+            b.click("Read Scrollbar")
+            spec.assert_true(b.wait_for_console("scrollbar reads 10 of 0..20, window 10"), "set_scrollbar clamps; the getters read it")
+            b.assert_text("Scrollbar: 77", "onChange is not told of code's set")
+        }
         spec.it("a text field read on demand") callback {
             b.set_field("hello")
             b.click("Read Entry")

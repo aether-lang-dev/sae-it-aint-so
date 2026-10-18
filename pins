@@ -147,4 +147,9 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # attached only if the window already existed: a sae page registers before
 # it does); AppKit installs its key monitor for any-key handlers; the driver
 # makes real input on ?real=1. Verified: tests/run_all.sh on macOS.
-AETHER_UI_REF=8ca060293dff9ea6c73ee342ac844bb9887c7a0a
+# 15af8d06 (2026-10-18): ui.scrollbar, a windowing slider native on every
+# backend (sae binds it: ui.scrollbar, set_scrollbar, scrollbar_steps,
+# get_scrollbar, scrollbar_range), and the datagrid's scrollers are
+# scrollbars, the thumb the share in view. Verified: tests/run_all.sh on
+# macOS.
+AETHER_UI_REF=15af8d0676955b867bed7cd4511ad5b47cb05d0b

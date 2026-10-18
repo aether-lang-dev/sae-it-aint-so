@@ -207,12 +207,13 @@ main() {
             b.assert_text("#", "the header is still there")
         }
         spec.it("and from its scrollbar") callback {
-            v = uidriver.widget_id_last_of("slider", "")
-            h = uidriver.widget_id_of("slider", "")
+            v = uidriver.widget_id_last_of("scrollbar", "")
+            h = uidriver.widget_id_of("scrollbar", "")
             vs = h
             if uidriver.widget_int_field_by_id(v, "h") > uidriver.widget_int_field_by_id(v, "w") { vs = v }
             uidriver.post_ok("/widget/${vs}/set_value?v=999985", "drag to the end")
             spec.assert_true(b.wait_for_text("J1000000"), "the last row")
+            spec.assert_true(string.contains(uidriver.get_body("/widget/${vs}"), "\"type\":\"scrollbar\"") == 1, "a native scrollbar")
         }
         spec.it("rows: one hidden shows no text, row numbers stay model rows; a row frozen") callback {
             spec.assert_true(b.wait_for_text("n1:1"), "row 2 shown")

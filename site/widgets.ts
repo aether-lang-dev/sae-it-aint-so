@@ -4,6 +4,7 @@
 // read (getChecked, getText); in-process, reads are plain calls.
 const { text, btn, divider, toggle, get_toggle, set_toggle, textfield, get_text,
         picker, picker_add, slider, get_slider, set_slider, progressbar, set_progress,
+        scrollbar, set_scrollbar, scrollbar_steps, get_scrollbar, scrollbar_range,
         set_text, hstack } = ui;
 
 text("Widget Interactions");
@@ -39,6 +40,20 @@ hstack(4, () => {
   btn("Slider to 0", () => { set_slider(slide, 0); set_text(slide_state, "Slider: 0"); set_progress(progress, 0); });
   btn("Slider to 100", () => { set_slider(slide, 100); set_text(slide_state, "Slider: 100"); set_progress(progress, 1); });
   btn("Read Slider", () => print(`slider reads ${Math.round(get_slider(slide))}`));
+});
+divider();
+
+// A scrollbar: a 10-row window onto 100 rows; its value is the first row
+// shown, 0 to 90.
+const bar_state = text("Scrollbar: 0");
+const bar = scrollbar(0, 0, 100, 10, 0, (v: number) => set_text(bar_state, `Scrollbar: ${Math.round(v)}`));
+hstack(4, () => {
+  btn("Scrollbar to 20 rows", () => set_scrollbar(bar, 0, 20, 10, 15));
+  btn("Scrollbar steps 2/5", () => scrollbar_steps(bar, 2, 5));
+  btn("Read Scrollbar", () => {
+    const [lo, hi, page] = scrollbar_range(bar);
+    print(`scrollbar reads ${Math.round(get_scrollbar(bar))} of ${lo}..${hi}, window ${page}`);
+  });
 });
 divider();
 

@@ -2578,6 +2578,65 @@ sae_ui_slider(ctx: @keep ptr, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
+// scrollbar(vertical, min, max, page, value, onChange(value)): a windowing
+// slider, native where the platform has one. The thumb is the window's
+// share of the range (page of max - min), and the value the window's
+// start, from min to max - page. onChange hears a person's move.
+sae_ui_scrollbar(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    ref = held_fn_(ctx, argv, argc, 5)
+    long t = now_ns_()
+    h = ui.scrollbar(mem.long_to_ptr(top_(p)), arg_int_(ctx, argv, argc, 0, 0),
+                     arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 1.0),
+                     arg_num_(ctx, argv, argc, 3, 0.0), arg_num_(ctx, argv, argc, 4, 0.0),
+                     |v: float| { fire_num_(ctx, ref, v, "a scrollbar handler") })
+    ui_done_(p, t)
+    return quickjs.new_int(ctx, h)
+}
+
+// set_scrollbar(h, min, max, page, value): range, window and value at once,
+// the value kept within min..max - page; onChange is not told.
+sae_ui_set_scrollbar(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "set_scrollbar(h, min, max, page, value): h is not a widget this page made") }
+    _h = ui.scrollbar_set(h, arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 1.0),
+                          arg_num_(ctx, argv, argc, 3, 0.0), arg_num_(ctx, argv, argc, 4, 0.0))
+    return 0
+}
+
+// scrollbar_steps(h, step, pageStep): what an arrow moves it by, and a
+// click on the track (0: a window's worth).
+sae_ui_scrollbar_steps(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "scrollbar_steps(h, step, pageStep): h is not a widget this page made") }
+    _h = ui.scrollbar_steps(h, arg_num_(ctx, argv, argc, 1, 1.0), arg_num_(ctx, argv, argc, 2, 0.0))
+    return 0
+}
+
+// get_scrollbar(h): the value, the window's start.
+sae_ui_get_scrollbar(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "get_scrollbar(h): h is not a widget this page made") }
+    return quickjs.new_float(ctx, ui.scrollbar_value(h))
+}
+
+// scrollbar_range(h): [min, max, page].
+sae_ui_scrollbar_range(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "scrollbar_range(h): h is not a widget this page made") }
+    return json_value_(ctx, "[${ui.scrollbar_min(h)}, ${ui.scrollbar_max(h)}, ${ui.scrollbar_page(h)}]")
+}
+
 // picker(onChange(index)): a drop-down; fill it with picker_add.
 sae_ui_picker(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
@@ -8086,6 +8145,11 @@ api_register_(p: *Page) {
     reg_(q, u, "into", 2, sae_ui_into)
     reg_(q, u, "toggle", 2, sae_ui_toggle)
     reg_(q, u, "slider", 4, sae_ui_slider)
+    reg_(q, u, "scrollbar", 6, sae_ui_scrollbar)
+    reg_(q, u, "set_scrollbar", 5, sae_ui_set_scrollbar)
+    reg_(q, u, "scrollbar_steps", 3, sae_ui_scrollbar_steps)
+    reg_(q, u, "get_scrollbar", 1, sae_ui_get_scrollbar)
+    reg_(q, u, "scrollbar_range", 1, sae_ui_scrollbar_range)
     reg_(q, u, "picker", 1, sae_ui_picker)
     reg_(q, u, "picker_add", 2, sae_ui_picker_add)
     reg_(q, u, "progressbar", 1, sae_ui_progressbar)
