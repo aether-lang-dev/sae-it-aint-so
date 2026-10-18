@@ -322,3 +322,32 @@ program drive an app, which is what the ARexx comparison is about.
    yes.** The same sealed wire, the key carried to the other machine out of
    band (as aeo does), sae binding an address the person names; TLS with a
    pinned certificate only if clients we do not write must connect.
+
+## The ui channel (2026-10-18)
+
+An app that wants an outside program to look at its window and press its
+keys declares it by name: `"controlBus": { "name": "sheet", "ui": true }` in
+app.json (the installer saw it, as for the bus itself). With `--control-bus`
+at launch and in a sae-driver build (aether-ui's driver on, started with
+`AETHER_UI_TEST_PORT`), a request that begins `@ui ` is not given to the
+page: sae passes it to the app's own UI driver, on this machine, and answers
+with what the driver says.
+
+```
+sae-bus Spreadsheet '@ui GET /widgets'                  every widget: text, geometry, state
+sae-bus Spreadsheet '@ui GET /screenshot?b64=1'         the window, a PNG as base64 text
+sae-bus Spreadsheet '@ui POST /window/key?combo=Down'   a key, as a person presses it
+sae-bus Spreadsheet '@ui POST /widget/12/click'         a widget clicked
+```
+
+Only a short list of paths is passed (what a person at the window can do:
+`GET /widgets`, `/widget/<id>`, `/focus`, `/window/pick`, `/screenshot?b64=1`;
+`POST /window/key`, `/window/resize`, and `/widget/<id>/` `click`, `set_text`,
+`focus`, `hover`, `toggle`, `set_value`); anything else, a path climbing out,
+another method, is refused and says so. Without the grant the request is
+refused (`this app's app.json does not grant capabilities.controlBus.ui`);
+without a driver (a release sae) it says there is none. The driver answers on
+the UI thread, so the connection is read a tick at a time, never waited on.
+The spreadsheet grants it, and its MCP server offers `spreadsheet_screenshot`,
+`spreadsheet_key` and `spreadsheet_ui` over it. `tests/spec_app_bus_ui.ae`,
+`tests/spec_app_bus.ae` (the refusal without the grant).

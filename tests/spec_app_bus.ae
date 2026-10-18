@@ -44,6 +44,13 @@ main() {
             spec.assert_contains(plain, "\"echo\":\"SETCELL(A1, 100)\"", "the handler's result")
             b.assert_text("last: SETCELL(A1, 100)", "the page saw it")
         }
+        spec.it("the ui channel is the app's to grant: this one does not, so @ui is refused, the page never asked") callback {
+            _u, key = courier_()
+            status, plain = command_(key, "@ui GET /widgets")
+            spec.assert_str_eq(status, "HTTP/1.1 200 OK", "answered")
+            spec.assert_contains(plain, "\"success\":false", "refused")
+            spec.assert_contains(plain, "does not grant capabilities.controlBus.ui", "saying why")
+        }
         spec.it("an async handler, and one that throws") callback {
             _u, key = courier_()
             _s1, later = command_(key, "later")

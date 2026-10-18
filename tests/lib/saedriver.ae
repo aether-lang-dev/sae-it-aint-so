@@ -444,13 +444,19 @@ vg_canvas() -> int { return uidriver.widget_id_last_of("canvas", "") }
 // widget id, and /widgets doesn't carry it. Handles count up, so the live
 // canvas with the highest handle is the newest: the current page's.
 vg_handle() -> int {
-    best = 0
-    k = 1
-    while k <= 64 {
-        if uidriver.get_status("/canvas/${k}/debug") == 200 { best = k }
-        k = k + 1
+    // The canvases are numbered 1, 2, 3 ... as they are made, none missing:
+    // the newest is found by doubling, then halving (a page with floats and
+    // icons makes hundreds).
+    hi = 1
+    while uidriver.get_status("/canvas/${hi}/debug") == 200 && hi < 65536 { hi = hi * 2 }
+    lo = hi / 2
+    if lo < 1 { return 0 }
+    while hi - lo > 1 {
+        mid = (lo + hi) / 2
+        if uidriver.get_status("/canvas/${mid}/debug") == 200 { lo = mid } else { hi = mid }
     }
-    return best
+    if uidriver.get_status("/canvas/${lo}/debug") == 200 { return lo }
+    return 0
 }
 
 // A vg scene's viewBox scales uniformly to fit the canvas and is centred

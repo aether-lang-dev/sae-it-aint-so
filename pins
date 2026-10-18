@@ -170,4 +170,6 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # and click_through, on every backend: sae's ui.datagrid_float,
 # ui.datagrid_float_move, ui.datagrid_float_remove, ui.datagrid_floats and
 # ui.click_through. Verified: tests/run_all.sh on macOS.
-AETHER_UI_REF=dd35a22e88d7106c7843162838cf25880ad42dd6
+# 06f2aed4 (2026-10-18): /screenshot?b64=1, the driver's picture as text, for the
+# control bus's ui channel. Verified: tests/run_all.sh on macOS.
+AETHER_UI_REF=06f2aed426821723acab4d68e7c0f3de2286f66f

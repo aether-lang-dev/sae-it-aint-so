@@ -21,6 +21,7 @@ import std.list
 import std.strarr
 import std.string
 import std.http.client
+import std.tcp
 // HTTPS in a build without OpenSSL (every cross-build, including Android):
 // std.http.client uses the pure-Aether TLS 1.3 client when it is linked.
 import std.cryptography.tls13_client
@@ -333,6 +334,10 @@ settle_(ctx: ptr) {
         say_("sae: uncaught exception in a promise job:\n${err}")
         if bus_inflight_ != 0 && string.contains(err, "interrupted") == 1 { bus_interrupted_ = 1 }
     }
+    // A vg scene made in a handler (a drawing floated over a grid, a chart)
+    // records its shapes until it is told to draw: now, its canvas made at
+    // its final size gets no resize to do it.
+    aether_ui_surface_flush_deferred_impl()
 }
 
 // Run a held handler with no arguments, as a widget does when it fires:
@@ -3863,6 +3868,7 @@ sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
 // BUS_DEADLINE_MS is answered for it, as failed.
 
 var control_bus_flag_: int = 0    // the person started the app with --control-bus
+var bus_ui_granted_: int = 0      // app.json capabilities.controlBus.ui: the UI driver's keys, pointer and screenshots, over the bus
 var bus_page_: ptr = null         // the page whose handler serves, or null
 var bus_timer_: int = 0
 var bus_told_off_: int = 0
@@ -3949,6 +3955,7 @@ bus_silence_() {
 // Each tick: what has arrived read, refusals logged, and the next request
 // handed to the page (one at a time).
 bus_tick_() {
+    bus_ui_poll_()
     bus.poll()
     l = bus.take_log()
     if l != "" { say_(l) }
@@ -3962,6 +3969,10 @@ bus_tick_() {
     }
     id, command = bus.next()
     if id == 0 { return }
+    if string.starts_with(command, "@ui ") == 1 {
+        bus_ui_(id, command)
+        return
+    }
     if bus_page_ == null {
         bus.answer(id, 0, "", "no page of this app is serving the control bus")
         return
@@ -3989,6 +4000,157 @@ bus_tick_() {
     if bus_interrupted_ == 1 && bus_inflight_ == id {
         bus_stop_request_("interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
     }
+}
+
+// The control bus's ui channel (app.json capabilities.controlBus.ui, and a
+// sae-driver build run with AETHER_UI_TEST_PORT): "@ui GET /widgets",
+// "@ui POST /window/key?combo=Down", "@ui GET /screenshot?b64=1" (answered as
+// the PNG in base64) go to the app's own UI driver, on this machine, as the
+// driver answers them; the paths are a short list (what a person at the
+// window can do: look, press keys, click a widget), and the answer is the
+// driver's. The driver answers on the UI thread, which this is, so the
+// connection is read a tick at a time (bus_ui_poll_), never waited on, and
+// answered on the bus when the driver has closed it.
+bus_ui_(id: int, command: string) {
+    if bus_ui_granted_ == 0 {
+        bus.answer(id, 0, "", "this app's app.json does not grant capabilities.controlBus.ui")
+        return
+    }
+    port = env_("AETHER_UI_TEST_PORT")
+    if port == "" {
+        bus.answer(id, 0, "", "this sae has no UI driver (a sae-driver build, started with AETHER_UI_TEST_PORT)")
+        return
+    }
+    rest = string.substring(command, 4, string.length(command))
+    sp = string.index_of(rest, " ")
+    if sp <= 0 {
+        bus.answer(id, 0, "", "@ui <GET|POST> <path>")
+        return
+    }
+    method = string.substring(rest, 0, sp)
+    path = string.trim(string.substring(rest, sp + 1, string.length(rest)))
+    if bus_ui_path_ok_(method, path) == 0 {
+        bus.answer(id, 0, "", "@ui: ${method} ${path} is not a path the control bus passes to the UI driver")
+        return
+    }
+    p_port, perr = string.to_int(port)
+    sock, cerr = tcp.connect("127.0.0.1", p_port)
+    if cerr != "" {
+        bus.answer(id, 0, "", "the UI driver: no connection: ${cerr}")
+        return
+    }
+    req = "${method} ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+    _w = tcp.write(sock, req)
+    pend = heap.new(BusUi)
+    pend.id = id
+    pend.sock = sock
+    pend.got = ""
+    pend.since = now_ms_()
+    if bus_ui_pending_ == null { bus_ui_pending_ = list.new() }
+    list.add(bus_ui_pending_, pend as ptr)
+}
+
+// A ui request waiting on the driver: its connection, and what has come.
+struct BusUi {
+    id: int
+    sock: ptr
+    got: string
+    since: long
+}
+
+var bus_ui_pending_: ptr = null   // std.list of *BusUi
+
+// Each tick: what each pending request's connection has for it read (the
+// driver answers on the UI thread, which this is, so nothing waits for it
+// here); one whose driver closed the connection is answered on the bus.
+bus_ui_poll_() {
+    if bus_ui_pending_ == null { return }
+    i = 0
+    while i < list.size(bus_ui_pending_) {
+        pv, _e = list.get(bus_ui_pending_, i)
+        pend = pv as *BusUi
+        done = 0
+        ready, _pe = tcp.poll(pend.sock, 0)
+        if ready {
+            data, rerr = tcp.read(pend.sock, 65536)
+            if rerr != "" || data == "" { done = 1 } else { pend.got = own_("${pend.got}${data}") }
+        }
+        if done == 0 && now_ms_() - pend.since > BUS_DEADLINE_MS {
+            _c = tcp.tcp_close(pend.sock)
+            bus.answer(pend.id, 0, "", "the UI driver did not answer in ${BUS_DEADLINE_MS / 1000} s")
+            list.list_remove(bus_ui_pending_, i)
+            heap.free(pend)
+            continue
+        }
+        if done == 1 {
+            _c = tcp.tcp_close(pend.sock)
+            end = string.index_of(pend.got, "\r\n\r\n")
+            if end < 0 {
+                bus.answer(pend.id, 0, "", "the UI driver answered nothing")
+            } else {
+                line = string.substring(pend.got, 0, string.index_of(pend.got, "\r\n"))
+                status = 0
+                sp1 = string.index_of(line, " ")
+                if sp1 > 0 {
+                    st, _se = string.to_int(string.substring(line, sp1 + 1, sp1 + 4))
+                    status = st
+                }
+                bus_ui_answer_(pend.id, status, string.substring(pend.got, end + 4, string.length(pend.got)), "")
+            }
+            list.list_remove(bus_ui_pending_, i)
+            heap.free(pend)
+            continue
+        }
+        i = i + 1
+    }
+}
+
+// What the ui channel passes: looking (the widgets, a widget, the focus, a
+// pick, the screenshot as text) and what a person at the window does (a
+// widget clicked or typed into, a key, a resize). Nothing that stops the app
+// or reaches outside it.
+bus_ui_path_ok_(method: string, path: string) -> int {
+    if string.contains(path, "..") == 1 { return 0 }
+    q = string.index_of(path, "?")
+    base = path
+    if q >= 0 { base = string.substring(path, 0, q) }
+    if method == "GET" {
+        if base == "/widgets" || base == "/focus" || base == "/window/pick" { return 1 }
+        if path == "/screenshot?b64=1" { return 1 }
+        if string.starts_with(base, "/widget/") == 1 && string.contains(string.substring(base, 8, string.length(base)), "/") == 0 { return 1 }
+        return 0
+    }
+    if method == "POST" {
+        if base == "/window/key" || base == "/window/resize" { return 1 }
+        if string.starts_with(base, "/widget/") == 1 {
+            tail = string.substring(base, 8, string.length(base))
+            sl = string.index_of(tail, "/")
+            if sl > 0 {
+                verb = string.substring(tail, sl + 1, string.length(tail))
+                if verb == "click" || verb == "set_text" || verb == "focus" || verb == "hover" || verb == "toggle" || verb == "set_value" { return 1 }
+            }
+        }
+        return 0
+    }
+    return 0
+}
+
+// The driver's answer on the bus: a JSON body as it is, other text as a JSON string.
+bus_ui_answer_(id: int, status: int, body: string, err: string) {
+    if err != "" {
+        bus.answer(id, 0, "", "the UI driver: ${err}")
+        return
+    }
+    if status < 200 || status >= 300 {
+        bus.answer(id, 0, "", "the UI driver answered ${status}: ${body}")
+        return
+    }
+    if string.starts_with(body, "{") == 1 || string.starts_with(body, "[") == 1 {
+        bus.answer(id, 1, body, "")
+        return
+    }
+    quoted = string.string_replace_all(string.string_replace_all(body, "\\", "\\\\"), "\"", "\\\"")
+    bus.answer(id, 1, "\"${quoted}\"", "")
 }
 
 // The request in flight answered as failed, its handler no longer awaited,
@@ -8244,6 +8406,8 @@ read_capabilities_(manifest: ptr) {
         bmv = json.json_object_get_raw(cb, "maxRequestBytes")
         if bmv != null { bmax = json.json_get_int(bmv) }
         bus.configure(bn, bmax)
+        uiv = json.json_object_get_raw(cb, "ui")
+        if uiv != null && json.json_get_bool(uiv) == 1 { bus_ui_granted_ = 1 }
     }
     // capabilities.clipboard (["write"], ["read"], both): at any time, not
     // only while the person clicks, types or pastes. Reading also needs the

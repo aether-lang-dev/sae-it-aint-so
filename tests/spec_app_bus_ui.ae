@@ -1,0 +1,62 @@
+// spec_app_bus_ui.ae — the control bus's ui channel (docs/control-bus.md):
+// an app whose app.json grants controlBus.ui, started with --control-bus in
+// a sae-driver build with its driver on, is looked at and pressed on by
+// another program: "@ui GET /widgets", "@ui GET /screenshot?b64=1" (the PNG
+// as text), "@ui POST /window/key?combo=...", "@ui POST /widget/<id>/click";
+// anything outside that short list is refused.
+//   SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$PWD/target/bus-ui-appdata \
+//     SAE_TEST_APP=tests/apps/busui tests/run_spec.sh spec_app_bus_ui
+import std.spec
+import std.string
+import std.json
+import saedriver as b
+import uidriver
+import busclient (courier_, command_)
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "the control bus's ui channel, granted") {
+        spec.it("looking: the widgets, a widget, the screenshot as base64") callback {
+            spec.assert_true(b.wait_for_console("sae: control bus: listening"), "listening")
+            _u, key = courier_()
+            status, widgets = command_(key, "@ui GET /widgets")
+            spec.assert_str_eq(status, "HTTP/1.1 200 OK", "answered")
+            spec.assert_contains(widgets, "\"success\":true", "succeeded")
+            spec.assert_contains(widgets, "last: (none)", "the page's own text, read off the window")
+            _s2, shot = command_(key, "@ui GET /screenshot?b64=1")
+            spec.assert_contains(shot, "\"success\":true", "a screenshot")
+            spec.assert_contains(shot, "iVBORw0KGgo", "a PNG's first bytes, as text")
+        }
+        spec.it("only the short list: anything else is refused, and the app is not stopped by it") callback {
+            _u, key = courier_()
+            _s1, sd = command_(key, "@ui POST /shutdown")
+            spec.assert_contains(sd, "\"success\":false", "shutdown refused")
+            spec.assert_contains(sd, "is not a path the control bus passes", "saying why")
+            _s2, up = command_(key, "@ui GET /widget/1/../../shutdown")
+            spec.assert_contains(up, "\"success\":false", "a path climbing out refused")
+            _s3, put = command_(key, "@ui PUT /widgets")
+            spec.assert_contains(put, "\"success\":false", "another method refused")
+            _s4, bad = command_(key, "@ui GET")
+            spec.assert_contains(bad, "\"success\":false", "a request with no path refused")
+            _s5, again = command_(key, "@ui GET /focus")
+            spec.assert_contains(again, "\"success\":true", "and the app still answers")
+        }
+        spec.it("pressing: a key and a click reach the window; the page's handler is still served") callback {
+            _u, key = courier_()
+            _s1, k = command_(key, "@ui POST /window/key?combo=Down")
+            spec.assert_contains(k, "\"success\":true", "a key")
+            // The page's own button, pressed from outside: its handler runs
+            // (it serves the bus again), and the app still answers.
+            bid = uidriver.widget_id_by_text("serve")
+            spec.assert_gt(bid, 0, "the serve button")
+            _s2, c = command_(key, "@ui POST /widget/${bid}/click")
+            spec.assert_contains(c, "\"success\":true", "a click on it")
+            _s3, w = command_(key, "@ui GET /widget/${bid}")
+            spec.assert_contains(w, "\"text\":\"serve\"", "the widget read back")
+            _s4, ping = command_(key, "ping")
+            spec.assert_contains(ping, "\"echo\":\"ping\"", "and the page's handler is still served")
+        }
+    }
+    return spec.run_summary(fw)
+}

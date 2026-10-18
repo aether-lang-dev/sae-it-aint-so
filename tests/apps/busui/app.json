@@ -1,0 +1,6 @@
+{
+  "name": "Bus ui test",
+  "capabilities": {
+    "controlBus": { "name": "sheetui", "maxRequestBytes": 4096, "ui": true }
+  }
+}
