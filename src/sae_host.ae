@@ -466,6 +466,21 @@ sae_ui_hstack(ctx: ptr, this_val: int, argv: int) -> int {
     return container_(ctx, argv, argc, h)
 }
 
+// wrap(block): a flow container (aether-ui's wrap: GtkFlowBox, AppKit's
+// AetherWrapView, Win32's and UIKit's flow layouts, Android's AetherWrap):
+// the block's widgets left to right, onto the next line when the width runs
+// out, so a row of buttons and fields never asks for more than its window.
+sae_ui_wrap(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    long t = now_ns_()
+    h = ui.wrap(mem.long_to_ptr(top_(p)))
+    ui_done_(p, t)
+    list.add(p.stacks, mem.long_to_ptr(h))
+    return container_(ctx, argv, argc, h)
+}
+
 // grid(cols, block) or grid(cols, spacing, block): the block's widgets fill
 // it a row at a time, cols to a row (aether-ui's grid block).
 sae_ui_grid(ctx: ptr, this_val: int, argv: int) -> int {
@@ -1771,6 +1786,17 @@ sae_ui_datagrid_frozen_cols(ctx: ptr, this_val: int, argv: int) -> int {
     g = dgrid_arg_(ctx, argv, argc)
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_frozen_cols: g is not a grid this page made") }
     return quickjs.new_int(ctx, ui.datagrid_frozen_cols(g))
+}
+
+// ui.datagrid_widget(g): the grid's own widget (its root, the element a
+// screen reader reads as the grid), for the a11y_* calls, a tooltip, a
+// width: a grid's handle numbers the page's grids, it is not a widget.
+sae_ui_datagrid_widget(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_widget: g is not a grid this page made") }
+    return quickjs.new_int(ctx, ui.datagrid_widget(g))
 }
 
 // ui.datagrid_set_height(g, px): the grid shows the rows that fit in px, at
@@ -8043,6 +8069,7 @@ api_register_(p: *Page) {
     u = quickjs.new_object(q)
     reg_(q, u, "vstack", 2, sae_ui_vstack)
     reg_(q, u, "hstack", 2, sae_ui_hstack)
+    reg_(q, u, "wrap", 1, sae_ui_wrap)
     reg_(q, u, "grid", 3, sae_ui_grid)
     reg_(q, u, "equal_cells", 0, sae_ui_equal_cells)
     reg_(q, u, "text", 1, sae_ui_text)
@@ -8107,6 +8134,7 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_set_height", 2, sae_ui_datagrid_set_height)
     reg_(q, u, "datagrid_freeze_cols", 2, sae_ui_datagrid_freeze_cols)
     reg_(q, u, "datagrid_frozen_cols", 1, sae_ui_datagrid_frozen_cols)
+    reg_(q, u, "datagrid_widget", 1, sae_ui_datagrid_widget)
     reg_(q, u, "datagrid_selection_glide", 2, sae_ui_datagrid_selection_glide)
     reg_(q, u, "datagrid_gliding", 1, sae_ui_datagrid_gliding)
     reg_(q, u, "datagrid_glide_box", 1, sae_ui_datagrid_glide_box)
@@ -9088,6 +9116,8 @@ build_chrome_(b: *Browser, root: int) {
     b.addr = ui.textfield(bctx, "address", |s: string| { })
     // The bar's spare width (a field's own is its natural 140 px).
     _fa = ui.fill_width(b.addr)
+    // Named for a screen reader (a placeholder is a hint, not a name).
+    _fl = ui.a11y_label(b.addr, "Address")
     ui.btn(bctx, "Go", || {
         typed = ui.get_text(b.addr)
         base = ""

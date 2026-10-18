@@ -15,6 +15,11 @@ ui.hstack(() => {
   ui.a11y_label(ui.set_width(vg.scene("0 0 10 10", 30, 30, () => vg.rect(0, 0, 10, 10, () => vg.fill("#2060c0"))), 30), "swatch one");
   ui.a11y_label(ui.set_width(vg.scene("0 0 10 10", 30, 30, () => vg.rect(0, 0, 10, 10, () => vg.fill("#c06020"))), 30), "swatch two");
 });
+// A wrap of forty buttons: wider than any window, so they flow onto more
+// lines rather than squeezing or widening the window.
+ui.wrap(() => {
+  for (let i = 1; i <= 40; i++) btn(`flow ${i}`, () => {});
+});
 const field = textfield("your name", (s: string) => set_text(echo, `echo: ${s}`));
 const shown = text("read: ");
 btn("Read", () => set_text(shown, `read: ${get_text(field)}`));

@@ -45,6 +45,21 @@ by_placeholder(ph: string) -> int {
     return id
 }
 
+// The first widget a screen reader reads as a grid (the page's first grid).
+first_grid_() -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) && id == 0 {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "role"), "grid") == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -247,6 +262,10 @@ main() {
             spec.assert_true(b.wait_for_console("grid rows 36 high"), "every row 36 high")
             b.click("Taller rows")
             spec.assert_true(b.wait_for_console("grid rows 24 high"), "and back")
+            b.click("Announce")
+            spec.assert_true(b.wait_for_console("grid widget "), "the grid's widget")
+            gw = first_grid_()
+            spec.assert_true(uidriver.wait_body_contains("/widget/${gw}/a11y", "\"announced\":\"grid said hello\"", 40), "announced on it")
             b.click("Headers")
             spec.assert_true(b.wait_for_console("grid headers shown false"), "hidden")
             b.click("Headers")

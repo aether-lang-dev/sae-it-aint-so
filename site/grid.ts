@@ -96,6 +96,12 @@ btn("Headers", () => {
   ui.datagrid_show_header(g, !ui.datagrid_header_shown(g));
   print(`grid headers shown ${ui.datagrid_header_shown(g)}`);
 });
+// The grid's own widget, which a screen reader reads as the grid: an
+// announcement made on it.
+btn("Announce", () => {
+  ui.a11y_announce(ui.datagrid_widget(g), "grid said hello");
+  print(`grid widget ${ui.datagrid_widget(g)}`);
+});
 btn("Half height", () => {
   ui.datagrid_set_height(g, Math.floor(ui.datagrid_height(g) / 2));
   print(`grid height ${ui.datagrid_height(g)}`);
