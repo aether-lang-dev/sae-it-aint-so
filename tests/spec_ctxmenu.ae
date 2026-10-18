@@ -1,0 +1,132 @@
+// spec_ctxmenu.ae — context menus for pages (site/contextmenu.ts), over the
+// AetherUIDriver: ui.context_menu's items on a widget, a vg shape and the
+// whole page, each above sae's own section (Back, Forward, Reload, View
+// page source, Inspect); a disabled item; the items array read again each
+// time; a page's item taking one of sae's labels refused; a page with no
+// menu of its own still given sae's; View page source and Inspect open
+// their windows. The driver's secondary click records the menu it pops
+// (aether-ui GET /popup) and GET /menus lists it.
+import std.spec
+import std.string
+import std.json
+import saedriver as b
+import uidriver
+
+const SAE_SECTION = "\"Back\",\"Forward\",\"Reload\",\"View page source\",\"Inspect\"]"
+
+popup_of(body: string) -> int {
+    v, _e = json.parse(body)
+    if v == null { return 0 }
+    n = uidriver.field_int(v, "popup")
+    json.json_free(v)
+    return n
+}
+
+menu_json(h: int) -> string {
+    body = uidriver.get_body("/menus")
+    at = string.index_of(body, "{\"handle\":${h},")
+    if at < 0 { return "" }
+    rest = string.substring(body, at, string.length(body))
+    end = string.index_of(rest, "]}")
+    if end < 0 { return rest }
+    return string.substring(rest, 0, end + 2)
+}
+
+// The first widget of a type, and a canvas's canvas id.
+first_of(t: string) -> int { return uidriver.widget_id_of(t, "") }
+canvas_id_() -> int {
+    v, _e = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "canvas") == 1 { id = uidriver.field_int(w, "canvas") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
+open_on(id: int) -> int { return popup_of(uidriver.post_body("/widget/${id}/secondary_click")) }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "context menus for pages") {
+        spec.it("sae's own labels are refused, and an item that does nothing") callback {
+            b.navigate(b.test_url("/contextmenu"))
+            b.assert_page("Context menus", "200 ", "the page")
+            spec.assert_true(b.wait_for_console("refused: \"Reload\" is sae's own menu item"), "Reload refused")
+            spec.assert_true(b.wait_for_console("refused: \" view page source \" is sae's own menu item"), "View page source refused, however spelt")
+            spec.assert_true(b.wait_for_console("refused: context_menu: \"Nothing\" has no action"), "an item with no action refused")
+            spec.assert_false(b.console_contains("not refused"), "none got in")
+        }
+        spec.it("a widget's menu: its items, a divider, then sae's") callback {
+            m = open_on(uidriver.widget_id_by_text("Right-click this line"))
+            spec.assert_gt(m, 0, "a menu popped")
+            mj = menu_json(m)
+            spec.assert_contains(mj, "\"items\":[\"Copy  Ctrl+C\",\"Paste\",${SAE_SECTION}", "the page's items, then sae's")
+            spec.assert_contains(mj, "\"separators\":[1,2]", "the page's separator, then the divider above sae's")
+            spec.assert_contains(mj, "\"Paste\"", "Paste is there")
+            spec.assert_contains(mj, "\"disabled\":[\"Paste\",\"Forward\"]", "Paste disabled, and Forward (nothing ahead)")
+            uidriver.post_ok("/menu/${m}/activate?label=Copy%20%20Ctrl%2BC", "choose Copy")
+            spec.assert_true(b.wait_for_text("chose: Copy"), "its action ran")
+        }
+        spec.it("the array is read again each time it opens") callback {
+            b.click("Add an item")
+            m = open_on(uidriver.widget_id_by_text("Right-click this line"))
+            spec.assert_contains(menu_json(m), "\"items\":[\"Copy  Ctrl+C\",\"Paste\",\"Added\",${SAE_SECTION}", "the added item, above sae's")
+            uidriver.post_ok("/menu/${m}/activate?label=Added", "choose it")
+            spec.assert_true(b.wait_for_text("chose: Added"), "it ran")
+        }
+        spec.it("the page's menu, anywhere with nothing deeper") callback {
+            m = open_on(first_of("scrollview"))
+            spec.assert_contains(menu_json(m), "\"items\":[\"Page item\",${SAE_SECTION}", "the page's item, then sae's")
+            uidriver.post_ok("/menu/${m}/activate?label=Page%20item", "choose it")
+            spec.assert_true(b.wait_for_text("chose: Page item"), "it ran")
+        }
+        spec.it("a vg shape's menu; another shape's own right click; the page's past both") callback {
+            cid = canvas_id_()
+            spec.assert_gt(cid, 0, "the scene's canvas")
+            cw = uidriver.widget_int_field_by_id(uidriver.widget_id_of("canvas", ""), "w")
+            ch = uidriver.widget_int_field_by_id(uidriver.widget_id_of("canvas", ""), "h")
+            // vg fits the 200 x 60 view box into the canvas, centred: the
+            // left shape's middle is view-box (50, 30), the right's (150, 30).
+            sx = cw * 1.0 / 200.0
+            sy = ch * 1.0 / 60.0
+            sc = sx
+            if sy < sc { sc = sy }
+            ox = (cw * 1.0 - 200.0 * sc) / 2.0
+            oy = (ch * 1.0 - 60.0 * sc) / 2.0
+            lx = (ox + 50.0 * sc) as int
+            rx = (ox + 150.0 * sc) as int
+            my = (oy + 30.0 * sc) as int
+            m = popup_of(uidriver.post_body("/canvas/${cid}/rightclick?x=${lx}&y=${my}"))
+            spec.assert_contains(menu_json(m), "\"items\":[\"Shape item\",${SAE_SECTION}", "the shape's item, then sae's")
+            uidriver.post_ok("/menu/${m}/activate?label=Shape%20item", "choose it")
+            spec.assert_true(b.wait_for_text("chose: Shape item"), "it ran")
+            uidriver.post_ok("/canvas/${cid}/rightclick?x=${rx}&y=${my}", "the other shape")
+            spec.assert_true(b.wait_for_text("right-clicked the other shape"), "its on_right_click ran")
+        }
+        spec.it("View page source and Inspect open their windows") callback {
+            m = open_on(first_of("scrollview"))
+            uidriver.post_ok("/menu/${m}/activate?label=View%20page%20source", "View page source")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Source of ", 20) == 1, "a source window")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "context_menu(target, items)", 20) == 1, "showing the page's source")
+            m2 = open_on(first_of("scrollview"))
+            uidriver.post_ok("/menu/${m2}/activate?label=Inspect", "Inspect")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "vg shapes handed to the page", 20) == 1, "an inspector window")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Right-click this line", 20) == 1, "listing the page's widgets")
+        }
+        spec.it("a page with no menu of its own still has sae's, and Reload works") callback {
+            b.navigate(b.test_url("/about"))
+            m = open_on(first_of("scrollview"))
+            spec.assert_contains(menu_json(m), "\"items\":[${SAE_SECTION}", "sae's section alone")
+            spec.assert_contains(menu_json(m), "\"separators\":[]", "no divider over nothing")
+            uidriver.post_ok("/menu/${m}/activate?label=Back", "Back")
+            b.assert_page("Context menus", "200 ", "Back went back")
+        }
+    }
+    return spec.run_summary(fw)
+}

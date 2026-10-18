@@ -152,4 +152,8 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # get_scrollbar, scrollbar_range), and the datagrid's scrollers are
 # scrollbars, the thumb the share in view. Verified: tests/run_all.sh on
 # macOS.
-AETHER_UI_REF=15af8d0676955b867bed7cd4511ad5b47cb05d0b
+# 1cdbfd48 (2026-10-18): on_secondary_click (a right click on any widget, on
+# every backend), menu_clear and disabled menu items, a popup recorded for
+# the driver: sae's ui.context_menu and its own section; CI's aeb pin moved
+# to v0.327 with 0.824.0. Verified: tests/run_all.sh on macOS.
+AETHER_UI_REF=1cdbfd48eacbca91125c9520c2a3ff4e257feb90

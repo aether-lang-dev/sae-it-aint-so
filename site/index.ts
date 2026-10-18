@@ -14,6 +14,7 @@ const links: Link[] = [
   { label: "Dynamic updates", href: "/dynamic" },
   { label: "Scrolling", href: "/scrolling" },
   { label: "Widget interactions", href: "/widgets" },
+  { label: "Context menus", href: "/contextmenu" },
   { label: "Banking (styles)", href: "/banking" },
   { label: "HTTP from a page", href: "/http" },
   { label: "Modern TypeScript", href: "/modern" },

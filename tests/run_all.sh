@@ -62,6 +62,7 @@ spec_keys||spec spec_keys
 spec_grid||spec spec_grid
 spec_reorder||spec spec_reorder
 spec_menus_web||spec spec_menus_web
+spec_ctxmenu||spec spec_ctxmenu
 spec_tooltip||spec spec_tooltip
 spec_a11y||spec spec_a11y
 spec_aevg||spec spec_aevg

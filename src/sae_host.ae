@@ -102,6 +102,9 @@ struct Browser {
     page_mem: long
     last_ok: int     // did the last load fetch and run cleanly
     root: int        // the window's own stack (chrome and content): its size is the window's
+    menu_h: int      // the context menu (one aether-ui menu, built again each time it opens), or 0
+    body: int        // the scroller pages build into: a right click there is the page's
+    source: string   // the current page's source as fetched ("View page source")
     win_w: int       // the window's content size, as on_layout last gave it (0 before)
     win_h: int
 }
@@ -162,6 +165,15 @@ struct Page {
     bus_ref: int     // bus.serve's dispatcher (the page's handler, wrapped), or 0
     bus_stopped_ref: int  // bus.serve's second function: told when a request was stopped, or 0
     dgrids: ptr      // std.list of aether-ui datagrids this page made (ui.datagrid)
+    menus: ptr       // std.list of *PageMenu: ui.context_menu's targets and items
+}
+
+// ui.context_menu(target, items): a widget's, a vg shape's or the whole
+// page's (target 0) menu items, the page's array held and read again each
+// time the menu opens, so the page changes it by changing the array.
+struct PageMenu {
+    target: int
+    items: int       // the held items array
 }
 
 // The pages whose runtimes are live (one in the browser, as a rule).
@@ -2382,6 +2394,19 @@ sae_ui_into(ctx: ptr, this_val: int, argv: int) -> int {
     return container_(ctx, argv, argc, h)
 }
 
+// on_double_click(h, fn): a double click on a widget the page made (a
+// double tap on touch), by the platform's own double-click.
+sae_ui_on_double_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = own_arg_(ctx, argv, argc)
+    if h == 0 { return sae_throw_type_error(ctx, "on_double_click(h, fn): h is not a widget this page made") }
+    ref = held_fn_(ctx, argv, argc, 1)
+    if ref == 0 { return sae_throw_type_error(ctx, "on_double_click(h, fn): fn must be a function") }
+    _d = ui.on_double_click(h, || { fire_click_(ctx, ref) })
+    return 0
+}
+
 sae_ui_onclick(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -2635,6 +2660,260 @@ sae_ui_scrollbar_range(ctx: ptr, this_val: int, argv: int) -> int {
     h = own_arg_(ctx, argv, argc)
     if h == 0 { return sae_throw_type_error(ctx, "scrollbar_range(h): h is not a widget this page made") }
     return json_value_(ctx, "[${ui.scrollbar_min(h)}, ${ui.scrollbar_max(h)}, ${ui.scrollbar_page(h)}]")
+}
+
+// --- the page API: context menus ---
+//
+//   ui.context_menu(target, [
+//     { label: "Copy", accel: "Ctrl+C", action: () => copy() },
+//     "-",                                         // a separator
+//     { label: "Paste", enabled: false },          // shown grey
+//   ])
+//
+// target: a widget the page made, a vg shape's handle, or 0 for the whole
+// page. A right click (a long press on touch) opens it: the page's items,
+// then, below a divider, sae's own (Back, Forward, Reload, View page
+// source, Inspect), which a page cannot remove, reorder, disable or add
+// under, and none of whose labels a page item may take. A page with no menu
+// still has sae's. The array is read again each time the menu opens.
+
+const SAE_MENU_LABELS_ = ",back,forward,reload,view page source,inspect,"
+
+// A page item's label taking one of sae's: "" or why it is refused.
+menu_label_refusal_(label: string) -> string {
+    t = string.to_lower(string.trim(label))
+    if string.length(t) == 0 { return "a menu item needs a label" }
+    if string.contains(SAE_MENU_LABELS_, ",${t},") == 1 { return "\"${label}\" is sae's own menu item" }
+    return ""
+}
+
+// Why an items array is refused, or "".
+menu_items_refusal_(ctx: ptr, items: int) -> string {
+    ti = quickjs.type_of(ctx, items)
+    if ti != "array" && ti != "object" { return "context_menu(target, items): items is an array of { label, action } and \"-\"" }
+    n = quickjs.length(ctx, items)
+    i = 0
+    while i < n {
+        it, _e = quickjs.get_index(ctx, items, i)
+        t = quickjs.type_of(ctx, it)
+        why = ""
+        if t == "string" {
+            if js_str_(ctx, it) != "-" { why = "context_menu: a string item is \"-\", a separator" }
+        } else if t == "object" {
+            why = menu_label_refusal_(js_prop_str_(ctx, it, "label", ""))
+            if why == "" {
+                f, _fe = quickjs.get(ctx, it, "action")
+                if quickjs.type_of(ctx, f) != "function" && js_prop_bool_(ctx, it, "enabled", 1) == 1 {
+                    why = "context_menu: \"${js_prop_str_(ctx, it, "label", "")}\" has no action (a function), and is not enabled: false"
+                }
+                quickjs.release(ctx, f)
+            }
+        } else {
+            why = "context_menu: an item is { label, action } or \"-\""
+        }
+        quickjs.release(ctx, it)
+        if why != "" { return why }
+        i = i + 1
+    }
+    return ""
+}
+
+// A boolean property of obj, or dflt when it is missing.
+js_prop_bool_(ctx: ptr, obj: int, name: string, dflt: int) -> int {
+    v, err = quickjs.get(ctx, obj, name)
+    if err != "" { return dflt }
+    out = dflt
+    if js_nothing_(ctx, v) == 0 { out = quickjs.to_bool(ctx, v) }
+    quickjs.release(ctx, v)
+    return out
+}
+
+// The held items for a target, or 0.
+page_menu_items_(p: *Page, target: int) -> int {
+    n = list.size(p.menus)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.menus, i)
+        pm = v as *PageMenu
+        if pm.target == target { return pm.items }
+        i = i + 1
+    }
+    return 0
+}
+
+page_menus_free_(p: *Page) {
+    n = list.size(p.menus)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.menus, i)
+        heap.free(v)
+        i = i + 1
+    }
+    list.free(p.menus)
+    // Its items go with the page: none of them can run into a freed runtime.
+    b = p.browser as *Browser
+    if b != null && b.menu_h != 0 { ui.menu_clear(b.menu_h) }
+}
+
+// Open the context menu: the page's items (held array `items`, 0 none),
+// a divider, sae's section; popped at `anchor`.
+open_menu_(b: *Browser, ctx: @keep ptr, items: int, anchor: int) {
+    if b.menu_h == 0 { b.menu_h = ui.menu("context") }
+    m = b.menu_h
+    ui.menu_clear(m)
+    shown = 0
+    if ctx != null && items != 0 {
+        n = quickjs.length(ctx, items)
+        i = 0
+        last_sep = 1
+        while i < n {
+            it, _e = quickjs.get_index(ctx, items, i)
+            t = quickjs.type_of(ctx, it)
+            if t == "string" {
+                // A separator, never two together or one first.
+                if last_sep == 0 { ui.menu_separator(m); last_sep = 1 }
+            } else if t == "object" {
+                label = js_prop_str_(ctx, it, "label", "")
+                if menu_label_refusal_(label) == "" {
+                    accel = js_prop_str_(ctx, it, "accel", "")
+                    text_ = label
+                    if string.length(accel) > 0 { text_ = "${label}  ${accel}" }
+                    f, _fe = quickjs.get(ctx, it, "action")
+                    on = js_prop_bool_(ctx, it, "enabled", 1)
+                    if on == 1 && quickjs.type_of(ctx, f) == "function" {
+                        idx = i
+                        ui.menu_item(m, own_(text_), || { fire_menu_item_(ctx, items, idx) })
+                    } else {
+                        ui.menu_item_disabled(m, own_(text_))
+                    }
+                    quickjs.release(ctx, f)
+                    shown = shown + 1
+                    last_sep = 0
+                }
+            }
+            quickjs.release(ctx, it)
+            i = i + 1
+        }
+    }
+    if shown > 0 { ui.menu_separator(m) }
+    // sae's own section: always there, always last, always these.
+    if b.hist_index > 0 { ui.menu_item(m, "Back", || { request_nav_(b, NAV_BACK, "") }) } else { ui.menu_item_disabled(m, "Back") }
+    if b.hist_index >= 0 && b.hist_index < b.hist_len - 1 { ui.menu_item(m, "Forward", || { request_nav_(b, NAV_FORWARD, "") }) } else { ui.menu_item_disabled(m, "Forward") }
+    ui.menu_item(m, "Reload", || { request_nav_(b, NAV_RELOAD, "") })
+    ui.menu_item(m, "View page source", || { show_source_(b) })
+    ui.menu_item(m, "Inspect", || { show_inspect_(b) })
+    ui.menu_popup(m, anchor)
+}
+
+// A page item chosen: its action, read again from the held array.
+fire_menu_item_(ctx: ptr, items: int, i: int) {
+    it, _e = quickjs.get_index(ctx, items, i)
+    f, _fe = quickjs.get(ctx, it, "action")
+    if quickjs.type_of(ctx, f) == "function" { fire_click_(ctx, f) }
+    quickjs.release(ctx, f)
+    quickjs.release(ctx, it)
+}
+
+// "View page source": a window with the page's source as fetched.
+show_source_(b: *Browser) {
+    url = ""
+    if b.page != null { url = (b.page as *Page).url }
+    w = ui.window_create("Source of ${url}", 760, 560)
+    r = ui.root_vstack(4)
+    _t = ui.text(mem.long_to_ptr(r), "Source of ${url}")
+    ta = ui.textarea(mem.long_to_ptr(r), "", |s: string| { })
+    ui.set_text(ta, b.source)
+    _fw = ui.fill_width(ta)
+    _fh = ui.fill_height(ta)
+    ui.window_set_body(w, r)
+    ui.window_show(w)
+}
+
+// "Inspect": a window with the page's widgets, each under its parent:
+// its handle and what it shows; the page's address and vg shape count.
+show_inspect_(b: *Browser) {
+    if b.page == null { return }
+    p = b.page as *Page
+    sb = strbuilder.new(256)
+    _a = strbuilder.append(sb, "${p.url}\n")
+    _b = strbuilder.append(sb, "${list.size(p.vg_nodes)} vg shapes handed to the page\n\n")
+    last = aether_ui_widget_count_impl()
+    h = p.root
+    while h <= last {
+        if h == p.root || h >= p.first_handle {
+            depth = 0
+            q = aether_ui_widget_parent_impl(h)
+            while q != 0 && q != p.root && depth < 40 {
+                depth = depth + 1
+                q = aether_ui_widget_parent_impl(q)
+            }
+            if h == p.root || q == p.root {
+                pad = ""
+                k = 0
+                while k < depth { pad = "${pad}  "; k = k + 1 }
+                txt = ui.get_text(h)
+                if string.length(txt) > 60 { txt = string.concat(string.substring(txt, 0, 57), "...") }
+                _c = strbuilder.append(sb, "${pad}#${h}  ${txt}\n")
+            }
+        }
+        h = h + 1
+    }
+    w = ui.window_create("Inspect ${p.url}", 560, 600)
+    r = ui.root_vstack(4)
+    _t = ui.text(mem.long_to_ptr(r), "Inspect ${p.url}")
+    ta = ui.textarea(mem.long_to_ptr(r), "", |s: string| { })
+    ui.set_text(ta, strbuilder.finish(sb))
+    _fw = ui.fill_width(ta)
+    _fh = ui.fill_height(ta)
+    ui.window_set_body(w, r)
+    ui.window_show(w)
+}
+
+// ui.context_menu(target, items)
+sae_ui_context_menu(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    if argc < 2 { return sae_throw_type_error(ctx, "context_menu(target, items): target (a widget, a vg shape or 0 for the page) and items") }
+    target = arg_int_(ctx, argv, argc, 0, 0)
+    items = hold_arg_(ctx, argv, 1)
+    why = menu_items_refusal_(ctx, items)
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    is_vg = 0
+    if target > VG_BASE {
+        node = vg_node_of_(p, target)
+        if node == null { return sae_throw_type_error(ctx, "context_menu: ${target} is not a vg shape this page made") }
+        r = aevg.rec_of(ae_model_(ctx), node)
+        if r == null || r.el == null { return sae_throw_type_error(ctx, "context_menu: ${target} is not a vg shape this page made") }
+        r.h_menu = items
+        is_vg = 1
+    } else if target != 0 && owned_(p, target) == 0 {
+        return sae_throw_type_error(ctx, "context_menu: ${target} is not a widget this page made")
+    }
+    had = page_menu_items_(p, target) != 0
+    n = list.size(p.menus)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.menus, i)
+        pm = v as *PageMenu
+        if pm.target == target { pm.items = items }
+        i = i + 1
+    }
+    if had == 0 {
+        pm = heap.new(PageMenu)
+        pm.target = target
+        pm.items = items
+        list.add(p.menus, pm as ptr)
+        // A widget's own: its secondary click opens it (the deepest taker
+        // wins, so a right click there is not the page's).
+        if target != 0 && is_vg == 0 {
+            b = p.browser as *Browser
+            ui.on_secondary_click(target, |x: float, y: float| {
+                open_menu_(b, ctx, page_menu_items_(p, target), target)
+            })
+        }
+    }
+    return 0
 }
 
 // picker(onChange(index)): a drop-down; fill it with picker_add.
@@ -6089,6 +6368,27 @@ ae_wire_canvas_(ctx: @keep ptr, sc: *AeScene) {
         aevg.scene_mark_dirty(sc)
         aevg.release_repaints(m)
     })
+    // A right click (a long press on touch): the topmost shape's menu
+    // (ui.context_menu(shape, items)) or its on_right_click; else the page's
+    // menu, as anywhere in the page.
+    ui.canvas_on_right_click(cid, |x: float, y: float| {
+        if ae_live_(ctx, seq) == 0 { return }
+        m = ae_model_(ctx)
+        r = aevg.hit_at(m, sc, aevg.EV_RIGHT, x, y)
+        lp = page_of_(ctx)
+        b = lp.browser as *Browser
+        if r != null && r.h_menu != 0 {
+            open_menu_(b, ctx, r.h_menu, ui.canvas_widget(cid))
+        } else if r != null && r.h_right != 0 {
+            aevg.hold_repaints(m)
+            ae_fire_xy_(ctx, scene, r.h_right, x, y, "a vg right-click handler")
+            if ae_live_(ctx, seq) == 0 { return }
+            aevg.scene_mark_dirty(sc)
+            aevg.release_repaints(m)
+        } else {
+            open_menu_(b, ctx, page_menu_items_(lp, 0), ui.canvas_widget(cid))
+        }
+    })
     ui.canvas_on_move(cid, |x: float, y: float| {
         if ae_live_(ctx, seq) == 0 { return }
         m = ae_model_(ctx)
@@ -6487,8 +6787,8 @@ sae_ae_on_double_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
-// on_right_click(fn): kept on the record; no aether-ui canvas reports a
-// right click yet, so it waits for that hook.
+// on_right_click(fn): a right click on the shape (a long press on touch),
+// dispatched by the scene's canvas hook (ae_wire_canvas_).
 sae_ae_on_right_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -8150,6 +8450,7 @@ api_register_(p: *Page) {
     reg_(q, u, "scrollbar_steps", 3, sae_ui_scrollbar_steps)
     reg_(q, u, "get_scrollbar", 1, sae_ui_get_scrollbar)
     reg_(q, u, "scrollbar_range", 1, sae_ui_scrollbar_range)
+    reg_(q, u, "context_menu", 2, sae_ui_context_menu)
     reg_(q, u, "picker", 1, sae_ui_picker)
     reg_(q, u, "picker_add", 2, sae_ui_picker_add)
     reg_(q, u, "progressbar", 1, sae_ui_progressbar)
@@ -8169,6 +8470,7 @@ api_register_(p: *Page) {
     reg_(q, u, "frame", 1, sae_request_frame)
     reg_(q, u, "frame_cancel", 1, sae_cancel_frame)
     reg_(q, u, "onclick", 1, sae_ui_onclick)
+    reg_(q, u, "on_double_click", 2, sae_ui_on_double_click)
     reg_(q, u, "margin", 4, sae_ui_margin)
     reg_(q, u, "bg_color", 4, sae_ui_bg_color)
     reg_(q, u, "ui_state", 1, sae_ui_state)
@@ -8527,6 +8829,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.bus_ref = 0
     p.bus_stopped_ref = 0
     p.dgrids = list.new()
+    p.menus = list.new()
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
     p.http_res = 0
@@ -8559,6 +8862,7 @@ page_free_(p: *Page) {
     list.free(p.stacks)
     list.free(p.grids)
     list.free(p.dgrids)
+    page_menus_free_(p)
     // The page's sheet styles only its own widgets: un-set it before the
     // next page builds, then free it (free_styles refuses the current one).
     if p.sheet != null {
@@ -9007,6 +9311,7 @@ load_(b: *Browser, url: string) {
         return
     }
 
+    b.source = own_(body)   // for "View page source"
     long t_lower0 = os.now_monotonic_ns()
     es5, lerr = lower.lower_source(body, final_url)
     long lower_ns = os.now_monotonic_ns() - t_lower0
@@ -9206,6 +9511,15 @@ build_chrome_(b: *Browser, root: int) {
 build_content_(b: *Browser, rctx: ptr) {
     scroller = ui.scrollview(rctx)
     b.content = ui.vstack(mem.long_to_ptr(scroller), 4)
+    b.body = scroller
+    // A right click in the page, on nothing deeper with a menu of its own:
+    // the page's menu (ui.context_menu(0, items)), then sae's section. A
+    // page with no menu still has sae's.
+    ui.on_secondary_click(scroller, |x: float, y: float| {
+        if b.page == null { open_menu_(b, null, 0, scroller); return }
+        p = b.page as *Page
+        open_menu_(b, p.ctx, page_menu_items_(p, 0), scroller)
+    })
 }
 
 browser_new_() -> *Browser {
@@ -9217,6 +9531,9 @@ browser_new_() -> *Browser {
     b.pending_kind = NAV_NONE
     b.nav_timer = 0
     b.page_mem = PAGE_MEM_DEFAULT
+    b.menu_h = 0
+    b.body = 0
+    b.source = ""
     pm = env_("SAE_PAGE_MEM")
     if pm != "" {
         v, perr = string.to_long(pm)

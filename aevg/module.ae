@@ -109,6 +109,7 @@ struct AeRec {
     h_click: int
     h_dbl: int
     h_right: int
+    h_menu: int      // ui.context_menu(shape, items): the held items array, 0 for none
     h_hover: int
     h_drag: int
     h_drag_end: int
@@ -167,7 +168,7 @@ hit_at(m: *AeModel, sc: *AeScene, ev: int, x: float, y: float) -> *AeRec {
             h = 0
             if ev == EV_CLICK { h = r.h_click }
             if ev == EV_DBL { h = r.h_dbl }
-            if ev == EV_RIGHT { h = r.h_right }
+            if ev == EV_RIGHT { h = r.h_right + r.h_menu }
             if ev == EV_HOVER { h = r.h_hover }
             if ev == EV_DRAG { h = r.h_drag + r.h_drag_end }
             if ev == EV_SCROLL { h = r.h_scroll }
@@ -248,6 +249,7 @@ rec_add(m: *AeModel, node: @keep ptr, el: @keep ptr, kind: int, parent: *AeRec, 
     r.h_click = 0
     r.h_dbl = 0
     r.h_right = 0
+    r.h_menu = 0
     r.h_hover = 0
     r.h_drag = 0
     r.h_drag_end = 0
