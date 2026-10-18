@@ -44,7 +44,14 @@
 # link (no libaether_sqlite), so sae builds against a 0.818 dev tree.
 # Verified: the dev tree at 0.818.0 (2a39e091), tests/run_all.sh 58/58 on
 # macOS.
-AE_PIN=0.818.0
+# 0.824.0 (2026-10-18): a tracking move with the family (Paul), no new
+# primitive needed: 0.823.0's fix for a string field read in a loop beside
+# a call (released twice) and 0.824.0's #2940 (generated helpers in the
+# reserved _aether_ namespace, E0900 through closures, a library calling
+# its own functions). The bare release still has no libaether_sqlite, so
+# sae builds against a 0.824 dev tree. Verified: the dev tree at the
+# v0.824.0 tag, tests/run_all.sh on macOS.
+AE_PIN=0.824.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
@@ -58,7 +65,9 @@ AE_PIN=0.818.0
 # db99a6f (2026-10-16): aeb under 0.818.0 (its own @keep annotations and
 # floor move). No tag carries it yet; a commit is pinned until one does
 # (tools/setup-siblings.sh fetches a SHA).
-AEB_REF=db99a6ff8562c9fdc38dd98d7d7f53650884cf3d
+# v0.327 (2026-10-18, 6d605f4): the first tag on the 0.818+ `@keep` floor
+# (0.823.0's), so a tag is pinned again. Verified with sae on Aether 0.824.0.
+AEB_REF=v0.327
 
 # Sibling checkouts, reached through the aether-ui symlink. c4858fbe adds
 # ui.timer_once and the frame clock (ui.on_frame), which sae's timers use.
@@ -130,4 +139,7 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # and cell pictures (ui.datagrid_set_row_heights, datagrid_selection_glide,
 # datagrid_show_header, datagrid_cell_picture); a canvas's own handle in the
 # driver's /widgets. Verified: tests/run_all.sh on macOS.
-AETHER_UI_REF=be93a25caa81768ce104e70b2d45aa6a288f3893
+# dcf21e00 (2026-10-18): aether-ui on Aether 0.824.0 (CI and bootstrap),
+# the datagrid glide robust to a stale first frame time, its spec and
+# insets_demo's made to wait. Verified: tests/run_all.sh on macOS.
+AETHER_UI_REF=dcf21e00501c63fb8dfc712f8935f09d441a8f5f
