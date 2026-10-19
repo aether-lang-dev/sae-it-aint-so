@@ -33,7 +33,7 @@ exports(
     current_url, status_line, status_code, status_url,
     click, click_nth, button_exists, set_field, set_field_by, field_id_by, field_text, check, slide_to, slide_nth, pick,
     has_text, page_texts, widget_count, style_of,
-    wait_for_url, wait_for_page, wait_for_text, wait_for_text_gone, wait_for_widget_count,
+    wait_for_url, wait_for_page, wait_for_text, wait_for_text_secs, wait_for_text_gone, wait_for_widget_count,
     assert_url, assert_page, assert_text, assert_no_text,
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
     console_count, wait_for_console_n,
@@ -382,6 +382,20 @@ wait_for_page(text: string, status_prefix: string) -> int {
 wait_for_text(text: string) -> int {
     i = 0
     while i < TRIES {
+        if has_text(text) == 1 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+// wait_for_text for work whose length is the machine's, not the page's: the
+// natives spec's twelve-million-number prime count is a second on an Apple
+// core and thirteen on the Ryzen of the x86_64 lab host (32-bit division is
+// several times slower there), so it waits `secs`, not three seconds.
+wait_for_text_secs(text: string, secs: int) -> int {
+    i = 0
+    while i < secs * 1000 / POLL_MS {
         if has_text(text) == 1 { return 1 }
         sleep(POLL_MS)
         i = i + 1

@@ -61,7 +61,7 @@ main() {
             b.click("Bump")
             b.assert_text("ticks: 2", "two clicks handled while the module computes")
             spec.assert_true(b.has_text("result: spinning") == 1, "and it still computes")
-            spec.assert_true(b.wait_for_text("result: spin 788060 primes, ticks 2, took time"), "then its answer, the clicks counted before it")
+            spec.assert_true(b.wait_for_text_secs("result: spin 788060 primes, ticks 2, took time", 90), "then its answer, the clicks counted before it")
         }
     }
     return spec.run_summary(fw)
