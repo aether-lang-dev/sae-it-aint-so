@@ -142,6 +142,11 @@ btn("To row 500000", () => {
   const [r, c] = ui.datagrid_first(g);
   print(`grid first ${r},${c}`);
 });
+btn("To the top", () => {
+  ui.datagrid_scroll_to(g, 0, 0);
+  const [r, c] = ui.datagrid_first(g);
+  print(`grid first ${r},${c}`);
+});
 // The first form: a cell function where the block goes, and the
 // ui.datagrid_* setters by handle (each returns the grid).
 const small = ui.datagrid(3, 2, 3, 2, 0, (r: number, c: number) => `s${r}${c}`);

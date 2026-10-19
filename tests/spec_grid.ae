@@ -259,10 +259,20 @@ main() {
             spec.assert_true(uidriver.wait_body_contains("/widgets", "\"type\":\"image\"", 40), "drawn over its cell")
             b.click("Picture")
             spec.assert_true(b.wait_for_console("grid picture off"), "and taken away")
+            // Back at the top (it was scrolled to row 500000): the float's cell
+            // shown, so its box is laid out and sized.
+            b.click("To the top")
+            spec.assert_true(b.wait_for_console("grid first 0,"), "the grid back to the top")
             b.click("Float")
             spec.assert_true(b.wait_for_console("grid float on, 1 over the grid"), "a float over the grid")
             fid = uidriver.widget_id_last_of("canvas", "")
             spec.assert_gt(fid, 0, "its scene is a canvas")
+            // Laid out a frame after it is made (it sits in a clip box now).
+            k = 0
+            while k < 40 && uidriver.widget_int_field_by_id(fid, "w") != 50 {
+                sleep(50)
+                k = k + 1
+            }
             spec.assert_eq(uidriver.widget_int_field_by_id(fid, "w"), 50, "50 wide")
             spec.assert_eq(uidriver.widget_int_field_by_id(fid, "h"), 30, "30 high")
             pick = uidriver.get_body("/window/pick?x=${uidriver.widget_int_field_by_id(fid, "x") + 25}&y=${uidriver.widget_int_field_by_id(fid, "y") + 15}")

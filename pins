@@ -172,4 +172,10 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # ui.click_through. Verified: tests/run_all.sh on macOS.
 # 06f2aed4 (2026-10-18): /screenshot?b64=1, the driver's picture as text, for the
 # control bus's ui channel. Verified: tests/run_all.sh on macOS.
-AETHER_UI_REF=06f2aed426821723acab4d68e7c0f3de2286f66f
+# cc86abafb69f107f0a3ea7c4cae848c1e4875ca8 (2026-10-19): datagrid_float clipped at the freeze line and
+# datagrid_float_takes_clicks (the page's floats go under frozen panes);
+# on GTK 4.6, /screenshot after a frame, a claimed Tab, the style rules in
+# sixty-four sheets (a page styling a thousand widgets crashed). Verified:
+# tests/run_all.sh on macOS, spraedsheet's run-tests.sh, the GTK specs on
+# aether-linux (4.6, arm64) and ae-x64, datagrid_demo on Win32, iOS and Android.
+AETHER_UI_REF=cc86abafb69f107f0a3ea7c4cae848c1e4875ca8

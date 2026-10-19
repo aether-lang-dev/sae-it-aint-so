@@ -2194,8 +2194,10 @@ sae_ui_datagrid_cell_tooltip(ctx: @keep ptr, this_val: int, argv: int) -> int {
 }
 // ui.datagrid_float(g, row, col, dx, dy, w, h): a container w x h px floating
 // over the grid at (dx, dy) from the top-left of the cell at model row, model
-// column, moving with it as the grid scrolls and clipped to the grid's body;
-// ui.into(f, ...) fills it. The pointer passes through it to the cells (ui.click_through(f, 0)
+// column, moving with it as the grid scrolls and clipped to the grid's body
+// and at its freeze line (a float over the scrolling cells goes under the
+// frozen columns and rows as the cells do); ui.into(f, ...) fills it. The
+// pointer passes through it to the cells (ui.datagrid_float_takes_clicks(g, f, 1)
 // makes it take the pointer). 0 when the grid already has 256.
 sae_ui_datagrid_float(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
@@ -2230,6 +2232,18 @@ sae_ui_datagrid_float_remove(ctx: ptr, this_val: int, argv: int) -> int {
     g = dgrid_arg_(ctx, argv, argc)
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_float_remove: g is not a grid this page made") }
     r = ui.datagrid_float_remove(g, arg_int_(ctx, argv, argc, 1, 0))
+    return quickjs.new_int(ctx, r)
+}
+
+// ui.datagrid_float_takes_clicks(g, f, on): float f takes the pointer (on 1)
+// instead of letting it through to the cells beneath, and back (0). Not
+// ui.click_through(f, ...): f is inside a clip box. 1 when f is one of the grid's.
+sae_ui_datagrid_float_takes_clicks(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_float_takes_clicks: g is not a grid this page made") }
+    r = ui.datagrid_float_takes_clicks(g, arg_int_(ctx, argv, argc, 1, 0), arg_int_(ctx, argv, argc, 2, 1))
     return quickjs.new_int(ctx, r)
 }
 
@@ -8823,6 +8837,7 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_float", 7, sae_ui_datagrid_float)
     reg_(q, u, "datagrid_float_move", 8, sae_ui_datagrid_float_move)
     reg_(q, u, "datagrid_float_remove", 2, sae_ui_datagrid_float_remove)
+    reg_(q, u, "datagrid_float_takes_clicks", 3, sae_ui_datagrid_float_takes_clicks)
     reg_(q, u, "datagrid_floats", 1, sae_ui_datagrid_floats)
     reg_(q, u, "click_through", 2, sae_ui_click_through)
     reg_(q, u, "datagrid_on_edit_change", 2, sae_ui_datagrid_on_edit_change)
