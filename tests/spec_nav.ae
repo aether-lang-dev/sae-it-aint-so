@@ -119,6 +119,10 @@ main() {
         }
         spec.it("a page with scoped seeks makes the requests it names and no others") callback {
             b.click("Scoped requests")
+            // The page loads on the fetch actor: wait for it, as every other
+            // link here does, before looking for its buttons (a click returns
+            // when the link is pressed, not when the next page is built).
+            b.assert_text("scoped: (none)", "the scoped page loaded")
             b.click("Sought GET")
             b.assert_text("sought GET: ok 200", "a sought method and path")
             b.click("Sought POST")

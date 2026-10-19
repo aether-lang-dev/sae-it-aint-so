@@ -121,6 +121,10 @@ main() {
         }
         spec.it("a page with no menu of its own still has sae's, and Reload works") callback {
             b.navigate(b.test_url("/about"))
+            // Go returns when pressed, not when the page is built: wait for
+            // /about before opening its menu, or the menu is the old page's.
+            b.assert_url(b.test_url("/about"), "the about page loaded")
+            b.assert_text("About", "and built")
             m = open_on(first_of("scrollview"))
             spec.assert_contains(menu_json(m), "\"items\":[${SAE_SECTION}", "sae's section alone")
             spec.assert_contains(menu_json(m), "\"separators\":[]", "no divider over nothing")

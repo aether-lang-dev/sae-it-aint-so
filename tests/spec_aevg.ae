@@ -57,6 +57,9 @@ main() {
     spec.describe(fw, "AeVG alive") {
         spec.it("bind_fill, visible_when and bind_text follow page state") callback {
             b.click("Home")
+            // A click returns when the link is pressed, not when the next
+            // page is built: wait for home before looking for its button.
+            b.assert_page("Welcome to Sae it ain't so", "200 ", "home")
             b.click("AeVG alive")
             b.assert_page("AeVG alive", "200 ", "live page")
             spec.assert_true(b.wait_for_vg_pixel(px(15.0), py(15.0), 0x0000ff), "the square starts blue")

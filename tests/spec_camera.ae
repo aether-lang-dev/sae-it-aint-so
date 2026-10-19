@@ -53,6 +53,7 @@ main() {
             spec.assert_true(b.wait_for_console("zoom 1"), "and back")
             spec.assert_true(b.wait_for_vg_pixel(cx(288.0), cy(115.6), 0x191919), "the ring at 288 again")
             b.click("Home")
+            b.assert_page("Welcome to Sae it ain't so", "200 ", "home")
         }
     }
     spec.describe(fw, "the clock components") {
