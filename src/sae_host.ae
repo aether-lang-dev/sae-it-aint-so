@@ -8274,7 +8274,7 @@ seek_refusal_(url: string, seeks: string) -> string {
     n = string.string_array_size(parts)
     i = 0
     while i < n {
-        nm = string.string_array_get(parts, i)
+        nm = string.concat(string.string_array_get(parts, i), "")
         if nm != "" && available_(nm) == 0 {
             if missing == "" { missing = nm } else { missing = "${missing}, ${nm}" }
         }
