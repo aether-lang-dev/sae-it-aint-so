@@ -178,4 +178,10 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # sixty-four sheets (a page styling a thousand widgets crashed). Verified:
 # tests/run_all.sh on macOS, spraedsheet's run-tests.sh, the GTK specs on
 # aether-linux (4.6, arm64) and ae-x64, datagrid_demo on Win32, iOS and Android.
-AETHER_UI_REF=cc86abafb69f107f0a3ea7c4cae848c1e4875ca8
+# 1d4a975c (2026-10-19): on GTK, an underline is whole pixels thick (Pango's was
+# a 0.59 px hairline), a scrollview's content is held to its width (one wide row
+# made a whole page that wide), and a wrap is a group, not a grid, to a screen
+# reader. Needed by spraedsheet's spec_sheet on GTK 4.6; no new primitive.
+# Verified: aether-ui ci.sh on macOS, aether-linux (4.6), -2604 (4.22) and
+# ae-x64; spraedsheet run-tests.sh on macOS; spec_sheet on aether-linux.
+AETHER_UI_REF=1d4a975cb2a15d06d6f75ad078ae92962ed6e679
