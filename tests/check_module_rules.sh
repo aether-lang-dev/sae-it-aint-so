@@ -78,7 +78,10 @@ if [ "$got" -eq 1 ] && printf '%s' "$out" | grep -q "is not in lib/sae/MANIFEST"
 else
     bad "a lib directory without a manifest serves nothing: exit $got: $out"
 fi
-if ! sh "$ROOT/tools/hash-lib.sh" || ! git -C "$ROOT" diff --quiet -- lib/sae/MANIFEST; then
+# Regenerate and compare with what was there -- not `git diff`, which says
+# nothing in a copy without .git (a rsync'd lane tree) and read as "stale".
+cp "$ROOT/lib/sae/MANIFEST" "$WORK/MANIFEST.before"
+if ! sh "$ROOT/tools/hash-lib.sh" || ! cmp -s "$WORK/MANIFEST.before" "$ROOT/lib/sae/MANIFEST"; then
     bad "lib/sae/MANIFEST is stale: run tools/hash-lib.sh and commit it"
 else
     ok "lib/sae/MANIFEST matches lib/sae/*.ts"
