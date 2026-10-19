@@ -192,4 +192,11 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # new primitive. Verified: aether-ui ci.sh on macOS, aether-linux (4.6) and
 # ae-x64; tests/run_all.sh on macOS, aether-linux and ae-x64;
 # spraedsheet's spec_sheet on aether-linux and ae-x64.
-AETHER_UI_REF=abc61c98585fc82b39942127e2f9e2ffe3764c75
+# ebee1c96 (2026-10-19): on GTK, a11y_announce from a focused widget no longer
+# crashes where GTK has no AT-SPI bus (GtkTestATContext has no announce hook;
+# sae's spec_a11y and spec_grid died on 4.22), the driver lays the UI out before
+# it serves a request (spec_aevg read a new canvas 0 x 0 one run in two on
+# 4.22), and a line-through is drawn, not CSS. No new primitive. Verified:
+# tests/run_all.sh on macOS, aether-linux (4.6), aether-linux-2604 (4.22) and
+# ae-x64; aether-ui ci.sh on those four.
+AETHER_UI_REF=ebee1c96cca645d007dd97e91bdb41259979b6f6
