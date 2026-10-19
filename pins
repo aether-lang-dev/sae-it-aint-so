@@ -184,4 +184,12 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # reader. Needed by spraedsheet's spec_sheet on GTK 4.6; no new primitive.
 # Verified: aether-ui ci.sh on macOS, aether-linux (4.6), -2604 (4.22) and
 # ae-x64; spraedsheet run-tests.sh on macOS; spec_sheet on aether-linux.
-AETHER_UI_REF=1d4a975cb2a15d06d6f75ad078ae92962ed6e679
+# abc61c98 (2026-10-19): on GTK, set_width holds a text field below GTK's 168 px
+# minimum and a canvas below its creation size (vg.resize shrinking a scene),
+# style rules load once per callback (a theme switch of a thousand widgets was
+# 2.4 s on ae-x64, now 0.1 s), and text set from code hides a field's
+# placeholder on GTK 4.6. Needed by spec_nav and spec_app_resize on GTK 4.6; no
+# new primitive. Verified: aether-ui ci.sh on macOS, aether-linux (4.6) and
+# ae-x64; tests/run_all.sh on macOS, aether-linux and ae-x64;
+# spraedsheet's spec_sheet on aether-linux and ae-x64.
+AETHER_UI_REF=abc61c98585fc82b39942127e2f9e2ffe3764c75
