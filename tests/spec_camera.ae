@@ -48,7 +48,11 @@ main() {
             b.click("Zoom in")
             spec.assert_true(b.wait_for_console("zoom 1.3"), "the tween finished")
             spec.assert_true(b.wait_for_vg_pixel(cx(300.0), cy(115.6), 0x191919), "zoomed: the ring reaches 300")
-            spec.assert_true(b.vg_pixel_near(cx(288.0), cy(115.6), 0x4d4d4d, 30), "and the disc inside it is at 288")
+            // 288 is on the edge between the ring and the disc inside it once
+            // zoomed (an antialiased 0x4d on macOS's 783 px canvas, 0x6d on
+            // Linux's 800 px one: the value moves with the scale). 284 is
+            // inside the disc, clear of that edge, the same on both.
+            spec.assert_true(b.vg_pixel_near(cx(284.0), cy(115.6), 0x8d8d8d, 30), "and the disc inside it is at 284")
             b.click("Zoom out")
             spec.assert_true(b.wait_for_console("zoom 1"), "and back")
             spec.assert_true(b.wait_for_vg_pixel(cx(288.0), cy(115.6), 0x191919), "the ring at 288 again")

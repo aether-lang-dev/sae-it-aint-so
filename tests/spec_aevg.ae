@@ -50,7 +50,11 @@ main() {
         spec.it("set_transform turns a group from a button") callback {
             spec.assert_true(b.vg_pixel_near(px(65.0), py(68.0), 0x333333, 24), "the dial's bar lies flat")
             b.click("Turn dial")
-            spec.assert_true(b.wait_for_vg_pixel(px(62.0), py(95.0), 0x333333), "turned 90 degrees about (50, 80): the bar stands")
+            // The bar now runs from (62, 80) down to (62, 110); the probe is
+            // kept above the "sized" text at y = 95, whose glyphs the Linux
+            // replay draws (macOS's carries no text) and which a probe at
+            // (62, 95) landed on.
+            spec.assert_true(b.wait_for_vg_pixel(px(62.0), py(85.0), 0x333333), "turned 90 degrees about (50, 80): the bar stands")
             spec.assert_true(b.vg_pixel_near(px(65.0), py(68.0), 0xffffff, 24), "and left where it was")
         }
     }
