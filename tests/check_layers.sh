@@ -31,7 +31,7 @@ expect_imports() {   # expect_imports FILE "line|line|..."
 }
 
 expect_imports services/files/module.ae \
-    "import std.fs|import std.dir|import std.string|import std.strarr|import std.sandbox"
+    "import std.fs|import std.dir|import std.string|import std.strarr|import std.sandbox|import std.encoding"
 expect_imports services/documents/module.ae \
     "import std.fs|import std.string|import std.strarr|import std.sandbox|import std.encoding"
 expect_imports services/clipboard/module.ae \

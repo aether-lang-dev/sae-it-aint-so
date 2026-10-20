@@ -21,6 +21,12 @@ attempt("write appdata", () => {
   fs.write_text("$APPDATA/notes/a.txt", "hello from a sae app");
   return fs.read_text("$APPDATA/notes/a.txt");
 });
+attempt("write base64", () => {
+  fs.mkdir("$APPDATA/notes");
+  fs.write_base64("$APPDATA/notes/bin.dat", "AAEC/f7/");
+  return fs.read_base64("$APPDATA/notes/bin.dat");
+});
+attempt("base64 outside", () => { fs.write_base64("$TEMP/sae-caps-read/b.dat", "AAEC"); return "written"; });
 attempt("list appdata", () => fs.list("$APPDATA/notes").join(","));
 attempt("read temp", () => fs.read_text("$TEMP/sae-caps-read/hello.txt"));
 attempt("write temp", () => { fs.write_text("$TEMP/sae-caps-read/x.txt", "no"); return "written"; });

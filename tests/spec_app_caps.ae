@@ -43,6 +43,15 @@ main() {
             b.click("list appdata")
             b.assert_text("list appdata: a.txt", "listed")
         }
+        spec.it("fs.write_base64 and read_base64: a binary file's bytes, 00 01 02 fd fe ff, within the grant") callback {
+            b.click("write base64")
+            b.assert_text("write base64: AAEC/f7/", "round trip")
+            appdata = os_getenv("SAE_APPDATA_DIR")
+            raw, n, _be = fs.read_binary("${appdata}/notes/bin.dat")
+            spec.assert_eq(n, 6, "six bytes on disk, as given")
+            b.click("base64 outside")
+            spec.assert_contains(b.page_texts(), "base64 outside: refused: fs.write_base64: outside this app's fs.write grant", "a write grant is needed")
+        }
         spec.it("fs.read within its grant") callback {
             _m = fs.mkdir_p("${tmp_dir()}/sae-caps-read")
             _w = fs.write("${tmp_dir()}/sae-caps-read/hello.txt", "readable")

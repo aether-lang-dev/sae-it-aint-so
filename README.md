@@ -329,7 +329,7 @@ service touches files, and each of its operations runs inside Aether's
 `sandbox.enforce` with exactly what was granted or picked
 (`aether/docs/containment-sandbox.md`), behind its own checks.
 
-- `fs.read_text`, `write_text`, `exists`, `list`, `mkdir`, `remove` (and
+- `fs.read_text`, `write_text`, `read_base64`, `write_base64` (a binary file's bytes), `exists`, `list`, `mkdir`, `remove` (and
   Node's `readFileSync`, `writeFileSync`, `existsSync`, `readdirSync`):
   synchronous, within the granted folders. Every path is resolved first
   (symlinks, `..`), so it cannot climb out; a refusal throws, naming the

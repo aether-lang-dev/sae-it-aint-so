@@ -4275,6 +4275,23 @@ sae_fs_write_text(ctx: ptr, this_val: int, argv: int) -> int {
     return 0
 }
 
+sae_fs_read_base64(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    b64, err = files.read_base64(own_(arg_str_(ctx, argv, argc, 0)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
+    return quickjs.new_string(ctx, b64)
+}
+
+sae_fs_write_base64(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = own_(arg_str_(ctx, argv, argc, 0))
+    err = files.write_base64(p, own_(arg_str_(ctx, argv, argc, 1)))
+    if err != "" { return sae_throw_type_error(ctx, err) }
+    return 0
+}
+
 sae_fs_exists(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
@@ -8945,6 +8962,8 @@ api_register_(p: *Page) {
         reg_(q, fo, "readFileSync", 2, sae_fs_read_text)
         reg_(q, fo, "write_text", 2, sae_fs_write_text)
         reg_(q, fo, "writeFileSync", 2, sae_fs_write_text)
+        reg_(q, fo, "read_base64", 1, sae_fs_read_base64)
+        reg_(q, fo, "write_base64", 2, sae_fs_write_base64)
         reg_(q, fo, "exists", 1, sae_fs_exists)
         reg_(q, fo, "existsSync", 1, sae_fs_exists)
         reg_(q, fo, "list", 1, sae_fs_list)

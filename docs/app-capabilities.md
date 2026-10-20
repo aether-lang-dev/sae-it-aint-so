@@ -98,6 +98,8 @@ documents, caches). Node names where they fit, so porting reads naturally:
 |---|---|
 | `fs.read_text(path)` | the file's text (throws if missing) |
 | `fs.write_text(path, text)` | writes it atomically |
+| `fs.read_base64(path)` | a binary file's bytes as base64 (padded) |
+| `fs.write_base64(path, base64)` | writes those bytes atomically |
 | `fs.exists(path)` | true / false |
 | `fs.list(dir)` | the names in a directory |
 | `fs.mkdir(dir)` | creates it and its parents |

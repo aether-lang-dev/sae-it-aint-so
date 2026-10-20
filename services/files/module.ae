@@ -21,9 +21,10 @@ import std.dir
 import std.string
 import std.strarr
 import std.sandbox
+import std.encoding
 
 exports (configure, grant_read, grant_write, granted, resolve, path,
-         read_text, write_text, exists, list_json, mkdir, remove)
+         read_text, write_text, read_base64, write_base64, exists, list_json, mkdir, remove)
 
 var enabled_: int = 0        // 0 in the browser: pages there get no fs
 var app_data_: string = ""   // $APPDATA, and where relative paths go
@@ -201,6 +202,39 @@ write_text(raw: string, text: string) -> string {
     }
     sandbox.free(perms)
     if err != "" { return "fs.write_text: ${err}" }
+    return ""
+}
+
+// A binary file's bytes as base64 (padded): (its base64, "") or ("", why).
+read_base64(raw: string) -> (string, string) {
+    data = ""
+    n = 0
+    err = ""
+    p, why = path(raw, 0, "fs.read_base64")
+    if why != "" { return "", why }
+    perms = fence_()
+    sandbox.enforce(perms) callback {
+        data, n, err = fs.read_binary(p)
+    }
+    sandbox.free(perms)
+    if err != "" { return "", "fs.read_base64: ${err}" }
+    if n == 0 { return "", "" }
+    return encoding.base64_encode_padded(string.bytes(data)), ""
+}
+
+// Bytes given as base64 written atomically: "" or why.
+write_base64(raw: string, b64: string) -> string {
+    err = ""
+    p, why = path(raw, 1, "fs.write_base64")
+    if why != "" { return why }
+    bytes, derr = encoding.base64_decode(b64)
+    if derr != "" { return "fs.write_base64: not base64" }
+    perms = fence_()
+    sandbox.enforce(perms) callback {
+        err = fs.write_atomic(p, string.bytes(bytes))
+    }
+    sandbox.free(perms)
+    if err != "" { return "fs.write_base64: ${err}" }
     return ""
 }
 
