@@ -180,6 +180,7 @@ ui.datagrid_cell_style(rows, (r: number, c: number) => (r === 0 && c === 1
   : r === 7 && c === 1 ? "white-space: normal" : ""));
 ui.datagrid_cell_tooltip(rows, (r: number, c: number) => (r === 0 && c === 1 ? "a note" : ""));
 ui.datagrid_on_edit(rows, (r: number, c: number, t: string) => print(`rows edited ${r},${c} = ${t}`));
+ui.datagrid_on_edit_cancel(rows, (r: number, c: number) => print(`rows edit cancelled ${r},${c}`));
 ui.datagrid_on_edit_change(rows, (t: string, caret: number) => print(`rows typing ${t} @${caret}`));
 btn("Hide row 2", () => {
   ui.datagrid_hide_row(rows, 1, 1);

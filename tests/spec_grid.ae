@@ -246,6 +246,7 @@ main() {
             b.click("Insert X1")
             spec.assert_true(b.wait_for_console("rows typing n2:1X1 @6"), "X1 at the caret")
             uidriver.post_ok("/window/key?combo=Escape", "Escape")
+            spec.assert_true(b.wait_for_console("rows edit cancelled 2,1"), "the cancelled editor is heard, row 2, model column 1, on every backend")
         }
         spec.it("the selection glides once asked; the headers hide and show") callback {
             b.click("Glide")

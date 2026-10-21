@@ -1553,7 +1553,8 @@ dg_headers_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int) -> strin
 }
 
 // kind: 0 click, 1 select, 2 activate, 3 column resize, 4 column move,
-// 5 a header clicked (fn(c): the second number is 0).
+// 5 a header clicked (fn(c): the second number is 0), 6 an editor closed
+// with nothing stored.
 dg_on_ii_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int, kind: int) -> string {
     if argc <= i || is_fn_arg_(ctx, argv, i) == 0 { return "fn must be a function of two numbers" }
     ref = hold_arg_(ctx, argv, i)
@@ -1566,6 +1567,7 @@ dg_on_ii_(ctx: @keep ptr, g: @keep ptr, argv: int, argc: int, i: int, kind: int)
     if kind == 2 { _g = ui.datagrid_on_activate(g, fire) }
     if kind == 3 { _g = ui.datagrid_on_col_resize(g, fire) }
     if kind == 4 { _g = ui.datagrid_on_col_move(g, fire) }
+    if kind == 6 { _g = ui.datagrid_on_edit_cancel(g, fire) }
     if kind == 5 {
         _g = ui.datagrid_on_header_click(g) callback |c: int| {
             _s = call_ii_str_(ctx, ref, c, 0, "a ui.datagrid header-click handler")
@@ -1709,6 +1711,20 @@ sae_ui_datagrid_on_header_click(ctx: @keep ptr, this_val: int, argv: int) -> int
     if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_header_click: g is not a grid this page made") }
     e = dg_on_ii_(ctx, g, argv, argc, 1, 5)
     if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_header_click(g, fn): ${e}") }
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+// ui.datagrid_on_edit_cancel(g, fn(r, c)): an editor on row r, MODEL column c
+// was closed with nothing stored: Escape, ui.datagrid_edit_cancel, or
+// ui.datagrid_set_view_only on. (A window key handler does not hear an
+// Escape the editor takes on GTK; this is told on every backend.)
+sae_ui_datagrid_on_edit_cancel(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_on_edit_cancel: g is not a grid this page made") }
+    e = dg_on_ii_(ctx, g, argv, argc, 1, 6)
+    if e != "" { return sae_throw_type_error(ctx, "ui.datagrid_on_edit_cancel(g, fn): ${e}") }
     return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
 }
 
@@ -8880,6 +8896,7 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_floats", 1, sae_ui_datagrid_floats)
     reg_(q, u, "click_through", 2, sae_ui_click_through)
     reg_(q, u, "datagrid_on_edit_change", 2, sae_ui_datagrid_on_edit_change)
+    reg_(q, u, "datagrid_on_edit_cancel", 2, sae_ui_datagrid_on_edit_cancel)
     reg_(q, u, "datagrid_edit_insert", 2, sae_ui_datagrid_edit_insert)
     reg_(q, u, "_textarea", 2, sae_ui_textarea)
     reg_(q, u, "text_measure", 2, sae_ui_text_measure)
