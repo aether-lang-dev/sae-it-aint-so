@@ -292,6 +292,32 @@ main() {
             b.click("Headers")
             spec.assert_true(b.wait_for_console("grid headers shown true"), "shown")
         }
+        spec.it("a read view: View only opens no editor and draws no cursor box or selection; Editable gives them back") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("C5")}/click", "click C5")
+            b.click("View only")
+            spec.assert_true(b.wait_for_console("grid view only true"), "view only, as the page reads it back")
+            before = uidriver.widget_id_last_of("textfield", "")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("C5")}/double_click", "double-click C5")
+            uidriver.post_ok("/window/key?combo=F2", "F2")
+            uidriver.post_ok("/window/key?combo=z", "z")
+            sleep(500)
+            spec.assert_eq(uidriver.widget_id_last_of("textfield", ""), before, "no editor opened")
+            spec.assert_false(string.contains(uidriver.get_body("/widget/${uidriver.widget_id_by_text("C5")}"), "\"borderWidth\":2") == 1, "C5 has no cursor box")
+            b.click("Editable")
+            spec.assert_true(b.wait_for_console("grid view only false"), "editable again")
+            spec.assert_contains(uidriver.get_body("/widget/${uidriver.widget_id_by_text("C5")}"), "\"borderWidth\":2", "the cursor box back on C5")
+            uidriver.post_ok("/window/key?combo=z", "z")
+            ed = 0
+            i = 0
+            while i < 30 && ed == 0 {
+                last = uidriver.widget_id_last_of("textfield", "")
+                if last != before { ed = last }
+                if ed == 0 { sleep(100) }
+                i = i + 1
+            }
+            spec.assert_true(ed > 0, "typing opens an editor again")
+            uidriver.post_ok("/window/key?combo=Escape", "Escape")
+        }
         spec.it("ui.textarea: several lines, bound both ways") callback {
             b.click("Two lines")
             spec.assert_true(b.wait_for_text("story has 2 lines"), "the state set it")

@@ -1835,6 +1835,26 @@ sae_ui_datagrid_header_shown(ctx: ptr, this_val: int, argv: int) -> int {
     return quickjs.new_bool(ctx, ui.datagrid_header_shown(g))
 }
 
+// ui.datagrid_set_view_only(g, on): a read view: no editor opens (one open
+// closes unstored) and no cursor box or selection colour is drawn, the
+// selection still moving and heard; ui.datagrid_view_only(g).
+sae_ui_datagrid_set_view_only(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_set_view_only: g is not a grid this page made") }
+    _g = ui.datagrid_set_view_only(g, arg_int_(ctx, argv, argc, 1, 1))
+    return quickjs.new_int(ctx, arg_int_(ctx, argv, argc, 0, 0))
+}
+
+sae_ui_datagrid_view_only(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    g = dgrid_arg_(ctx, argv, argc)
+    if g == null { return sae_throw_type_error(ctx, "ui.datagrid_view_only: g is not a grid this page made") }
+    return quickjs.new_bool(ctx, ui.datagrid_view_only(g))
+}
+
 // ui.datagrid_set_row_heights(g, h): every row's height the grid's own (a
 // zoom's), rows given their own keeping theirs; ui.datagrid_row_heights(g).
 sae_ui_datagrid_set_row_heights(ctx: ptr, this_val: int, argv: int) -> int {
@@ -8820,6 +8840,8 @@ api_register_(p: *Page) {
     reg_(q, u, "datagrid_glide_box", 1, sae_ui_datagrid_glide_box)
     reg_(q, u, "datagrid_show_header", 2, sae_ui_datagrid_show_header)
     reg_(q, u, "datagrid_header_shown", 1, sae_ui_datagrid_header_shown)
+    reg_(q, u, "datagrid_set_view_only", 2, sae_ui_datagrid_set_view_only)
+    reg_(q, u, "datagrid_view_only", 1, sae_ui_datagrid_view_only)
     reg_(q, u, "datagrid_set_row_heights", 2, sae_ui_datagrid_set_row_heights)
     reg_(q, u, "datagrid_row_heights", 1, sae_ui_datagrid_row_heights)
     reg_(q, u, "datagrid_height", 1, sae_ui_datagrid_height)

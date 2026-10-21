@@ -114,6 +114,15 @@ btn("Headers", () => {
   ui.datagrid_show_header(g, !ui.datagrid_header_shown(g));
   print(`grid headers shown ${ui.datagrid_header_shown(g)}`);
 });
+// A read view: no editor, no cursor box or selection colour; Editable undoes it.
+btn("View only", () => {
+  ui.datagrid_set_view_only(g, true);
+  print(`grid view only ${ui.datagrid_view_only(g)}`);
+});
+btn("Editable", () => {
+  ui.datagrid_set_view_only(g, false);
+  print(`grid view only ${ui.datagrid_view_only(g)}`);
+});
 // The grid's own widget, which a screen reader reads as the grid: an
 // announcement made on it.
 btn("Announce", () => {
