@@ -70,7 +70,7 @@ command_(key: string, command: string) -> (string, string) {
     port = port_of_(url)
     o = json.obj()
     _c = json.set(o, "command", json.str(command))
-    plain_in, _se = json.stringify(o)
+    plain_in, _se = json.encode(o)
     frame = secure_channel.seal_line(key, plain_in)
     path = string.substring(url, string.index_of(string.substring(url, 7, string.length(url)), "/") + 7, string.length(url))
     status, body = exchange_(port, request_(port, path, "127.0.0.1:${port}", "", frame))

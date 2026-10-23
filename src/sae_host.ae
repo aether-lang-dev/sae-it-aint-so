@@ -2673,7 +2673,7 @@ vg_node_of_(p: *Page, h: int) -> ptr {
 
 // Register a node, run the shape's block (if the page gave one at fn_at)
 // with it on top, and return its handle.
-vg_shape_done_(ctx: ptr, argv: int, argc: int, fn_at: int, node: ptr) -> int {
+vg_shape_done_(ctx: ptr, argv: int, argc: int, fn_at: int, node: @keep ptr) -> int {
     p = page_of_(ctx)
     list.add(p.vg_nodes, node)
     h = VG_BASE + list.size(p.vg_nodes)
@@ -8755,16 +8755,25 @@ engine_eval_(q: ptr, src: string, url: string) -> (int, string) {
 
 engine_dispose_(q: ptr) { quickjs.dispose(q) }
 
+// contrib.quickjs's qjs_function again, with the callback typed. Our page-API
+// functions keep their `ctx` (`@keep ptr`, hold_ and the widget callbacks they
+// register), and quickjs.function takes a plain `cb: @keep fn`, which borrows
+// every ptr, so from 0.838.0 the checker refuses to hand it one (E0902). The
+// extern says what the engine really does with the callback: calls it with the
+// runtime, which outlives the page's widgets. (Aether gap: quickjs.function's
+// cb should be `@keep fn(@keep ptr, int, int) -> int`.)
+extern qjs_function(q: ptr, name: string, arity: int, cb: @retain fn(@keep ptr, int, int) -> int) -> int
+
 // One page-API function: obj[name] calls the Aether function f.
-reg_(q: ptr, obj: int, name: string, arity: int, f: fn) {
-    h = quickjs.function(q, name, arity, f)
+reg_(q: ptr, obj: int, name: string, arity: int, f: @keep fn(@keep ptr, int, int) -> int) {
+    h = qjs_function(q, name, arity, f)
     _e = quickjs.set(q, obj, name, h)
     quickjs.release(q, h)
 }
 
 // One global page-API function: globalThis[name] calls the Aether function f.
-glob_fn_(q: ptr, name: string, arity: int, f: fn) {
-    h = quickjs.function(q, name, arity, f)
+glob_fn_(q: ptr, name: string, arity: int, f: @keep fn(@keep ptr, int, int) -> int) {
+    h = qjs_function(q, name, arity, f)
     quickjs.set_global(q, name, h)
     quickjs.release(q, h)
 }

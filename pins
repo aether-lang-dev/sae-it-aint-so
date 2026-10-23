@@ -54,7 +54,19 @@
 # 0.830.0 (2026-10-20): the floor of aeb v0.328 (below), so a pin that
 # installs aeb v0.328 through get.sh has an ae it accepts. No new primitive
 # sae uses; verified against the dev tree at 0.831.0 (see AEB_REF).
-AE_PIN=0.830.0
+# 0.841.0 (2026-10-23): a real floor move, evidence-based, not a tracking
+# bump. 0.836-0.840's ownership rules reach sae: a function that keeps a
+# `fn` or a `ptr` declares it `@keep`, and a std container's store (list.add,
+# map.put) keeps what it is given (0.840, @retain); `fn` parameters are
+# checked too (0.838). src/sae_host.ae's reg_ and glob_fn_ take the page-API
+# callback as `@keep fn(@keep ptr, int, int) -> int`, which hands it to a local
+# extern of contrib.quickjs's qjs_function (quickjs.function's own `cb` is a
+# plain `@keep fn`, which borrows every ptr, so it refuses our `@keep ctx`
+# callbacks: an Aether gap, to report), vg_shape_done_ and aevg's
+# index_gradients keep their node. std.json.stringify is encode, and os.aether_args_*
+# are args_count/args_get (0.836.0). Verified: the dev tree at v0.841.0,
+# lower/run-tests.sh and tests/run_all.sh on macOS.
+AE_PIN=0.841.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
@@ -74,7 +86,11 @@ AE_PIN=0.830.0
 # v0.327's bldr has W1005 sites (18 per aeb build in sae's log: 36 for the
 # sae and sae-driver builds), so it stops compiling on that release; v0.328
 # reads them with typed accessors, and its floor is Aether 0.830.0 (AE_PIN).
-AEB_REF=v0.328
+# v0.333 (2026-10-23): the first tag with aeb's own 0.840 fix (3f5acf4): a
+# build node's session handle is `@keep`, so aeb compiles under 0.840 and
+# 0.841 (v0.328's bldr does not: E0902 on its handle). Its floor is Aether
+# 0.841.0 (AE_PIN). Verified: sae's builds (sae, sae-driver) under v0.333.
+AEB_REF=v0.333
 
 # Sibling checkouts, reached through the aether-ui symlink. c4858fbe adds
 # ui.timer_once and the frame clock (ui.on_frame), which sae's timers use.
@@ -206,4 +222,9 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # 4.22), and a line-through is drawn, not CSS. No new primitive. Verified:
 # tests/run_all.sh on macOS, aether-linux (4.6), aether-linux-2604 (4.22) and
 # ae-x64; aether-ui ci.sh on those four.
-AETHER_UI_REF=ebee1c96cca645d007dd97e91bdb41259979b6f6
+# 51d1ae75 (2026-10-23): aether-ui on Aether 0.841.0. ac75c750 declares ~130
+# kept fn and ptr parameters `@keep` (0.838-0.840's ownership rules; nothing
+# older than 0.836 builds the tree), and aeb v0.333 is its CI pin. Also
+# carries datagrid_set_view_only (6deb9490) and datagrid_on_edit_cancel
+# (f065b112), which sae binds already. Verified: tests/run_all.sh on macOS.
+AETHER_UI_REF=51d1ae7563a90c815177dc130b5a80dec130ef83

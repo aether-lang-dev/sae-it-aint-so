@@ -113,7 +113,7 @@ courier_json_() -> string {
     o = json.obj()
     _u = json.set(o, "url", json.str(address()))
     _k = json.set(o, "key", json.str(key_))
-    text, _e = json.stringify(o)
+    text, _e = json.encode(o)
     return text
 }
 
@@ -358,7 +358,7 @@ reply_json_(success: int, result_json: string, code: int, error: string) -> stri
     if success == 1 { ok = "true" }
     r = result_json
     if r == "" { r = "null" }
-    quoted, _e = json.stringify(json.str(error))
+    quoted, _e = json.encode(json.str(error))
     return "{\"success\":${ok},\"result\":${r},\"errorCode\":${code},\"error\":${quoted}}"
 }
 

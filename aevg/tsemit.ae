@@ -292,7 +292,7 @@ hidden(node: ptr) -> int {
 
 // Every gradient in the document, keyed by id, so href chains resolve and a
 // solid rendering can pick a colour.
-index_gradients(e: *Emit, node: ptr) {
+index_gradients(e: *Emit, node: @keep ptr) {
     tag = parser.node_tag(node)
     if tag == "linearGradient" || tag == "radialGradient" {
         if parser.node_has_attr(node, "id") == 1 {

@@ -87,7 +87,7 @@ main() {
 
     o = json.obj()
     _c = json.set(o, "command", json.str(command))
-    plain, _se = json.stringify(o)
+    plain, _se = json.encode(o)
     frame = secure_channel.seal_line(key, plain)
 
     sock, cerr = tcp.connect("127.0.0.1", port)

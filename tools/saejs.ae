@@ -24,11 +24,11 @@ print_(q: ptr, this_h: int, args: int) -> int {
 }
 
 main() {
-    if os.aether_args_count() < 2 {
+    if os.args_count() < 2 {
         println("usage: saejs file.js")
         exit(2)
     }
-    path = os.aether_args_get(1)
+    path = os.args_get(1)
     src, err = fs.read(path)
     if err != "" {
         println("saejs: cannot read ${path}: ${err}")
