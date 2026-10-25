@@ -66,7 +66,14 @@
 # index_gradients keep their node. std.json.stringify is encode, and os.aether_args_*
 # are args_count/args_get (0.836.0). Verified: the dev tree at v0.841.0,
 # lower/run-tests.sh and tests/run_all.sh on macOS.
-AE_PIN=0.841.0
+# 0.842.0 (2026-10-25): a real floor move, evidence-based: the first release
+# with aether #3126 (efb32d1f), which types `quickjs.function`'s callback as
+# `@keep fn(@keep ptr, int, int) -> int`. src/sae_host.ae's local `extern
+# qjs_function` (the workaround for the plain `@keep fn` that refused our
+# `@keep ctx` callbacks) is gone and reg_/glob_fn_ call quickjs.function.
+# Verified: the dev tree at v0.842.0, lower/run-tests.sh and tests/run_all.sh
+# on macOS.
+AE_PIN=0.842.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
