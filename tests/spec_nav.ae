@@ -299,6 +299,23 @@ main() {
             b.click("Back to Home")
             b.assert_page(HOME, "200 ", "home")
         }
+        spec.it("a page that builds part of itself again lets go of the old widgets' callbacks: none are held beyond the widgets that are left") callback {
+            b.navigate(b.test_url("/rebuild"))
+            b.assert_page("presses: 0", "200 ", "rebuild page")
+            b.click("Rebuild")
+            spec.assert_true(b.wait_for_console("held: 0"), "a hundred rebuilds of a button, a field, a toggle and a context menu hold what one does")
+            b.click("Press")
+            b.assert_text("presses: 1", "the row's new button works")
+            b.click("Self")
+            b.assert_text("self: 1", "a handler that destroys its own widget runs to its end")
+            b.click("Press")
+            b.assert_text("presses: 2", "and the row it built works")
+            b.click("Self")
+            b.click("Self")
+            b.assert_text("self: 3", "again and again")
+            b.navigate(b.test_url("/"))
+            b.assert_page(HOME, "200 ", "and home again")
+        }
     }
 
     spec.describe(fw, "inputs and indicators") {

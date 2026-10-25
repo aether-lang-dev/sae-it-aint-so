@@ -167,6 +167,17 @@ struct Page {
     bus_stopped_ref: int  // bus.serve's second function: told when a request was stopped, or 0
     dgrids: ptr      // std.list of aether-ui datagrids this page made (ui.datagrid)
     menus: ptr       // std.list of *PageMenu: ui.context_menu's targets and items
+    held: ptr        // std.list of *HeldRef: the callbacks widgets hold, to let go with their widget
+}
+
+// A JS function a widget holds for its callback (a click, a change, a
+// context menu's items), noted with the widget so it can be let go when the
+// widget is destroyed: without that a page that builds part of itself again
+// (a row of tabs, a panel) keeps every callback it ever made, and whatever
+// each one closes over, for as long as the page lives.
+struct HeldRef {
+    widget: int
+    ref: int
 }
 
 // ui.context_menu(target, items): a widget's, a vg shape's or the whole
@@ -297,7 +308,11 @@ pop_(p: *Page) {
 // Call a held JS function with no arguments: 0, or -1 if it threw (the
 // error is in quickjs.last_error). Its promise jobs run after it.
 call0_(ctx: ptr, f: int) -> int {
-    r, err = quickjs.call(ctx, f, 0, 0)
+    // The call holds a reference of its own: a handler may destroy its own
+    // widget, which lets go of f (drop_held_), while it is still running.
+    g = quickjs.dup(ctx, f)
+    r, err = quickjs.call(ctx, g, 0, 0)
+    quickjs.release(ctx, g)
     if err != "" { return 0 - 1 }
     quickjs.release(ctx, r)
     return 0
@@ -313,7 +328,9 @@ call_arg_(ctx: ptr, argv: int, i: int) -> int {
 
 // Call a held function with the elements of an args array: as call0_.
 calln_(ctx: ptr, f: int, args: int) -> int {
-    r, err = quickjs.call(ctx, f, 0, args)
+    g = quickjs.dup(ctx, f)
+    r, err = quickjs.call(ctx, g, 0, args)
+    quickjs.release(ctx, g)
     if err != "" { return 0 - 1 }
     quickjs.release(ctx, r)
     return 0
@@ -382,6 +399,87 @@ hold_(ctx: ptr, h: int) -> int {
 // Hold argument i.
 hold_arg_(ctx: ptr, argv: int, i: int) -> int {
     return quickjs.arg(ctx, argv, i)
+}
+
+// Note that held function `ref` is widget `h`'s callback, to be let go of
+// when h is destroyed (drop_held_).
+track_(p: *Page, h: int, ref: int) {
+    if ref == 0 || h == 0 { return }
+    e = heap.new(HeldRef)
+    e.widget = h
+    e.ref = ref
+    list.add(p.held, e as ptr)
+}
+
+// Is widget `w` the widget `root`, or inside it?
+under_(w: int, root: int) -> int {
+    cur = w
+    steps = 0
+    while cur > 0 && steps < 1024 {
+        if cur == root { return 1 }
+        cur = aether_ui_widget_parent_impl(cur)
+        steps = steps + 1
+    }
+    return 0
+}
+
+// The widgets inside `root` (and root itself when `self_too`) are about to be
+// destroyed: let go of the callbacks they hold and the context menus they
+// carry, and forget them as stacks. Called before they go, while the tree
+// can still be walked. A handler of theirs running right now is safe: the
+// calls into JS hold a reference of their own (hold_call_).
+drop_held_(ctx: ptr, p: *Page, root: int, self_too: int) {
+    if root == 0 { return }
+    kept = list.new()
+    n = list.size(p.held)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.held, i)
+        e = v as *HeldRef
+        if under_(e.widget, root) == 1 && (self_too == 1 || e.widget != root) {
+            quickjs.release(ctx, e.ref)
+            heap.free(e)
+        } else {
+            list.add(kept, v)
+        }
+        i = i + 1
+    }
+    list.free(p.held)
+    p.held = kept
+    mkept = list.new()
+    n = list.size(p.menus)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.menus, i)
+        pm = v as *PageMenu
+        if pm.target > 0 && pm.target < VG_BASE && under_(pm.target, root) == 1 && (self_too == 1 || pm.target != root) {
+            quickjs.release(ctx, pm.items)
+            heap.free(pm)
+        } else {
+            list.add(mkept, v)
+        }
+        i = i + 1
+    }
+    list.free(p.menus)
+    p.menus = mkept
+    p.stacks = forget_under_(p.stacks, root, self_too)
+    p.grids = forget_under_(p.grids, root, self_too)
+}
+
+// A list of widget handles, less those inside `root` (and root itself when
+// `self_too`).
+forget_under_(l: ptr, root: int, self_too: int) -> ptr {
+    kept = list.new()
+    n = list.size(l)
+    i = 0
+    while i < n {
+        v, _ = list.get(l, i)
+        w = mem.ptr_to_long(v) as int
+        if under_(w, root) == 1 && (self_too == 1 || w != root) { } else { list.add(kept, v) }
+        i = i + 1
+    }
+    list.free(l)
+    return kept
 }
 
 // A container builder: make it under the current top, then run the page's
@@ -563,6 +661,7 @@ sae_ui_btn(ctx: @keep ptr, this_val: int, argv: int) -> int {
     on_press = || { fire_click_(ctx, ref) }
     long t = now_ns_()
     h = ui.btn(mem.long_to_ptr(top_(p)), label, on_press)
+    track_(p, h, ref)
     ui_done_(p, t)
     return quickjs.new_int(ctx, h)
 }
@@ -771,6 +870,7 @@ sae_ui_textfield(ctx: @keep ptr, this_val: int, argv: int) -> int {
     }
     long t = now_ns_()
     h = ui.textfield(mem.long_to_ptr(top_(p)), placeholder, on_change)
+    track_(p, h, ref)
     ui_done_(p, t)
     // textfield(placeholder, onChange, () => { onsubmit(...) }): a third
     // argument is the field's own block.
@@ -806,6 +906,7 @@ sae_ui_securefield(ctx: @keep ptr, this_val: int, argv: int) -> int {
     }
     long t = now_ns_()
     h = ui.securefield(mem.long_to_ptr(top_(p)), placeholder, on_change)
+    track_(p, h, ref)
     ui_done_(p, t)
     return quickjs.new_int(ctx, h)
 }
@@ -1062,6 +1163,7 @@ sae_ui_on_submit(ctx: @keep ptr, this_val: int, argv: int) -> int {
 }
 
 submit_to_(ctx: @keep ptr, h: int, ref: int) {
+    track_(page_of_(ctx), h, ref)
     _h = ui.on_submit(h) callback |t: string| {
         r = call1_str_(ctx, ref, t)
         if r < 0 { report_exception_(ctx, "a submit handler") }
@@ -1097,6 +1199,7 @@ call_iff_(ctx: ptr, ref: int, a: int, x: float, y: float, what: string) {
 }
 
 drag_to_(ctx: @keep ptr, h: int, ref: int) {
+    track_(page_of_(ctx), h, ref)
     _h = ui.on_drag(h) callback |phase: int, x: float, y: float| {
         call_iff_(ctx, ref, phase, x, y, "a drag handler")
         settle_(ctx)
@@ -1135,6 +1238,7 @@ sae_ui_reorderable(ctx: @keep ptr, this_val: int, argv: int) -> int {
     if kind != "vstack" && kind != "hstack" { return sae_throw_type_error(ctx, "ui.reorderable(h, fn): h is not a vstack or hstack this page made") }
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.reorderable(h, fn): fn must be a function (from, to) => void") }
     ref = hold_arg_(ctx, argv, 1)
+    track_(p, h, ref)
     ui.reorderable(h) callback |from: int, to: int| {
         was = gesture_
         gesture_ = 1
@@ -1169,6 +1273,7 @@ call_i_(ctx: ptr, ref: int, n: int, what: string) {
 }
 
 focus_to_(ctx: @keep ptr, h: int, ref: int) {
+    track_(page_of_(ctx), h, ref)
     _h = ui.on_focus_change(h) callback |inside: int| {
         call_i_(ctx, ref, inside, "a focus handler")
         settle_(ctx)
@@ -1278,6 +1383,7 @@ sae_ui_on_layout(ctx: @keep ptr, this_val: int, argv: int) -> int {
     if owned_(p, h) == 0 || own_stack_(p, h) == 0 || in_list_(p.grids, h) == 1 { return sae_throw_type_error(ctx, "ui.on_layout(h, fn): h is not a stack (vstack or hstack) this page made") }
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.on_layout(h, fn): fn must be a function") }
     ref = hold_arg_(ctx, argv, 1)
+    track_(p, h, ref)
     seq = p.seq
     ui.on_layout(h) callback |w: int, hh: int| {
         if ae_live_(ctx, seq) == 0 { return }
@@ -1446,7 +1552,9 @@ call_ii_str_(ctx: ptr, ref: int, a: int, b: int, what: string) -> string {
     vb = quickjs.new_int(ctx, b)
     _b = quickjs.set_index(ctx, args, 1, vb)
     quickjs.release(ctx, vb)
-    r, err = quickjs.call(ctx, ref, 0, args)
+    g = quickjs.dup(ctx, ref)
+    r, err = quickjs.call(ctx, g, 0, args)
+    quickjs.release(ctx, g)
     quickjs.release(ctx, args)
     if err != "" {
         report_exception_(ctx, what)
@@ -2364,6 +2472,7 @@ sae_ui_textarea(ctx: @keep ptr, this_val: int, argv: int) -> int {
     }
     long t = now_ns_()
     h = ui.textarea(mem.long_to_ptr(top_(p)), placeholder, on_change)
+    track_(p, h, ref)
     ui_done_(p, t)
     return quickjs.new_int(ctx, h)
 }
@@ -2552,6 +2661,7 @@ sae_ui_clear(ctx: ptr, this_val: int, argv: int) -> int {
     p = page_of_(ctx)
     h = arg_int_(ctx, argv, argc, 0, 0)
     if own_stack_(p, h) == 0 { return sae_throw_type_error(ctx, "clear(h): h is not a vstack, hstack or grid this page made") }
+    drop_held_(ctx, p, h, 0)
     ui.clear_children(h)
     return 0
 }
@@ -2577,6 +2687,7 @@ sae_ui_on_double_click(ctx: @keep ptr, this_val: int, argv: int) -> int {
     if h == 0 { return sae_throw_type_error(ctx, "on_double_click(h, fn): h is not a widget this page made") }
     ref = held_fn_(ctx, argv, argc, 1)
     if ref == 0 { return sae_throw_type_error(ctx, "on_double_click(h, fn): fn must be a function") }
+    track_(page_of_(ctx), h, ref)
     _d = ui.on_double_click(h, || { fire_click_(ctx, ref) })
     return 0
 }
@@ -2590,6 +2701,7 @@ sae_ui_onclick(ctx: @keep ptr, this_val: int, argv: int) -> int {
         return sae_throw_type_error(ctx, "onclick(fn): fn must be a function")
     }
     ref = hold_arg_(ctx, argv, 0)
+    track_(page_of_(ctx), target, ref)
     ui.onclick(mem.long_to_ptr(target), || { fire_click_(ctx, ref) })
     return 0
 }
@@ -2760,6 +2872,7 @@ sae_ui_toggle(ctx: @keep ptr, this_val: int, argv: int) -> int {
     ref = held_fn_(ctx, argv, argc, 1)
     long t = now_ns_()
     h = ui.toggle(mem.long_to_ptr(top_(p)), label, |on: int| { fire_num_(ctx, ref, on, "a toggle handler") })
+    track_(p, h, ref)
     ui_done_(p, t)
     return quickjs.new_int(ctx, h)
 }
@@ -2773,6 +2886,7 @@ sae_ui_slider(ctx: @keep ptr, this_val: int, argv: int) -> int {
     long t = now_ns_()
     h = ui.slider(mem.long_to_ptr(top_(p)), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 1.0),
                   arg_num_(ctx, argv, argc, 2, 0.0), |v: float| { fire_num_(ctx, ref, v, "a slider handler") })
+    track_(p, h, ref)
     ui_done_(p, t)
     return quickjs.new_int(ctx, h)
 }
@@ -2791,6 +2905,7 @@ sae_ui_scrollbar(ctx: @keep ptr, this_val: int, argv: int) -> int {
                      arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 1.0),
                      arg_num_(ctx, argv, argc, 3, 0.0), arg_num_(ctx, argv, argc, 4, 0.0),
                      |v: float| { fire_num_(ctx, ref, v, "a scrollbar handler") })
+    track_(p, h, ref)
     ui_done_(p, t)
     return quickjs.new_int(ctx, h)
 }
@@ -2924,6 +3039,14 @@ page_menus_free_(p: *Page) {
         i = i + 1
     }
     list.free(p.menus)
+    n = list.size(p.held)
+    i = 0
+    while i < n {
+        v, _ = list.get(p.held, i)
+        heap.free(v)
+        i = i + 1
+    }
+    list.free(p.held)
     // Its items go with the page: none of them can run into a freed runtime.
     b = p.browser as *Browser
     if b != null && b.menu_h != 0 { ui.menu_clear(b.menu_h) }
@@ -3070,7 +3193,10 @@ sae_ui_context_menu(ctx: @keep ptr, this_val: int, argv: int) -> int {
     while i < n {
         v, _ = list.get(p.menus, i)
         pm = v as *PageMenu
-        if pm.target == target { pm.items = items }
+        if pm.target == target {
+            if pm.items != items { quickjs.release(ctx, pm.items) }
+            pm.items = items
+        }
         i = i + 1
     }
     if had == 0 {
@@ -3098,6 +3224,7 @@ sae_ui_picker(ctx: @keep ptr, this_val: int, argv: int) -> int {
     ref = held_fn_(ctx, argv, argc, 0)
     long t = now_ns_()
     h = ui.picker(mem.long_to_ptr(top_(p)), |i: int| { fire_num_(ctx, ref, i, "a picker handler") })
+    track_(p, h, ref)
     ui_done_(p, t)
     return quickjs.new_int(ctx, h)
 }
@@ -4694,6 +4821,24 @@ js_date_now(ctx: ptr, this_val: int, argv: int) -> int {
 js_performance_now(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     return quickjs.new_float(ctx, esc_perf_now_())
+}
+
+// performance.memoryUsed(): bytes the page's runtime has allocated, garbage
+// not yet collected included (Chrome's performance.memory.usedJSHeapSize).
+// A page learns only how big it is; a spec samples it between steps to show
+// that a long run stays bounded.
+js_performance_memory_used(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_float(ctx, quickjs.memory_used(ctx) as float)
+}
+
+// performance.handlesHeld(): how many values the host holds for the page now
+// (the callbacks widgets keep, a timer's function): a page that makes and
+// drops widgets should see this level off, and a count that keeps climbing
+// is a callback no widget lets go of.
+js_performance_handles_held(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_float(ctx, quickjs.handles(ctx) as float)
 }
 
 // ===== wave1/escape: the browser's security rules (docs/roadmap.md 1.1, 1.2) =====
@@ -6496,7 +6641,9 @@ ae_call_bool_(ctx: ptr, ref: int, b: int) -> int {
 // Call a held JS function with no arguments and return its value's handle
 // (0 if it threw; the error is reported).
 ae_call_value_(ctx: ptr, ref: int, what: string) -> int {
-    r, err = quickjs.call(ctx, ref, 0, 0)
+    g = quickjs.dup(ctx, ref)
+    r, err = quickjs.call(ctx, g, 0, 0)
+    quickjs.release(ctx, g)
     if err != "" {
         report_exception_(ctx, what)
         return 0
@@ -6626,6 +6773,7 @@ sae_ae_remove_child(ctx: ptr, this_val: int, argv: int) -> int {
     if own_stack_(p, parent) == 0 || owned_(p, child) == 0 {
         return sae_throw_type_error(ctx, "remove_child(parent, child): not widgets this page made")
     }
+    drop_held_(ctx, p, child, 1)
     ui.remove_child(parent, child)
     return 0
 }
@@ -9147,6 +9295,8 @@ api_register_(p: *Page) {
     quickjs.release(q, d)
     perf = quickjs.new_object(q)
     reg_(q, perf, "now", 0, js_performance_now)
+    reg_(q, perf, "memoryUsed", 0, js_performance_memory_used)
+    reg_(q, perf, "handlesHeld", 0, js_performance_handles_held)
     quickjs.set_global(q, "performance", perf)
     quickjs.release(q, perf)
 
@@ -9193,6 +9343,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.bus_stopped_ref = 0
     p.dgrids = list.new()
     p.menus = list.new()
+    p.held = list.new()
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
     p.http_res = 0

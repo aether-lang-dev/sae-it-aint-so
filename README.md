@@ -141,6 +141,24 @@ embedded by `tools/embed-prelude.sh` (`tests/check_prelude.sh` keeps the
 two in step). `site/reactive.ts` is the demo, `tests/spec_reactive.ae`
 the spec.
 
+### What a page holds: widgets and their callbacks
+
+A widget's callbacks (a button's click, a field's change, a toggle, a
+slider, `onclick`, `on_submit`, `on_double_click`, a context menu's items)
+are functions the host keeps for it, and what each closes over. They go with
+the widget: `ui.clear(h)` and the removal of a row by `each` let go of what
+the widgets inside held, so a page that builds part of itself again (a row of
+tabs, a panel) holds what one build does, not every build it ever made. A
+handler that destroys its own widget runs to its end. Before that was so, a
+spreadsheet's sheet tabs kept every callback they had ever been built with
+(45,000 held, 80 MB of heap, by the end of its test run). Two numbers let a
+page, or its test, see this: `performance.memoryUsed()` (bytes the page's
+runtime has allocated, garbage not yet collected included; Chrome's
+`performance.memory.usedJSHeapSize`) and `performance.handlesHeld()` (the
+callbacks and other values the host holds for the page). `site/rebuild.ts`
+and its case in `tests/spec_nav.ae`; the spreadsheet's `spec_sheet` samples
+both after every case and asserts the peak.
+
 ### Timers and animation frames
 
 ```ts
