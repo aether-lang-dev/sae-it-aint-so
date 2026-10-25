@@ -338,11 +338,12 @@ sae-bus Spreadsheet '@ui GET /widgets'                  every widget: text, geom
 sae-bus Spreadsheet '@ui GET /screenshot?b64=1'         the window, a PNG as base64 text
 sae-bus Spreadsheet '@ui POST /window/key?combo=Down'   a key, as a person presses it
 sae-bus Spreadsheet '@ui POST /widget/12/click'         a widget clicked
+sae-bus Spreadsheet '@ui POST /focus/move?dir=forward'  the focus moved on as Tab moves it (dir=backward: Shift+Tab); says what has it now
 ```
 
 Only a short list of paths is passed (what a person at the window can do:
 `GET /widgets`, `/widget/<id>`, `/focus`, `/window/pick`, `/screenshot?b64=1`;
-`POST /window/key`, `/window/resize`, and `/widget/<id>/` `click`, `set_text`,
+`POST /window/key`, `/window/resize`, `/focus/move` and `/widget/<id>/` `click`, `set_text`,
 `focus`, `hover`, `toggle`, `set_value`); anything else, a path climbing out,
 another method, is refused and says so. Without the grant the request is
 refused (`this app's app.json does not grant capabilities.controlBus.ui`);

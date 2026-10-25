@@ -1287,9 +1287,10 @@ sae_ui_on_focus_change(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
-    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.on_focus_change(h, fn): h is not a widget this page made") }
+    w = a11y_widget_(page_of_(ctx), h)
+    if w == 0 { return sae_throw_type_error(ctx, "ui.on_focus_change(h, fn): h is not a widget or vg scene this page made") }
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.on_focus_change(h, fn): fn must be a function") }
-    focus_to_(ctx, h, hold_arg_(ctx, argv, 1))
+    focus_to_(ctx, w, hold_arg_(ctx, argv, 1))
     return quickjs.new_int(ctx, h)
 }
 
@@ -1351,9 +1352,25 @@ sae_ui_focus(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     h = arg_int_(ctx, argv, argc, 0, 0)
-    if owned_(page_of_(ctx), h) == 0 { return sae_throw_type_error(ctx, "ui.focus(h): h is not a widget this page made") }
-    ui.focus(h)
+    w = a11y_widget_(page_of_(ctx), h)
+    if w == 0 { return sae_throw_type_error(ctx, "ui.focus(h): h is not a widget or vg scene this page made") }
+    ui.focus(w)
     return 0
+}
+
+// ui.set_focusable(h, on) -> h: let a widget the page made (or a vg scene, by
+// its canvas) take the keyboard focus, and so be a stop of Tab: a stack used
+// as a row of its own, or a canvas drawn as a button, takes none by default on
+// most backends; 0 takes it away, from a canvas too (GTK4 gives every canvas
+// the focus). Native controls decide for themselves.
+sae_ui_set_focusable(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    h = arg_int_(ctx, argv, argc, 0, 0)
+    w = a11y_widget_(page_of_(ctx), h)
+    if w == 0 { return sae_throw_type_error(ctx, "ui.set_focusable(h, on): h is not a widget or vg scene this page made") }
+    ui.set_focusable(w, arg_int_(ctx, argv, argc, 1, 1))
+    return quickjs.new_int(ctx, h)
 }
 
 // ui.text_wrapped(label, px): a label that wraps its words at px wide.
@@ -4284,7 +4301,8 @@ bus_ui_poll_() {
 
 // What the ui channel passes: looking (the widgets, a widget, the focus, a
 // pick, the screenshot as text) and what a person at the window does (a
-// widget clicked or typed into, a key, a resize). Nothing that stops the app
+// widget clicked or typed into, a key, the focus moved on as Tab moves it, a
+// resize). Nothing that stops the app
 // or reaches outside it.
 bus_ui_path_ok_(method: string, path: string) -> int {
     if string.contains(path, "..") == 1 { return 0 }
@@ -4298,7 +4316,7 @@ bus_ui_path_ok_(method: string, path: string) -> int {
         return 0
     }
     if method == "POST" {
-        if base == "/window/key" || base == "/window/resize" { return 1 }
+        if base == "/window/key" || base == "/window/resize" || base == "/focus/move" { return 1 }
         if string.starts_with(base, "/widget/") == 1 {
             tail = string.substring(base, 8, string.length(base))
             sl = string.index_of(tail, "/")
@@ -9081,6 +9099,7 @@ api_register_(p: *Page) {
     reg_(q, u, "onfocuschange", 1, sae_ui_onfocuschange)
     reg_(q, u, "key_text", 1, sae_ui_key_text)
     reg_(q, u, "focus", 1, sae_ui_focus)
+    reg_(q, u, "set_focusable", 2, sae_ui_set_focusable)
     reg_(q, u, "text_wrapped", 2, sae_ui_text_wrapped)
     reg_(q, u, "width", 1, sae_ui_width)
     reg_(q, u, "set_width", 2, sae_ui_set_width)

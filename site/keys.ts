@@ -1,6 +1,6 @@
 // site/keys.ts -- the keyboard, Return, focus, wrapping and text metrics a
 // spreadsheet needed (the cloud session's wishlist, 2026-10-10):
-// ui.on_key, ui.on_submit, ui.focus, ui.text_wrapped, ui.width/height,
+// ui.on_key, ui.on_submit, ui.focus, ui.set_focusable, ui.text_wrapped, ui.width/height,
 // vg.measure and vg.ellipsize. tests/spec_keys.ae drives it.
 const { text, textfield, btn } = ui;
 
@@ -16,6 +16,12 @@ ui.on_key((key: string, mods: number) => {
 const field = textfield("a formula");
 ui.on_submit(field, (t: string) => print(`submitted: ${t}`));
 btn("Focus the field", () => ui.focus(field));
+
+// ui.set_focusable: a stack that takes the keyboard focus (a toolbar's one stop of Tab).
+const box = ui.hstack(2, () => { text("a stack that takes the focus"); });
+print(`set_focusable returns its widget: ${ui.set_focusable(box, 1) === box}`);
+btn("Focus the stack", () => ui.focus(box));
+btn("Stack off", () => ui.set_focusable(box, 0));
 
 const narrow = ui.text_wrapped("one two three four five six seven eight nine ten eleven twelve", 120);
 btn("Sizes", () => print(`wrapped: ${ui.width(narrow)} x ${ui.height(narrow)}`));

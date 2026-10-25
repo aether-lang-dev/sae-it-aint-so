@@ -2,7 +2,8 @@
 // an app whose app.json grants controlBus.ui, started with --control-bus in
 // a sae-driver build with its driver on, is looked at and pressed on by
 // another program: "@ui GET /widgets", "@ui GET /screenshot?b64=1" (the PNG
-// as text), "@ui POST /window/key?combo=...", "@ui POST /widget/<id>/click";
+// as text), "@ui POST /window/key?combo=...", "@ui POST /widget/<id>/click",
+// "@ui POST /focus/move?dir=forward|backward" (Tab and Shift+Tab);
 // anything outside that short list is refused.
 //   SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$PWD/target/bus-ui-appdata \
 //     SAE_TEST_APP=tests/apps/busui tests/run_spec.sh spec_app_bus_ui
@@ -41,6 +42,20 @@ main() {
             spec.assert_contains(bad, "\"success\":false", "a request with no path refused")
             _s5, again = command_(key, "@ui GET /focus")
             spec.assert_contains(again, "\"success\":true", "and the app still answers")
+        }
+        spec.it("the focus moved on as Tab moves it: through the bus, naming what has it, and Shift+Tab back") callback {
+            _u, key = courier_()
+            _s1, fwd = command_(key, "@ui POST /focus/move?dir=forward")
+            spec.assert_contains(fwd, "\"success\":true", "forward")
+            spec.assert_contains(fwd, "moved", "the answer says whether it moved")
+            first = uidriver.focused_widget()
+            spec.assert_gt(first, 0, "something has the focus now")
+            _s2, back = command_(key, "@ui POST /focus/move?dir=backward")
+            spec.assert_contains(back, "\"success\":true", "backward")
+            _s3, again = command_(key, "@ui POST /focus/move?dir=forward")
+            spec.assert_contains(again, "\"success\":true", "forward again")
+            spec.assert_eq(uidriver.focused_widget(), first, "Tab, Shift+Tab, Tab: where the first Tab went")
+            spec.assert_true(string.length(b.tab_name(uidriver.focus_move_body(0))) > 0, "saedriver names it")
         }
         spec.it("pressing: a key and a click reach the window; the page's handler is still served") callback {
             _u, key = courier_()

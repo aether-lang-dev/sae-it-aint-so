@@ -83,6 +83,19 @@ main() {
             _r = uidriver.window_key("Left")
             spec.assert_true(b.wait_for_console("keys: Left"), "the page got Left")
         }
+        spec.it("ui.set_focusable: a stack takes the keyboard focus when it is given it, and not once it is taken away") callback {
+            spec.assert_true(b.wait_for_console("set_focusable returns its widget: true"), "it returns the widget")
+            b.click("Focus the stack")
+            sleep(200)
+            spec.assert_contains(uidriver.get_body("/focus"), "\"type\":\"hstack\"", "the stack has the focus")
+            b.click("Focus the field")
+            sleep(200)
+            spec.assert_true(string.contains(uidriver.get_body("/focus"), "\"type\":\"hstack\"") == 0, "and the field has it after")
+            b.click("Stack off")
+            b.click("Focus the stack")
+            sleep(200)
+            spec.assert_true(string.contains(uidriver.get_body("/focus"), "\"type\":\"hstack\"") == 0, "a stack taken off does not take it")
+        }
         spec.it("but never a key typed while the address bar has the focus") callback {
             n0 = b.console_count("keys: ")
             addr = uidriver.widget_id_of("textfield", "")

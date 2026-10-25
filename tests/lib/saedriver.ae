@@ -39,7 +39,7 @@ exports(
     console_count, wait_for_console_n,
     vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool, vg_px_x_in, vg_px_y_in, wait_for_vg_canvas,
     screenshot, console_contains, wait_for_console, url_encode, vg_nodes,
-    vg_key, vg_a11y, wait_for_vg_a11y
+    vg_key, vg_a11y, wait_for_vg_a11y, tab, tab_name
 )
 
 import std.string
@@ -553,6 +553,30 @@ vg_scroll(dx: int, dy: int) {
 // "space", "Escape", "a"): runs the scene's vg.on_key function.
 vg_key(name: string) {
     uidriver.post_ok("/canvas/${vg_handle()}/key?name=${url_encode(name)}", "POST canvas key ${name}")
+}
+
+// The keyboard focus moved on as Tab (back 0) or Shift+Tab (back 1) moves it, through the toolkit's
+// own focus order (aether-ui's POST /focus/move), and the widget that has it now named the way a
+// person would name it: "type: its accessible name", else its text, else its placeholder
+// ("canvas: Bold", "button: Save", "textfield: cell"); "none" when nothing has it.
+tab(back: int) -> string {
+    return tab_name(uidriver.focus_move_body(back))
+}
+
+// The name of the widget a /focus/move answer says has the focus.
+tab_name(body: string) -> string {
+    v, _jerr = json.parse(body)
+    if v == null { return "none" }
+    w = json.json_object_get_raw(v, "widget")
+    r = "none"
+    if w != null {
+        label = uidriver.field_str(w, "a11y_name")
+        if string.length(label) == 0 { label = uidriver.field_str(w, "text") }
+        if string.length(label) == 0 { label = uidriver.field_str(w, "placeholder") }
+        r = "${uidriver.field_str(w, "type")}: ${label}"
+    }
+    json.json_free(v)
+    return r
 }
 
 // What a screen reader is told of the vg canvas: aether-ui's
