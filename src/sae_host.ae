@@ -152,6 +152,8 @@ struct Page {
     http_req: int    // the page's request-object maker
     on_resize: int   // the page's ui.on_resize handler (a held ref), or 0
     on_appearance: int   // the page's ui.on_appearance handler (a held ref), or 0
+    on_interrupted: int  // the page's ui.on_interrupted handler (a held ref), or 0
+    interrupting: int    // 1 while that handler runs (a limit it meets itself is not told again)
     http_scopes: string // its outgoing-http scopes, "VERBS\tabsolute-pattern\n"
                      //   per line, or "" when it seeks outgoing-http unscoped
     absent: string   // privileges it can do without and was not granted, as
@@ -350,6 +352,7 @@ settle_(ctx: ptr) {
     if n < 0 {
         say_("sae: uncaught exception in a promise job:\n${err}")
         if bus_inflight_ != 0 && string.contains(err, "interrupted") == 1 { bus_interrupted_ = 1 }
+        note_interrupted_(ctx, err)
     }
     // A vg scene made in a handler (a drawing floated over a grid, a chart)
     // records its shapes until it is told to draw: now, its canvas made at
@@ -378,7 +381,25 @@ fire_click_(ctx: ptr, ref: int) {
 }
 
 report_exception_(ctx: ptr, where_: string) {
-    say_("sae: uncaught exception in ${where_}:\n${quickjs.last_error(ctx)}")
+    err = quickjs.last_error(ctx)
+    say_("sae: uncaught exception in ${where_}:\n${err}")
+    note_interrupted_(ctx, err)
+}
+
+// An entry into the page's JS the time limit stopped (its error says
+// "interrupted"): the work it was part of, a promise job, never comes back,
+// and nothing in the page can know, as no finally runs. The page's
+// ui.on_interrupted handler is told, in an entry of its own, to fail what
+// was waiting on it. The control bus's request in flight is answered
+// separately (bus.serve's stopped).
+note_interrupted_(ctx: ptr, err: string) {
+    if string.contains(err, "interrupted") == 0 { return }
+    p = page_of_(ctx)
+    if p == null || p.on_interrupted == 0 || p.interrupting == 1 { return }
+    p.interrupting = 1
+    if call0_(ctx, p.on_interrupted) < 0 { report_exception_(ctx, "an interrupted handler") }
+    settle_(ctx)
+    p.interrupting = 0
 }
 
 // A line on stdout through C stdio, flushed, as print's output is: the two
@@ -1449,6 +1470,21 @@ sae_ui_on_appearance(ctx: @keep ptr, this_val: int, argv: int) -> int {
     p = page_of_(ctx)
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "ui.on_appearance(fn): fn must be a function") }
     p.on_appearance = hold_arg_(ctx, argv, 0)
+    return 0
+}
+
+// ui.on_interrupted(fn): told when the page's time limit (SAE_PAGE_TIME_MS, 5 s
+// an entry) stopped an entry into its JS: a handler, a timer, the promise jobs
+// one queued. A job stopped so never resumes and runs no finally, so a page
+// holding state across an await (a queue, a lock) learns here that the work
+// it was waiting on is gone. One handler a page; a second replaces the first;
+// it goes with the page.
+sae_ui_on_interrupted(ctx: @keep ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "ui.on_interrupted(fn): fn must be a function") }
+    p.on_interrupted = hold_arg_(ctx, argv, 0)
     return 0
 }
 
@@ -9096,6 +9132,7 @@ api_register_(p: *Page) {
     reg_(q, u, "on_resize", 1, sae_ui_on_resize)
     reg_(q, u, "dark_mode", 0, sae_ui_dark_mode)
     reg_(q, u, "on_appearance", 1, sae_ui_on_appearance)
+    reg_(q, u, "on_interrupted", 1, sae_ui_on_interrupted)
     reg_(q, u, "onfocuschange", 1, sae_ui_onfocuschange)
     reg_(q, u, "key_text", 1, sae_ui_key_text)
     reg_(q, u, "focus", 1, sae_ui_focus)
@@ -9369,6 +9406,8 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.http_req = 0
     p.on_resize = 0
     p.on_appearance = 0
+    p.on_interrupted = 0
+    p.interrupting = 0
     p.ctx = engine_new_(b.page_mem)
     if pages_ == null { pages_ = list.new() }
     list.add(pages_, p as ptr)

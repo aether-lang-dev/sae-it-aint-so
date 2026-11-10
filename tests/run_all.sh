@@ -45,6 +45,7 @@ rm -rf "$T/spec-storage" "$T/caps-appdata" "$T/globals-appdata" \
 TABLE="
 spec_nav||spec spec_nav
 spec_timers||spec spec_timers
+spec_interrupted||spec spec_interrupted
 spec_globals||spec spec_globals
 spec_globals[app]|SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$T/globals-appdata|spec spec_globals
 spec_webrules||spec spec_webrules

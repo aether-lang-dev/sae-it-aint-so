@@ -1,0 +1,37 @@
+// spec_interrupted.ae — ui.on_interrupted: the page is told when the time
+// limit stopped one of its entries (a handler, or the promise jobs it
+// queued), once each, and keeps working. The page is site/interrupted.ts.
+//
+//   tests/run_spec.sh spec_interrupted
+import std.spec
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a page told its entry was interrupted") {
+        spec.it("the page loads and has not been told") callback {
+            b.navigate(b.test_url("/interrupted"))
+            spec.assert_true(b.wait_for_text("told: 0"), "loaded")
+        }
+        spec.it("a job stopped after an await tells the page, once") callback {
+            b.click("Hang in a job")
+            spec.assert_true(b.wait_for_text_secs("told: 1", 10), "told")
+            sleep(500)
+            b.assert_text("told: 1", "once, not again")
+            b.assert_text("finally: 0", "no finally ran in the stopped job")
+        }
+        spec.it("a handler stopped before any await tells the page") callback {
+            b.click("Hang in a handler")
+            spec.assert_true(b.wait_for_text_secs("told: 2", 10), "told again")
+        }
+        spec.it("the page goes on working") callback {
+            b.click("Count")
+            spec.assert_true(b.wait_for_text("clicks: 1"), "a click still lands")
+        }
+    }
+
+    return spec.run_summary(fw)
+}
