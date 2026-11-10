@@ -209,5 +209,15 @@ which the socket pair cannot (`os.run_socket` is "unsupported on Windows").
    `CANCEL` with a grace period; reuse it rather than invent one).
 4. **Plugins**: what "Aether plus plugins" means for a backend (contrib
    modules, other Aether libraries) and how `app.json` declares them.
-5. **The bus's future**: if backends and a Unix socket cover its cases,
+5. **Stray output on the stdio transport.** Once the child's stdout is the
+   channel, a stray print, a library's diagnostic or a panic message lands
+   in the frame stream (sae stops the backend for breaking the protocol; it
+   should say "wrote '<first bytes>' outside a frame"). The fix, after the
+   run_stdio PR: an Aether call that claims stdin and stdout for the channel
+   first thing in main (flush, dup 0 and 1 to private descriptors, point 0
+   at the null device and 1 at stderr), made by `saebackend.open()` on that
+   transport. Not masked even then: what was written before it, C code
+   holding its own copy of fd 1, and a wrapper's own output (a `wslc run`
+   that pulls its image: pull it first; to check).
+6. **The bus's future**: if backends and a Unix socket cover its cases,
    the loopback TCP bus, its courier file and its sealing could go.
