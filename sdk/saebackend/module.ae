@@ -1,0 +1,99 @@
+// saebackend — the backend side of Tauri mode (docs/tauri-mode.md): what an
+// app's own Aether program imports to answer its pages.
+//
+// sae starts the backend with its end of the channel at fd 3 (std.ipc's
+// parent_channel). A backend reads calls, answers each one, and may send
+// events its pages listen for:
+//
+//   import saebackend
+//   main() {
+//       sb, err = saebackend.open()
+//       if err != "" { println(err); exit(2) }
+//       while 1 == 1 {
+//           id, name, arg, rerr = saebackend.next(sb)
+//           if rerr != "" { break }          // sae closed the channel: exit
+//           if name == "echo" { saebackend.answer(sb, id, arg) }
+//           else { saebackend.fail(sb, id, "no call ${name}") }
+//       }
+//   }
+//
+// Build it with this folder on the module path:
+//   AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main
+//
+// The frames are services/backend's (one JSON object each). Each SaeBackend
+// is an instance with its own channel; nothing here is shared.
+
+import std.ipc
+import std.json
+import std.string
+
+exports (open, next, answer, fail, emit)
+
+const MAX_FRAME = 1048576
+
+struct SaeBackend {
+    ch: int
+}
+
+// The channel sae started this program with: (backend, "") or (null, why).
+open() -> (ptr, string) {
+    ch = ipc.parent_channel()
+    if ch < 0 { return null, "saebackend: no channel: this program is an app's backend, started by sae" }
+    if ipc.parent_channel_kind() != "socket" { return null, "saebackend: the channel is not a socket" }
+    b = heap.new(SaeBackend)
+    b.ch = ch
+    return b as ptr, ""
+}
+
+// The next call: (id, name, arg, ""), or (0, "", "", why) when the channel
+// has closed (sae is stopping: the backend should exit) or broke.
+next(h: ptr) -> (int, string, string, string) {
+    b = h as *SaeBackend
+    data, err = ipc.read_frame(b.ch, MAX_FRAME)
+    if err != "" { return 0, "", "", err }
+    v, perr = json.parse(data)
+    if perr != "" || v == null { return 0, "", "", "saebackend: a frame that is not JSON: ${perr}" }
+    idv = json.json_object_get_raw(v, "id")
+    id = 0
+    if idv != null { id = json.json_get_int(idv) }
+    name, _ne = json.get_string(json.json_object_get_raw(v, "call"))
+    arg, _ae = json.get_string(json.json_object_get_raw(v, "arg"))
+    name = string.copy(name)
+    arg = string.copy(arg)
+    json.json_free(v)
+    return id, name, arg, ""
+}
+
+// Answer call `id` with `result`. "" or why not.
+answer(h: ptr, id: int, result: string) -> string {
+    o = json.obj()
+    _i = json.set(o, "id", json.from_int(id))
+    _k = json.set(o, "ok", json.boolean(1))
+    _r = json.set(o, "result", json.str(result))
+    return send_(h, o)
+}
+
+// Answer call `id` with a failure: the page's promise rejects with `why`.
+fail(h: ptr, id: int, why: string) -> string {
+    o = json.obj()
+    _i = json.set(o, "id", json.from_int(id))
+    _k = json.set(o, "ok", json.boolean(0))
+    _e = json.set(o, "error", json.str(why))
+    return send_(h, o)
+}
+
+// An event the page hears with backend.on(name, fn), unasked.
+emit(h: ptr, name: string, data: string) -> string {
+    o = json.obj()
+    _e = json.set(o, "event", json.str(name))
+    _d = json.set(o, "data", json.str(data))
+    return send_(h, o)
+}
+
+send_(h: ptr, o: ptr) -> string {
+    b = h as *SaeBackend
+    text, eerr = json.encode(o)
+    json.json_free(o)
+    if eerr != "" { return "saebackend: ${eerr}" }
+    return ipc.write_frame(b.ch, text)
+}

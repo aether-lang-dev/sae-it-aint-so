@@ -1,6 +1,32 @@
 # Tauri mode: an app's own backend process, on an inherited channel
 
-A design note, 2026-11-10, for Paul and Nic. Nothing here is built.
+A design note, 2026-11-10, for Paul and Nic.
+
+**Built (2026-11-10), the first slice**, on macOS and Linux (the BSDs
+should follow; not yet run there). Windows waits on Aether: `os.run_socket`
+answers "unsupported on Windows" (Open, 1).
+
+- `app.json`: `"capabilities": { "backend": { "program": "backend/main",
+  "args": [...], "deadlineMs": 10000 } }`. `program` is a file inside the
+  app (`.exe` added on Windows); a path that climbs out, or a bad
+  `deadlineMs` (100 to 600000), refuses the app. A program that is missing
+  or does not start is said once, and the app runs without it: its pages'
+  calls fail with why.
+- The page: `"seeks backend"`, then `backend.invoke(name, arg)` (a promise
+  for a string), `backend.on(name, fn)`, `backend.on_gone(fn)` and
+  `backend.running()`.
+- The backend: `sdk/saebackend` (`open`, `next`, `answer`, `fail`, `emit`),
+  built with `AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main`.
+- In sae: `services/backend` (an instance per backend, no module state; the
+  one place sae starts a program, held so by `tests/check_layers.sh`) and
+  the "backend" section of `src/sae_host.ae`.
+- Tests: `tests/apps/backend` and `tests/spec_app_backend.ae` (its args,
+  answers, failures, events before the answer, the deadline, the backend
+  exiting and being reaped, and `lsof` finding nothing listening);
+  `tests/escape/computed_fs.ts` tries `backend` by a computed name.
+
+Not yet: passing a picked document's descriptor (`ipc.send_fd`),
+containment, plugins, and anything about the bus.
 
 ## The shape
 
@@ -36,6 +62,7 @@ decision, not this note's.
 "seeks backend";
 const r = await backend.invoke("open_project", JSON.stringify({ id: 7 }));
 backend.on("progress", (msg: string) => set_text(status, msg));
+backend.on_gone((why: string) => set_text(status, why));
 ```
 
 - `backend.invoke(name, arg)`: one frame out, a Promise for the frame that
@@ -43,8 +70,27 @@ backend.on("progress", (msg: string) => set_text(status, msg));
   bus's rule).
 - `backend.on(name, fn)`: frames the backend sends unasked. This is push
   to the page with no SSE, Comet or WebSocket, and no listening socket.
+- `backend.on_gone(fn)`: the backend has exited, or broke the protocol, or
+  never started; `fn(why)`. Every call waiting fails with the same why, and
+  so does every later one.
 - Sought and declared like any capability: a web page has no `backend`,
   and an app whose `app.json` names none refuses a page that seeks it.
+
+## The frames
+
+std.ipc's frames (a 4-byte length, then the bytes), each one JSON object:
+
+```
+sae -> backend   {"id": n, "call": "<name>", "arg": "<string>"}
+backend -> sae   {"id": n, "ok": true, "result": "<string>"}
+                 {"id": n, "ok": false, "error": "<message>"}
+                 {"event": "<name>", "data": "<string>"}
+```
+
+At most 1 MB a frame. A frame that has begun must be whole within 2 s; a
+backend that breaks either rule, or sends something that is not JSON, is
+stopped. Strings only cross for now; a page that wants structure sends
+JSON text.
 
 ## What the kernel does
 

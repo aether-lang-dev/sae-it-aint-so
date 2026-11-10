@@ -38,6 +38,8 @@ expect_imports services/clipboard/module.ae \
     "import ui (clipboard_read, clipboard_write)|import std.string"
 expect_imports services/bus/module.ae \
     "import std.tcp|import std.fs|import std.list|import std.string|import std.strarr|import std.json|import std.time (now_ms)|import services.agent_auth|import services.secure_channel"
+expect_imports services/backend/module.ae \
+    "import std.os|import std.io (fd_close)|import std.ipc|import std.list|import std.string|import std.json"
 expect_imports services/agent_auth/module.ae \
     "import std.nanoid|import std.cryptography (hmac_sha256_hex)|import std.string (bytes, string_length, string_char_at)"
 expect_imports services/secure_channel/module.ae \
@@ -79,6 +81,18 @@ else
     echo "ok   sae listens only in services/bus"
 fi
 
+# Starting a program only in services/backend: the app's own backend
+# (docs/tauri-mode.md) is the one process sae starts, under its rules.
+hits=$(grep -rnE 'os\.(run|run_socket|run_pipe|run_capture|run_full|run_supervised|run_pipe_drain_and_wait|spawn_proc|spawn_proc_to|exec)[[:space:]]*\(' \
+        --include='*.ae' src services lower 2>/dev/null \
+      | grep -v '^services/backend/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+if [ -n "$hits" ]; then
+    echo "FAIL a program started outside services/backend:"
+    echo "$hits" | sed 's/^/       /'
+    fail=1
+else
+    echo "ok   sae starts a program only in services/backend"
+fi
 # ui.clipboard_read and clipboard_write only in services/clipboard: every
 # read and write of the system clipboard goes through its rules.
 hits=$(grep -rnE '(^|[^_a-zA-Z0-9])clipboard_(read|write)[[:space:]]*\(' \

@@ -1,0 +1,159 @@
+// services/backend — an app's own backend process, on an inherited channel
+// (docs/tauri-mode.md). The one place sae starts a program.
+//
+// sae is the parent: start() spawns the program app.json names with
+// os.run_socket, which hands the child one end of an AF_UNIX socket pair
+// at fd 3 (std.ipc's parent_channel) and keeps the other here. Nothing is
+// written to the file system, nothing listens, and there is no key: holding
+// the descriptor is the capability, and only sae and the child it started
+// hold one.
+//
+// Each Backend is an instance with its own state (the kernel holds one per
+// app); nothing here is shared between them. Frames are std.ipc's
+// (a 4-byte length, then the bytes), each one JSON:
+//
+//   sae -> backend   {"id": n, "call": "<name>", "arg": "<string>"}
+//   backend -> sae   {"id": n, "ok": true, "result": "<string>"}
+//                    {"id": n, "ok": false, "error": "<message>"}
+//                    {"event": "<name>", "data": "<string>"}
+//
+// The kernel reads them on the UI thread a tick at a time (poll never
+// waits for a frame to start), so a backend cannot stall the window.
+
+import std.os
+import std.io (fd_close)
+import std.ipc
+import std.list
+import std.string
+import std.json
+
+exports (start, alive, why, call, poll, stop, MAX_FRAME)
+
+// The largest frame either side may send. A header announcing more is an
+// error, and the channel is closed.
+const MAX_FRAME = 1048576
+
+// A frame that has begun must be whole within this; a backend that sends a
+// header and stalls is cut off.
+const FRAME_MS = 2000
+
+// Grace between closing the channel and killing a backend that has not
+// exited by itself.
+const STOP_GRACE_S = 2
+
+struct Backend {
+    ch: int          // our end of the socket pair, or -1 once closed
+    pid: int         // the child's spawn token, or -1 once reaped
+    why: string      // why it is no longer running, "" while it is
+}
+
+// Start `program` (a path the kernel has already resolved inside the app)
+// with the arguments in `argv` (a std.list of strings, or null).
+// (backend, "") or (null, why).
+start(program: string, argv: ptr) -> (ptr, string) {
+    args = argv
+    own = 0
+    if args == null {
+        args = list.new()
+        own = 1
+    }
+    ch, pid, err = os.run_socket(program, args, null)
+    if own == 1 { list.free(args) }
+    if err != "" { return null, "backend: could not start ${program}: ${err}" }
+    b = heap.new(Backend)
+    b.ch = ch
+    b.pid = pid
+    b.why = ""
+    return b as ptr, ""
+}
+
+// 1 while the channel is open.
+alive(h: ptr) -> int {
+    if h == null { return 0 }
+    b = h as *Backend
+    if b.ch < 0 { return 0 }
+    return 1
+}
+
+// Why the backend is no longer running ("" while it is).
+why(h: ptr) -> string {
+    if h == null { return "backend: none" }
+    b = h as *Backend
+    return b.why
+}
+
+// Ask the backend to run `name` with `arg`, as request `id`. "" or why not.
+call(h: ptr, id: int, name: string, arg: string) -> string {
+    if alive(h) == 0 { return why(h) }
+    b = h as *Backend
+    o = json.obj()
+    _i = json.set(o, "id", json.from_int(id))
+    _c = json.set(o, "call", json.str(name))
+    _a = json.set(o, "arg", json.str(arg))
+    text, eerr = json.encode(o)
+    json.json_free(o)
+    if eerr != "" { return "backend: ${eerr}" }
+    if string.length(text) > MAX_FRAME { return "backend: the request is larger than ${MAX_FRAME} bytes" }
+    werr = ipc.write_frame(b.ch, text)
+    if werr != "" {
+        lost_(b, "backend: the channel failed: ${werr}")
+        return b.why
+    }
+    return ""
+}
+
+// The next frame the backend has sent, if one has begun: (frame, "") with
+// the JSON text, ("", "") when none is waiting, ("", why) when the backend
+// has gone (it closed the channel, or broke the protocol) and is stopped.
+poll(h: ptr) -> (string, string) {
+    if alive(h) == 0 { return "", why(h) }
+    b = h as *Backend
+    ready, werr = ipc.wait_readable(b.ch, 0)
+    if werr != "" {
+        lost_(b, "backend: the channel failed: ${werr}")
+        return "", b.why
+    }
+    if ready == 0 { return "", "" }
+    data, rerr = ipc.read_frame_timeout(b.ch, MAX_FRAME, FRAME_MS)
+    if string.contains(rerr, "end of stream") == 1 {
+        lost_(b, "")    // it closed its end: it has exited, or is exiting
+        return "", b.why
+    }
+    if rerr != "" {
+        lost_(b, "backend: ${rerr}")
+        return "", b.why
+    }
+    return data, ""
+}
+
+// Close the channel, give the backend STOP_GRACE_S to exit by itself, then
+// kill it, and reap it. Safe to call twice.
+stop(h: ptr) {
+    if h == null { return }
+    b = h as *Backend
+    lost_(b, "backend: stopped")
+}
+
+// Close the channel and reap the child, killing it if it has not exited
+// within STOP_GRACE_S. The first reason is kept; "" means the backend closed
+// its end itself, and the reason is how it exited.
+lost_(b: *Backend, reason: string) {
+    if b.ch >= 0 {
+        _c = fd_close(b.ch)
+        b.ch = 0 - 1
+    }
+    how = ""
+    if b.pid >= 0 {
+        st, timed_out, _we = os.wait_pid_timeout(b.pid, STOP_GRACE_S)
+        how = "it exited with status ${st}"
+        if timed_out == 1 {
+            _k = os.kill(b.pid, 9)
+            _w = os.wait_pid(b.pid)
+            how = "it was killed: it had not exited ${STOP_GRACE_S} s after its channel closed"
+        }
+        b.pid = 0 - 1
+    }
+    if b.why == "" {
+        if reason == "" { b.why = "backend: ${how}" } else { b.why = string.copy(reason) }
+    }
+}

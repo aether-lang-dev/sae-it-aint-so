@@ -1,0 +1,44 @@
+// The backend of tests/apps/backend (docs/tauri-mode.md): sae starts it with
+// the channel at fd 3; it answers calls and sends events. spec_app_backend
+// drives every case through the page.
+//   AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main
+import std.os
+import std.string
+import saebackend
+
+main() {
+    sb, err = saebackend.open()
+    if err != "" {
+        println(err)
+        exit(2)
+    }
+    greeting = "hi"
+    if os.args_get(1) == "--greeting" { greeting = os.args_get(2) }
+    calls = 0
+    while 1 == 1 {
+        id, name, arg, rerr = saebackend.next(sb)
+        if rerr != "" { break }        // sae closed the channel: it is stopping
+        calls = calls + 1
+        if name == "echo" {
+            _r = saebackend.answer(sb, id, arg)
+        } else if name == "greet" {
+            _r = saebackend.answer(sb, id, "${greeting}, ${arg} (call ${calls})")
+        } else if name == "upper" {
+            _r = saebackend.answer(sb, id, string.string_to_upper(arg))
+        } else if name == "fail" {
+            _r = saebackend.fail(sb, id, "it failed: ${arg}")
+        } else if name == "tick" {
+            // Events first, unasked; then the answer.
+            _e1 = saebackend.emit(sb, "tick", "1 of 2")
+            _e2 = saebackend.emit(sb, "tick", "2 of 2")
+            _r = saebackend.answer(sb, id, "ticked")
+        } else if name == "ignore" {
+            // No answer: the page's deadline fails the call.
+        } else if name == "exit" {
+            _r = saebackend.answer(sb, id, "bye")
+            exit(0)
+        } else {
+            _r = saebackend.fail(sb, id, "no call ${name}")
+        }
+    }
+}

@@ -102,6 +102,7 @@ check_page_veto||check check_page_veto
 check_layers||check check_layers
 check_android_sources||check check_android_sources
 check_storage_scope||check check_storage_scope
+spec_app_backend|SAE_TEST_APP=tests/apps/backend|backend tests/apps/backend spec_app_backend
 check_sqlite_relaunch||check check_sqlite_relaunch
 check_natives||check check_natives
 check_module_rules||check check_module_rules
@@ -126,6 +127,8 @@ for line in $TABLE; do
         spec)  set -- tests/run_spec.sh "$@" ;;
         # an app's own host built first (tools/saehost.sh, docs/natives.md), then its spec
         host)  set -- sh -c 'AETHER_UI_WITH_DRIVER=1 tools/saehost.sh "$1" && tests/run_spec.sh "$2"' host "$@" ;;
+        # an app's backend program built first (sdk/saebackend, docs/tauri-mode.md), then its spec
+        backend) set -- sh -c '(cd "$1" && AETHER_LIB_DIR="$2/sdk" ae build backend/main.ae -o backend/main) && tests/run_spec.sh "$3"' backend "$1" "$ROOT" "$2" ;;
         aerun) set -- ae run "tests/$1.ae" ;;
         check) set -- sh "tests/$1.sh" ;;
         lower) set -- lower/run-tests.sh ;;

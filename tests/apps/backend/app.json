@@ -1,0 +1,6 @@
+{
+  "name": "Backend test",
+  "capabilities": {
+    "backend": { "program": "backend/main", "args": ["--greeting", "hello"], "deadlineMs": 1000 }
+  }
+}

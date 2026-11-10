@@ -34,6 +34,7 @@ import services.files
 import services.documents
 import services.clipboard
 import services.bus
+import services.backend
 import services.shell
 import services.print as printing
 import services.net
@@ -108,6 +109,22 @@ struct Browser {
     source: string   // the current page's source as fetched ("View page source")
     win_w: int       // the window's content size, as on_layout last gave it (0 before)
     win_h: int
+    // Tauri mode (docs/tauri-mode.md): the app's own backend process.
+    backend_declared: int  // 1: app.json declares one (a page may seek it, even if it did not start)
+    backend: ptr     // services/backend's instance, or null (none declared, or it never started)
+    backend_why: string  // why there is none running, "" while it runs
+    backend_ids: int     // the last call id handed out
+    backend_calls: ptr   // std.list of *BackendCall: calls not yet answered
+    backend_timer: int   // the UI timer reading its frames, or 0
+    backend_deadline_ms: int  // a call not answered in this is failed (app.json deadlineMs)
+}
+
+// A call to the backend not yet answered: which page made it (an answer for
+// a page that has gone is dropped) and when (its deadline).
+struct BackendCall {
+    id: int
+    seq: int
+    since: long
 }
 
 // One per loaded page: its QuickJS runtime (ctx), found again from the
@@ -167,6 +184,7 @@ struct Page {
     key_ref: int     // ui.on_key's held function, or 0
     bus_ref: int     // bus.serve's dispatcher (the page's handler, wrapped), or 0
     bus_stopped_ref: int  // bus.serve's second function: told when a request was stopped, or 0
+    backend_ref: int // the backend object's dispatcher (answers, events, its end), or 0
     dgrids: ptr      // std.list of aether-ui datagrids this page made (ui.datagrid)
     menus: ptr       // std.list of *PageMenu: ui.context_menu's targets and items
     held: ptr        // std.list of *HeldRef: the callbacks widgets hold, to let go with their widget
@@ -4407,6 +4425,267 @@ bus_stop_request_(reason: string, why: string) {
     settle_(ctx)
 }
 
+// --- the page API: backend, the app's own process (docs/tauri-mode.md) ---
+//
+// app.json capabilities.backend { "program": "<file in the app>", "args":
+// [...] } names a program sae starts when the app does (services/backend:
+// os.run_socket, its channel inherited, nothing on the file system and
+// nothing listening). A page that seeks it gets `backend`: invoke(name, arg)
+// is a promise for the backend's answer, on(name, fn) hears what it sends
+// unasked, on_gone(fn) hears that it has gone. A UI timer reads its frames
+// and hands each to the page that is showing; an answer for a page that has
+// gone is dropped. A backend that does not start, or goes, is said once;
+// every call waiting is failed with why, and later calls fail at once.
+
+// A call's default deadline; app.json capabilities.backend.deadlineMs sets
+// the app's own, from BACKEND_DEADLINE_MIN to BACKEND_DEADLINE_MAX.
+const BACKEND_DEADLINE_MS = 10000
+const BACKEND_DEADLINE_MIN = 100
+const BACKEND_DEADLINE_MAX = 600000
+const BACKEND_FRAMES_PER_TICK = 32
+
+// The program app.json names, inside the app: "" and why not.
+backend_program_(prog: string) -> (string, string) {
+    if prog == "" { return "", "app.json capabilities.backend.program: the backend program, a file inside the app" }
+    if string.string_starts_with(prog, "/") == 1 || string.contains(prog, "\\") == 1 || string.contains(prog, ":") == 1 {
+        return "", "app.json capabilities.backend.program: a path inside the app (${prog} is not)"
+    }
+    path, climbed = norm_path_(prog)
+    if climbed == 1 || string.contains("/${path}/", "/../") == 1 {
+        return "", "app.json capabilities.backend.program: a path inside the app (${prog} climbs out)"
+    }
+    full = "${app_dir_}/${path}"
+    if os.platform() == "windows" && string.string_ends_with(full, ".exe") == 0 { full = string.concat(full, ".exe") }
+    if fs.exists(full) == 0 { return "", "backend: no program at ${full} (build it first: docs/tauri-mode.md)" }
+    return full, ""
+}
+
+// Start the backend app.json declares, before the first page runs. A wrong
+// declaration refuses the app (returned); a program that does not start is
+// said, and the app runs without it (its pages' calls fail with why).
+backend_start_(b: *Browser, manifest: ptr) -> string {
+    if manifest == null { return "" }
+    caps = json.json_object_get_raw(manifest, "capabilities")
+    if caps == null { return "" }
+    decl = json.json_object_get_raw(caps, "backend")
+    if decl == null { return "" }
+    if json.json_type(decl) != 5 { return "app.json capabilities.backend must be an object: { \"program\": \"<file>\", \"args\": [...] }" }
+    b.backend_declared = 1
+    dmv = json.json_object_get_raw(decl, "deadlineMs")
+    if dmv != null {
+        dm = json.json_get_int(dmv)
+        if dm < BACKEND_DEADLINE_MIN || dm > BACKEND_DEADLINE_MAX {
+            return "app.json capabilities.backend.deadlineMs: from ${BACKEND_DEADLINE_MIN} to ${BACKEND_DEADLINE_MAX} (ms a call may wait for its answer)"
+        }
+        b.backend_deadline_ms = dm
+    }
+    pv = json.json_object_get_raw(decl, "program")
+    prog = ""
+    if pv != null {
+        ps, _pe = json.get_string(pv)
+        prog = own_(ps)
+    }
+    full, perr = backend_program_(prog)
+    if perr != "" && string.string_starts_with(perr, "app.json") == 1 { return perr }
+    b.backend_why = "backend: not started"
+    if perr != "" {
+        b.backend_why = own_(perr)
+        say_("sae: ${perr}")
+        return ""
+    }
+    args = list.new()
+    grants_from_(decl, "args", |a: string| { list.add(args, own_(a)) })
+    h, serr = backend.start(full, args)
+    list.free(args)
+    if serr != "" {
+        b.backend_why = own_(serr)
+        say_("sae: ${serr}")
+        return ""
+    }
+    b.backend = h
+    b.backend_why = ""
+    say_("sae: backend: ${prog} started")
+    b.backend_timer = ui.timer(10, || { backend_tick_(b) })
+    return ""
+}
+
+sae_backend_listen(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "backend: its dispatcher must be a function") }
+    if p.backend_ref != 0 { quickjs.release(ctx, p.backend_ref) }
+    p.backend_ref = hold_arg_(ctx, argv, 0)
+    return 0
+}
+
+// raw.call(name, arg): the call's id, or 0 when there is no backend to ask
+// (raw.why() says why).
+sae_backend_call(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    argc = quickjs.arg_count(ctx, argv)
+    p = page_of_(ctx)
+    b = p.browser as *Browser
+    if b.backend == null || backend.alive(b.backend) == 0 { return quickjs.new_int(ctx, 0) }
+    b.backend_ids = b.backend_ids + 1
+    id = b.backend_ids
+    err = backend.call(b.backend, id, own_(arg_str_(ctx, argv, argc, 0)), own_(arg_str_(ctx, argv, argc, 1)))
+    if err != "" {
+        backend_gone_(b, err)
+        return quickjs.new_int(ctx, 0)
+    }
+    c = heap.new(BackendCall)
+    c.id = id
+    c.seq = p.seq
+    c.since = now_ms_()
+    list.add(b.backend_calls, c as ptr)
+    return quickjs.new_int(ctx, id)
+}
+
+sae_backend_why(ctx: ptr, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    p = page_of_(ctx)
+    b = p.browser as *Browser
+    return quickjs.new_string(ctx, b.backend_why)
+}
+
+// Hand the showing page (kind, id, ok, name, payload): 0 an answer, 1 an
+// event, 2 the backend has gone.
+backend_deliver_(b: *Browser, seq: int, kind: int, id: int, ok: int, name: string, payload: string) {
+    if b.page == null { return }
+    p = b.page as *Page
+    if seq != 0 && p.seq != seq { return }
+    if p.backend_ref == 0 { return }
+    ctx = p.ctx
+    args = quickjs.new_array(ctx)
+    v0 = quickjs.new_int(ctx, kind)
+    _a = quickjs.set_index(ctx, args, 0, v0)
+    quickjs.release(ctx, v0)
+    v1 = quickjs.new_int(ctx, id)
+    _b = quickjs.set_index(ctx, args, 1, v1)
+    quickjs.release(ctx, v1)
+    v2 = quickjs.new_int(ctx, ok)
+    _c = quickjs.set_index(ctx, args, 2, v2)
+    quickjs.release(ctx, v2)
+    v3 = quickjs.new_string(ctx, name)
+    _d = quickjs.set_index(ctx, args, 3, v3)
+    quickjs.release(ctx, v3)
+    v4 = quickjs.new_string(ctx, payload)
+    _e = quickjs.set_index(ctx, args, 4, v4)
+    quickjs.release(ctx, v4)
+    r = calln_(ctx, p.backend_ref, args)
+    quickjs.release(ctx, args)
+    if r < 0 { report_exception_(ctx, "the backend's handler") }
+    settle_(ctx)
+}
+
+// The call `id` waits no longer: (its page's seq, 1), or (0, 0) if it was
+// not waiting (answered already, or its deadline passed).
+backend_take_call_(b: *Browser, id: int) -> (int, int) {
+    n = list.size(b.backend_calls)
+    i = 0
+    while i < n {
+        cv, _ = list.get(b.backend_calls, i)
+        c = cv as *BackendCall
+        if c.id == id {
+            seq = c.seq
+            list.list_remove(b.backend_calls, i)
+            heap.free(c)
+            return seq, 1
+        }
+        i = i + 1
+    }
+    return 0, 0
+}
+
+// The backend has gone (or never answers again): said once, every call
+// waiting failed with why, the page told, the timer stopped.
+backend_gone_(b: *Browser, why: string) {
+    if b.backend == null { return }
+    backend.stop(b.backend)
+    b.backend = null
+    b.backend_why = own_(why)
+    say_("sae: ${why}")
+    if b.backend_timer != 0 {
+        ui.timer_cancel(b.backend_timer)
+        b.backend_timer = 0
+    }
+    while list.size(b.backend_calls) > 0 {
+        cv, _ = list.get(b.backend_calls, 0)
+        c = cv as *BackendCall
+        list.list_remove(b.backend_calls, 0)
+        backend_deliver_(b, c.seq, 0, c.id, 0, "", why)
+        heap.free(c)
+    }
+    backend_deliver_(b, 0, 2, 0, 0, "", why)
+}
+
+backend_tick_(b: *Browser) {
+    if b.backend == null { return }
+    k = 0
+    while k < BACKEND_FRAMES_PER_TICK {
+        k = k + 1
+        frame, why = backend.poll(b.backend)
+        if why != "" {
+            backend_gone_(b, why)
+            return
+        }
+        if frame == "" { break }
+        v, perr = json.parse(frame)
+        if perr != "" || v == null {
+            backend_gone_(b, "backend: it sent something that is not a frame of JSON")
+            return
+        }
+        ev = json.json_object_get_raw(v, "event")
+        if ev != null {
+            en, _ee = json.get_string(ev)
+            dv = json.json_object_get_raw(v, "data")
+            data = ""
+            if dv != null {
+                ds, _de = json.get_string(dv)
+                data = own_(ds)
+            }
+            name = own_(en)
+            json.json_free(v)
+            backend_deliver_(b, 0, 1, 0, 1, name, data)
+        } else {
+            idv = json.json_object_get_raw(v, "id")
+            id = 0
+            if idv != null { id = json.json_get_int(idv) }
+            okv = json.json_object_get_raw(v, "ok")
+            ok = 0
+            if okv != null { ok = json.json_get_bool(okv) }
+            pl = "result"
+            if ok == 0 { pl = "error" }
+            plv = json.json_object_get_raw(v, pl)
+            payload = ""
+            if plv != null {
+                ps, _pe = json.get_string(plv)
+                payload = own_(ps)
+            }
+            json.json_free(v)
+            seq, waiting = backend_take_call_(b, id)
+            if waiting == 1 { backend_deliver_(b, seq, 0, id, ok, "", payload) }
+        }
+        if b.backend == null { return }
+    }
+    // Calls past their deadline: failed, the backend kept (it may answer
+    // the next).
+    now = now_ms_()
+    i = 0
+    while i < list.size(b.backend_calls) {
+        cv, _ = list.get(b.backend_calls, i)
+        c = cv as *BackendCall
+        if now - c.since > b.backend_deadline_ms {
+            list.list_remove(b.backend_calls, i)
+            backend_deliver_(b, c.seq, 0, c.id, 0, "", "the backend did not answer in ${b.backend_deadline_ms} ms")
+            heap.free(c)
+        } else {
+            i = i + 1
+        }
+    }
+}
+
 // --- the page API: clipboard (services/clipboard has the rules) ---
 
 sae_clip_write(ctx: ptr, this_val: int, argv: int) -> int {
@@ -8534,6 +8813,11 @@ available_(nm: string) -> int {
     }
     if nm == "open-urls" { return shell.granted() }
     if nm == "print" { return printing.granted() }
+    if nm == "backend" {
+        if browser_ == null { return 0 }
+        bb = browser_ as *Browser
+        return bb.backend_declared
+    }
     if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
     if string.string_starts_with(nm, "native ") == 1 { return natives_granted_(string.string_substring(nm, 7, string.length(nm))) }   // wave1/natives
     return 0
@@ -8624,7 +8908,7 @@ absent_of_(optional: string) -> string {
 // ("local-filesystem,open-urls,"), to leave out with the absent ones.
 unsought_(seeks: string, optional: string) -> string {
     out = ""
-    names = string.split("outgoing-http,local-filesystem,open-urls,print,documents,clipboard,clipboard-read,control-bus", ",")
+    names = string.split("outgoing-http,local-filesystem,open-urls,print,documents,clipboard,clipboard-read,control-bus,backend", ",")
     n = string.string_array_size(names)
     i = 0
     while i < n {
@@ -9278,6 +9562,19 @@ api_register_(p: *Page) {
         bw, _bwe = quickjs.eval(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
         quickjs.release(q, bw)
     }
+    // backend: the app's own process (Tauri mode, capabilities.backend).
+    // invoke's promise is settled by the dispatcher when the answer comes
+    // (backend_tick_), or at once when there is no backend to ask.
+    if app_dir_ != "" && string.contains(p.absent, ",backend,") == 0 {
+        bko = quickjs.new_object(q)
+        reg_(q, bko, "listen", 1, sae_backend_listen)
+        reg_(q, bko, "call", 2, sae_backend_call)
+        reg_(q, bko, "why", 0, sae_backend_why)
+        quickjs.set_global(q, "__sae_backend", bko)
+        quickjs.release(q, bko)
+        bkw, _bke = quickjs.eval(q, "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; raw.listen(function (kind, id, ok, name, payload) { if (kind === 0) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg): name must be a string'); var a = arg === undefined ? '' : String(arg); return new Promise(function (resolve, reject) { var id = raw.call(name, a); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;", "sae:backend")
+        quickjs.release(q, bkw)
+    }
     if app_dir_ != "" && string.contains(p.absent, ",print,") == 0 {
         pro = quickjs.new_object(q)
         reg_(q, pro, "pdf", 2, sae_printing_pdf)
@@ -9415,6 +9712,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.key_ref = 0
     p.bus_ref = 0
     p.bus_stopped_ref = 0
+    p.backend_ref = 0
     p.dgrids = list.new()
     p.menus = list.new()
     p.held = list.new()
@@ -10124,6 +10422,13 @@ browser_new_() -> *Browser {
     b.menu_h = 0
     b.body = 0
     b.source = ""
+    b.backend_declared = 0
+    b.backend = null
+    b.backend_why = "this app has no backend (app.json capabilities.backend)"
+    b.backend_ids = 0
+    b.backend_calls = list.new()
+    b.backend_timer = 0
+    b.backend_deadline_ms = BACKEND_DEADLINE_MS
     pm = env_("SAE_PAGE_MEM")
     if pm != "" {
         v, perr = string.to_long(pm)
@@ -10256,6 +10561,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         read_capabilities_(manifest)
         sqlite_why = sqlite_start_(manifest)   // wave1/sqlite: before any page runs
         if sqlite_why == "" { sqlite_why = natives_start_(manifest) }   // wave1/natives
+        if sqlite_why == "" { sqlite_why = backend_start_(b, manifest) }   // Tauri mode
         build_content_(b, mem.long_to_ptr(root))
     } else {
         build_chrome_(b, root)
@@ -10288,5 +10594,6 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         return 0
     }
     ui.window_run(title, w, h, root)
+    if b.backend != null { backend.stop(b.backend) }
     return 0
 }
