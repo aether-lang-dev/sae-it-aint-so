@@ -5,6 +5,9 @@
 #   tests/run_spec.sh [spec] [site-dir]     (defaults: spec_nav, site/)
 #   SAE_TEST_APP=<dir> tests/run_spec.sh <spec>   app mode: sae-driver --app <dir>
 #   SAE_TEST_START=<url|file> tests/run_spec.sh <spec>   the browser, starting there
+#   SAE_TEST_SERVER=external tests/run_spec.sh <spec>   use a page server that
+#       already answers on SAE_TEST_SITE_PORT (one in a container, WSL, another
+#       host's) instead of starting target/pageserver
 #   SAE_TEST_BIN=<sae-driver> tests/run_spec.sh <spec>   another sae-driver: an
 #       app's own host, built by tools/saehost.sh with its natives (docs/natives.md)
 #   tests/run_spec.sh /path/to/spec_x.ae [site-dir]   a spec of another repo's
@@ -57,7 +60,10 @@ fi
 PATH="$ROOT/target/toolchain/bin:$PATH"
 
 DRIVER_BIN="${SAE_TEST_BIN:-$ROOT/target/build/bin/sae-driver}"
+EXTERNAL_SERVER=0
+[ "${SAE_TEST_SERVER:-}" = external ] && EXTERNAL_SERVER=1
 for f in target/pageserver; do
+    [ $EXTERNAL_SERVER = 1 ] && break
     [ -x "$ROOT/$f" ] || {
         echo "run_spec.sh: no $f; build it with AETHER_UI_WITH_DRIVER=1 ./build.sh (see README)" >&2
         exit 2
@@ -78,8 +84,16 @@ LOG="$ROOT/target/$SPEC.log"
 export SAE_PAGE_TIME_MS="${SAE_PAGE_TIME_MS:-1000}"
 # The page server runs in both modes: in app mode it is the API an app may
 # call (its /api/ routes).
-"$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
-SERVER=$!
+SERVER=
+if [ $EXTERNAL_SERVER = 1 ]; then
+    curl -s -o /dev/null "http://127.0.0.1:$SITE_PORT/" || {
+        echo "run_spec.sh: SAE_TEST_SERVER=external, but nothing answers on http://127.0.0.1:$SITE_PORT/" >&2
+        exit 2
+    }
+else
+    "$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
+    SERVER=$!
+fi
 if [ -n "${SAE_TEST_APP:-}" ]; then
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$DRIVER_BIN" \
         --app "$(cd "$SAE_TEST_APP" && pwd)" ${SAE_TEST_FLAGS:-} >"$LOG" 2>&1 &

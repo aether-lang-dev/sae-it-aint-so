@@ -47,6 +47,7 @@ import std.os
 import std.os (os_getenv)
 import std.fs
 import std.json
+import std.list
 import std.spec
 import uidriver
 
@@ -682,9 +683,23 @@ vg_nodes() -> string {
 
 // Save the window as a PNG. The body is binary, which the string-typed
 // HTTP client can't carry, so curl fetches it. Returns "" or an error.
+// curl is launched without a shell (argv, no quoting): os.exec runs its
+// command line through cmd.exe on Windows, where single quotes are not
+// quotes. "" only when a non-empty PNG is there afterwards.
 screenshot(path: string) -> string {
-    _out, err = os.exec("curl -sf -o '${path}' '${uidriver.url_of("/screenshot")}'")
-    return err
+    args = list.new()
+    defer list.free(args)
+    list.add(args, "-sf")
+    list.add(args, "-o")
+    list.add(args, path)
+    list.add(args, uidriver.url_of("/screenshot"))
+    _out, status, err = os.run_capture("curl", args, null)
+    if string.length(err) > 0 { return err }
+    if status != 0 { return "curl exited ${status}" }
+    n, serr = fs.size(path)
+    if string.length(serr) > 0 { return "no screenshot at ${path}: ${serr}" }
+    if n == 0 { return "empty screenshot at ${path}" }
+    return ""
 }
 
 // 1 when sae-driver has printed `text` (a page's console.log, an error the

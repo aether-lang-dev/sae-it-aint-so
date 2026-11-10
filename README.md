@@ -710,7 +710,9 @@ status line under the toolbar shows the status and final URL.
 
 ## Build and run
 
-The desktop build selects AppKit on macOS and GTK4 on Linux/FreeBSD.
+The desktop build selects AppKit on macOS, GTK4 on Linux/FreeBSD and Win32
+on Windows (MSYS2 MINGW64; `docs/windows.md`, which also runs the page server
+in WSL).
 On Debian/Ubuntu, install the GTK4 build dependencies with
 `sudo apt install build-essential pkg-config libgtk-4-dev libepoxy-dev`.
 
@@ -928,8 +930,9 @@ The launcher starts `target/pageserver` on the site and `sae-driver` on port
 Done: the spike (five builders through the context stack, click handlers held
 as GC roots, per-phase timings; numbers in `docs/spike-results.md`), HTTP
 fetch, history and navigation, browser chrome, the page-dialect lowerer. Not
-yet: more of the `ui` surface, the bytecode cache, a Win32 build arm,
-`class` in the dialect.
+yet: more of the `ui` surface, the bytecode cache,
+`class` in the dialect. Windows builds and runs spec_nav, but 15 of
+`tests/run_all.sh`'s 62 still fail there (`docs/windows.md`).
 
 ## Licence
 

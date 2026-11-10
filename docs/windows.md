@@ -1,0 +1,110 @@
+# sae on Windows, and a page server in WSL
+
+sae builds as a native 64-bit Win32 program (`sae.exe`, PE32+ x86-64) on
+aether-ui's Win32 backend. The pages it loads can come from anywhere HTTP
+reaches, including a Linux page server running in WSL on the same machine:
+that is the shape of "a Linux server speaking TypeScript on the wire to a sae
+browser native on Windows".
+
+First done 2026-11-10 on win11 (Windows 11 26200, MSYS2 MINGW64, gcc 16.2),
+with the pins in `pins` (Aether 0.905.0, aeb v0.344, aether-ui 4b553fd4).
+
+## Building on Windows
+
+The environment is MSYS2's MINGW64 shell, the one aether's own Windows CI
+uses. `tools/setup-siblings.sh` and `./build.sh` work there as on Linux;
+`.build.ae` has a `windows` arm (aether-ui's `aether_ui_win32.c` and the
+Win32 system libraries).
+
+sae's root links (`aether-ui`, `ui`, `vg`, and a few under `tests/` and
+`lower/`) must be real symlinks. MSYS2 makes native ones with
+`MSYS=winsymlinks:nativestrict`, which needs Windows' Developer Mode or an
+elevated shell (an administrator's ssh session is elevated; that is how
+win11 made them), and git makes them only with `core.symlinks=true`.
+`nativestrict` refuses a link whose target does not exist yet, so check out
+before the siblings exist, then make the links:
+
+```sh
+export MSYS=winsymlinks:nativestrict
+git clone -c core.symlinks=false https://github.com/aether-lang-dev/sae-it-aint-so.git sae
+cd sae
+sh tools/setup-siblings.sh                   # ../aether, ../aether-ui, ../aeb at the pins
+git config core.symlinks true
+L=$(git ls-files -s | awk '$1==120000{print $4}')
+rm -f $L && git checkout -- $L               # now real links
+./build.sh                                   # target/build/bin/sae.exe
+AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver.exe
+export PATH=$PWD/../aether/build:$PATH AETHER_HOME=$PWD/../aether
+(cd tools && ae build pageserver.ae -o ../target/pageserver)
+```
+
+## A page server in WSL (wslc)
+
+WSL's container CLI, `wslc` (in `C:\Program Files\WSL`), builds and runs
+Linux images from a Dockerfile. The page server is a Linux program like any
+other there. Build it on an x86_64 Linux host (Ubuntu 22.04's glibc keeps it
+runnable on later ones), then stage it with its OpenSSL libraries and the
+site it serves:
+
+```
+wsl/
+  Dockerfile
+  pageserver                    # target/pageserver from the Linux host
+  lib/libssl.so.3 lib/libcrypto.so.3
+  site/                         # git archive HEAD site | tar -x
+```
+
+```dockerfile
+FROM ubuntu:22.04
+COPY pageserver /sae/pageserver
+COPY lib /sae/lib
+COPY site /sae/site
+ENV LD_LIBRARY_PATH=/sae/lib
+EXPOSE 8091
+CMD ["/sae/pageserver", "/sae/site", "8091"]
+```
+
+```bat
+wslc build -t sae-pageserver:dev C:\path\to\wsl
+wslc run -d --name saeps -p 8091:8091 sae-pageserver:dev
+target\build\bin\sae.exe http://127.0.0.1:8091/
+```
+
+The page server listens on every interface inside the container (Aether's
+HTTP server binds `0.0.0.0` unless told otherwise; its first line of output
+names 127.0.0.1, which is only the address it suggests). wslc publishes the
+port on the Windows side's loopback only (`127.0.0.1:8091->8091/tcp`), so the
+browser on the same machine reaches it and other machines do not.
+
+## Testing against it
+
+`SAE_TEST_SERVER=external` makes `tests/run_spec.sh` use the page server that
+already answers on `SAE_TEST_SITE_PORT` (8091) instead of starting
+`target/pageserver`, and refuse to run when nothing does:
+
+```sh
+SAE_TEST_SERVER=external tests/run_spec.sh        # spec_nav: Windows sae, WSL page server
+```
+
+spec_nav is 48 passing that way on win11, as it is with both ends native on
+Windows and on macOS.
+
+## State (2026-11-10)
+
+`tests/run_all.sh` natively on win11 (page server and browser both Windows
+programs): 47 passed, 15 failed. The failures are Windows ports still to do,
+not flakes:
+
+- app storage: a page's writes under its app data folder do not land
+  (spec_app_caps, spec_gitify, spec_pomatez, check_sqlite_relaunch)
+- the page standard library: `lib/sae` beside `sae.exe` is not found
+  (check_module_rules)
+- the lowerer's error tests (lower, `err/*`)
+- an app's native modules are refused (check_natives, spec_app_natives)
+- origin rules: spec_escape (another origin, a redirect out) and
+  spec_app_httplist (`*.localhost`)
+- the control bus's courier file is checked for mode 0600, which NTFS does
+  not have (spec_app_bus)
+- input: a two-key chord (spec_app_menus), set_focusable on a stack
+  (spec_keys), onsubmit in a field's block (spec_grid)
+- spec_aevg_parity: the corpus canvas comes out 449 px high, not 400

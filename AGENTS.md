@@ -128,6 +128,13 @@ PATH=$PWD/../aether/build:$PATH AETHER_HOME=$PWD/../aether \
 `./build.sh`) need the QuickJS amalgamation in the dev tree too: run
 `./build.sh` first, or `sh ../aether/scripts/fetch-quickjs-amalgamation.sh`.
 
+### Windows
+
+`docs/windows.md`: the MSYS2 MINGW64 build (symlinks need
+`MSYS=winsymlinks:nativestrict` and `core.symlinks=true`), a page server in
+WSL under `wslc`, `SAE_TEST_SERVER=external`, and which specs still fail
+there.
+
 ### A machine with only sae (a Claude Code cloud session)
 
 `tools/setup-siblings.sh` clones whichever of `../aether`, `../aether-ui`

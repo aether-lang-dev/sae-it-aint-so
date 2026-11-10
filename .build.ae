@@ -90,6 +90,11 @@ aeb(cap) {
                 sources("aether-ui/backend/aether_ui_sni.c")
                 cflag("$(pkg-config --cflags gtk4 epoxy)")
                 link_flag("$(pkg-config --libs gtk4 epoxy)")
+            } else if platform == "windows" {
+                // Win32, 64-bit, under MSYS2's MINGW64 (aether's Windows
+                // CI environment). The system libraries follow libaether's
+                // own below, as aether-ui's ui_backend lists them.
+                sources("aether-ui/backend/aether_ui_win32.c")
             } else {
                 print("sae: unsupported build platform ${platform}")
                 return 1
@@ -98,6 +103,14 @@ aeb(cap) {
             // libaether's own dependencies (OpenSSL for std.http, ...),
             // as aether-ui's ui_backend gets them.
             link_flag("$(${ae_bin_()} cflags --libs 2>/dev/null)")
+            if platform == "windows" {
+                // `ae cflags --libs` ends in -Wl,-Bstatic on MINGW; the
+                // system import libraries are back on the default search.
+                link_flag("-Wl,-Bdynamic")
+                link_flag("-luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32")
+                link_flag("-lshell32 -lole32 -loleaut32 -luuid -loleacc -ldwmapi -luxtheme")
+                link_flag("-lws2_32 -lbcrypt -ldbghelp")
+            }
             link_flag("-lpthread")
             link_flag("-lm")
             output_file(output_name_())
