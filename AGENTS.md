@@ -69,6 +69,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 lower/run-tests.sh                           # 67 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless; --mod DIR runs another repo's)
 tests/run_all.sh                             # every spec and check below, each with its environment (a label filter: tests/run_all.sh spec_app_)
 tests/run_spec.sh                            # spec_nav: 45 specs
+# A slow engine (the x86_64 lab host ae-x64 runs QuickJS about twelve times slower than the Macs): SAE_TEST_WAIT_SCALE=6 multiplies every wait's three seconds, SAE_PAGE_TIME_MS=60000 lifts the page's 5 s limit per entry into JS (without it "InternalError: interrupted" ends Solver and the like); a timing budget in a test (spraedsheet's sheet_large) stays the Mac's.
 tests/check_page_veto.sh                     # page veto present and enforced
 tests/check_layers.sh                        # services held to their imports
 tests/check_android_sources.sh               # the APK compiles the same C as .build.ae

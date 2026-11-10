@@ -73,7 +73,13 @@
 # `@keep ctx` callbacks) is gone and reg_/glob_fn_ call quickjs.function.
 # Verified: the dev tree at v0.842.0, lower/run-tests.sh and tests/run_all.sh
 # on macOS.
-AE_PIN=0.842.0
+# 0.905.0 (2026-11-09): a tracking move, no new primitive needed and no code
+# change in src/ or services/. The bare release (SAE_AETHER_HOME=none, its bin
+# directory first on PATH and AETHER_HOME set to its versions/v0.905.0 dir, so
+# the std tree is the release's own) builds sae, sae-driver and the four tools.
+# Verified: lower/run-tests.sh 70 and tests/run_all.sh 61/61 on macOS and on
+# ae-x64 (Ubuntu 22.04, GTK 4.6), spraedsheet's run-tests.sh on macOS.
+AE_PIN=0.905.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
@@ -97,7 +103,9 @@ AE_PIN=0.842.0
 # build node's session handle is `@keep`, so aeb compiles under 0.840 and
 # 0.841 (v0.328's bldr does not: E0902 on its handle). Its floor is Aether
 # 0.841.0 (AE_PIN). Verified: sae's builds (sae, sae-driver) under v0.333.
-AEB_REF=v0.333
+# v0.344 (2026-11-09): a tracking move with Aether 0.905.0 (AE_PIN), no new
+# primitive needed. Verified: sae's builds (sae, sae-driver) under v0.344.
+AEB_REF=v0.344
 
 # Sibling checkouts, reached through the aether-ui symlink. c4858fbe adds
 # ui.timer_once and the frame clock (ui.on_frame), which sae's timers use.
@@ -234,4 +242,7 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # older than 0.836 builds the tree), and aeb v0.333 is its CI pin. Also
 # carries datagrid_set_view_only (6deb9490) and datagrid_on_edit_cancel
 # (f065b112), which sae binds already. Verified: tests/run_all.sh on macOS.
-AETHER_UI_REF=51d1ae7563a90c815177dc130b5a80dec130ef83
+# 50cbc007 (2026-11-09): aether-ui main (50cbc007, "AppKit driver: real clicks and keys
+# reach a headless window") on Aether 0.905.0. A tracking move, no new primitive
+# needed. Verified: tests/run_all.sh on macOS and ae-x64.
+AETHER_UI_REF=50cbc007688c734d66a78354d84179e3298d2154

@@ -38,7 +38,7 @@ exports(
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
     console_count, wait_for_console_n,
     vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool, vg_px_x_in, vg_px_y_in, wait_for_vg_canvas,
-    screenshot, console_contains, wait_for_console, url_encode, vg_nodes,
+    screenshot, console_contains, wait_for_console, wait_for_console_secs, tries, url_encode, vg_nodes,
     vg_key, vg_a11y, wait_for_vg_a11y, tab, tab_name
 )
 
@@ -50,8 +50,20 @@ import std.json
 import std.spec
 import uidriver
 
-const TRIES: int = 60     // x POLL_MS: how long a wait waits (3 s)
 const POLL_MS: int = 50
+
+// How many polls (x POLL_MS) a wait makes: 60, three seconds, times
+// SAE_TEST_WAIT_SCALE for a machine whose engine is slower than the Macs the
+// waits were written on (QuickJS runs about twelve times slower on the x86_64
+// lab host, ae-x64; its runs set 6).
+tries() -> int {
+    s = os_getenv("SAE_TEST_WAIT_SCALE")
+    if s == null { return 60 }
+    n, err = string.to_int(s)
+    if string.length(err) > 0 { return 60 }
+    if n < 1 { return 60 }
+    return 60 * n
+}
 
 // ─── Where things are ────────────────────────────────────────────
 
@@ -368,7 +380,7 @@ wait_for_url(url: string) -> int {
 // page's widgets are up.
 wait_for_page(text: string, status_prefix: string) -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
         if string.starts_with(status_line(), status_prefix) == 1 {
             if string.length(text) == 0 { return 1 }
             if has_text(text) == 1 { return 1 }
@@ -381,7 +393,7 @@ wait_for_page(text: string, status_prefix: string) -> int {
 
 wait_for_text(text: string) -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
         if has_text(text) == 1 { return 1 }
         sleep(POLL_MS)
         i = i + 1
@@ -405,7 +417,7 @@ wait_for_text_secs(text: string, secs: int) -> int {
 
 wait_for_text_gone(text: string) -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
         if has_text(text) == 0 { return 1 }
         sleep(POLL_MS)
         i = i + 1
@@ -415,7 +427,7 @@ wait_for_text_gone(text: string) -> int {
 
 wait_for_widget_count(n: int) -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
         if widget_count() == n { return 1 }
         sleep(POLL_MS)
         i = i + 1
@@ -500,7 +512,7 @@ fit_scale(cw: float, ch: float, vb_w: float, vb_h: float) -> float {
 // 1 once the page has a canvas (a vg.scene) and it has painted.
 wait_for_vg_canvas() -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
         if vg_canvas() > 0 {
             if uidriver.widget_int_field_by_id(vg_canvas(), "w") > 0 {
                 sleep(POLL_MS * 3)
@@ -613,7 +625,7 @@ widget_bool(wtype: string, text: string, field: string) -> int {
 
 wait_for_widget_bool(wtype: string, text: string, field: string, want: int) -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
         if widget_bool(wtype, text, field) == want { return 1 }
         sleep(POLL_MS)
         i = i + 1
@@ -651,7 +663,7 @@ near(a: int, b: int, tol: int) -> int {
 
 wait_for_vg_pixel(x: int, y: int, rgb: int) -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
         if vg_pixel_near(x, y, rgb, 24) == 1 { return 1 }
         sleep(POLL_MS)
         i = i + 1
@@ -687,7 +699,22 @@ console_contains(text: string) -> int {
 
 wait_for_console(text: string) -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
+        if console_contains(text) == 1 { return 1 }
+        sleep(POLL_MS)
+        i = i + 1
+    }
+    return 0
+}
+
+// wait_for_console, for a line that comes after many frames of the page's
+// own work: it waits `secs`, not three seconds. spec_algos's Run drains 480
+// generator steps on the frame clock; on the x86_64 lab host (QuickJS about
+// twelve times slower there than on this Mac, a frame about 0.4 s under Xvfb)
+// the last line comes after about seven seconds.
+wait_for_console_secs(text: string, secs: int) -> int {
+    i = 0
+    while i < secs * 1000 / POLL_MS {
         if console_contains(text) == 1 { return 1 }
         sleep(POLL_MS)
         i = i + 1
@@ -709,7 +736,7 @@ console_count(text: string) -> int {
 // satisfied by the first.
 wait_for_console_n(text: string, n: int) -> int {
     i = 0
-    while i < TRIES {
+    while i < tries() {
         if console_count(text) >= n { return 1 }
         sleep(POLL_MS)
         i = i + 1
