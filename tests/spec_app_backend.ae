@@ -1,4 +1,4 @@
-// spec_app_backend.ae — Tauri mode (docs/tauri-mode.md): an app's own
+// spec_app_backend.ae — an app's backend (docs/app-backend.md): its own
 // backend process, started by sae with an inherited channel, reached by the
 // page through backend.invoke / backend.on / backend.on_gone.
 //   (cd tests/apps/backend && AETHER_LIB_DIR=../../../sdk ae build backend/main.ae -o backend/main)

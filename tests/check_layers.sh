@@ -82,7 +82,7 @@ else
 fi
 
 # Starting a program only in services/backend: the app's own backend
-# (docs/tauri-mode.md) is the one process sae starts, under its rules.
+# (docs/app-backend.md) is the one process sae starts, under its rules.
 hits=$(grep -rnE 'os\.(run|run_socket|run_pipe|run_capture|run_full|run_supervised|run_pipe_drain_and_wait|spawn_proc|spawn_proc_to|exec)[[:space:]]*\(' \
         --include='*.ae' src services lower 2>/dev/null \
       | grep -v '^services/backend/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)

@@ -1,10 +1,33 @@
-# Tauri mode: an app's own backend process, on an inherited channel
+# An app's backend: its own process, on an inherited channel
 
-A design note, 2026-11-10, for Paul and Nic.
+A design note, 2026-11-10, for Paul and Nic. It began as "Tauri mode";
+sae's app mode already has Tauri's shape (an installed app without browser
+chrome, pages from its own folder, app.json grants in the place of Tauri's
+capabilities, sae's services in the place of Tauri's core and its standard
+plugins). What app mode lacked is Tauri's custom commands: the app's own
+code a page reaches with `invoke`. This note is that, and only that.
+
+## Where an app's code goes
+
+Tauri's core exists mostly to get past the browser: the DOM and the web
+sandbox cannot reach files, dialogs or the system. sae has native widgets
+and a grant and services system designed in, so a backend is not how a page
+gets those. It is for what should not be a sae service:
+
+| A page needs | It goes in | Who answers for it |
+|---|---|---|
+| A generic effect any app may want (files, documents, clipboard, print, sqlite, http) | a sae service, under app.json grants | sae's kernel, reviewed once |
+| Pure computation | natives: compiled into the app's host, capability-empty | the compiler's check (`ae inspect`) |
+| The app's own effects (a protocol client, a file format that writes, an engine with state), or code that must run elsewhere (Linux code behind wslc on Windows) | the app's backend process | the app's author, the process kept apart |
+
+So "my app needs X" is no longer a reason to grow the kernel: X is a
+service only if every app may want it, and then it is reviewed as one.
+
+## State
 
 **Built (2026-11-10), the first slice**, on macOS and Linux (the BSDs
-should follow; not yet run there). Windows waits on Aether: `os.run_socket`
-answers "unsupported on Windows" (Open, 1).
+should follow; not yet run there), over the socket pair. Windows waits on
+the stdio transport (Transports, below).
 
 - `app.json`: `"capabilities": { "backend": { "program": "backend/main",
   "args": [...], "deadlineMs": 10000 } }`. `program` is a file inside the
@@ -118,7 +141,7 @@ JSON text.
 Alice runs the app; Bob wrote it; Eve wants to drive it, or read what it
 holds. What changes is how much there is for Eve to find.
 
-| Eve is | The control bus today | Tauri mode |
+| Eve is | The control bus today | A backend on an inherited channel |
 |---|---|---|
 | Another account on the machine | Must not read `$APPDATA/.control-bus` (address and key). Rests on the file's 0600, and on Windows that is not set yet (`docs/windows.md`) | Nothing to read: no file, no address, no key. The channel is a socket pair that exists only as two descriptors, one in each process |
 | Another account, connecting | Can reach the loopback port; refused without the key, every frame sealed | Nothing to connect to: nothing listens |
@@ -149,11 +172,34 @@ descriptor, and only sae and the child it started hold one.
   functions where a frame round trip would cost too much. A backend is for
   effects.
 
+## Transports
+
+The frames are the same over each; what differs is the channel the backend
+inherits.
+
+| Transport | Where | The channel | Descriptors (`send_fd`) |
+|---|---|---|---|
+| socket pair (built) | macOS, Linux, the BSDs | fd 3 of the child (`os.run_socket`) | yes |
+| stdio (next) | every platform | the child's stdin and stdout, two pipes | no |
+| wslc (after stdio) | Windows | stdio of `wslc run --rm -i <image> <command>`: a Linux backend in a WSL container | no (nothing crosses the VM) |
+
+wslc, checked on win11 (2026-11-10): `echo hello | wslc run --rm -i alpine:3
+sh -c 'read l; echo got: $l'` answers `got: hello`, and a warm start takes
+about 1.3 s, once per launch. wslc has no daemon socket, and the channel is
+the two pipe handles sae holds, so the Alice/Bob/Eve table below holds for it
+as for the socket pair.
+
+The stdio transport needs from Aether: a spawn with the child's stdin and
+stdout as pipes the parent keeps, on every platform, and on Windows
+`ipc.wait_readable` and `ipc.read_frame_timeout` for pipes (both say "not
+available on Windows" in 0.907.0). That also gives native Windows backends,
+which the socket pair cannot (`os.run_socket` is "unsupported on Windows").
+
 ## Open
 
-1. **Windows spawn.** `os.run_socket` is built on `socketpair`; it is not
-   yet checked on Windows (AF_UNIX there needs Windows 10 1803 or later).
-   If it does not work, that is an Aether gap to fill first.
+1. **Windows.** `os.run_socket` is "unsupported on Windows" in Aether
+   0.907.0 (checked 2026-11-10). The stdio transport (above) is the way
+   there, not a Windows socket pair with descriptor passing.
 2. **Containment.** `sandbox.spawn_socket` contains a child only on Linux
    with Landlock today; on macOS and Windows it refuses
    (`../aether-child-sandboxing`). Tauri's core runs uncontained; whether
@@ -163,5 +209,5 @@ descriptor, and only sae and the child it started hold one.
    `CANCEL` with a grace period; reuse it rather than invent one).
 4. **Plugins**: what "Aether plus plugins" means for a backend (contrib
    modules, other Aether libraries) and how `app.json` declares them.
-5. **The bus's future**: if Tauri mode and a Unix socket cover its cases,
+5. **The bus's future**: if backends and a Unix socket cover its cases,
    the loopback TCP bus, its courier file and its sealing could go.

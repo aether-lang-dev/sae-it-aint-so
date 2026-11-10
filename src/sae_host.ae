@@ -109,7 +109,7 @@ struct Browser {
     source: string   // the current page's source as fetched ("View page source")
     win_w: int       // the window's content size, as on_layout last gave it (0 before)
     win_h: int
-    // Tauri mode (docs/tauri-mode.md): the app's own backend process.
+    // The app's backend (docs/app-backend.md): its own process.
     backend_declared: int  // 1: app.json declares one (a page may seek it, even if it did not start)
     backend: ptr     // services/backend's instance, or null (none declared, or it never started)
     backend_why: string  // why there is none running, "" while it runs
@@ -4425,7 +4425,7 @@ bus_stop_request_(reason: string, why: string) {
     settle_(ctx)
 }
 
-// --- the page API: backend, the app's own process (docs/tauri-mode.md) ---
+// --- the page API: backend, the app's own process (docs/app-backend.md) ---
 //
 // app.json capabilities.backend { "program": "<file in the app>", "args":
 // [...] } names a program sae starts when the app does (services/backend:
@@ -4456,7 +4456,7 @@ backend_program_(prog: string) -> (string, string) {
     }
     full = "${app_dir_}/${path}"
     if os.platform() == "windows" && string.string_ends_with(full, ".exe") == 0 { full = string.concat(full, ".exe") }
-    if fs.exists(full) == 0 { return "", "backend: no program at ${full} (build it first: docs/tauri-mode.md)" }
+    if fs.exists(full) == 0 { return "", "backend: no program at ${full} (build it first: docs/app-backend.md)" }
     return full, ""
 }
 
@@ -9562,7 +9562,7 @@ api_register_(p: *Page) {
         bw, _bwe = quickjs.eval(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
         quickjs.release(q, bw)
     }
-    // backend: the app's own process (Tauri mode, capabilities.backend).
+    // backend: the app's own process (capabilities.backend, docs/app-backend.md).
     // invoke's promise is settled by the dispatcher when the answer comes
     // (backend_tick_), or at once when there is no backend to ask.
     if app_dir_ != "" && string.contains(p.absent, ",backend,") == 0 {
@@ -10561,7 +10561,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         read_capabilities_(manifest)
         sqlite_why = sqlite_start_(manifest)   // wave1/sqlite: before any page runs
         if sqlite_why == "" { sqlite_why = natives_start_(manifest) }   // wave1/natives
-        if sqlite_why == "" { sqlite_why = backend_start_(b, manifest) }   // Tauri mode
+        if sqlite_why == "" { sqlite_why = backend_start_(b, manifest) }   // the app's backend
         build_content_(b, mem.long_to_ptr(root))
     } else {
         build_chrome_(b, root)

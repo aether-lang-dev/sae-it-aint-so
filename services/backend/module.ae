@@ -1,5 +1,5 @@
 // services/backend — an app's own backend process, on an inherited channel
-// (docs/tauri-mode.md). The one place sae starts a program.
+// (docs/app-backend.md). The one place sae starts a program.
 //
 // sae is the parent: start() spawns the program app.json names with
 // os.run_socket, which hands the child one end of an AF_UNIX socket pair

@@ -1,5 +1,5 @@
 "seeks backend";
-// A test app for spec_app_backend (docs/tauri-mode.md): each button makes
+// A test app for spec_app_backend (docs/app-backend.md): each button makes
 // one call to the app's own backend process and shows what came back.
 const { text, btn, set_text } = ui;
 const result = text("result: (none)");

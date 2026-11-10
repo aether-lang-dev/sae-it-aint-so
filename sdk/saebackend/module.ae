@@ -1,4 +1,4 @@
-// saebackend — the backend side of Tauri mode (docs/tauri-mode.md): what an
+// saebackend — the backend side of an app's backend process (docs/app-backend.md): what an
 // app's own Aether program imports to answer its pages.
 //
 // sae starts the backend with its end of the channel at fd 3 (std.ipc's
