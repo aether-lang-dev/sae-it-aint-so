@@ -71,8 +71,10 @@ done
     case "$name" in module_*) mode="--module" ;; esac
     got=$("$LOWER" $mode "$t" 2>&1)
     status=$?
-    # strip the "path:" prefix, keep "line:col: message"
-    got=${got#"$t:"}
+    # strip the "path:" prefix, keep "line:col: message". Up to the file's
+    # name, not $t itself: on Windows (MSYS2) saelower.exe is handed
+    # $t as C:/... and reports it so.
+    got=${got#*"/$name.ts:"}
     case "$got" in
         "$want"*)
             if [ $status -eq 1 ]; then

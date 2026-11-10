@@ -4,14 +4,18 @@
 import std.spec
 import std.string
 import std.fs
+import std.os
 import std.os (os_getenv)
 import saedriver as b
 import uidriver
 
+// The app's $TEMP, found as sae finds it (temp_dir_ in src/sae_host.ae):
+// $TMPDIR, else %TEMP% on Windows, else /tmp.
 tmp_dir() -> string {
     t = os_getenv("TMPDIR")
+    if t == null && os.platform() == "windows" { t = os_getenv("TEMP") }
     if t == null { return "/tmp" }
-    while string.ends_with(t, "/") == 1 { t = string.substring(t, 0, string.length(t) - 1) }
+    while string.ends_with(t, "/") == 1 || string.ends_with(t, "\\") == 1 { t = string.substring(t, 0, string.length(t) - 1) }
     return t
 }
 

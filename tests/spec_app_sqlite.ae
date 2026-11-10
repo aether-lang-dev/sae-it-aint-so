@@ -31,7 +31,8 @@ main() {
             spec.it("the migrations were applied in the first launch only") callback {
                 b.click("Migrations")
                 b.assert_text("result: migrations: db/001_init.sql db/002_tags.sql", "both recorded")
-                spec.assert_true(b.wait_for_console("sae: sqlite notes: /"), "the database was opened")
+                // sae names the file it opened (/... here, C:/... on Windows).
+                spec.assert_true(b.wait_for_console("/.sqlite/notes.db"), "the database was opened")
                 spec.assert_false(b.console_contains("applied db/001_init.sql"), "001 not applied again")
                 spec.assert_false(b.console_contains("applied db/002_tags.sql"), "002 not applied again")
             }

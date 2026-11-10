@@ -931,8 +931,8 @@ Done: the spike (five builders through the context stack, click handlers held
 as GC roots, per-phase timings; numbers in `docs/spike-results.md`), HTTP
 fetch, history and navigation, browser chrome, the page-dialect lowerer. Not
 yet: more of the `ui` surface, the bytecode cache,
-`class` in the dialect. Windows builds and runs spec_nav, but 15 of
-`tests/run_all.sh`'s 62 still fail there (`docs/windows.md`).
+`class` in the dialect. Windows builds and passes 56 of
+`tests/run_all.sh`'s 62 (`docs/windows.md` has the other six).
 
 ## Licence
 

@@ -4436,13 +4436,13 @@ sae_clip_read(ctx: ptr, this_val: int, argv: int) -> int {
 sae_docs_pick_open(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    return quickjs.new_int(ctx, documents.adopt(ui.open_file(own_(arg_str_(ctx, argv, argc, 0)), "")))
+    return quickjs.new_int(ctx, documents.adopt(slashes_(ui.open_file(own_(arg_str_(ctx, argv, argc, 0)), ""))))
 }
 
 sae_docs_pick_save(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    return quickjs.new_int(ctx, documents.adopt(ui.save_file("Save", own_(arg_str_(ctx, argv, argc, 0)))))
+    return quickjs.new_int(ctx, documents.adopt(slashes_(ui.save_file("Save", own_(arg_str_(ctx, argv, argc, 0))))))
 }
 
 sae_docs_name(ctx: ptr, this_val: int, argv: int) -> int {
@@ -8477,9 +8477,28 @@ call_http_(p: *Page, ref: int, status: int, text: string, err: string, raw_heade
 // The app's own data folder: $SAE_APPDATA_DIR, else the platform's place.
 app_data_dir_() -> string {
     d = env_("SAE_APPDATA_DIR")
-    if d != "" { return d }
-    if os.platform() == "darwin" { return "${env_("HOME")}/Library/Application Support/${app_name_}" }
-    return "${env_("HOME")}/.local/share/${app_name_}"
+    if d != "" { return slashes_(d) }
+    if os.platform() == "darwin" { return "${home_dir_()}/Library/Application Support/${app_name_}" }
+    if os.platform() == "windows" && env_("APPDATA") != "" { return "${slashes_(env_("APPDATA"))}/${app_name_}" }
+    return "${home_dir_()}/.local/share/${app_name_}"
+}
+
+// $HOME, or on Windows (where a program not started from MSYS2 or Cygwin
+// has none) %USERPROFILE%; "" if neither.
+home_dir_() -> string {
+    h = env_("HOME")
+    if h == "" && os.platform() == "windows" { h = env_("USERPROFILE") }
+    return slashes_(h)
+}
+
+// $TMPDIR, else %TEMP% on Windows, else /tmp; no trailing "/".
+temp_dir_() -> string {
+    t = env_("TMPDIR")
+    if t == "" && os.platform() == "windows" { t = env_("TEMP") }
+    if t == "" { t = "/tmp" }
+    t = slashes_(t)
+    while string.length(t) > 1 && string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
+    return t
 }
 
 // A JSON text made into a JS value (JSON.parse, from the host), for a
@@ -8634,10 +8653,9 @@ grants_from_(v: ptr, key: string, add: fn) {
 // The app's grants from app.json "capabilities", handed to the services
 // that enforce them (http's stay here, with the actors that make requests).
 read_capabilities_(manifest: ptr) {
-    t = env_("TMPDIR")
-    if t == "" { t = "/tmp" }
-    while string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
-    files.configure(1, app_data_dir_(), env_("HOME"), t)
+    win = 0
+    if os.platform() == "windows" { win = 1 }
+    files.configure(1, app_data_dir_(), home_dir_(), temp_dir_(), win)
     shell.configure(1, env_("SAE_SHELL_LOG"))
     // capabilities.http is the app's whole network: absent or empty is none
     // (Tauri's deny by default). An entry services/net does not understand
@@ -8737,7 +8755,7 @@ hash_hex_(s: string) -> string {
 canonical_dir_(d: string) -> string {
     p, _k, err = fs.realpath(d)
     if err != "" || p == "" { return own_(d) }
-    return own_(p)
+    return slashes_(p)
 }
 
 // The bundle identifier of the macOS .app whose executable is `exe`
@@ -8777,8 +8795,8 @@ var app_key_: string = ""   // app mode: app_storage_key_, set at start
 // $SAE_STORAGE_DIR, else ~/.sae/storage, or .sae/storage in the working
 // directory where there is no $HOME (an Android app: its own files folder).
 storage_dir_(url: string) -> string {
-    root = env_("SAE_STORAGE_DIR")
-    home = env_("HOME")
+    root = slashes_(env_("SAE_STORAGE_DIR"))
+    home = home_dir_()
     if home == "" { home = "." }
     if root == "" { root = "${home}/.sae/storage" }
     scope = "file"
@@ -10173,8 +10191,17 @@ main() {
     // sae --app <dir> --control-bus: the person switches the app's control
     // bus on for this launch (docs/control-bus.md, decision 2).
     if os.args_get(3) == "--control-bus" { control_bus_flag_ = 1 }
-    code = sae_main(os.args_get(1), os.args_get(2), os.argv0())
+    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()))
     if code != 0 { exit(code) }
+}
+
+// A path from the system with "/" separators. Windows gives them with "\\"
+// (os.argv0() as C:\dir\sae.exe, fs.realpath, %APPDATA%), and every path
+// the kernel takes apart (dir_of_, base_name_, the files service) splits on
+// "/". Elsewhere a "\\" is a character a name may hold, and is kept.
+slashes_(p: string) -> string {
+    if os.platform() == "windows" { return string.string_replace_all(p, "\\", "/") }
+    return p
 }
 
 sae_main(arg1: string, arg2: string, exe: string) -> int {

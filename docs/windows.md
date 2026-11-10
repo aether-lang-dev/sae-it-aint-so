@@ -92,19 +92,26 @@ Windows and on macOS.
 ## State (2026-11-10)
 
 `tests/run_all.sh` natively on win11 (page server and browser both Windows
-programs): 47 passed, 15 failed. The failures are Windows ports still to do,
-not flakes:
+programs): 56 of 62 pass. What it took: the binary's path, `fs.realpath`,
+`%APPDATA%`, `%USERPROFILE%` and `%TEMP%` in the kernel's "/" form
+(`slashes_`, `home_dir_`, `temp_dir_`); drive paths in services/files (a path
+with no drive is outside every grant there); and tests and tools that read
+CRLF output or MSYS2's `/c/...` spelling of `C:/...`.
 
-- app storage: a page's writes under its app data folder do not land
-  (spec_app_caps, spec_gitify, spec_pomatez, check_sqlite_relaunch)
-- the page standard library: `lib/sae` beside `sae.exe` is not found
-  (check_module_rules)
-- the lowerer's error tests (lower, `err/*`)
-- an app's native modules are refused (check_natives, spec_app_natives)
-- origin rules: spec_escape (another origin, a redirect out) and
-  spec_app_httplist (`*.localhost`)
-- the control bus's courier file is checked for mode 0600, which NTFS does
-  not have (spec_app_bus)
-- input: a two-key chord (spec_app_menus), set_focusable on a stack
-  (spec_keys), onsubmit in a field's block (spec_grid)
-- spec_aevg_parity: the corpus canvas comes out 449 px high, not 400
+Still failing, each a fix upstream:
+
+- spec_app_bus: the courier file is to be readable only by its user. Aether's
+  `fs.chmod` on Windows toggles the read-only attribute and ignores the rest,
+  so the key is as readable as its folder. Needs an owner-only file in
+  std.fs (a DACL on Windows).
+- spec_app_httplist: `api.localhost` does not resolve on Windows (macOS and
+  Linux resolve every `*.localhost` to loopback, RFC 6761). Needs Aether's
+  resolver to do so on every platform.
+- aether-ui's Win32 backend: a two-key chord (spec_app_menus), set_focusable
+  taken away from a stack (spec_keys), onsubmit in a field's block
+  (spec_grid), and spec_aevg_parity's corpus canvas, 449 px high instead of
+  400.
+
+A page server already answering on 8091 (the WSL container) takes a native
+run's requests on Windows, as wslc's 127.0.0.1 relay wins over the native
+server's 0.0.0.0; `tests/run_spec.sh` now refuses to start then.

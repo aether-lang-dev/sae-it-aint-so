@@ -66,8 +66,15 @@ rm -rf "$out/natives" "$out/app_natives"
 # and cache.
 # The build files are copied, not linked: aeb takes a build file's own
 # folder for the project's, and its outputs and cache go there.
+# Under MSYS2 (Windows) ln -s copies unless asked for a native link, which
+# needs Developer Mode or an elevated shell; native falls back to the copy.
+# rm -rf, not rm -f: what an earlier run left may be such a copy (rm -rf
+# removes a link itself, never what it points to).
+case $(uname -s) in
+    MINGW*|MSYS*) export MSYS="${MSYS:+$MSYS }winsymlinks:native" ;;
+esac
 for f in src services lower aevg lib tools aether-ui ui vg pins; do
-    rm -f "$out/$f"
+    rm -rf "$out/$f"
     ln -s "$ROOT/$f" "$out/$f"
 done
 for f in build.sh .build.ae; do

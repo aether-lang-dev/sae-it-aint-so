@@ -64,7 +64,8 @@ inspect_(path: string) -> string {
     list.add(argv, path)
     out, status, err = os.run_capture(ae, argv, null)
     if err != "" || status != 0 { fail_(1, "${path}: ae inspect failed (${err}${out})") }
-    return out
+    // Windows' ae prints CRLF lines; the checks below read "\n" ones.
+    return string.string_replace_all(out, "\r", "")
 }
 
 // The module at `path` for the native `name`, with the functions `fns`

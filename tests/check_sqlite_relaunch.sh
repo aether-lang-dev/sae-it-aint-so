@@ -29,7 +29,7 @@ else
 fi
 db=$(ls "$STORE"/app-sqlite_badmig-*/.sqlite/notes.db 2>/dev/null | head -1)
 if [ -n "$db" ] && command -v sqlite3 >/dev/null 2>&1; then
-    kept=$(sqlite3 "$db" "select count(*) from sqlite_master where name = 'notes'; select count(*) from _sae_migrations" | tr '\n' ' ')
+    kept=$(sqlite3 "$db" "select count(*) from sqlite_master where name = 'notes'; select count(*) from _sae_migrations" | tr -d '\r' | tr '\n' ' ')
     if [ "$kept" = "0 0 " ]; then
         echo "ok   nothing of the failed migration was kept (no notes table, nothing recorded)"
     else

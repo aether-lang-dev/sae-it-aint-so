@@ -30,13 +30,17 @@ var enabled_: int = 0        // 0 in the browser: pages there get no fs
 var app_data_: string = ""   // $APPDATA, and where relative paths go
 var home_: string = ""
 var temp_: string = ""
+var windows_: int = 0        // 1: paths are C:/... (the kernel's form of C:\...)
 var reads_: ptr = null       // strarr: resolved directory prefixes ending in "/"
 var writes_: ptr = null      // ... that may also be changed
 
 // Set up for an app (enabled 1) or a web page (0), with the roots the
-// $-prefixes expand to. The kernel reads them from the environment.
-configure(enabled: int, app_data: string, home: string, temp: string) {
+// $-prefixes expand to. The kernel reads them from the environment, with
+// "/" separators. windows is 1 on Windows: an absolute path there starts
+// with a drive (C:/), and a page's "\" is a separator, as Windows reads it.
+configure(enabled: int, app_data: string, home: string, temp: string, windows: int) {
     enabled_ = enabled
+    windows_ = windows
     app_data_ = string.copy(app_data)
     home_ = string.copy(home)
     temp_ = string.copy(temp)
@@ -95,9 +99,25 @@ expand_(s: string) -> string {
 // "$APPDATA/link/../x" is /elsewhere/x. A path that cannot be resolved (a
 // dangling symlink, a loop) gives "", which no grant covers. Aether's
 // std.sandbox resolves paths the same way (runtime/aether_sandbox_path.h).
+//
+// On Windows the walk is the same below the drive: "C:/x/../y" is C:/y, a
+// ".." at the drive's root stays there, and a path with no drive ("/x",
+// "//server/share") gives "", as no grant names one.
 resolve(raw: string) -> string {
     p = expand_(raw)
-    if string.string_starts_with(p, "/") == 0 { p = "${app_data_}/${p}" }
+    drive = ""
+    if windows_ == 1 {
+        p = string.string_replace_all(p, "\\", "/")
+        if drive_of_(p) == "" {
+            if string.string_starts_with(p, "/") == 1 { return "" }
+            p = "${app_data_}/${p}"
+        }
+        drive = drive_of_(p)
+        if drive == "" { return "" }
+        p = string.string_substring(p, 2, string.length(p))
+    } else if string.string_starts_with(p, "/") == 0 {
+        p = "${app_data_}/${p}"
+    }
     res = ""
     n = string.length(p)
     i = 0
@@ -112,17 +132,43 @@ resolve(raw: string) -> string {
             res = string.string_substring(res, 0, k)
         } else if seg != "" && seg != "." {
             res = "${res}/${seg}"
-            if fs.fs_is_symlink(res) == 1 {
-                rp, _k, err = fs.realpath(res)
+            if fs.fs_is_symlink("${drive}${res}") == 1 {
+                rp, _k, err = fs.realpath("${drive}${res}")
                 if err != "" { return "" }
                 res = string.copy(rp)
+                if windows_ == 1 {
+                    res = string.string_replace_all(res, "\\", "/")
+                    if string.string_starts_with(res, "//?/") == 1 { res = string.string_substring(res, 4, string.length(res)) }
+                    drive = drive_of_(res)
+                    if drive == "" { return "" }
+                    res = string.string_substring(res, 2, string.length(res))
+                }
                 if res == "/" { res = "" }
             }
         }
         i = j + 1
     }
-    if res == "" { return "/" }
-    return res
+    if res == "" { return "${drive}/" }
+    return "${drive}${res}"
+}
+
+// 1 for a Windows path that is absolute but names no drive ("/etc/hosts",
+// \\server\share), which resolve refuses.
+driveless_(raw: string) -> int {
+    p = string.string_replace_all(expand_(raw), "\\", "/")
+    if drive_of_(p) == "" && string.string_starts_with(p, "/") == 1 { return 1 }
+    return 0
+}
+
+// "C:" for a path that starts with a drive ("C:/..." or just "C:"), the
+// letter upper-cased so one folder has one spelling; "" otherwise.
+drive_of_(p: string) -> string {
+    if string.length(p) < 2 || string.char_at(p, 1) != 58 { return "" }
+    if string.length(p) > 2 && string.char_at(p, 2) != 47 { return "" }
+    c = string.char_at(p, 0)
+    if c >= 97 && c <= 122 { c = c - 32 }
+    if c < 65 || c > 90 { return "" }
+    return string.concat(string.string_substring("ABCDEFGHIJKLMNOPQRSTUVWXYZ", c - 65, c - 64), ":")
 }
 
 prefix_in_(l: ptr, s: string) -> int {
@@ -147,6 +193,11 @@ within_(l: ptr, p: string) -> int {
 path(raw: string, write: int, what: string) -> (string, string) {
     if enabled_ == 0 { return "", "${what}: fs is not available to a web page" }
     p = resolve(raw)
+    if p == "" && windows_ == 1 && driveless_(raw) == 1 {
+        kind = "read"
+        if write == 1 { kind = "write" }
+        return "", "${what}: outside this app's fs.${kind} grant: ${raw} (no drive)"
+    }
     if p == "" { return "", "${what}: cannot resolve ${raw} (a dangling symlink, or a loop)" }
     if write == 1 {
         if within_(writes_, p) == 1 { return p, "" }

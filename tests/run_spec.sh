@@ -91,6 +91,13 @@ if [ $EXTERNAL_SERVER = 1 ]; then
         exit 2
     }
 else
+    # Another server already answering there would take the requests (on
+    # Windows a WSL container's 127.0.0.1 relay wins over this 0.0.0.0), and
+    # the spec would run against its state, not this site's.
+    if curl -s -o /dev/null "http://127.0.0.1:$SITE_PORT/"; then
+        echo "run_spec.sh: something already answers on page server port $SITE_PORT (SAE_TEST_SERVER=external to use it)" >&2
+        exit 2
+    fi
     "$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
     SERVER=$!
 fi
