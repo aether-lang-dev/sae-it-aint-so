@@ -245,4 +245,10 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # 50cbc007 (2026-11-09): aether-ui main (50cbc007, "AppKit driver: real clicks and keys
 # reach a headless window") on Aether 0.905.0. A tracking move, no new primitive
 # needed. Verified: tests/run_all.sh on macOS and ae-x64.
-AETHER_UI_REF=50cbc007688c734d66a78354d84179e3298d2154
+# 4b553fd4 (2026-11-10): aether-ui main (4b553fd4): the driver answers every
+# request on the UI thread on AppKit and Win32 (AppKit crashed reading a field
+# during Tab), a key to a visible non-key window is delivered once, and client
+# sockets are bounded at 5 s. A tracking move, no new primitive needed.
+# Verified: tests/run_all.sh on macOS (62 passed); spraedsheet spec_sheet on
+# macOS against this ref.
+AETHER_UI_REF=4b553fd47b6f2c914b5800d9df1ee65cdc455223
