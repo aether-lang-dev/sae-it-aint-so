@@ -21,7 +21,9 @@ cd "$ROOT" || exit 1
 FILTER=${1:-}
 if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
    && [ -z "${SAE_RUN_ALL_XVFB:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
-    SAE_RUN_ALL_XVFB=1 exec xvfb-run -a sh "$0" "$@"
+    # A screen named: xvfb-run's own default differs by distribution (640x480
+    # on Arch), and the resize specs need room to grow a window to 900x800.
+    SAE_RUN_ALL_XVFB=1 exec xvfb-run -a -s "-screen 0 1920x1200x24" sh "$0" "$@"
 fi
 for f in target/build/bin/sae target/build/bin/sae-driver target/pageserver target/saelower target/saejs; do
     [ -x "$f" ] || { echo "run_all.sh: no $f (AGENTS.md \"Build and test\")" >&2; exit 2; }
