@@ -27,7 +27,8 @@ service only if every app may want it, and then it is reviewed as one.
 
 **Built (2026-11-10), the first slice; one transport since 2026-11-11**:
 the backend's own stdin and stdout, two pipes (`os.run_stdio`, Aether
-0.908.0), on macOS, Linux and Windows, and through `wslc run -i` to a Linux
+0.908.0), on macOS, Linux, FreeBSD (the backend specs on GhostBSD) and
+Windows, and through `wslc run -i` to a Linux
 backend in a WSL container on Windows. The socket pair it began on is gone.
 
 - `app.json`, a program in the app: `"capabilities": { "backend": {

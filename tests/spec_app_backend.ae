@@ -35,7 +35,8 @@ running_(prog: string, args: string) -> int {
 }
 
 // The listening sockets (TCP and Unix) of sae-driver and of the backend,
-// as lsof names them, except the UI driver's own port (the test's): ""
+// as lsof names them, except the UI driver's own port (the test's; FreeBSD's
+// lsof names it 127.0.0.1:9222->*:*): """"
 // when there are none. "(no lsof)" where lsof is missing. On Windows, the
 // TCP ones (Get-NetTCPConnection); nothing in sae makes a Unix socket there.
 listeners_() -> string {
@@ -49,7 +50,7 @@ listeners_() -> string {
         list.add(argv, "$ids = @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and ($_.CommandLine -like '*sae-driver*--app*' -or $_.CommandLine -like '*tests/apps/backend/backend/main*') } | ForEach-Object { $_.ProcessId }); Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess -and $_.LocalPort -ne 9222 } | ForEach-Object { \"$($_.LocalAddress):$($_.LocalPort)\" }")
     } else {
         list.add(argv, "-c")
-        list.add(argv, "command -v lsof >/dev/null || { echo '(no lsof)'; exit 0; }; for p in $(pgrep -f 'sae-driver --app') $(pgrep -f 'tests/apps/backend/backend/main'); do lsof -nP -a -p $p -iTCP -sTCP:LISTEN -Fn 2>/dev/null | grep '^n' | grep -v ':9222$'; lsof -nP -a -p $p -U -Fn 2>/dev/null | grep '^n/'; done; true")
+        list.add(argv, "command -v lsof >/dev/null || { echo '(no lsof)'; exit 0; }; for p in $(pgrep -f 'sae-driver --app') $(pgrep -f 'tests/apps/backend/backend/main'); do lsof -nP -a -p $p -iTCP -sTCP:LISTEN -Fn 2>/dev/null | grep '^n' | grep -vE ':9222(->[*]:[*])?$'; lsof -nP -a -p $p -U -Fn 2>/dev/null | grep '^n/'; done; true")
     }
     out, _st, _err = os.run_capture(tool, argv, null)
     return string.trim(out)
