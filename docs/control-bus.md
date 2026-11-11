@@ -1,7 +1,7 @@
 # A control bus: may an installed app accept local connections?
 
 A design note, decided by Paul (2026-10-14). **Option (a) is built**
-(2026-10-14): `services/bus`, with aeo's `agent_auth` and `secure_channel`
+(2026-10-14): `services/bus` (an instance per launch, the kernel's `Browser.bus`, no module state since 2026-11-11), with aeo's `agent_auth` and `secure_channel`
 copied into `services/` (to be shared later); `"seeks control-bus"` and
 `bus.serve`/`bus.stop`; `--control-bus` after `sae --app <dir>`; the
 spreadsheet serves it (aether-lang-dev/spraedsheet, once demo 18:

@@ -21,6 +21,10 @@
 // bus listens, takes each authenticated command with next(), and answers it
 // with answer() once the page's handler has. Nothing here runs a page.
 //
+// Each Bus is an instance with its own state (the kernel holds one per
+// launch, made with new() and passed to every call); nothing here is module
+// state.
+//
 // What this module can reach is its imports. tests/check_layers.sh holds it
 // to them, and holds the listen call to this module.
 
@@ -34,7 +38,7 @@ import std.time (now_ms)
 import services.agent_auth
 import services.secure_channel
 
-exports (configure, declared, request_limit, start, stop, listening, address, poll, next, answer, take_log)
+exports (new, configure, declared, request_limit, start, stop, listening, address, poll, next, answer, take_log)
 
 const MAX_WAITING = 8
 
@@ -46,52 +50,80 @@ struct BusConn {
     command: string   // the opened command, once ready
 }
 
-var name_: string = ""        // capabilities.controlBus.name: the path /api/<name>
-var max_: int = 65536
-var server_: ptr = null
-var port_: int = 0
-var key_: string = ""
-var file_: string = ""
-var conns_: ptr = null        // std.list of *BusConn
-var next_id_: int = 0
-var seen_: ptr = null         // strarr: nonces seen, "<ms> <nonce>", oldest first
-var log_: string = ""         // lines for the kernel to print (take_log)
-
-// The app declares a control bus (app.json capabilities.controlBus).
-configure(name: string, max_bytes: int) {
-    name_ = string.copy(name)
-    max_ = max_bytes
-    if max_ <= 0 { max_ = 65536 }
-    if max_ > 1048576 { max_ = 1048576 }
+// One launch's control bus: what app.json declares, and while it listens,
+// its socket, key, courier file and connections.
+struct Bus {
+    name: string      // capabilities.controlBus.name: the path /api/<name>, "" when undeclared
+    max: int          // a request's most bytes (maxRequestBytes)
+    server: ptr       // the listening socket, or null
+    port: int
+    key: string       // this launch's courier key, "" when not listening
+    file: string      // the courier file, "" when not written
+    conns: ptr        // std.list of *BusConn
+    next_id: int
+    seen: ptr         // strarr: nonces seen, "<ms> <nonce>", oldest first
+    log: string       // lines for the kernel to print (take_log)
 }
 
-declared() -> int {
-    if name_ == "" { return 0 }
+// A bus that declares nothing and does not listen.
+new() -> ptr {
+    u = heap.new(Bus)
+    u.name = ""
+    u.max = 65536
+    u.server = null
+    u.port = 0
+    u.key = ""
+    u.file = ""
+    u.conns = null
+    u.next_id = 0
+    u.seen = null
+    u.log = ""
+    return u as ptr
+}
+
+// The app declares a control bus (app.json capabilities.controlBus).
+configure(h: ptr, name: string, max_bytes: int) {
+    u = h as *Bus
+    u.name = string.copy(name)
+    u.max = max_bytes
+    if u.max <= 0 { u.max = 65536 }
+    if u.max > 1048576 { u.max = 1048576 }
+}
+
+declared(h: ptr) -> int {
+    if h == null { return 0 }
+    u = h as *Bus
+    if u.name == "" { return 0 }
     return 1
 }
 
 // A request's most bytes (maxRequestBytes), which the control channel
 // (services/channel) holds its commands to as well.
-request_limit() -> int {
-    return max_
+request_limit(h: ptr) -> int {
+    u = h as *Bus
+    return u.max
 }
 
-listening() -> int {
-    if server_ == null { return 0 }
+listening(h: ptr) -> int {
+    if h == null { return 0 }
+    u = h as *Bus
+    if u.server == null { return 0 }
     return 1
 }
 
 // The URL a client posts to, "" when not listening.
-address() -> string {
-    if server_ == null { return "" }
-    return "http://127.0.0.1:${port_}/api/${name_}"
+address(h: ptr) -> string {
+    u = h as *Bus
+    if u.server == null { return "" }
+    return "http://127.0.0.1:${u.port}/api/${u.name}"
 }
 
 // Listen, and write the courier file in `app_data` (the app's own folder).
 // "" or why not.
-start(app_data: string) -> string {
-    if name_ == "" { return "control bus: this app's app.json does not declare one" }
-    if server_ != null { return "" }
+start(h: ptr, app_data: string) -> string {
+    u = h as *Bus
+    if u.name == "" { return "control bus: this app's app.json does not declare one" }
+    if u.server != null { return "" }
     s, err = tcp.listen_on("127.0.0.1", 0)
     if err != "" { return "control bus: ${err}" }
     key = agent_auth.mint_secret()
@@ -99,26 +131,26 @@ start(app_data: string) -> string {
         _c = tcp.tcp_server_close(s)
         return "control bus: no key could be made"
     }
-    server_ = s
-    port_ = tcp.server_port(s)
-    key_ = string.copy(key)
-    conns_ = list.new()
-    seen_ = strarr.new()
+    u.server = s
+    u.port = tcp.server_port(s)
+    u.key = string.copy(key)
+    u.conns = list.new()
+    u.seen = strarr.new()
     _m = fs.mkdir_p(app_data)
-    file_ = "${app_data}/.control-bus"
-    werr = write_private_(file_, courier_json_())
+    u.file = "${app_data}/.control-bus"
+    werr = write_private_(u.file, courier_json_(u))
     if werr != "" {
-        stop()
+        stop(u as ptr)
         return "control bus: the courier file: ${werr}"
     }
     return ""
 }
 
 // What a client reads: where to post, and the key. JSON.
-courier_json_() -> string {
+courier_json_(u: *Bus) -> string {
     o = json.obj()
-    _u = json.set(o, "url", json.str(address()))
-    _k = json.set(o, "key", json.str(key_))
+    _u = json.set(o, "url", json.str(address(u as ptr)))
+    _k = json.set(o, "key", json.str(u.key))
     text, _e = json.encode(o)
     return text
 }
@@ -140,65 +172,68 @@ write_private_(path: string, text: string) -> string {
 
 // Stop listening: every connection closed, the courier file deleted, the key
 // forgotten.
-stop() {
-    if conns_ != null {
+stop(h: ptr) {
+    u = h as *Bus
+    if u.conns != null {
         i = 0
-        while i < list.size(conns_) {
-            cv, _e = list.get(conns_, i)
+        while i < list.size(u.conns) {
+            cv, _e = list.get(u.conns, i)
             c = cv as *BusConn
             _x = tcp.tcp_close(c.sock)
             i = i + 1
         }
-        conns_ = list.new()
+        u.conns = list.new()
     }
-    if server_ != null { _c = tcp.tcp_server_close(server_) }
-    server_ = null
-    if file_ != "" { _d = fs.delete(file_) }
-    file_ = ""
-    key_ = ""
+    if u.server != null { _c = tcp.tcp_server_close(u.server) }
+    u.server = null
+    if u.file != "" { _d = fs.delete(u.file) }
+    u.file = ""
+    u.key = ""
 }
 
 // Lines the kernel prints (refusals, once per connection, never the key).
-take_log() -> string {
-    l = log_
-    log_ = ""
+take_log(h: ptr) -> string {
+    u = h as *Bus
+    l = u.log
+    u.log = ""
     return l
 }
 
-log_line_(s: string) {
-    if log_ == "" { log_ = "sae: control bus: ${s}" } else { log_ = "${log_}\nsae: control bus: ${s}" }
+log_line_(u: *Bus, s: string) {
+    if u.log == "" { u.log = "sae: control bus: ${s}" } else { u.log = "${u.log}\nsae: control bus: ${s}" }
 }
 
 // Accept what is waiting and read what has arrived, without blocking.
-poll() {
-    if server_ == null { return }
-    while tcp.server_poll(server_, 0) == 1 {
-        sock, aerr = tcp.accept(server_)
+poll(h: ptr) {
+    u = h as *Bus
+    if u.server == null { return }
+    while tcp.server_poll(u.server, 0) == 1 {
+        sock, aerr = tcp.accept(u.server)
         if aerr != "" { break }
         c = heap.new(BusConn)
         c.sock = sock
         c.buf = ""
-        next_id_ = next_id_ + 1
-        c.id = next_id_
+        u.next_id = u.next_id + 1
+        c.id = u.next_id
         c.state = 0
         c.command = ""
-        list.add(conns_, c)
+        list.add(u.conns, c)
     }
     i = 0
-    while i < list.size(conns_) {
-        cv, _e = list.get(conns_, i)
+    while i < list.size(u.conns) {
+        cv, _e = list.get(u.conns, i)
         c = cv as *BusConn
         if c.state == 0 {
             ready, _perr = tcp.poll(c.sock, 0)
             if ready {
                 data, rerr = tcp.read(c.sock, 16384)
                 if rerr != "" || data == "" {
-                    drop_(i)
+                    drop_(u, i)
                     continue
                 }
                 c.buf = "${c.buf}${data}"
-                if parse_(c) == 1 {
-                    drop_(i)
+                if parse_(u, c) == 1 {
+                    drop_(u, i)
                     continue
                 }
             }
@@ -208,19 +243,19 @@ poll() {
 }
 
 // Close and forget connection i.
-drop_(i: int) {
-    cv, _e = list.get(conns_, i)
+drop_(u: *Bus, i: int) {
+    cv, _e = list.get(u.conns, i)
     c = cv as *BusConn
     _x = tcp.tcp_close(c.sock)
-    list.list_remove(conns_, i)
+    list.list_remove(u.conns, i)
 }
 
 // Waiting and with the page.
-waiting_() -> int {
+waiting_(u: *Bus) -> int {
     n = 0
     i = 0
-    while i < list.size(conns_) {
-        cv, _e = list.get(conns_, i)
+    while i < list.size(u.conns) {
+        cv, _e = list.get(u.conns, i)
         c = cv as *BusConn
         if c.state != 0 { n = n + 1 }
         i = i + 1
@@ -230,8 +265,8 @@ waiting_() -> int {
 
 // A request as far as it has arrived: 0 to keep it (still arriving, or ready
 // for the page), 1 when it was answered here and can be dropped.
-parse_(c: *BusConn) -> int {
-    if string.length(c.buf) > max_ + 8192 { return answer_(c, 413, "Payload Too Large", "the request is larger than this app's maxRequestBytes") }
+parse_(u: *Bus, c: *BusConn) -> int {
+    if string.length(c.buf) > u.max + 8192 { return answer_(c, 413, "Payload Too Large", "the request is larger than this app's maxRequestBytes") }
     end = string.index_of(c.buf, "\r\n\r\n")
     if end < 0 { return 0 }
     head = string.substring(c.buf, 0, end)
@@ -259,23 +294,23 @@ parse_(c: *BusConn) -> int {
     }
     // A browser sends Origin; a page re-pointing its own name at 127.0.0.1
     // (DNS rebinding) sends its own Host. Neither gets further.
-    if origin == 1 { return refused_(c, 403, "Forbidden", "a request from a web browser (it has an Origin header)") }
-    if host != "127.0.0.1:${port_}" && host != "localhost:${port_}" && host != "[::1]:${port_}" {
-        return refused_(c, 403, "Forbidden", "a request for another host (${host})")
+    if origin == 1 { return refused_(u, c, 403, "Forbidden", "a request from a web browser (it has an Origin header)") }
+    if host != "127.0.0.1:${u.port}" && host != "localhost:${u.port}" && host != "[::1]:${u.port}" {
+        return refused_(u, c, 403, "Forbidden", "a request for another host (${host})")
     }
-    if length > max_ { return answer_(c, 413, "Payload Too Large", "the request is larger than this app's maxRequestBytes") }
+    if length > u.max { return answer_(c, 413, "Payload Too Large", "the request is larger than this app's maxRequestBytes") }
     if string.length(body) < length { return 0 }
-    if first != "POST /api/${name_} HTTP/1.1" && first != "POST /api/${name_} HTTP/1.0" {
-        return answer_(c, 404, "Not Found", "this app's control bus is POST /api/${name_}")
+    if first != "POST /api/${u.name} HTTP/1.1" && first != "POST /api/${u.name} HTTP/1.0" {
+        return answer_(c, 404, "Not Found", "this app's control bus is POST /api/${u.name}")
     }
-    if waiting_() >= MAX_WAITING { return answer_(c, 503, "Service Unavailable", "the control bus is busy") }
+    if waiting_(u) >= MAX_WAITING { return answer_(c, 503, "Service Unavailable", "the control bus is busy") }
     frame = string.trim(string.substring(body, 0, length))
-    cmd, nonce, why = secure_channel.open_line_ex(key_, frame)
-    if why == "ok" && seen_before_(nonce) == 1 { why = "replay" }
-    if why != "ok" { return refused_(c, 401, "Unauthorized", "a request that does not open with this launch's key (${why})") }
-    remember_(nonce)
+    cmd, nonce, why = secure_channel.open_line_ex(u.key, frame)
+    if why == "ok" && seen_before_(u, nonce) == 1 { why = "replay" }
+    if why != "ok" { return refused_(u, c, 401, "Unauthorized", "a request that does not open with this launch's key (${why})") }
+    remember_(u, nonce)
     command, cerr = command_of_(cmd)
-    if cerr != "" { return sealed_(c, 400, "Bad Request", reply_json_(0, "", 2, cerr)) }
+    if cerr != "" { return sealed_(u, c, 400, "Bad Request", reply_json_(0, "", 2, cerr)) }
     c.command = command
     c.state = 1
     return 0
@@ -293,40 +328,42 @@ command_of_(text: string) -> (string, string) {
 }
 
 // A nonce seen within the window: a replay.
-seen_before_(nonce: string) -> int {
+seen_before_(u: *Bus, nonce: string) -> int {
     now = now_ms()
     // Those older than twice the window go: they cannot be replayed.
     kept = strarr.new()
     j = 0
-    while j < strarr.size(seen_) {
-        e = strarr.get(seen_, j)
+    while j < strarr.size(u.seen) {
+        e = strarr.get(u.seen, j)
         sp = string.index_of(e, " ")
         t, _te = string.to_long(string.substring(e, 0, sp))
         if now - t <= 2 * secure_channel.WINDOW_MS() { strarr.push_copy(kept, e) }
         j = j + 1
     }
-    strarr.free(seen_)
-    seen_ = kept
+    strarr.free(u.seen)
+    u.seen = kept
     i = 0
-    while i < strarr.size(seen_) {
-        e = strarr.get(seen_, i)
+    while i < strarr.size(u.seen) {
+        e = strarr.get(u.seen, i)
         if string.ends_with(e, " ${nonce}") == 1 { return 1 }
         i = i + 1
     }
     return 0
 }
 
-remember_(nonce: string) {
-    strarr.push_copy(seen_, "${now_ms()} ${nonce}")
+remember_(u: *Bus, nonce: string) {
+    strarr.push_copy(u.seen, "${now_ms()} ${nonce}")
 }
 
 // The oldest request ready for the page: (its id, its command), or (0, "").
 // It is then with the page until answer().
-next() -> (int, string) {
-    if conns_ == null { return 0, "" }
+next(h: ptr) -> (int, string) {
+    if h == null { return 0, "" }
+    u = h as *Bus
+    if u.conns == null { return 0, "" }
     i = 0
-    while i < list.size(conns_) {
-        cv, _e = list.get(conns_, i)
+    while i < list.size(u.conns) {
+        cv, _e = list.get(u.conns, i)
         c = cv as *BusConn
         if c.state == 2 { return 0, "" }    // one at a time, in order
         if c.state == 1 {
@@ -341,17 +378,18 @@ next() -> (int, string) {
 // The page's answer to request `id`: success, the result as JSON ("" for
 // none), and an error message when it failed. Sealed, then the connection
 // closed.
-answer(id: int, success: int, result_json: string, error: string) {
-    if conns_ == null { return }
+answer(h: ptr, id: int, success: int, result_json: string, error: string) {
+    u = h as *Bus
+    if u.conns == null { return }
     i = 0
-    while i < list.size(conns_) {
-        cv, _e = list.get(conns_, i)
+    while i < list.size(u.conns) {
+        cv, _e = list.get(u.conns, i)
         c = cv as *BusConn
         if c.id == id {
             code = 1
             if success == 1 { code = 0 }
-            _s = sealed_(c, 200, "OK", reply_json_(success, result_json, code, error))
-            drop_(i)
+            _s = sealed_(u, c, 200, "OK", reply_json_(success, result_json, code, error))
+            drop_(u, i)
             return
         }
         i = i + 1
@@ -369,8 +407,8 @@ reply_json_(success: int, result_json: string, code: int, error: string) -> stri
 }
 
 // A refusal before any page sees it: logged once, without the key.
-refused_(c: *BusConn, status: int, text: string, why: string) -> int {
-    log_line_("refused ${why}")
+refused_(u: *Bus, c: *BusConn, status: int, text: string, why: string) -> int {
+    log_line_(u, "refused ${why}")
     return answer_(c, status, text, why)
 }
 
@@ -382,8 +420,8 @@ answer_(c: *BusConn, status: int, text: string, body: string) -> int {
 
 // A sealed answer: only the holder of the key can read it, and only from
 // this sae can it open.
-sealed_(c: *BusConn, status: int, text: string, plain: string) -> int {
-    frame = secure_channel.seal_line(key_, plain)
+sealed_(u: *Bus, c: *BusConn, status: int, text: string, plain: string) -> int {
+    frame = secure_channel.seal_line(u.key, plain)
     _w = tcp.write(c.sock, "HTTP/1.1 ${status} ${text}\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(frame)}\r\nConnection: close\r\n\r\n${frame}")
     return 1
 }

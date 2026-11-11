@@ -123,6 +123,9 @@ struct Browser {
     // that started sae drives the app over sae's stdin and stdout.
     control: ptr     // services/channel's instance, or null (not started that way)
     control_timer: int   // the UI timer reading it, or 0
+    // The control bus (--control-bus, services/bus): this launch's instance,
+    // declared or not.
+    bus: ptr
 }
 
 // A call to the backend not yet answered: which page made it (an answer for
@@ -4197,8 +4200,8 @@ sae_bus_answer(ctx: ptr, this_val: int, argv: int) -> int {
 
 // Listen (the courier file written), the title marked, the poll timer on.
 bus_listen_() -> string {
-    if bus.listening() == 1 { return "" }
-    why = bus.start(app_data_dir_())
+    if bus.listening(bus_of_()) == 1 { return "" }
+    why = bus.start(bus_of_(), app_data_dir_())
     if why != "" { return why }
     ui.set_window_title(1, "${app_name_} - control bus on")
     say_("sae: control bus: listening (other programs on this machine can control ${app_name_})")
@@ -4208,8 +4211,8 @@ bus_listen_() -> string {
 
 // Stop listening: the courier file gone, the title as it was.
 bus_silence_() {
-    if bus.listening() == 0 { return }
-    bus.stop()
+    if bus.listening(bus_of_()) == 0 { return }
+    bus.stop(bus_of_())
     if bus_timer_ != 0 {
         ui.timer_cancel(bus_timer_)
         bus_timer_ = 0
@@ -4233,8 +4236,8 @@ bus_tick_() {
             return
         }
     } else {
-        bus.poll()
-        l = bus.take_log()
+        bus.poll(bus_of_())
+        l = bus.take_log(bus_of_())
         if l != "" { say_(l) }
     }
     if bus_inflight_ != 0 {
@@ -4251,7 +4254,7 @@ bus_tick_() {
         bus_ui_(id, command)
         return
     }
-    if bus.declared() == 0 {
+    if bus.declared(bus_of_()) == 0 {
         ctl_answer_(id, 0, "", "this app's app.json does not declare a control bus (capabilities.controlBus)")
         return
     }
@@ -4284,6 +4287,14 @@ bus_tick_() {
     }
 }
 
+// The launch's control bus (services/bus's instance), or null before the
+// browser is made.
+bus_of_() -> ptr {
+    if browser_ == null { return null }
+    b = browser_ as *Browser
+    return b.bus
+}
+
 // The launch's control channel (--control-stdio), or null.
 control_() -> ptr {
     if browser_ == null { return null }
@@ -4298,7 +4309,7 @@ ctl_next_() -> (int, string) {
         id, command = channel.next(ch)
         return id, command
     }
-    id2, command2 = bus.next()
+    id2, command2 = bus.next(bus_of_())
     return id2, command2
 }
 
@@ -4309,15 +4320,15 @@ ctl_answer_(id: int, success: int, result_json: string, error: string) {
         channel.answer(ch, id, success, result_json, error)
         return
     }
-    bus.answer(id, success, result_json, error)
+    bus.answer(bus_of_(), id, success, result_json, error)
 }
 
 // At launch, with --control-stdio: the channel held to the bus's request
 // size, the window marked, and the tick that reads it started. It needs no
 // page yet: requests that come before one serves are answered so.
 control_start_(b: *Browser) {
-    channel.configure(b.control, bus.request_limit())
-    if bus.declared() == 0 {
+    channel.configure(b.control, bus.request_limit(b.bus))
+    if bus.declared(b.bus) == 0 {
         say_("sae: control channel: this app's app.json does not declare a control bus (capabilities.controlBus): every request is refused")
     } else {
         say_("sae: control channel: on (the program that started sae can control ${app_name_}; nothing listens)")
@@ -8952,7 +8963,7 @@ available_(nm: string) -> int {
     // Desktop first: Android and iOS have their own IPC.
     if nm == "control-bus" {
         if os.platform() == "android" || os.platform() == "ios" { return 0 }
-        return bus.declared()
+        return bus.declared(bus_of_())
     }
     if nm == "open-urls" { return shell.granted() }
     if nm == "print" { return printing.granted() }
@@ -9119,7 +9130,7 @@ read_capabilities_(manifest: ptr) {
         bmax = 65536
         bmv = json.json_object_get_raw(cb, "maxRequestBytes")
         if bmv != null { bmax = json.json_get_int(bmv) }
-        bus.configure(bn, bmax)
+        bus.configure(bus_of_(), bn, bmax)
         uiv = json.json_object_get_raw(cb, "ui")
         if uiv != null && json.json_get_bool(uiv) == 1 { bus_ui_granted_ = 1 }
     }
@@ -10574,6 +10585,7 @@ browser_new_() -> *Browser {
     b.backend_deadline_ms = BACKEND_DEADLINE_MS
     b.control = null
     b.control_timer = 0
+    b.bus = bus.new()
     pm = env_("SAE_PAGE_MEM")
     if pm != "" {
         v, perr = string.to_long(pm)
@@ -10746,7 +10758,7 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr) -> int {
     // then on, through the page's handlers).
     // The first page may have started the control bus before the window
     // existed: its title says so from the start.
-    if bus.listening() == 1 { title = "${title} - control bus on" }
+    if bus.listening(b.bus) == 1 { title = "${title} - control bus on" }
     if channel.alive(b.control) == 1 { title = "${title} - control channel on" }
     window_up_ = 1
     if menu_bar_ != 0 {
