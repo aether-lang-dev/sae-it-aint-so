@@ -100,6 +100,13 @@ else
     fi
     "$ROOT/target/pageserver" "$SITE" "$SITE_PORT" >/dev/null 2>&1 &
     SERVER=$!
+    # Wait for it to answer before sae loads its first page: a freshly built
+    # page server's first start (macOS checks a new binary first) lost that
+    # race, and spec_nav's home page read "connection failed" (2026-11-11).
+    i=0
+    while [ $i -lt 100 ] && ! curl -s -o /dev/null "http://127.0.0.1:$SITE_PORT/"; do
+        sleep 0.1; i=$((i + 1))
+    done
 fi
 if [ -n "${SAE_TEST_APP:-}" ]; then
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$DRIVER_BIN" \
