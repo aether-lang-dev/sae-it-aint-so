@@ -134,7 +134,7 @@ canvas row). What it took before that: the binary's path, `fs.realpath`,
 with no drive is outside every grant there); and tests and tools that read
 CRLF output or MSYS2's `/c/...` spelling of `C:/...`.
 
-Still failing, each a fix upstream:
+Still failing, each a fix upstream (both in aether PR #3649, not yet released):
 
 - spec_app_bus: the courier file is to be readable only by its user. Aether's
   `fs.chmod` on Windows toggles the read-only attribute and ignores the rest,
@@ -143,9 +143,11 @@ Still failing, each a fix upstream:
 - spec_app_httplist: `api.localhost` does not resolve on Windows (macOS and
   Linux resolve every `*.localhost` to loopback, RFC 6761). Needs Aether's
   resolver to do so on every platform.
-- spec_escape failed in this run only because the run used an already-running
-  page server on 8091 (it serves `site/`, and the spec needs its own site
-  directory); it is not a Windows failure, rerun it with no server on 8091.
+
+spec_escape failed in that run only because a page server left running on
+8091 answered for it (it serves `site/`, and the spec needs its own site
+directory). Rerun alone with 8091 free (2026-11-11), it passes, 19 of 19, so
+64 of 66 pass. aether PR #3649 carries both upstream fixes above.
 
 A page server already answering on 8091 (the WSL container) takes a native
 run's requests on Windows, as wslc's 127.0.0.1 relay wins over the native
