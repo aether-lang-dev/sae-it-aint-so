@@ -126,6 +126,18 @@ struct Browser {
     // The control bus (--control-bus, services/bus): this launch's instance,
     // declared or not.
     bus: ptr
+    // The kernel's side of serving either one ("The control bus" below):
+    // the page whose handler serves and the request it has, for the bus or
+    // the channel, whichever this launch has.
+    bus_flag: int        // the person started the app with --control-bus
+    bus_ui_granted: int  // app.json capabilities.controlBus.ui: the UI driver's keys, pointer and screenshots, over the bus
+    bus_page: ptr        // the *Page whose handler serves, or null
+    bus_timer: int       // the UI timer reading the bus, or 0
+    bus_told_off: int    // 1 once "control bus: off" has been said
+    bus_inflight: int    // the request with the page, or 0
+    bus_since: long      // when it was handed to the page
+    bus_interrupted: int // the page's time limit stopped the request in flight
+    bus_ui_pending: ptr  // std.list of *BusUi: @ui requests waiting on the driver
 }
 
 // A call to the backend not yet answered: which page made it (an answer for
@@ -378,7 +390,11 @@ settle_(ctx: ptr) {
     n, err = quickjs.run_jobs(ctx)
     if n < 0 {
         say_("sae: uncaught exception in a promise job:\n${err}")
-        if bus_inflight_ != 0 && string.contains(err, "interrupted") == 1 { bus_interrupted_ = 1 }
+        p = page_of_(ctx)
+        if p != null {
+            b = p.browser as *Browser
+            if b.bus_inflight != 0 && string.contains(err, "interrupted") == 1 { b.bus_interrupted = 1 }
+        }
         note_interrupted_(ctx, err)
     }
     // A vg scene made in a handler (a drawing floated over a grid, a chart)
@@ -4132,20 +4148,13 @@ sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
 // (bus_tick_) reads the channel instead of the listener. ctl_next_ and
 // ctl_answer_ are the one place the two differ.
 
-var control_bus_flag_: int = 0    // the person started the app with --control-bus
-var bus_ui_granted_: int = 0      // app.json capabilities.controlBus.ui: the UI driver's keys, pointer and screenshots, over the bus
-var bus_page_: ptr = null         // the page whose handler serves, or null
-var bus_timer_: int = 0
-var bus_told_off_: int = 0
-var bus_inflight_: int = 0        // the request with the page, or 0
-var bus_since_: long = 0
-var bus_interrupted_: int = 0     // the page's time limit stopped the request in flight
 const BUS_DEADLINE_MS = 10000
 
 sae_bus_serve(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     p = page_of_(ctx)
+    b = p.browser as *Browser
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "bus.serve(fn): fn must be a function") }
     if p.bus_ref != 0 { quickjs.release(ctx, p.bus_ref) }
     p.bus_ref = hold_arg_(ctx, argv, 0)
@@ -4154,20 +4163,20 @@ sae_bus_serve(ctx: ptr, this_val: int, argv: int) -> int {
         p.bus_stopped_ref = 0
     }
     if argc >= 2 && is_fn_arg_(ctx, argv, 1) == 1 { p.bus_stopped_ref = hold_arg_(ctx, argv, 1) }
-    bus_page_ = p as ptr
-    ch = control_()
+    b.bus_page = p as ptr
+    ch = b.control
     if ch != null {
         channel.event(ch, "serving")
         return 0
     }
-    if control_bus_flag_ == 0 {
-        if bus_told_off_ == 0 {
-            bus_told_off_ = 1
+    if b.bus_flag == 0 {
+        if b.bus_told_off == 0 {
+            b.bus_told_off = 1
             say_("sae: control bus: off; start the app with --control-bus to switch it on")
         }
         return 0
     }
-    why = bus_listen_()
+    why = bus_listen_(b)
     if why != "" { return sae_throw_type_error(ctx, why) }
     return 0
 }
@@ -4175,6 +4184,7 @@ sae_bus_serve(ctx: ptr, this_val: int, argv: int) -> int {
 sae_bus_stop(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     p = page_of_(ctx)
+    b = p.browser as *Browser
     if p.bus_ref != 0 {
         quickjs.release(ctx, p.bus_ref)
         p.bus_ref = 0
@@ -4183,8 +4193,8 @@ sae_bus_stop(ctx: ptr, this_val: int, argv: int) -> int {
         quickjs.release(ctx, p.bus_stopped_ref)
         p.bus_stopped_ref = 0
     }
-    if bus_page_ == p as ptr { bus_page_ = null }
-    bus_silence_()
+    if b.bus_page == p as ptr { b.bus_page = null }
+    bus_silence_(b)
     return 0
 }
 
@@ -4192,83 +4202,84 @@ sae_bus_answer(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
     id = arg_int_(ctx, argv, argc, 0, 0)
-    if id != bus_inflight_ { return 0 }   // answered already (its deadline passed)
-    ctl_answer_(id, arg_int_(ctx, argv, argc, 1, 0), own_(arg_str_(ctx, argv, argc, 2)), own_(arg_str_(ctx, argv, argc, 3)))
-    bus_inflight_ = 0
+    b = browser_of_(ctx)
+    if id != b.bus_inflight { return 0 }   // answered already (its deadline passed)
+    ctl_answer_(b, id, arg_int_(ctx, argv, argc, 1, 0), own_(arg_str_(ctx, argv, argc, 2)), own_(arg_str_(ctx, argv, argc, 3)))
+    b.bus_inflight = 0
     return 0
 }
 
 // Listen (the courier file written), the title marked, the poll timer on.
-bus_listen_() -> string {
-    if bus.listening(bus_of_()) == 1 { return "" }
-    why = bus.start(bus_of_(), app_data_dir_())
+bus_listen_(b: *Browser) -> string {
+    if bus.listening(b.bus) == 1 { return "" }
+    why = bus.start(b.bus, app_data_dir_())
     if why != "" { return why }
     ui.set_window_title(1, "${app_name_} - control bus on")
     say_("sae: control bus: listening (other programs on this machine can control ${app_name_})")
-    if bus_timer_ == 0 { bus_timer_ = ui.timer(20, || { bus_tick_() }) }
+    if b.bus_timer == 0 { b.bus_timer = ui.timer(20, || { bus_tick_(b) }) }
     return ""
 }
 
 // Stop listening: the courier file gone, the title as it was.
-bus_silence_() {
-    if bus.listening(bus_of_()) == 0 { return }
-    bus.stop(bus_of_())
-    if bus_timer_ != 0 {
-        ui.timer_cancel(bus_timer_)
-        bus_timer_ = 0
+bus_silence_(b: *Browser) {
+    if bus.listening(b.bus) == 0 { return }
+    bus.stop(b.bus)
+    if b.bus_timer != 0 {
+        ui.timer_cancel(b.bus_timer)
+        b.bus_timer = 0
     }
-    bus_inflight_ = 0
+    b.bus_inflight = 0
     ui.set_window_title(1, app_name_)
     say_("sae: control bus: stopped")
 }
 
 // Each tick: what has arrived read, refusals logged, and the next request
 // handed to the page (one at a time).
-bus_tick_() {
-    bus_ui_poll_()
-    ch = control_()
+bus_tick_(b: *Browser) {
+    bus_ui_poll_(b)
+    ch = b.control
     if ch != null {
         channel.poll(ch)
         cl = channel.take_log(ch)
         if cl != "" { say_(cl) }
         if channel.alive(ch) == 0 {
-            control_gone_()
+            control_gone_(b)
             return
         }
     } else {
-        bus.poll(bus_of_())
-        l = bus.take_log(bus_of_())
+        bus.poll(b.bus)
+        l = bus.take_log(b.bus)
         if l != "" { say_(l) }
     }
-    if bus_inflight_ != 0 {
-        if bus_interrupted_ == 1 {
-            bus_stop_request_("interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
-        } else if now_ms_() - bus_since_ > BUS_DEADLINE_MS {
-            bus_stop_request_("deadline", "the app did not answer in ${BUS_DEADLINE_MS / 1000} s")
+    if b.bus_inflight != 0 {
+        if b.bus_interrupted == 1 {
+            bus_stop_request_(b, "interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
+        } else if now_ms_() - b.bus_since > BUS_DEADLINE_MS {
+            bus_stop_request_(b, "deadline", "the app did not answer in ${BUS_DEADLINE_MS / 1000} s")
         }
         return
     }
-    id, command = ctl_next_()
+    id, command = ctl_next_(b)
     if id == 0 { return }
     if string.starts_with(command, "@ui ") == 1 {
-        bus_ui_(id, command)
+        bus_ui_(b, id, command)
         return
     }
-    if bus.declared(bus_of_()) == 0 {
-        ctl_answer_(id, 0, "", "this app's app.json does not declare a control bus (capabilities.controlBus)")
+    if bus.declared(b.bus) == 0 {
+        ctl_answer_(b, id, 0, "", "this app's app.json does not declare a control bus (capabilities.controlBus)")
         return
     }
-    if bus_page_ == null {
-        ctl_answer_(id, 0, "", "no page of this app is serving the control bus")
+    if b.bus_page == null {
+        ctl_answer_(b, id, 0, "", "no page of this app is serving the control bus")
         return
     }
-    p = bus_page_ as *Page
+    p = b.bus_page as *Page
     if p.bus_ref == 0 {
-        ctl_answer_(id, 0, "", "no page of this app is serving the control bus")
+        ctl_answer_(b, id, 0, "", "no page of this app is serving the control bus")
         return
     }
-    bus_inflight_ = id
-    bus_since_ = now_ms_()
+    b.bus_inflight = id
+    b.bus_since = now_ms_()
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     iv = quickjs.new_int(ctx, id)
@@ -4277,50 +4288,35 @@ bus_tick_() {
     cv = quickjs.new_string(ctx, command)
     _b = quickjs.set_index(ctx, args, 1, cv)
     quickjs.release(ctx, cv)
-    bus_interrupted_ = 0
+    b.bus_interrupted = 0
     r = calln_(ctx, p.bus_ref, args)
     quickjs.release(ctx, args)
     if r < 0 { report_exception_(ctx, "the control bus's handler") }
     settle_(ctx)
-    if bus_interrupted_ == 1 && bus_inflight_ == id {
-        bus_stop_request_("interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
+    if b.bus_interrupted == 1 && b.bus_inflight == id {
+        bus_stop_request_(b, "interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
     }
 }
 
-// The launch's control bus (services/bus's instance), or null before the
-// browser is made.
-bus_of_() -> ptr {
-    if browser_ == null { return null }
-    b = browser_ as *Browser
-    return b.bus
-}
-
-// The launch's control channel (--control-stdio), or null.
-control_() -> ptr {
-    if browser_ == null { return null }
-    b = browser_ as *Browser
-    return b.control
-}
-
 // The next request for the page, from the channel or the bus.
-ctl_next_() -> (int, string) {
-    ch = control_()
+ctl_next_(b: *Browser) -> (int, string) {
+    ch = b.control
     if ch != null {
         id, command = channel.next(ch)
         return id, command
     }
-    id2, command2 = bus.next(bus_of_())
+    id2, command2 = bus.next(b.bus)
     return id2, command2
 }
 
 // A request answered, on the channel or the bus it came by.
-ctl_answer_(id: int, success: int, result_json: string, error: string) {
-    ch = control_()
+ctl_answer_(b: *Browser, id: int, success: int, result_json: string, error: string) {
+    ch = b.control
     if ch != null {
         channel.answer(ch, id, success, result_json, error)
         return
     }
-    bus.answer(bus_of_(), id, success, result_json, error)
+    bus.answer(b.bus, id, success, result_json, error)
 }
 
 // At launch, with --control-stdio: the channel held to the bus's request
@@ -4333,21 +4329,20 @@ control_start_(b: *Browser) {
     } else {
         say_("sae: control channel: on (the program that started sae can control ${app_name_}; nothing listens)")
     }
-    b.control_timer = ui.timer(20, || { bus_tick_() })
+    b.control_timer = ui.timer(20, || { bus_tick_(b) })
 }
 
 // The program that started sae closed the channel, or broke it. Without a
 // window (AETHER_UI_HEADLESS) no one else can use the app, so sae stops, as
 // a child whose parent has gone should; with one, the person may be using
 // it, so it stays and only the title's mark goes.
-control_gone_() {
-    b = browser_ as *Browser
+control_gone_(b: *Browser) {
     say_("sae: ${channel.why(b.control)}")
     if b.control_timer != 0 {
         ui.timer_cancel(b.control_timer)
         b.control_timer = 0
     }
-    bus_inflight_ = 0
+    b.bus_inflight = 0
     if env_("AETHER_UI_HEADLESS") != "" {
         say_("sae: control channel: no window and no channel: stopping")
         if b.backend != null { backend.stop(b.backend) }
@@ -4365,32 +4360,32 @@ control_gone_() {
 // driver's. The driver answers on the UI thread, which this is, so the
 // connection is read a tick at a time (bus_ui_poll_), never waited on, and
 // answered on the bus when the driver has closed it.
-bus_ui_(id: int, command: string) {
-    if bus_ui_granted_ == 0 {
-        ctl_answer_(id, 0, "", "this app's app.json does not grant capabilities.controlBus.ui")
+bus_ui_(b: *Browser, id: int, command: string) {
+    if b.bus_ui_granted == 0 {
+        ctl_answer_(b, id, 0, "", "this app's app.json does not grant capabilities.controlBus.ui")
         return
     }
     port = env_("AETHER_UI_TEST_PORT")
     if port == "" {
-        ctl_answer_(id, 0, "", "this sae has no UI driver (a sae-driver build, started with AETHER_UI_TEST_PORT)")
+        ctl_answer_(b, id, 0, "", "this sae has no UI driver (a sae-driver build, started with AETHER_UI_TEST_PORT)")
         return
     }
     rest = string.substring(command, 4, string.length(command))
     sp = string.index_of(rest, " ")
     if sp <= 0 {
-        ctl_answer_(id, 0, "", "@ui <GET|POST> <path>")
+        ctl_answer_(b, id, 0, "", "@ui <GET|POST> <path>")
         return
     }
     method = string.substring(rest, 0, sp)
     path = string.trim(string.substring(rest, sp + 1, string.length(rest)))
     if bus_ui_path_ok_(method, path) == 0 {
-        ctl_answer_(id, 0, "", "@ui: ${method} ${path} is not a path the control bus passes to the UI driver")
+        ctl_answer_(b, id, 0, "", "@ui: ${method} ${path} is not a path the control bus passes to the UI driver")
         return
     }
     p_port, perr = string.to_int(port)
     sock, cerr = tcp.connect("127.0.0.1", p_port)
     if cerr != "" {
-        ctl_answer_(id, 0, "", "the UI driver: no connection: ${cerr}")
+        ctl_answer_(b, id, 0, "", "the UI driver: no connection: ${cerr}")
         return
     }
     req = "${method} ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
@@ -4400,8 +4395,7 @@ bus_ui_(id: int, command: string) {
     pend.sock = sock
     pend.got = ""
     pend.since = now_ms_()
-    if bus_ui_pending_ == null { bus_ui_pending_ = list.new() }
-    list.add(bus_ui_pending_, pend as ptr)
+    list.add(b.bus_ui_pending, pend as ptr)
 }
 
 // A ui request waiting on the driver: its connection, and what has come.
@@ -4412,16 +4406,14 @@ struct BusUi {
     since: long
 }
 
-var bus_ui_pending_: ptr = null   // std.list of *BusUi
 
 // Each tick: what each pending request's connection has for it read (the
 // driver answers on the UI thread, which this is, so nothing waits for it
 // here); one whose driver closed the connection is answered on the bus.
-bus_ui_poll_() {
-    if bus_ui_pending_ == null { return }
+bus_ui_poll_(b: *Browser) {
     i = 0
-    while i < list.size(bus_ui_pending_) {
-        pv, _e = list.get(bus_ui_pending_, i)
+    while i < list.size(b.bus_ui_pending) {
+        pv, _e = list.get(b.bus_ui_pending, i)
         pend = pv as *BusUi
         done = 0
         ready, _pe = tcp.poll(pend.sock, 0)
@@ -4431,8 +4423,8 @@ bus_ui_poll_() {
         }
         if done == 0 && now_ms_() - pend.since > BUS_DEADLINE_MS {
             _c = tcp.tcp_close(pend.sock)
-            ctl_answer_(pend.id, 0, "", "the UI driver did not answer in ${BUS_DEADLINE_MS / 1000} s")
-            list.list_remove(bus_ui_pending_, i)
+            ctl_answer_(b, pend.id, 0, "", "the UI driver did not answer in ${BUS_DEADLINE_MS / 1000} s")
+            list.list_remove(b.bus_ui_pending, i)
             heap.free(pend)
             continue
         }
@@ -4440,7 +4432,7 @@ bus_ui_poll_() {
             _c = tcp.tcp_close(pend.sock)
             end = string.index_of(pend.got, "\r\n\r\n")
             if end < 0 {
-                ctl_answer_(pend.id, 0, "", "the UI driver answered nothing")
+                ctl_answer_(b, pend.id, 0, "", "the UI driver answered nothing")
             } else {
                 line = string.substring(pend.got, 0, string.index_of(pend.got, "\r\n"))
                 status = 0
@@ -4449,9 +4441,9 @@ bus_ui_poll_() {
                     st, _se = string.to_int(string.substring(line, sp1 + 1, sp1 + 4))
                     status = st
                 }
-                bus_ui_answer_(pend.id, status, string.substring(pend.got, end + 4, string.length(pend.got)), "")
+                bus_ui_answer_(b, pend.id, status, string.substring(pend.got, end + 4, string.length(pend.got)), "")
             }
-            list.list_remove(bus_ui_pending_, i)
+            list.list_remove(b.bus_ui_pending, i)
             heap.free(pend)
             continue
         }
@@ -4491,21 +4483,21 @@ bus_ui_path_ok_(method: string, path: string) -> int {
 }
 
 // The driver's answer on the bus: a JSON body as it is, other text as a JSON string.
-bus_ui_answer_(id: int, status: int, body: string, err: string) {
+bus_ui_answer_(b: *Browser, id: int, status: int, body: string, err: string) {
     if err != "" {
-        ctl_answer_(id, 0, "", "the UI driver: ${err}")
+        ctl_answer_(b, id, 0, "", "the UI driver: ${err}")
         return
     }
     if status < 200 || status >= 300 {
-        ctl_answer_(id, 0, "", "the UI driver answered ${status}: ${body}")
+        ctl_answer_(b, id, 0, "", "the UI driver answered ${status}: ${body}")
         return
     }
     if string.starts_with(body, "{") == 1 || string.starts_with(body, "[") == 1 {
-        ctl_answer_(id, 1, body, "")
+        ctl_answer_(b, id, 1, body, "")
         return
     }
     quoted = string.string_replace_all(string.string_replace_all(body, "\\", "\\\\"), "\"", "\\\"")
-    ctl_answer_(id, 1, "\"${quoted}\"", "")
+    ctl_answer_(b, id, 1, "\"${quoted}\"", "")
 }
 
 // The request in flight answered as failed, its handler no longer awaited,
@@ -4513,12 +4505,12 @@ bus_ui_answer_(id: int, status: int, body: string, err: string) {
 // function): "interrupted" when the page's time limit stopped it, its
 // promise never to settle; "deadline" when it was answered for it while
 // still running. The page puts back what the request had done.
-bus_stop_request_(reason: string, why: string) {
-    ctl_answer_(bus_inflight_, 0, "", why)
-    bus_inflight_ = 0
-    bus_interrupted_ = 0
-    if bus_page_ == null { return }
-    p = bus_page_ as *Page
+bus_stop_request_(b: *Browser, reason: string, why: string) {
+    ctl_answer_(b, b.bus_inflight, 0, "", why)
+    b.bus_inflight = 0
+    b.bus_interrupted = 0
+    if b.bus_page == null { return }
+    p = b.bus_page as *Page
     if p.bus_stopped_ref == 0 { return }
     ctx = p.ctx
     args = quickjs.new_array(ctx)
@@ -8949,7 +8941,7 @@ var clip_read_granted_: int = 0
 // 1 if this context can give a page the privilege `nm`. A web page in the
 // browser gets outgoing-http (to its own origin) and nothing else; an app
 // gets each only as far as app.json grants it.
-available_(nm: string) -> int {
+available_(b: *Browser, nm: string) -> int {
     if app_dir_ == "" {
         if nm == "outgoing-http" { return 1 }
         if nm == "clipboard" { return 1 }
@@ -8963,15 +8955,11 @@ available_(nm: string) -> int {
     // Desktop first: Android and iOS have their own IPC.
     if nm == "control-bus" {
         if os.platform() == "android" || os.platform() == "ios" { return 0 }
-        return bus.declared(bus_of_())
+        return bus.declared(b.bus)
     }
     if nm == "open-urls" { return shell.granted() }
     if nm == "print" { return printing.granted() }
-    if nm == "backend" {
-        if browser_ == null { return 0 }
-        bb = browser_ as *Browser
-        return bb.backend_declared
-    }
+    if nm == "backend" { return b.backend_declared }
     if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
     if string.string_starts_with(nm, "native ") == 1 { return natives_granted_(string.string_substring(nm, 7, string.length(nm))) }   // wave1/natives
     return 0
@@ -8979,7 +8967,7 @@ available_(nm: string) -> int {
 
 // Why a page that seeks `seeks` (",local-filesystem,...", from its "seeks"
 // lines) cannot run here, or "".
-seek_refusal_(url: string, seeks: string) -> string {
+seek_refusal_(b: *Browser, url: string, seeks: string) -> string {
     if seeks == "" { return "" }
     missing = ""
     parts = string.split(seeks, ",")
@@ -8987,7 +8975,7 @@ seek_refusal_(url: string, seeks: string) -> string {
     i = 0
     while i < n {
         nm = string.concat(string.string_array_get(parts, i), "")
-        if nm != "" && available_(nm) == 0 {
+        if nm != "" && available_(b, nm) == 0 {
             if missing == "" { missing = nm } else { missing = "${missing}, ${nm}" }
         }
         i = i + 1
@@ -9045,14 +9033,14 @@ http_scopes_for_(page_url: string, scopes: string) -> (string, string) {
 // The privileges a page can do without (",outgoing-http,") that this context
 // cannot give it, as ",local-filesystem,": their objects are left out, so the
 // page sees `typeof fs === "undefined"` and falls back.
-absent_of_(optional: string) -> string {
+absent_of_(b: *Browser, optional: string) -> string {
     out = ","
     parts = string.split(optional, ",")
     n = string.string_array_size(parts)
     i = 0
     while i < n {
         nm = string.string_array_get(parts, i)
-        if nm != "" && available_(nm) == 0 { out = string.concat(out, "${nm},") }
+        if nm != "" && available_(b, nm) == 0 { out = string.concat(out, "${nm},") }
         i = i + 1
     }
     return out
@@ -9090,7 +9078,7 @@ grants_from_(v: ptr, key: string, add: fn) {
 
 // The app's grants from app.json "capabilities", handed to the services
 // that enforce them (http's stay here, with the actors that make requests).
-read_capabilities_(manifest: ptr) {
+read_capabilities_(b: *Browser, manifest: ptr) {
     win = 0
     if os.platform() == "windows" { win = 1 }
     files.configure(1, app_data_dir_(), home_dir_(), temp_dir_(), win)
@@ -9130,9 +9118,9 @@ read_capabilities_(manifest: ptr) {
         bmax = 65536
         bmv = json.json_object_get_raw(cb, "maxRequestBytes")
         if bmv != null { bmax = json.json_get_int(bmv) }
-        bus.configure(bus_of_(), bn, bmax)
+        bus.configure(b.bus, bn, bmax)
         uiv = json.json_object_get_raw(cb, "ui")
-        if uiv != null && json.json_get_bool(uiv) == 1 { bus_ui_granted_ = 1 }
+        if uiv != null && json.json_get_bool(uiv) == 1 { b.bus_ui_granted = 1 }
     }
     // capabilities.clipboard (["write"], ["read"], both): at any time, not
     // only while the person clicks, types or pastes. Reading also needs the
@@ -9893,7 +9881,8 @@ page_free_(p: *Page) {
     esc_free_(p)   // wave1/escape: the page's cap state
     // The control bus's handler goes with its page; the bus keeps listening,
     // and answers that no page serves it until another calls bus.serve.
-    if bus_page_ == p as ptr { bus_page_ = null }
+    bb = p.browser as *Browser
+    if bb.bus_page == p as ptr { bb.bus_page = null }
     // A page's timers and animation frames stop with it: a tick after this
     // would call into a freed runtime.
     timers_free_(p)
@@ -10368,7 +10357,7 @@ load_(b: *Browser, url: string) {
 
     // What the page seeks, against what this context grants: refused here,
     // before any of its code runs, with the reason (docs/app-capabilities.md).
-    why = seek_refusal_(final_url, lower.page_seeks())
+    why = seek_refusal_(b, final_url, lower.page_seeks())
     if why != "" {
         ui.text(mem.long_to_ptr(b.content), "This page cannot run here:")
         ui.text(mem.long_to_ptr(b.content), why)
@@ -10382,7 +10371,7 @@ load_(b: *Browser, url: string) {
     // checked against the grant here too, before any of the page runs. An
     // optional outgoing-http whose scope reaches past the grant goes the
     // same way as one not granted at all: the page does without.
-    absent = absent_of_(lower.page_optional())
+    absent = absent_of_(b, lower.page_optional())
     // A privilege the page does not seek at all has no object either. The
     // lowerer refuses a page that names one unsought, but only by name:
     // without this, globalThis["ht" + "tp"] would reach it.
@@ -10586,6 +10575,15 @@ browser_new_() -> *Browser {
     b.control = null
     b.control_timer = 0
     b.bus = bus.new()
+    b.bus_flag = 0
+    b.bus_ui_granted = 0
+    b.bus_page = null
+    b.bus_timer = 0
+    b.bus_told_off = 0
+    b.bus_inflight = 0
+    b.bus_since = 0
+    b.bus_interrupted = 0
+    b.bus_ui_pending = list.new()
     pm = env_("SAE_PAGE_MEM")
     if pm != "" {
         v, perr = string.to_long(pm)
@@ -10667,8 +10665,9 @@ main() {
     }
     // sae --app <dir> --control-bus: the person switches the app's control
     // bus on for this launch (docs/control-bus.md, decision 2).
-    if os.args_get(3) == "--control-bus" { control_bus_flag_ = 1 }
-    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()), ctl)
+    bus_flag = 0
+    if os.args_get(3) == "--control-bus" { bus_flag = 1 }
+    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()), ctl, bus_flag)
     if code != 0 { exit(code) }
 }
 
@@ -10681,7 +10680,7 @@ slashes_(p: string) -> string {
     return p
 }
 
-sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr) -> int {
+sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int) -> int {
     app = ""
     start_url = arg1
     if arg1 == "--app" { app = arg2 }
@@ -10696,6 +10695,7 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr) -> int {
     b = browser_new_()
     browser_ = b as ptr
     b.control = ctl
+    b.bus_flag = bus_flag
     stdlib.configure(lib_dir_(exe))   // wave1/imports: the sae: library
     root = aether_ui_vstack_create(6)
     b.root = root
@@ -10731,7 +10731,7 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr) -> int {
             b.page_mem = mbl * 1048576
         }
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
-        read_capabilities_(manifest)
+        read_capabilities_(b, manifest)
         sqlite_why = sqlite_start_(manifest)   // wave1/sqlite: before any page runs
         if sqlite_why == "" { sqlite_why = natives_start_(manifest) }   // wave1/natives
         if sqlite_why == "" { sqlite_why = backend_start_(b, manifest) }   // the app's backend
