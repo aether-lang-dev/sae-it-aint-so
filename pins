@@ -262,4 +262,13 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # sockets are bounded at 5 s. A tracking move, no new primitive needed.
 # Verified: tests/run_all.sh on macOS (62 passed); spraedsheet spec_sheet on
 # macOS against this ref.
-AETHER_UI_REF=4b553fd47b6f2c914b5800d9df1ee65cdc455223
+# 93d1b24e (2026-11-11): aether-ui main (93d1b24e): four Win32 backend fixes
+# (focus() refused for a stack set_focusable has not made focusable; the
+# driver's submit runs on_submit directly; Primary+ keys match shortcuts and
+# chords; a scrollview's document is no taller than its content, so a
+# spacer/canvas/spacer row keeps its size) and the GTK4 driver holding a
+# reference to the widget across an action (spec_pomatez died with SIGBUS on
+# FreeBSD). No new primitive. Verified: tests/run_all.sh natively on win11
+# (spec_keys, spec_grid, spec_app_menus, spec_aevg_parity now pass; 63 of 66
+# there), spec_pomatez on ghostbsd (10 passing; 8 passing and a SIGBUS before).
+AETHER_UI_REF=93d1b24e4227887331945aeaea32bc24462be542

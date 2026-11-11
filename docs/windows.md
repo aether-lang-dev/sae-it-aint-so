@@ -119,11 +119,16 @@ backend and says why.
 
 ## State (2026-11-11)
 
-`tests/run_all.sh` natively on win11 (page server and browser both Windows
-programs): 59 of 65 pass on Aether 0.908.0, the three backend specs among
-them (spec_app_backend_wslc through wslc); spec_escape's handle_across and
-spec_aevg each failed once in a full run while the wslc image built
-alongside, and passed when rerun. On 2026-11-10 it was 56 of 62. What it took: the binary's path, `fs.realpath`,
+`tests/run_all.sh` natively on win11 (browser a Windows program, page server
+the one already answering on 8091, so `SAE_TEST_SERVER=external`): 63 of 66
+pass on Aether 0.908.0 and aether-ui 93d1b24e, the three backend specs among
+them. The four aether-ui Win32 failures of the earlier 59 of 65 are fixed
+there: set_focusable taken away from a stack (spec_keys), onsubmit in a
+field's block (spec_grid: the driver's submit went through the key handlers,
+where the grid took the Return), a two-key chord named with `Primary`
+(spec_app_menus), and spec_aevg_parity's canvas, 449 px high instead of 400
+(a scrollview's document was stretched to the view, handing its slack to the
+canvas row). What it took before that: the binary's path, `fs.realpath`,
 `%APPDATA%`, `%USERPROFILE%` and `%TEMP%` in the kernel's "/" form
 (`slashes_`, `home_dir_`, `temp_dir_`); drive paths in services/files (a path
 with no drive is outside every grant there); and tests and tools that read
@@ -138,10 +143,9 @@ Still failing, each a fix upstream:
 - spec_app_httplist: `api.localhost` does not resolve on Windows (macOS and
   Linux resolve every `*.localhost` to loopback, RFC 6761). Needs Aether's
   resolver to do so on every platform.
-- aether-ui's Win32 backend: a two-key chord (spec_app_menus), set_focusable
-  taken away from a stack (spec_keys), onsubmit in a field's block
-  (spec_grid), and spec_aevg_parity's corpus canvas, 449 px high instead of
-  400.
+- spec_escape failed in this run only because the run used an already-running
+  page server on 8091 (it serves `site/`, and the spec needs its own site
+  directory); it is not a Windows failure, rerun it with no server on 8091.
 
 A page server already answering on 8091 (the WSL container) takes a native
 run's requests on Windows, as wslc's 127.0.0.1 relay wins over the native
