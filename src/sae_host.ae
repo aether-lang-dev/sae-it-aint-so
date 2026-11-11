@@ -82,12 +82,6 @@ const NAV_BACK = 2
 const NAV_FORWARD = 3
 const NAV_RELOAD = 4
 
-// App mode (`sae --app <dir>`, or a packaged .app): the folder of pages the
-// app is made of, "" in browser mode. Its pages are app:/<path> URLs, mapped
-// onto <dir>/<path>.ts or .js the way tools/pageserver maps a site.
-var app_dir_ = ""
-var app_name_ = ""
-var page_seq_ = 0
 var browser_: ptr = null   // the one browser, for completions that arrive later
 
 // The browser: chrome widgets, history, and the page currently shown.
@@ -150,6 +144,35 @@ struct Browser {
     sqlite_jobs: *SqliteJobs   // wave1/sqlite: the app's databases and the calls on them
     native_jobs: *NativeJobs   // wave1/natives: the app's native modules and the calls on them
     http_jobs: *HttpJobs       // http.get/post: the fetchers and the requests in flight
+    // App mode (`sae --app <dir>`, or a packaged .app): the folder of pages
+    // the app is made of, "" in browser mode. Its pages are app:/<path> URLs,
+    // mapped onto <dir>/<path>.ts or .js the way tools/pageserver maps a site.
+    app_dir: string
+    app_name: string
+    app_key: string   // app mode: app_storage_key_, set at start ("" in the browser)
+    pages: ptr       // std.list of *Page: the pages whose runtimes are live (one, as a rule)
+    page_seq: int    // the last page load's number
+    clock: *Clock    // the clocks pages read (SAE_TIME_SCALE)
+    gesture: int     // what the person is doing while a handler runs (fire_click_)
+    // ui.menu's bar ("ui.menu" below).
+    menu_bar: int    // the bar the menus go on, or 0
+    menu_bar_seq: int    // the page load that made it
+    app_menus: ptr   // std.list: the menus of the current page's bar, emptied with the next page's
+    menu_open: int   // the menu whose block is running, or 0
+    window_up: int   // 1 once window_run has made the window
+    keys_hooked: int // 1 once the window's key hook is made (keys_hook_)
+    esc_coarse: int  // wave1/escape: 0 not decided yet, 1 the clocks are fine, 2 coarse
+    clip_read_granted: int   // app.json grants clipboard "read"
+    nav_typed: int   // 1 while the pending navigation is one typed into the address bar
+}
+
+// The clocks pages read (Date.now, new Date(), performance.now): real, or
+// under SAE_TIME_SCALE=<n> n times fast from the moment each is first read,
+// so a spec can watch a minute-long timer finish in seconds.
+struct Clock {
+    scale: int       // 0 not read yet, 1 real time, n > 1 n times fast
+    base_mono: long  // the monotonic clock's first reading under a scale
+    base_unix: long  // the wall clock's
 }
 
 // A call to the backend not yet answered: which page made it (an answer for
@@ -223,6 +246,11 @@ struct Page {
     held: ptr        // std.list of *HeldRef: the callbacks widgets hold, to let go with their widget
     sqlite_fns: ptr  // wave1/sqlite: its *SqlitePageFns, made on first use, or null
     natives_set: string  // wave1/natives: the modules it gets, as ",engine,", worked out at api_register_
+    esc_logged_http: int     // wave1/escape: each cap's refusal logged once per page
+    esc_logged_timers: int
+    esc_logged_storage: int
+    rasters: ptr     // wave1/raster: std.list of *PageRaster, freed with the page
+    ae: ptr          // wave1/aevg: its *AePage, made on first use, or null
 }
 
 // A JS function a widget holds for its callback (a click, a change, a
@@ -243,15 +271,13 @@ struct PageMenu {
     items: int       // the held items array
 }
 
-// The pages whose runtimes are live (one in the browser, as a rule).
-var pages_: ptr = null
-
 // The page a runtime belongs to.
 page_of_(ctx: ptr) -> *Page {
-    n = list.size(pages_)
+    pages = (browser_ as *Browser).pages
+    n = list.size(pages)
     i = 0
     while i < n {
-        pv, _ = list.get(pages_, i)
+        pv, _ = list.get(pages, i)
         pp = pv as *Page
         if pp.ctx == ctx { return pp }
         i = i + 1
@@ -284,35 +310,31 @@ us_(ns: long) -> long { return ns / 1000 }
 // The clocks, for page-API functions, which cannot name `os` (see "The page
 // veto" below).
 now_ns_() -> long { return os.now_monotonic_ns() }
-now_ms_() -> long { return scaled_(os.now_monotonic_ms(), 0) }
-now_unix_ms_() -> long { return scaled_(os.now_unix_ms(), 1) }
+now_ms_(c: *Clock) -> long { return scaled_(c, os.now_monotonic_ms(), 0) }
+now_unix_ms_(c: *Clock) -> long { return scaled_(c, os.now_unix_ms(), 1) }
 
-// SAE_TIME_SCALE=<n> runs the clocks pages see (Date.now, new Date(),
-// performance.now) n times fast, from the moment each is first read, so a
-// spec can watch a minute-long timer finish in seconds. Off (1x) unless set.
-var time_scale_ = 0
 // The gap between a stack's or grid's children when the page gives none.
 const SPACING = 4
 
-var time_base_mono_: long = 0
-var time_base_unix_: long = 0
-
-scaled_(real: long, which: int) -> long {
-    if time_scale_ == 0 {
-        time_scale_ = 1
+// SAE_TIME_SCALE=<n> runs the clocks pages see (Date.now, new Date(),
+// performance.now) n times fast, from the moment each is first read. Off
+// (1x) unless set.
+scaled_(c: *Clock, real: long, which: int) -> long {
+    if c.scale == 0 {
+        c.scale = 1
         sv = env_("SAE_TIME_SCALE")
         if sv != "" {
             n, nerr = string.to_int(sv)
-            if nerr == "" && n > 1 { time_scale_ = n }
+            if nerr == "" && n > 1 { c.scale = n }
         }
     }
-    if time_scale_ == 1 { return real }
+    if c.scale == 1 { return real }
     if which == 0 {
-        if time_base_mono_ == 0 { time_base_mono_ = real }
-        return time_base_mono_ + (real - time_base_mono_) * time_scale_
+        if c.base_mono == 0 { c.base_mono = real }
+        return c.base_mono + (real - c.base_mono) * c.scale
     }
-    if time_base_unix_ == 0 { time_base_unix_ = real }
-    return time_base_unix_ + (real - time_base_unix_) * time_scale_
+    if c.base_unix == 0 { c.base_unix = real }
+    return c.base_unix + (real - c.base_unix) * c.scale
 }
 
 // --- reading a page-API call's arguments (args is the engine's array handle) ---
@@ -425,16 +447,15 @@ fire0_(ctx: ptr, ref: int, what: string) {
 }
 
 // What the person is doing while a page's handler runs, for the clipboard
-// (services/clipboard): 0 nothing (a timer, a frame, a reply), 1 a click or
-// a key, 2 their paste (Ctrl or Cmd+V). Set around a click's or a key's
-// handler and the promise jobs it queued, then put back.
-var gesture_: int = 0
-
+// (services/clipboard): b.gesture is 0 nothing (a timer, a frame, a reply),
+// 1 a click or a key, 2 their paste (Ctrl or Cmd+V). Set around a click's or
+// a key's handler and the promise jobs it queued, then put back.
 fire_click_(ctx: ptr, ref: int) {
-    was = gesture_
-    gesture_ = 1
+    b = browser_of_(ctx)
+    was = b.gesture
+    b.gesture = 1
     fire0_(ctx, ref, "a click handler")
-    gesture_ = was
+    b.gesture = was
 }
 
 report_exception_(ctx: ptr, where_: string) {
@@ -753,46 +774,42 @@ sae_ui_btn(ctx: @keep ptr, this_val: int, argv: int) -> int {
 // the browser may not touch the browser's own menus. The menus of one page
 // load make one bar; a later page's ui.menu starts a bar of its own, which
 // replaces it on the window. An item fires only for the page that made it
-// (a past page's item does nothing).
-var menu_bar_: int = 0        // the bar the menus go on, or 0
-var menu_bar_seq_: int = 0    // the page load that made it
-var app_menus_: ptr = null   // the menus of the current page's bar (ui.menu), emptied with the next page's
-var menu_open_: int = 0       // the menu whose block is running, or 0
-var window_up_: int = 0       // 1 once window_run has made the window
+// (a past page's item does nothing). The bar and the menus are the
+// Browser's (menu_bar, menu_bar_seq, app_menus, menu_open, window_up).
 
 sae_ui_menu(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    if app_dir_ == "" { return sae_throw_type_error(ctx, "ui.menu: only an installed app has a menu bar (a web page may not change the browser's)") }
-    if menu_open_ != 0 { return sae_throw_type_error(ctx, "ui.menu(label, fn): a menu inside a menu is not made yet") }
+    b = browser_of_(ctx)
+    if b.app_dir == "" { return sae_throw_type_error(ctx, "ui.menu: only an installed app has a menu bar (a web page may not change the browser's)") }
+    if b.menu_open != 0 { return sae_throw_type_error(ctx, "ui.menu(label, fn): a menu inside a menu is not made yet") }
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.menu(label, fn): fn must be a function") }
     p = page_of_(ctx)
     m = ui.menu(arg_str_(ctx, argv, argc, 0))
-    menu_open_ = m
+    b.menu_open = m
     r = call_arg_(ctx, argv, 1)
-    menu_open_ = 0
+    b.menu_open = 0
     if r < 0 { return rethrow_(ctx) }
-    if menu_bar_ == 0 || menu_bar_seq_ != p.seq {
+    if b.menu_bar == 0 || b.menu_bar_seq != p.seq {
         // A new page's bar: the last page's menus emptied first, so none of
         // their accelerators (a key GTK maps to an action, the driver's
         // registry) outlives the page that made them.
-        if app_menus_ == null { app_menus_ = list.new() }
         k = 0
-        while k < list.size(app_menus_) {
-            hv, _ = list.get(app_menus_, k)
+        while k < list.size(b.app_menus) {
+            hv, _ = list.get(b.app_menus, k)
             ui.menu_clear(mem.ptr_to_long(hv) as int)
             k = k + 1
         }
-        list.free(app_menus_)
-        app_menus_ = list.new()
-        menu_bar_ = ui.menu_bar()
-        menu_bar_seq_ = p.seq
+        list.free(b.app_menus)
+        b.app_menus = list.new()
+        b.menu_bar = ui.menu_bar()
+        b.menu_bar_seq = p.seq
     }
-    list.add(app_menus_, mem.long_to_ptr(m * 1))
-    ui.menu_bar_add(menu_bar_, m)
+    list.add(b.app_menus, mem.long_to_ptr(m * 1))
+    ui.menu_bar_add(b.menu_bar, m)
     // A bar made once the window is up goes on it now; before, window_run
     // attaches it as it makes the window.
-    if window_up_ == 1 { ui.attach_menu_bar_to_window(1, menu_bar_) }
+    if b.window_up == 1 { ui.attach_menu_bar_to_window(1, b.menu_bar) }
     return quickjs.new_int(ctx, m)
 }
 
@@ -800,12 +817,13 @@ sae_ui_menu(ctx: ptr, this_val: int, argv: int) -> int {
 sae_ui_menu_item(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    if menu_open_ == 0 { return sae_throw_type_error(ctx, "ui.menu_item(label, fn) must be called inside a ui.menu block") }
+    mo = browser_of_(ctx).menu_open
+    if mo == 0 { return sae_throw_type_error(ctx, "ui.menu_item(label, fn) must be called inside a ui.menu block") }
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.menu_item(label, fn): fn must be a function") }
     p = page_of_(ctx)
     seq = p.seq
     ref = hold_arg_(ctx, argv, 1)
-    ui.menu_item(menu_open_, arg_str_(ctx, argv, argc, 0), || {
+    ui.menu_item(mo, arg_str_(ctx, argv, argc, 0), || {
         if ae_live_(ctx, seq) == 1 { fire_click_(ctx, ref) }
     })
     return 0
@@ -817,12 +835,13 @@ sae_ui_menu_item(ctx: @keep ptr, this_val: int, argv: int) -> int {
 sae_ui_menu_item_accel(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    if menu_open_ == 0 { return sae_throw_type_error(ctx, "ui.menu_item_accel(label, accel, fn) must be called inside a ui.menu block") }
+    mo = browser_of_(ctx).menu_open
+    if mo == 0 { return sae_throw_type_error(ctx, "ui.menu_item_accel(label, accel, fn) must be called inside a ui.menu block") }
     if argc < 3 || is_fn_arg_(ctx, argv, 2) == 0 { return sae_throw_type_error(ctx, "ui.menu_item_accel(label, accel, fn): fn must be a function") }
     p = page_of_(ctx)
     seq = p.seq
     ref = hold_arg_(ctx, argv, 2)
-    ui.menu_item_accel(menu_open_, arg_str_(ctx, argv, argc, 0), arg_str_(ctx, argv, argc, 1), || {
+    ui.menu_item_accel(mo, arg_str_(ctx, argv, argc, 0), arg_str_(ctx, argv, argc, 1), || {
         if ae_live_(ctx, seq) == 1 { fire_click_(ctx, ref) }
     })
     return 0
@@ -834,7 +853,7 @@ sae_ui_menu_item_accel(ctx: @keep ptr, this_val: int, argv: int) -> int {
 sae_ui_shortcut_chord(ctx: @keep ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    if app_dir_ == "" { return sae_throw_type_error(ctx, "ui.shortcut_chord: only an installed app binds window keys (a web page has ui.on_key)") }
+    if browser_of_(ctx).app_dir == "" { return sae_throw_type_error(ctx, "ui.shortcut_chord: only an installed app binds window keys (a web page has ui.on_key)") }
     if argc < 3 || is_fn_arg_(ctx, argv, 2) == 0 { return sae_throw_type_error(ctx, "ui.shortcut_chord(first, second, fn): fn must be a function") }
     p = page_of_(ctx)
     seq = p.seq
@@ -857,8 +876,9 @@ chord_key_(k: string) -> string {
 // ui.menu_separator(): a line between items of the menu whose block is running.
 sae_ui_menu_separator(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    if menu_open_ == 0 { return sae_throw_type_error(ctx, "ui.menu_separator() must be called inside a ui.menu block") }
-    ui.menu_separator(menu_open_)
+    mo = browser_of_(ctx).menu_open
+    if mo == 0 { return sae_throw_type_error(ctx, "ui.menu_separator() must be called inside a ui.menu block") }
+    ui.menu_separator(mo)
     return 0
 }
 
@@ -1005,27 +1025,25 @@ sae_ui_on_key(ctx: ptr, this_val: int, argv: int) -> int {
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "ui.on_key(fn): fn must be a function") }
     if p.key_ref != 0 { quickjs.release(ctx, p.key_ref) }
     p.key_ref = hold_arg_(ctx, argv, 0)
-    keys_hook_()
+    keys_hook_(p.browser as *Browser)
     return 0
 }
 
 // One window hook for every page, made the first time any page asks.
-var keys_hooked_: int = 0
-keys_hook_() {
-    if keys_hooked_ == 1 { return }
-    keys_hooked_ = 1
-    ui.window_on_key(|k: string, m: int| { keys_deliver_(k, m) })
+keys_hook_(b: *Browser) {
+    if b.keys_hooked == 1 { return }
+    b.keys_hooked = 1
+    ui.window_on_key(|k: string, m: int| { keys_deliver_(b, k, m) })
 }
 
 // To the page with the focus, if it asked: the first live page with a key
 // function whose widget has the focus (or with nothing focused). One page,
 // then return: a handler may navigate, which frees pages.
-keys_deliver_(k: string, m: int) {
-    if pages_ == null { return }
+keys_deliver_(b: *Browser, k: string, m: int) {
     fw = ui.focused_widget()
     i = 0
-    while i < list.size(pages_) {
-        pv, _e = list.get(pages_, i)
+    while i < list.size(b.pages) {
+        pv, _e = list.get(b.pages, i)
         p = pv as *Page
         if p.key_ref != 0 {
             if fw == 0 || owned_(p, fw) == 1 {
@@ -1038,14 +1056,14 @@ keys_deliver_(k: string, m: int) {
                 _b = quickjs.set_index(ctx, args, 1, ms)
                 quickjs.release(ctx, ms)
                 // A key is a gesture; Ctrl or Cmd with V is the person's paste.
-                was = gesture_
-                gesture_ = 1
-                if (k == "v" || k == "V") && ((m / 2) % 2 == 1 || (m / 8) % 2 == 1) { gesture_ = 2 }
+                was = b.gesture
+                b.gesture = 1
+                if (k == "v" || k == "V") && ((m / 2) % 2 == 1 || (m / 8) % 2 == 1) { b.gesture = 2 }
                 r = calln_(ctx, p.key_ref, args)
                 quickjs.release(ctx, args)
                 if r < 0 { report_exception_(ctx, "a ui.on_key handler") }
                 settle_(ctx)
-                gesture_ = was
+                b.gesture = was
                 return
             }
         }
@@ -1157,6 +1175,7 @@ struct VgKey {
     cid: int     // the canvas
     ref: int     // the page's function (held), or 0 once the page is gone
     ctx: ptr
+    browser: ptr // *Browser
 }
 
 sae_vg_on_key(ctx: @keep ptr, this_val: int, argv: int) -> int {
@@ -1181,6 +1200,7 @@ sae_vg_on_key(ctx: @keep ptr, this_val: int, argv: int) -> int {
         i = i + 1
     }
     k = heap.new(VgKey)
+    k.browser = p.browser
     k.cid = cid
     k.ctx = ctx
     k.ref = hold_arg_(ctx, argv, 1)
@@ -1205,13 +1225,14 @@ vg_key_fire_(kp: ptr, name: string) {
     _a = quickjs.set_index(ctx, args, 0, ks)
     quickjs.release(ctx, ks)
     // A key is a gesture, as ui.on_key's are.
-    was = gesture_
-    gesture_ = 1
+    kb = k.browser as *Browser
+    was = kb.gesture
+    kb.gesture = 1
     r = calln_(ctx, k.ref, args)
     quickjs.release(ctx, args)
     if r < 0 { report_exception_(ctx, "a vg key handler") }
     settle_(ctx)
-    gesture_ = was
+    kb.gesture = was
 }
 
 // With the page: each entry's function let go, the entry kept (its canvas
@@ -1317,12 +1338,13 @@ sae_ui_reorderable(ctx: @keep ptr, this_val: int, argv: int) -> int {
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.reorderable(h, fn): fn must be a function (from, to) => void") }
     ref = hold_arg_(ctx, argv, 1)
     track_(p, h, ref)
+    rb = p.browser as *Browser
     ui.reorderable(h) callback |from: int, to: int| {
-        was = gesture_
-        gesture_ = 1
+        was = rb.gesture
+        rb.gesture = 1
         call_ii_(ctx, ref, from, to, "a reorder handler")
         settle_(ctx)
-        gesture_ = was
+        rb.gesture = was
     }
     return quickjs.new_int(ctx, h)
 }
@@ -3676,9 +3698,9 @@ real_ms_() -> long { return os.now_monotonic_ms() }
 
 // The clock requestAnimationFrame's timestamp is on: performance.now()'s,
 // with the fraction kept.
-raf_now_() -> float {
-    long ms = now_ms_()   // also starts SAE_TIME_SCALE's base
-    if time_scale_ == 1 { return esc_perf_now_() }   // wave1/escape: coarse in the browser
+raf_now_(b: *Browser) -> float {
+    long ms = now_ms_(b.clock)   // also starts SAE_TIME_SCALE's base
+    if b.clock.scale == 1 { return esc_perf_now_(b) }   // wave1/escape: coarse in the browser
     return ms as float
 }
 
@@ -3976,7 +3998,7 @@ rafs_frame_(ctx: ptr) {
     batch = p.rafs
     p.rafs = list.new()
     p.raf_batch = batch
-    ts = raf_now_()
+    ts = raf_now_(p.browser as *Browser)
     n = list.size(batch)
     i = 0
     while i < n {
@@ -4226,10 +4248,10 @@ sae_bus_answer(ctx: ptr, this_val: int, argv: int) -> int {
 // Listen (the courier file written), the title marked, the poll timer on.
 bus_listen_(b: *Browser) -> string {
     if bus.listening(b.bus) == 1 { return "" }
-    why = bus.start(b.bus, app_data_dir_())
+    why = bus.start(b.bus, app_data_dir_(b))
     if why != "" { return why }
-    ui.set_window_title(1, "${app_name_} - control bus on")
-    say_("sae: control bus: listening (other programs on this machine can control ${app_name_})")
+    ui.set_window_title(1, "${b.app_name} - control bus on")
+    say_("sae: control bus: listening (other programs on this machine can control ${b.app_name})")
     if b.bus_timer == 0 { b.bus_timer = ui.timer(20, || { bus_tick_(b) }) }
     return ""
 }
@@ -4243,7 +4265,7 @@ bus_silence_(b: *Browser) {
         b.bus_timer = 0
     }
     b.bus_inflight = 0
-    ui.set_window_title(1, app_name_)
+    ui.set_window_title(1, b.app_name)
     say_("sae: control bus: stopped")
 }
 
@@ -4268,7 +4290,7 @@ bus_tick_(b: *Browser) {
     if b.bus_inflight != 0 {
         if b.bus_interrupted == 1 {
             bus_stop_request_(b, "interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
-        } else if now_ms_() - b.bus_since > BUS_DEADLINE_MS {
+        } else if now_ms_(b.clock) - b.bus_since > BUS_DEADLINE_MS {
             bus_stop_request_(b, "deadline", "the app did not answer in ${BUS_DEADLINE_MS / 1000} s")
         }
         return
@@ -4293,7 +4315,7 @@ bus_tick_(b: *Browser) {
         return
     }
     b.bus_inflight = id
-    b.bus_since = now_ms_()
+    b.bus_since = now_ms_(b.clock)
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     iv = quickjs.new_int(ctx, id)
@@ -4341,7 +4363,7 @@ control_start_(b: *Browser) {
     if bus.declared(b.bus) == 0 {
         say_("sae: control channel: this app's app.json does not declare a control bus (capabilities.controlBus): every request is refused")
     } else {
-        say_("sae: control channel: on (the program that started sae can control ${app_name_}; nothing listens)")
+        say_("sae: control channel: on (the program that started sae can control ${b.app_name}; nothing listens)")
     }
     b.control_timer = ui.timer(20, || { bus_tick_(b) })
 }
@@ -4362,7 +4384,7 @@ control_gone_(b: *Browser) {
         if b.backend != null { backend.stop(b.backend) }
         exit(0)
     }
-    ui.set_window_title(1, app_name_)
+    ui.set_window_title(1, b.app_name)
 }
 
 // The control bus's ui channel (app.json capabilities.controlBus.ui, and a
@@ -4408,7 +4430,7 @@ bus_ui_(b: *Browser, id: int, command: string) {
     pend.id = id
     pend.sock = sock
     pend.got = ""
-    pend.since = now_ms_()
+    pend.since = now_ms_(b.clock)
     list.add(b.bus_ui_pending, pend as ptr)
 }
 
@@ -4435,7 +4457,7 @@ bus_ui_poll_(b: *Browser) {
             data, rerr = tcp.read(pend.sock, 65536)
             if rerr != "" || data == "" { done = 1 } else { pend.got = own_("${pend.got}${data}") }
         }
-        if done == 0 && now_ms_() - pend.since > BUS_DEADLINE_MS {
+        if done == 0 && now_ms_(b.clock) - pend.since > BUS_DEADLINE_MS {
             _c = tcp.tcp_close(pend.sock)
             ctl_answer_(b, pend.id, 0, "", "the UI driver did not answer in ${BUS_DEADLINE_MS / 1000} s")
             list.list_remove(b.bus_ui_pending, i)
@@ -4558,7 +4580,7 @@ const BACKEND_DEADLINE_MAX = 600000
 const BACKEND_FRAMES_PER_TICK = 32
 
 // The program app.json names, inside the app: "" and why not.
-backend_program_(prog: string) -> (string, string) {
+backend_program_(b: *Browser, prog: string) -> (string, string) {
     if prog == "" { return "", "app.json capabilities.backend.program: the backend program, a file inside the app" }
     if string.string_starts_with(prog, "/") == 1 || string.contains(prog, "\\") == 1 || string.contains(prog, ":") == 1 {
         return "", "app.json capabilities.backend.program: a path inside the app (${prog} is not)"
@@ -4567,7 +4589,7 @@ backend_program_(prog: string) -> (string, string) {
     if climbed == 1 || string.contains("/${path}/", "/../") == 1 {
         return "", "app.json capabilities.backend.program: a path inside the app (${prog} climbs out)"
     }
-    full = "${app_dir_}/${path}"
+    full = "${b.app_dir}/${path}"
     if os.platform() == "windows" && string.string_ends_with(full, ".exe") == 0 { full = string.concat(full, ".exe") }
     if fs.exists(full) == 0 { return "", "backend: no program at ${full} (build it first: docs/app-backend.md)" }
     return full, ""
@@ -4615,7 +4637,7 @@ backend_start_(b: *Browser, manifest: ptr) -> string {
             ps, _pe = json.get_string(pv)
             prog = own_(ps)
         }
-        full, perr = backend_program_(prog)
+        full, perr = backend_program_(b, prog)
         if perr != "" && string.string_starts_with(perr, "app.json") == 1 { return perr }
         if perr != "" {
             b.backend_why = own_(perr)
@@ -4697,7 +4719,7 @@ sae_backend_call(ctx: ptr, this_val: int, argv: int) -> int {
     c = heap.new(BackendCall)
     c.id = id
     c.seq = p.seq
-    c.since = now_ms_()
+    c.since = now_ms_(b.clock)
     list.add(b.backend_calls, c as ptr)
     return quickjs.new_int(ctx, id)
 }
@@ -4831,7 +4853,7 @@ backend_tick_(b: *Browser) {
     }
     // Calls past their deadline: failed, the backend kept (it may answer
     // the next).
-    now = now_ms_()
+    now = now_ms_(b.clock)
     i = 0
     while i < list.size(b.backend_calls) {
         cv, _ = list.get(b.backend_calls, i)
@@ -4851,7 +4873,7 @@ backend_tick_(b: *Browser) {
 sae_clip_write(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     argc = quickjs.arg_count(ctx, argv)
-    err = clipboard.write_text(browser_of_(ctx).clipboard, own_(arg_str_(ctx, argv, argc, 0)), gesture_)
+    err = clipboard.write_text(browser_of_(ctx).clipboard, own_(arg_str_(ctx, argv, argc, 0)), browser_of_(ctx).gesture)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return 0
 }
@@ -4861,7 +4883,7 @@ sae_clip_read(ctx: ptr, this_val: int, argv: int) -> int {
     p = page_of_(ctx)
     sought_read = 0
     if string.contains(p.absent, ",clipboard-read,") == 0 { sought_read = 1 }
-    text, err = clipboard.read_text(browser_of_(ctx).clipboard, gesture_, sought_read)
+    text, err = clipboard.read_text(browser_of_(ctx).clipboard, browser_of_(ctx).gesture, sought_read)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return quickjs.new_string(ctx, text)
 }
@@ -5015,7 +5037,7 @@ sae_storage_get(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.get(key): key must be letters, digits, '.', '_' or '-'") }
-    v, found = storage_read_(page_of_(ctx).url, key)
+    v, found = storage_read_(browser_of_(ctx), page_of_(ctx).url, key)
     if found == 0 { return quickjs.new_null(ctx) }
     return quickjs.new_string(ctx, v)
 }
@@ -5027,8 +5049,8 @@ sae_storage_set(ctx: ptr, this_val: int, argv: int) -> int {
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.set(key, value): key must be letters, digits, '.', '_' or '-'") }
     val = own_(arg_str_(ctx, argv, argc, 1))
     if string.length(val) > STORAGE_MAX { return sae_throw_type_error(ctx, "storage.set: value over 1 MB") }
-    if esc_storage_over_(page_of_(ctx).url, key, string.length(val)) == 1 { return esc_storage_refuse_(ctx, page_of_(ctx)) }   // wave1/escape: the origin's cap
-    if storage_write_(page_of_(ctx).url, key, val) == 0 { return sae_throw_type_error(ctx, "storage.set: could not save") }
+    if esc_storage_over_(browser_of_(ctx), page_of_(ctx).url, key, string.length(val)) == 1 { return esc_storage_refuse_(ctx, page_of_(ctx)) }   // wave1/escape: the origin's cap
+    if storage_write_(browser_of_(ctx), page_of_(ctx).url, key, val) == 0 { return sae_throw_type_error(ctx, "storage.set: could not save") }
     return 0
 }
 
@@ -5037,7 +5059,7 @@ sae_storage_remove(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.remove(key): key must be letters, digits, '.', '_' or '-'") }
-    storage_remove_(page_of_(ctx).url, key)
+    storage_remove_(browser_of_(ctx), page_of_(ctx).url, key)
     return 0
 }
 
@@ -5308,12 +5330,12 @@ js_print(ctx: ptr, this_val: int, argv: int) -> int {
 // Date.now() and performance.now(), on sae's clocks (SAE_TIME_SCALE).
 js_date_now(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    return quickjs.new_float(ctx, now_unix_ms_() as float)
+    return quickjs.new_float(ctx, now_unix_ms_(browser_of_(ctx).clock) as float)
 }
 
 js_performance_now(ctx: ptr, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    return quickjs.new_float(ctx, esc_perf_now_())
+    return quickjs.new_float(ctx, esc_perf_now_(browser_of_(ctx)))
 }
 
 // performance.memoryUsed(): bytes the page's runtime has allocated, garbage
@@ -5379,60 +5401,11 @@ const ESC_TIMERS_MAX = 256
 const ESC_STORAGE_ORIGIN_MAX = 4194304   // 4 MB, in bytes of values
 const ESC_CLOCK_UNIT_NS = 100000         // 100 us: the coarse clocks' tick
 
-// Per-page state this section keeps beside the Page (which stays as it is):
-// which caps have been logged for the page. Keyed by the page's runtime,
-// freed with the page (esc_free_).
-struct EscState {
-    ctx: ptr
-    logged_http: int
-    logged_timers: int
-    logged_storage: int
-}
-
-var esc_states_: ptr = null   // std.list of *EscState
-
-esc_state_(p: *Page) -> *EscState {
-    if esc_states_ == null { esc_states_ = list.new() }
-    n = list.size(esc_states_)
-    i = 0
-    while i < n {
-        v, _ = list.get(esc_states_, i)
-        s = v as *EscState
-        if s.ctx == p.ctx { return s }
-        i = i + 1
-    }
-    ns = heap.new(EscState)
-    ns.ctx = p.ctx
-    ns.logged_http = 0
-    ns.logged_timers = 0
-    ns.logged_storage = 0
-    list.add(esc_states_, ns as ptr)
-    return ns
-}
-
-// The page goes: so does its state here.
-esc_free_(p: *Page) {
-    if esc_states_ == null { return }
-    i = list.size(esc_states_) - 1
-    while i >= 0 {
-        v, _ = list.get(esc_states_, i)
-        s = v as *EscState
-        if s.ctx == p.ctx {
-            list.list_remove(esc_states_, i)
-            heap.free(s)
-        }
-        i = i - 1
-    }
-}
+// Which caps have been logged for a page is the page's own
+// (Page.esc_logged_http, esc_logged_timers, esc_logged_storage).
 
 // A refusal on the console, once, in the form every refusal takes.
 esc_log_(why: string) { say_("sae: refused: ${why}") }
-
-// 1 in the browser (no app folder): where these rules apply.
-esc_browser_() -> int {
-    if app_dir_ == "" { return 1 }
-    return 0
-}
 
 // --- mixed content, and crossing an origin ---
 
@@ -5462,22 +5435,22 @@ esc_scope_why_(page_url: string, pat: string) -> string {
 // (On the fetcher actor.) 1 if the request's first URL already leaves the
 // page's origin, in the browser: credentials stay behind from the start.
 esc_cross_start_(j: *HttpJob) -> int {
-    if app_dir_ != "" { return 0 }
+    if j.app == 1 { return 0 }
     return net.cross_origin(j.page_url, j.url)
 }
 
 // (On the fetcher actor.) 1 if a page-set header named `lname` (lowercased)
 // is sent. In the browser Origin and Referer are sae's to send, never the
 // page's: a forged Origin would be the page naming another site.
-esc_header_kept_(lname: string) -> int {
-    if app_dir_ == "" && (lname == "origin" || lname == "referer") { return 0 }
+esc_header_kept_(app: int, lname: string) -> int {
+    if app == 0 && (lname == "origin" || lname == "referer") { return 0 }
     return 1
 }
 
 // (On the fetcher actor.) Across origins, in the browser, the one header sae
 // adds: Origin, the page's origin as its URL spells it.
 esc_send_origin_(req: ptr, j: *HttpJob, cross: int) {
-    if cross == 1 && app_dir_ == "" && is_http_(j.page_url) == 1 {
+    if cross == 1 && j.app == 0 && is_http_(j.page_url) == 1 {
         _s = client.set_header(req, "Origin", string.string_substring(j.page_url, 0, origin_end_(j.page_url)))
     }
 }
@@ -5487,7 +5460,7 @@ esc_send_origin_(req: ptr, j: *HttpJob, cross: int) {
 // body, status and headers withheld; the refusal is logged once when it is
 // delivered (j.refused_hop, as a refused redirect hop is).
 esc_cors_refused_(j: *HttpJob, resp: ptr, cross: int, url: string) -> int {
-    if cross == 0 || app_dir_ != "" { return 0 }
+    if cross == 0 || j.app == 1 { return 0 }
     allow = client.response_header(resp, "Sae-Allow-Origin")
     if net.allows_origin(j.page_url, allow) == 1 { return 0 }
     po = string.string_substring(j.page_url, 0, origin_end_(j.page_url))
@@ -5520,9 +5493,8 @@ esc_http_inflight_(p: *Page) -> int {
 esc_http_refuse_(ctx: ptr, p: *Page, ref: int) -> int {
     quickjs.release(ctx, ref)
     why = "http: this page has ${ESC_HTTP_INFLIGHT_MAX} requests in flight (the cap); wait for one to finish"
-    s = esc_state_(p)
-    if s.logged_http == 0 {
-        s.logged_http = 1
+    if p.esc_logged_http == 0 {
+        p.esc_logged_http = 1
         esc_log_(why)
     }
     return sae_throw_type_error(ctx, why)
@@ -5554,9 +5526,8 @@ esc_timers_pending_(p: *Page) -> int {
 // The timers cap: log once per page, throw. Called before anything is held.
 esc_timers_refuse_(ctx: ptr, p: *Page) -> int {
     why = "this page has ${ESC_TIMERS_MAX} timers and animation frames pending (the cap); cancel or let some run first"
-    s = esc_state_(p)
-    if s.logged_timers == 0 {
-        s.logged_timers = 1
+    if p.esc_logged_timers == 0 {
+        p.esc_logged_timers = 1
         esc_log_(why)
     }
     return sae_throw_type_error(ctx, why)
@@ -5584,19 +5555,18 @@ esc_storage_used_(dir: string, key: string) -> long {
 
 // 1 if writing `add` bytes under `key` would take the page's origin (or
 // app, or file folder) over its storage cap.
-esc_storage_over_(url: string, key: string, add: int) -> int {
+esc_storage_over_(b: *Browser, url: string, key: string, add: int) -> int {
     long cap = ESC_STORAGE_ORIGIN_MAX
     long more = add
-    if esc_storage_used_(storage_dir_(url), key) + more > cap { return 1 }
+    if esc_storage_used_(storage_dir_(b, url), key) + more > cap { return 1 }
     return 0
 }
 
 // The storage cap: log once per page, throw.
 esc_storage_refuse_(ctx: ptr, p: *Page) -> int {
     why = "storage.set: this origin's storage would exceed 4 MB (the cap); remove something first"
-    s = esc_state_(p)
-    if s.logged_storage == 0 {
-        s.logged_storage = 1
+    if p.esc_logged_storage == 0 {
+        p.esc_logged_storage = 1
         esc_log_(why)
     }
     return sae_throw_type_error(ctx, why)
@@ -5604,30 +5574,29 @@ esc_storage_refuse_(ctx: ptr, p: *Page) -> int {
 
 // --- coarse clocks ---
 
-var esc_coarse_ = 0   // 0 not decided yet, 1 off, 2 on
-
 // 1 when the clocks a page reads are coarse: in the browser unless
-// SAE_COARSE_CLOCKS=0, in an app only with SAE_COARSE_CLOCKS=1.
-esc_coarse_on_() -> int {
-    if esc_coarse_ == 0 {
-        esc_coarse_ = 1
-        if app_dir_ == "" { esc_coarse_ = 2 }
+// SAE_COARSE_CLOCKS=0, in an app only with SAE_COARSE_CLOCKS=1. Decided
+// once (b.esc_coarse).
+esc_coarse_on_(b: *Browser) -> int {
+    if b.esc_coarse == 0 {
+        b.esc_coarse = 1
+        if b.app_dir == "" { b.esc_coarse = 2 }
         v = env_("SAE_COARSE_CLOCKS")
-        if v == "0" || v == "off" { esc_coarse_ = 1 }
-        if v == "1" || v == "on" { esc_coarse_ = 2 }
+        if v == "0" || v == "off" { b.esc_coarse = 1 }
+        if v == "1" || v == "on" { b.esc_coarse = 2 }
     }
-    if esc_coarse_ == 2 { return 1 }
+    if b.esc_coarse == 2 { return 1 }
     return 0
 }
 
 // performance.now() and the frame clock: milliseconds with the fraction
 // kept, rounded down to 100 us when the clocks are coarse. Under
 // SAE_TIME_SCALE the scaled clock is whole milliseconds, as before.
-esc_perf_now_() -> float {
-    long ms = now_ms_()   // also starts SAE_TIME_SCALE's base
-    if time_scale_ != 1 { return ms as float }
+esc_perf_now_(b: *Browser) -> float {
+    long ms = now_ms_(b.clock)   // also starts SAE_TIME_SCALE's base
+    if b.clock.scale != 1 { return ms as float }
     long ns = os.now_monotonic_ns()
-    if esc_coarse_on_() == 1 { return ((ns / ESC_CLOCK_UNIT_NS) as float) / 10.0 }
+    if esc_coarse_on_(b) == 1 { return ((ns / ESC_CLOCK_UNIT_NS) as float) / 10.0 }
     return (ns as float) / 1000000.0
 }
 
@@ -5645,7 +5614,7 @@ esc_perf_now_() -> float {
 esc_nav_check_(b: *Browser, url: string) -> (string, string) {
     if b.page == null { return own_(url), "" }
     cur = (b.page as *Page).url
-    if app_dir_ != "" {
+    if b.app_dir != "" {
         if is_app_(url) == 0 { return own_(url), "" }   // run_nav_ refuses it, as before
         path, climbed = norm_path_(string.string_substring(url, 4, string.length(url)))
         if climbed == 1 { return own_(url), "a page may not navigate above the app's bundle; refused ${url}" }
@@ -5878,7 +5847,7 @@ sqlite_start_(b: *Browser, manifest: ptr) -> string {
     decl = json.json_object_get_raw(caps, "sqlite")
     if decl == null { return "" }
     if json.json_type(decl) != 5 { return "app.json capabilities.sqlite must be an object: { \"<name>\": { \"migrations\": [...] } }" }
-    dir = "${storage_dir_("app:/")}/.sqlite"
+    dir = "${storage_dir_(b, "app:/")}/.sqlite"
     n = json.json_object_size_raw(decl)
     i = 0
     while i < n {
@@ -5909,7 +5878,7 @@ sqlite_start_(b: *Browser, manifest: ptr) -> string {
                 _c1 = sqlite.close(db)
                 return "sqlite ${name}: migration ${mv}: a migration is a file inside the app (no \"..\", no absolute path)"
             }
-            text, rerr = fs.read("${app_dir_}/${mv}")
+            text, rerr = fs.read("${b.app_dir}/${mv}")
             if rerr != "" {
                 _c2 = sqlite.close(db)
                 return "sqlite ${name}: migration ${mv}: ${rerr}"
@@ -5960,7 +5929,7 @@ sqlite_refuse_app_(b: *Browser, why: string) {
 // lowered, so the lowerer's answers are this page's.
 sqlite_page_dbs_(p: *Page) -> string {
     out = ","
-    if app_dir_ == "" { return out }
+    if (p.browser as *Browser).app_dir == "" { return out }
     parts = string.split("${lower.page_seeks()},${lower.page_optional()}", ",")
     n = string.string_array_size(parts)
     i = 0
@@ -6490,7 +6459,7 @@ natives_start_(b: *Browser, manifest: ptr) -> string {
 // optional) that this app has and were not left out (p.absent).
 natives_page_mods_(p: *Page) -> string {
     out = ","
-    if app_dir_ == "" { return out }
+    if (p.browser as *Browser).app_dir == "" { return out }
     parts = string.split("${lower.page_seeks()},${lower.page_optional()}", ",")
     n = string.string_array_size(parts)
     i = 0
@@ -6672,16 +6641,14 @@ struct PageRaster {
     ph: int
 }
 
-var rasters_: ptr = null     // std.list of *PageRaster, every page's
-
-raster_list_() -> ptr {
-    if rasters_ == null { rasters_ = list.new() }
-    return rasters_
+// The rasters of the page that runtime ctx belongs to (Page.rasters).
+raster_list_(ctx: ptr) -> ptr {
+    return page_of_(ctx).rasters
 }
 
 // The page's rasters' bytes so far.
 raster_used_(ctx: ptr) -> int {
-    l = raster_list_()
+    l = raster_list_(ctx)
     n = list.size(l)
     used = 0
     i = 0
@@ -6695,7 +6662,7 @@ raster_used_(ctx: ptr) -> int {
 }
 
 raster_of_(ctx: ptr, h: int) -> *PageRaster {
-    l = raster_list_()
+    l = raster_list_(ctx)
     n = list.size(l)
     i = 0
     while i < n {
@@ -6716,24 +6683,21 @@ raster_add_(ctx: @keep ptr, h: int, node: @keep ptr, pix: @keep ptr, bytes: int,
     r.bytes = bytes
     r.pw = pw
     r.ph = ph
-    list.add(raster_list_(), r as ptr)
+    list.add(raster_list_(ctx), r as ptr)
 }
 
 // Free a page's rasters with it (from page_free_): the buffers vg.raster
 // copied into; vg.image's belong to their elements.
 raster_page_free_(p: *Page) {
-    if rasters_ == null { return }
-    i = list.size(rasters_) - 1
+    i = list.size(p.rasters) - 1
     while i >= 0 {
-        rv, _ = list.get(rasters_, i)
+        rv, _ = list.get(p.rasters, i)
         r = rv as *PageRaster
-        if r.ctx == p.ctx {
-            if r.pix != null { free(r.pix) }
-            list.list_remove(rasters_, i)
-            heap.free(r)
-        }
+        if r.pix != null { free(r.pix) }
+        heap.free(r)
         i = i - 1
     }
+    list.free(p.rasters)
 }
 
 // "" when a w x h raster of `bytes` more fits the page, else the refusal.
@@ -6954,36 +6918,13 @@ const AB_TRANSFORM = 6
 const AB_WHEN = 7
 const AB_VIEWBOX = 8
 
-var ae_pages_: ptr = null
 
-// The page's wave1/aevg record, made on first use, dropped when its page is
-// gone (the runtime pointer may be reused by a later page; the sequence
-// number tells them apart).
+// The page's wave1/aevg record (Page.ae), made on first use, freed with
+// the page (page_free_).
 ae_page_(ctx: @keep ptr) -> *AePage {
-    if ae_pages_ == null { ae_pages_ = list.new() }
     p = page_of_(ctx)
-    // Prune the dead: entries whose page is no longer live.
-    i = 0
-    while i < list.size(ae_pages_) {
-        v, _ = list.get(ae_pages_, i)
-        ap = v as *AePage
-        lp = page_of_(ap.ctx)
-        if lp == null || lp.seq != ap.seq {
-            ae_page_free_(ap)
-            list.list_remove(ae_pages_, i)
-        } else {
-            i = i + 1
-        }
-    }
     if p == null { return null }
-    n = list.size(ae_pages_)
-    i = 0
-    while i < n {
-        v2, _2 = list.get(ae_pages_, i)
-        ap2 = v2 as *AePage
-        if ap2.ctx == ctx && ap2.seq == p.seq { return ap2 }
-        i = i + 1
-    }
+    if p.ae != null { return p.ae as *AePage }
     ap3 = heap.new(AePage)
     ap3.ctx = ctx
     ap3.seq = p.seq
@@ -6991,7 +6932,7 @@ ae_page_(ctx: @keep ptr) -> *AePage {
     ap3.binds = list.new()
     ap3.defs_sb = null
     ap3.defs_scene = null
-    list.add(ae_pages_, ap3 as ptr)
+    p.ae = ap3 as ptr
     return ap3
 }
 
@@ -7329,9 +7270,10 @@ ae_wire_canvas_(ctx: @keep ptr, sc: *AeScene) {
     scene = sc.scene
     cid = sc.cid
     seq = page_of_(ctx).seq
+    clk = (page_of_(ctx).browser as *Browser).clock
     ui.canvas_on_click(cid, |x: float, y: float| {
         if ae_live_(ctx, seq) == 0 { return }
-        long now = now_ms_()
+        long now = now_ms_(clk)
         dbl = 0
         if sc.last_click_ms != 0 && now - sc.last_click_ms < 400 {
             dx = x - sc.last_cx
@@ -8464,6 +8406,7 @@ struct HttpJob {
     refused_hop: int // err is capabilities.http refusing a redirect hop: logged on delivery
     net: ptr         // the browser's services/net, which every hop is held to
     inbox: ptr       // the HttpInbox its fetcher hands it to when done
+    app: int         // 1 in app mode (the escape rules are the browser's)
 }
 
 // A request a page is waiting on: which page (by load), and its callback.
@@ -8578,7 +8521,7 @@ http_do_(jp: ptr) {
                 if c > 0 {
                     hname = string.string_substring(line, 0, c)
                     lname = string.to_lower(hname)
-                    if esc_header_kept_(lname) == 1 && (cross == 0 || (lname != "authorization" && lname != "cookie" && lname != "proxy-authorization")) {
+                    if esc_header_kept_(j.app, lname) == 1 && (cross == 0 || (lname != "authorization" && lname != "cookie" && lname != "proxy-authorization")) {
                         _sh = client.set_header(req, hname, string.string_substring(line, c + 2, string.length(line)))
                     }
                 }
@@ -8627,7 +8570,7 @@ http_do_(jp: ptr) {
             method = "GET"
             body = ""
         }
-        why = http_refusal_(j.net, j.page_url, j.scopes, method, next)
+        why = http_refusal_(j.net, j.app, j.page_url, j.scopes, method, next)
         if why != "" {
             j.err = "redirected to ${next}: ${why}"
             if net.refusal(j.net, next) != "" { j.refused_hop = 1 }
@@ -8714,10 +8657,10 @@ net_log_(why: string) {
 // "" if a page at page_url, with these scopes ("" when it seeks
 // outgoing-http unscoped), may make this request, else why not. The grant
 // (app.json, or a web page's own origin) is checked first, then the scopes.
-http_refusal_(nt: ptr, page_url: string, scopes: string, method: string, url: string) -> string {
+http_refusal_(nt: ptr, app: int, page_url: string, scopes: string, method: string, url: string) -> string {
     if is_http_(url) == 0 { return "http.get/post takes an http(s) URL: ${url}" }
     granted = 0
-    if app_dir_ != "" {
+    if app == 1 {
         // app.json capabilities.http, held by services/net: the server first,
         // then the path prefix.
         nwhy = net.refusal(nt, url)
@@ -8748,7 +8691,7 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     // A URL app.json capabilities.http does not cover is refused like any
     // other (res.ok false, below), and logged once. Only in an app; in the
     // browser services/net checks nothing.
-    if app_dir_ != "" && is_http_(url) == 1 {
+    if j_app_(p) == 1 && is_http_(url) == 1 {
         nwhy = net.refusal(browser_of_(ctx).net, url)
         if nwhy != "" { net_log_(nwhy) }
     }
@@ -8769,9 +8712,11 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     j.resp_headers = ""
     j.page_url = p.url
     j.net = (p.browser as *Browser).net
+    j.app = 0
+    if (p.browser as *Browser).app_dir != "" { j.app = 1 }
     j.scopes = p.http_scopes
     j.refused_hop = 0
-    j.err = http_refusal_(j.net, p.url, p.http_scopes, method, url)
+    j.err = http_refusal_(j.net, j.app, p.url, p.http_scopes, method, url)
     w = heap.new(HttpWait)
     w.id = j.id
     w.page = p as ptr
@@ -8931,13 +8876,19 @@ call_http_(p: *Page, ref: int, status: int, text: string, err: string, raw_heade
 // The http, fs and shell grants live in services/net, services/files and
 // services/shell.
 
+// 1 when the page is an installed app's (the browser runs in app mode).
+j_app_(p: *Page) -> int {
+    if (p.browser as *Browser).app_dir != "" { return 1 }
+    return 0
+}
+
 // The app's own data folder: $SAE_APPDATA_DIR, else the platform's place.
-app_data_dir_() -> string {
+app_data_dir_(b: *Browser) -> string {
     d = env_("SAE_APPDATA_DIR")
     if d != "" { return slashes_(d) }
-    if os.platform() == "darwin" { return "${home_dir_()}/Library/Application Support/${app_name_}" }
-    if os.platform() == "windows" && env_("APPDATA") != "" { return "${slashes_(env_("APPDATA"))}/${app_name_}" }
-    return "${home_dir_()}/.local/share/${app_name_}"
+    if os.platform() == "darwin" { return "${home_dir_()}/Library/Application Support/${b.app_name}" }
+    if os.platform() == "windows" && env_("APPDATA") != "" { return "${slashes_(env_("APPDATA"))}/${b.app_name}" }
+    return "${home_dir_()}/.local/share/${b.app_name}"
 }
 
 // $HOME, or on Windows (where a program not started from MSYS2 or Cygwin
@@ -8968,13 +8919,12 @@ json_value_(ctx: ptr, text: string) -> int {
 
 // 1 when app.json grants clipboard "read" (a page that also seeks
 // clipboard-read may read at any time).
-var clip_read_granted_: int = 0
 
 // 1 if this context can give a page the privilege `nm`. A web page in the
 // browser gets outgoing-http (to its own origin) and nothing else; an app
 // gets each only as far as app.json grants it.
 available_(b: *Browser, nm: string) -> int {
-    if app_dir_ == "" {
+    if b.app_dir == "" {
         if nm == "outgoing-http" { return 1 }
         if nm == "clipboard" { return 1 }
         return 0
@@ -8983,7 +8933,7 @@ available_(b: *Browser, nm: string) -> int {
     if nm == "local-filesystem" { return files.granted(b.files) }
     if nm == "documents" { return documents.granted(b.documents) }
     if nm == "clipboard" { return 1 }
-    if nm == "clipboard-read" { return clip_read_granted_ }
+    if nm == "clipboard-read" { return b.clip_read_granted }
     // Desktop first: Android and iOS have their own IPC.
     if nm == "control-bus" {
         if os.platform() == "android" || os.platform() == "ios" { return 0 }
@@ -9013,7 +8963,7 @@ seek_refusal_(b: *Browser, url: string, seeks: string) -> string {
         i = i + 1
     }
     if missing == "" { return "" }
-    if app_dir_ == "" { return "${url} seeks ${missing}, which a web page in the browser cannot have" }
+    if b.app_dir == "" { return "${url} seeks ${missing}, which a web page in the browser cannot have" }
     return "${url} seeks ${missing}, which this app's app.json does not grant"
 }
 
@@ -9023,7 +8973,7 @@ seek_refusal_(b: *Browser, url: string, seeks: string) -> string {
 // page keeps them ("VERBS\tpattern" lines) and "", or "" and why the page
 // cannot run. A scope must lie inside the grant: within app.json's http
 // prefixes in an app, on the page's own origin in the browser.
-http_scopes_for_(nt: ptr, page_url: string, scopes: string) -> (string, string) {
+http_scopes_for_(b: *Browser, page_url: string, scopes: string) -> (string, string) {
     out = ""
     lines = string.split(scopes, "\n")
     n = string.string_array_size(lines)
@@ -9043,11 +8993,11 @@ http_scopes_for_(nt: ptr, page_url: string, scopes: string) -> (string, string) 
                 }
                 pat = string.concat(string.string_substring(page_url, 0, origin_end_(page_url)), pat)
             }
-            if app_dir_ != "" {
+            if b.app_dir != "" {
                 lit = pat
                 star = string.index_of(pat, "*")
                 if star >= 0 { lit = string.string_substring(pat, 0, star) }
-                if net.refusal(nt, lit) != "" {
+                if net.refusal(b.net, lit) != "" {
                     return "", "${page_url} ${shown}, beyond what this app's app.json grants (capabilities.http)"
                 }
             } else {
@@ -9113,7 +9063,7 @@ grants_from_(v: ptr, key: string, add: fn) {
 read_capabilities_(b: *Browser, manifest: ptr) {
     win = 0
     if os.platform() == "windows" { win = 1 }
-    files.configure(b.files, 1, app_data_dir_(), home_dir_(), temp_dir_(), win)
+    files.configure(b.files, 1, app_data_dir_(b), home_dir_(), temp_dir_(), win)
     shell.configure(b.shell, 1, env_("SAE_SHELL_LOG"))
     // capabilities.http is the app's whole network: absent or empty is none
     // (Tauri's deny by default). An entry services/net does not understand
@@ -9135,7 +9085,7 @@ read_capabilities_(b: *Browser, manifest: ptr) {
     if json.json_object_get_raw(caps, "documents") != null { documents.configure(b.documents, 1) }
     // capabilities.print ({}): pages may hand a PDF to the system's print
     // dialog (services/print), its file written in the app's data folder.
-    if json.json_object_get_raw(caps, "print") != null { printing.configure(b.printing, 1, app_data_dir_()) }
+    if json.json_object_get_raw(caps, "print") != null { printing.configure(b.printing, 1, app_data_dir_(b)) }
     // capabilities.controlBus ({ "name": ..., "maxRequestBytes": ... }): the
     // app may be driven by other programs on this machine, while the person
     // has switched it on (--control-bus). services/bus.
@@ -9161,7 +9111,7 @@ read_capabilities_(b: *Browser, manifest: ptr) {
         if g == "write" { clipboard.grant_write(b.clipboard) }
         if g == "read" {
             clipboard.grant_read(b.clipboard)
-            clip_read_granted_ = 1
+            b.clip_read_granted = 1
         }
     })
 }
@@ -9244,21 +9194,19 @@ app_storage_key_(dir: string, exe: string, bundled: int) -> string {
     return "${base_name_(c)}-${hash_hex_(c)}"
 }
 
-var app_key_: string = ""   // app mode: app_storage_key_, set at start
-
 // The folder a page's storage lives in: one per installed app (app_key_),
 // per origin, or, for a page loaded from a file, per directory: the file
 // system's nearest thing to a site, so a folder of pages that link to one
 // another shares storage, and pages in another folder do not.
 // $SAE_STORAGE_DIR, else ~/.sae/storage, or .sae/storage in the working
 // directory where there is no $HOME (an Android app: its own files folder).
-storage_dir_(url: string) -> string {
+storage_dir_(b: *Browser, url: string) -> string {
     root = slashes_(env_("SAE_STORAGE_DIR"))
     home = home_dir_()
     if home == "" { home = "." }
     if root == "" { root = "${home}/.sae/storage" }
     scope = "file"
-    if is_app_(url) == 1 { scope = string.concat("app-", app_key_) }
+    if is_app_(url) == 1 { scope = string.concat("app-", b.app_key) }
     if is_http_(url) == 1 { scope = string.string_substring(url, 0, origin_end_(url)) }
     if is_app_(url) == 0 && is_http_(url) == 0 {
         d = dir_of_(url)
@@ -9282,22 +9230,22 @@ storage_dir_(url: string) -> string {
     return "${root}/${out}"
 }
 
-storage_read_(url: string, key: string) -> (string, int) {
-    v, err = fs.read("${storage_dir_(url)}/${key}")
+storage_read_(b: *Browser, url: string, key: string) -> (string, int) {
+    v, err = fs.read("${storage_dir_(b, url)}/${key}")
     if err != "" { return "", 0 }
     return v, 1
 }
 
-storage_write_(url: string, key: string, val: string) -> int {
-    d = storage_dir_(url)
+storage_write_(b: *Browser, url: string, key: string, val: string) -> int {
+    d = storage_dir_(b, url)
     _m = fs.mkdir_p(d)
     werr = fs.write_atomic("${d}/${key}", string.bytes(val))
     if werr != "" { return 0 }
     return 1
 }
 
-storage_remove_(url: string, key: string) {
-    _r = fs.remove_tree("${storage_dir_(url)}/${key}")
+storage_remove_(b: *Browser, url: string, key: string) {
+    _r = fs.remove_tree("${storage_dir_(b, url)}/${key}")
 }
 
 is_app_(u: string) -> int {
@@ -9306,11 +9254,11 @@ is_app_(u: string) -> int {
 
 // The file an app: URL names: app:/about is <app>/about.ts (or .js), app:/ is
 // the index, and a path that already ends in .ts or .js is taken as it is.
-app_file_(url: string) -> string {
+app_file_(b: *Browser, url: string) -> string {
     path = string.string_substring(url, 4, string.length(url))
     if path == "" || path == "/" { path = "/index" }
     if string.string_ends_with(path, "/") == 1 { path = string.concat(path, "index") }
-    stem = string.concat(app_dir_, path)
+    stem = string.concat(b.app_dir, path)
     if string.string_ends_with(stem, ".ts") == 1 || string.string_ends_with(stem, ".js") == 1 { return stem }
     if fs.exists("${stem}.ts") == 1 { return "${stem}.ts" }
     return "${stem}.js"
@@ -9318,11 +9266,11 @@ app_file_(url: string) -> string {
 
 // Read an app page. A missing one is the app's own 404 page, as the dev page
 // server serves it, when the app has one.
-fetch_app_(url: string) -> (int, string, string, string) {
-    f = app_file_(url)
+fetch_app_(b: *Browser, url: string) -> (int, string, string, string) {
+    f = app_file_(b, url)
     src, ferr = fs.read(f)
     if ferr == "" { return 200, src, own_(url), "" }
-    nf = app_file_("app:/404")
+    nf = app_file_(b, "app:/404")
     src2, ferr2 = fs.read(nf)
     if ferr2 == "" { return 404, src2, own_(url), "" }
     return 0, "", own_(url), "no such page in this app: ${url}"
@@ -9383,10 +9331,10 @@ resolve_(base: string, href: string) -> string {
 // status (200 for a file read), final_url is where redirects ended, and err
 // is "" unless nothing could be fetched at all.
 fetch_(b: *Browser, url: string) -> (int, string, string, string) {
-    if is_app_(url) == 1 { return fetch_app_(url) }
+    if is_app_(url) == 1 { return fetch_app_(b, url) }
     // An app's pages are its own (app.json "start" included): it loads no
     // page from a file or the network, whatever capabilities.http lists.
-    if app_dir_ != "" { return 0, "", own_(url), "this app loads only its own pages (app:/...): ${url}" }
+    if b.app_dir != "" { return 0, "", own_(url), "this app loads only its own pages (app:/...): ${url}" }
     if is_http_(url) == 0 {
         src, ferr = fs.read(url)
         if ferr != "" { return 0, "", url, ferr }
@@ -9452,6 +9400,7 @@ glob_fn_(q: ptr, name: string, arity: int, f: @keep fn(@keep ptr, int, int) -> i
 // exist only in app mode: a
 // web page has no such objects at all.
 api_register_(p: *Page) {
+    ab = p.browser as *Browser
     q = p.ctx
     u = quickjs.new_object(q)
     reg_(q, u, "vstack", 2, sae_ui_vstack)
@@ -9675,7 +9624,7 @@ api_register_(p: *Page) {
     quickjs.release(q, hf)
     }
 
-    if app_dir_ != "" && string.contains(p.absent, ",local-filesystem,") == 0 {
+    if ab.app_dir != "" && string.contains(p.absent, ",local-filesystem,") == 0 {
         fo = quickjs.new_object(q)
         reg_(q, fo, "read_text", 1, sae_fs_read_text)
         reg_(q, fo, "readFileSync", 2, sae_fs_read_text)
@@ -9695,7 +9644,7 @@ api_register_(p: *Page) {
     // documents: the person's files, picked; the page gets handles, never
     // paths. The raw gates go in a hidden global the wrapper takes and
     // deletes, so a page has only `documents`, all of it promises.
-    if app_dir_ != "" && string.contains(p.absent, ",documents,") == 0 {
+    if ab.app_dir != "" && string.contains(p.absent, ",documents,") == 0 {
         dr = quickjs.new_object(q)
         reg_(q, dr, "open", 1, sae_docs_pick_open)
         reg_(q, dr, "save", 1, sae_docs_pick_save)
@@ -9726,7 +9675,7 @@ api_register_(p: *Page) {
     // stopped(reason) runs, in an entry of its own, when a request was answered
     // as failed without the handler: "interrupted" (the page's time limit
     // stopped it) or "deadline" (it was still running at BUS_DEADLINE_MS).
-    if app_dir_ != "" && string.contains(p.absent, ",control-bus,") == 0 {
+    if ab.app_dir != "" && string.contains(p.absent, ",control-bus,") == 0 {
         br = quickjs.new_object(q)
         reg_(q, br, "serve", 2, sae_bus_serve)
         reg_(q, br, "stop", 0, sae_bus_stop)
@@ -9739,7 +9688,7 @@ api_register_(p: *Page) {
     // backend: the app's own process (capabilities.backend, docs/app-backend.md).
     // invoke's promise is settled by the dispatcher when the answer comes
     // (backend_tick_), or at once when there is no backend to ask.
-    if app_dir_ != "" && string.contains(p.absent, ",backend,") == 0 {
+    if ab.app_dir != "" && string.contains(p.absent, ",backend,") == 0 {
         bko = quickjs.new_object(q)
         reg_(q, bko, "listen", 1, sae_backend_listen)
         reg_(q, bko, "call", 2, sae_backend_call)
@@ -9749,13 +9698,13 @@ api_register_(p: *Page) {
         bkw, _bke = quickjs.eval(q, "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; raw.listen(function (kind, id, ok, name, payload) { if (kind === 0) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg): name must be a string'); var a = arg === undefined ? '' : String(arg); return new Promise(function (resolve, reject) { var id = raw.call(name, a); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;", "sae:backend")
         quickjs.release(q, bkw)
     }
-    if app_dir_ != "" && string.contains(p.absent, ",print,") == 0 {
+    if ab.app_dir != "" && string.contains(p.absent, ",print,") == 0 {
         pro = quickjs.new_object(q)
         reg_(q, pro, "pdf", 2, sae_printing_pdf)
         quickjs.set_global(q, "printing", pro)
         quickjs.release(q, pro)
     }
-    if app_dir_ != "" && string.contains(p.absent, ",open-urls,") == 0 {
+    if ab.app_dir != "" && string.contains(p.absent, ",open-urls,") == 0 {
         sho = quickjs.new_object(q)
         reg_(q, sho, "open", 1, sae_shell_open)
         quickjs.set_global(q, "shell", sho)
@@ -9890,8 +9839,13 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.held = list.new()
     p.sqlite_fns = null
     p.natives_set = ","
-    page_seq_ = page_seq_ + 1
-    p.seq = page_seq_
+    p.esc_logged_http = 0
+    p.esc_logged_timers = 0
+    p.esc_logged_storage = 0
+    p.rasters = list.new()
+    p.ae = null
+    b.page_seq = b.page_seq + 1
+    p.seq = b.page_seq
     p.http_res = 0
     p.http_req = 0
     p.on_resize = 0
@@ -9899,8 +9853,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.on_interrupted = 0
     p.interrupting = 0
     p.ctx = engine_new_(b.page_mem)
-    if pages_ == null { pages_ = list.new() }
-    list.add(pages_, p as ptr)
+    list.add(b.pages, p as ptr)
     api_register_(p)
     p.root = ui.vstack(mem.long_to_ptr(b.content), 4)
     // After the root: it is the browser's, like the content area it sits in.
@@ -9910,7 +9863,6 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
 }
 
 page_free_(p: *Page) {
-    esc_free_(p)   // wave1/escape: the page's cap state
     // The control bus's handler goes with its page; the bus keeps listening,
     // and answers that no page serves it until another calls bus.serve.
     bb = p.browser as *Browser
@@ -9936,17 +9888,18 @@ page_free_(p: *Page) {
     free(p.vg_stack)
     // The runtime goes with everything it held: the page's handlers, its
     // http helpers, its pending promises.
-    n = list.size(pages_)
+    n = list.size(bb.pages)
     i = 0
     while i < n {
-        pv, _ = list.get(pages_, i)
+        pv, _ = list.get(bb.pages, i)
         if pv == p as ptr {
-            list.list_remove(pages_, i)
+            list.list_remove(bb.pages, i)
             break
         }
         i = i + 1
     }
     engine_dispose_(p.ctx)
+    if p.ae != null { ae_page_free_(p.ae as *AePage) }   // wave1/aevg: its scene record, once nothing can run
     if p.sqlite_fns != null { heap.free(p.sqlite_fns as *SqlitePageFns) }
     free(p.stack)
     heap.free(p)
@@ -10071,7 +10024,7 @@ origin_of_(u: string) -> string {
 
 // Resolve an import specifier against the URL of the unit that imports it.
 // Returns (url, why): why is "" when the import is allowed.
-module_resolve_(importer: string, spec: string) -> (string, string) {
+module_resolve_(b: *Browser, importer: string, spec: string) -> (string, string) {
     clean, _hex, ierr = stdlib.integrity_of(spec)
     if ierr != "" { return "", ierr }
     if string.string_starts_with(clean, "sae:") == 1 {
@@ -10087,7 +10040,7 @@ module_resolve_(importer: string, spec: string) -> (string, string) {
     if rel == 0 && is_http_(clean) == 0 && is_app_(clean) == 0 {
         return "", "\"${clean}\" cannot be imported: no bare names (there is no npm here) and no other scheme; a path on this origin (\"./m.ts\", \"/lib/m.ts\") or \"sae:<name>\""
     }
-    if app_dir_ != "" {
+    if b.app_dir != "" {
         if is_http_(clean) == 1 { return "", "\"${clean}\": an app imports only from its own bundle (app:/...) or sae:" }
         u = clean
         if rel == 1 { u = resolve_(importer, clean) }
@@ -10201,7 +10154,7 @@ mod_imports_(p: *Page, url: string, imports: string, seeks: string, chain: strin
             f = string.split(l, "\t")
             spec = string.string_array_get(f, 0)
             at = "${url}:${string.string_array_get(f, 1)}:${string.string_array_get(f, 2)}"
-            target, why = module_resolve_(url, spec)
+            target, why = module_resolve_(p.browser as *Browser, url, spec)
             if why != "" { return "${at}: import refused: ${why}" }
             _c, hex, _e = stdlib.integrity_of(spec)
             why2 = mod_load_(p, target, seeks, hex, chain, loading)
@@ -10330,7 +10283,7 @@ sae_mod_get(ctx: ptr, this_val: int, argv: int) -> int {
     p = page_of_(ctx)
     spec = arg_str_(ctx, argv, argc, 0)
     url = js_prop_str_(ctx, this_val, "url", p.url)
-    target, why = module_resolve_(url, spec)
+    target, why = module_resolve_(p.browser as *Browser, url, spec)
     if why != "" { return sae_throw_type_error(ctx, "import refused: ${why}") }
     m = mod_find_(p, target)
     if m == null { return sae_throw_type_error(ctx, "\"${spec}\" is not imported by this page (imports are static: an import statement at the top of the page)") }
@@ -10409,7 +10362,7 @@ load_(b: *Browser, url: string) {
     // lowerer refuses a page that names one unsought, but only by name:
     // without this, globalThis["ht" + "tp"] would reach it.
     absent = string.concat(absent, unsought_(lower.page_seeks(), lower.page_optional()))
-    scopes, swhy = http_scopes_for_(b.net, final_url, lower.page_scopes())
+    scopes, swhy = http_scopes_for_(b, final_url, lower.page_scopes())
     if swhy != "" {
         if string.contains(lower.page_optional(), ",outgoing-http,") == 1 {
             absent = string.concat(absent, "outgoing-http,")
@@ -10474,16 +10427,13 @@ go_(b: *Browser, url: string) {
     load_(b, url)
 }
 
-// 1 while the pending navigation is one typed into the address bar.
-var nav_typed_ = 0
-
 run_nav_(b: *Browser) {
     kind = b.pending_kind
     url = b.pending_url
     b.pending_kind = NAV_NONE
     if kind == NAV_GO {
         // An app's pages navigate only among themselves (Tauri's default).
-        if app_dir_ != "" && is_app_(url) == 0 {
+        if b.app_dir != "" && is_app_(url) == 0 {
             println("sae: this app navigates only to its own pages; refused ${url}")
             fflush(sae_stdout())
             return
@@ -10492,10 +10442,10 @@ run_nav_(b: *Browser) {
         // The rule holds a page's own navigations; an address typed into
         // the browser's bar is the person's, and goes where they say (a file
         // page's folder does not bound them), as esc_nav_check_ intends.
-        typed = nav_typed_
-        nav_typed_ = 0
+        typed = b.nav_typed
+        b.nav_typed = 0
         nurl = url
-        if typed == 0 || app_dir_ != "" {
+        if typed == 0 || b.app_dir != "" {
             n2, nwhy = esc_nav_check_(b, url)
             if nwhy != "" {
                 esc_log_(nwhy)
@@ -10527,7 +10477,7 @@ run_nav_(b: *Browser) {
 request_nav_(b: *Browser, kind: int, url: string) {
     b.pending_kind = kind
     b.pending_url = own_(url)
-    nav_typed_ = 0   // the Go button sets it again after this; a page never does
+    b.nav_typed = 0   // the Go button sets it again after this; a page never does
     if b.nav_timer == 0 {
         b.nav_timer = ui.timer(1, || {
             ui.timer_cancel(b.nav_timer)
@@ -10564,7 +10514,7 @@ build_chrome_(b: *Browser, root: int) {
             target = resolve_(base, typed)
         }
         request_nav_(b, NAV_GO, target)
-        nav_typed_ = 1   // the person asked, not the page: see run_nav_
+        b.nav_typed = 1   // the person asked, not the page: see run_nav_
     })
     b.status = ui.text(rctx, "")
     ui.divider(rctx)
@@ -10627,6 +10577,26 @@ browser_new_() -> *Browser {
     b.sqlite_jobs = sqlite_jobs_new_()
     b.native_jobs = native_jobs_new_()
     b.http_jobs = http_jobs_new_()
+    b.app_dir = ""
+    b.app_name = ""
+    b.app_key = ""
+    b.pages = list.new()
+    b.page_seq = 0
+    clk = heap.new(Clock)
+    clk.scale = 0
+    clk.base_mono = 0
+    clk.base_unix = 0
+    b.clock = clk
+    b.gesture = 0
+    b.menu_bar = 0
+    b.menu_bar_seq = 0
+    b.app_menus = list.new()
+    b.menu_open = 0
+    b.window_up = 0
+    b.keys_hooked = 0
+    b.esc_coarse = 0
+    b.clip_read_granted = 0
+    b.nav_typed = 0
     pm = env_("SAE_PAGE_MEM")
     if pm != "" {
         v, perr = string.to_long(pm)
@@ -10749,7 +10719,7 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int)
     sqlite_why = ""   // wave1/sqlite: why the app cannot start, if a database cannot be opened or migrated
     if app != "" {
         while string.string_ends_with(app, "/") == 1 { app = string.string_substring(app, 0, string.length(app) - 1) }
-        app_dir_ = own_(app)
+        b.app_dir = own_(app)
         manifest = null
         mtext, merr = fs.read("${app}/app.json")
         if merr == "" {
@@ -10757,10 +10727,10 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int)
             manifest = mv
         }
         title = app_setting_(manifest, "name", base_name_(app))
-        app_name_ = own_(title)
+        b.app_name = own_(title)
         bundled = 0
         if arg1 == "" { bundled = 1 }
-        app_key_ = app_storage_key_(app, exe, bundled)
+        b.app_key = app_storage_key_(app, exe, bundled)
         w = app_setting_int_(manifest, "width", 800)
         h = app_setting_int_(manifest, "height", 600)
         // memory (MB): an installed app's page may have more heap than a web
@@ -10803,11 +10773,11 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int)
     // existed: its title says so from the start.
     if bus.listening(b.bus) == 1 { title = "${title} - control bus on" }
     if channel.alive(b.control) == 1 { title = "${title} - control channel on" }
-    window_up_ = 1
-    if menu_bar_ != 0 {
+    b.window_up = 1
+    if b.menu_bar != 0 {
         // The first page made menus: the window is made with its bar.
         app_h = ui.app_create(title, w, h)
-        ui.attach_menu_bar(app_h, menu_bar_)
+        ui.attach_menu_bar(app_h, b.menu_bar)
         ui.app_start(app_h, root)
         return 0
     }
