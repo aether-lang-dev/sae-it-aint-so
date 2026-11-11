@@ -36,7 +36,7 @@ running_(prog: string, args: string) -> int {
 
 // The listening sockets (TCP and Unix) of sae-driver and of the backend,
 // as lsof names them, except the UI driver's own port (the test's; FreeBSD's
-// lsof names it 127.0.0.1:9222->*:*): """"
+// lsof names it 127.0.0.1:9222->*:*): ""
 // when there are none. "(no lsof)" where lsof is missing. On Windows, the
 // TCP ones (Get-NetTCPConnection); nothing in sae makes a Unix socket there.
 listeners_() -> string {
