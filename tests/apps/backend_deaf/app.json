@@ -1,0 +1,6 @@
+{
+  "name": "Backend deaf test",
+  "capabilities": {
+    "backend": { "program": "backend/main", "deadlineMs": 30000 }
+  }
+}

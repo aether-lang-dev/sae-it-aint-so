@@ -12,6 +12,8 @@ import std.os
 import std.os (os_getenv)
 import std.list
 import std.ipc
+import std.http.client
+import std.time (now_ms)
 import saedriver as b
 import uidriver
 import saecontrol
@@ -83,6 +85,34 @@ running_() -> int {
     _o2, st2, _e2 = os.run_capture("sh", argv, null)
     if st2 == 0 { return 1 }
     return 0
+}
+
+// How long the window took to answer the driver (GET /windows, served on
+// sae's UI thread), or -1 when it did not within 2 s.
+answered_in_() -> long {
+    t0 = now_ms()
+    req = client.request("GET", uidriver.url_of("/windows"))
+    _t = client.set_timeout(req, 2s)
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if cerr != "" { return 0 - 1 }
+    client.response_free(resp)
+    return now_ms() - t0
+}
+
+// The window answers the driver within a second, `n` times, `gap_ms` apart:
+// 1, or 0 (the case failed) at the first time it does not. A spec stops its
+// case on 0: every other driver call would wait on the stuck window too.
+responsive_(n: int, gap_ms: int, msg: string) -> int {
+    i = 0
+    while i < n {
+        ms = answered_in_()
+        spec.assert_true(ms >= 0 && ms < 1000, "${msg}: the window answered the driver in ${ms} ms (-1: not within 2 s)")
+        if ms < 0 || ms >= 1000 { return 0 }
+        sleep(gap_ms)
+        i = i + 1
+    }
+    return 1
 }
 
 main() {
@@ -172,5 +202,39 @@ main() {
         }
     }
     saecontrol.stop(hl)
+    // A parent that asks and then does not read: the answer (2 MB, past what
+    // a pipe holds) cannot all be written. sae's UI thread does not wait for
+    // it (the answer is written on a thread of its own), and once it has
+    // waited frames.WRITE_MS (5 s) the channel is closed, saying why.
+    // Before 2026-11-11 the write was on the UI thread: the window stopped
+    // answering until the parent read or went.
+    sl = launch_(0)
+    spec.describe(fw, "a parent that stops reading") {
+        spec.it("the window stays responsive, and after 5 s the channel is closed, saying why; the app stays") callback {
+            spec.assert_eq(saecontrol.wait_event(sl, "serving", 10000), 1, "serving")
+            spec.assert_str_eq(saecontrol.send_raw(sl, "{\"id\": 1, \"command\": \"big\"}"), "", "sent, and its answer never read")
+            sleep(300)
+            if responsive_(6, 400, "while sae's answer waits") == 0 { return }
+            spec.assert_true(b.wait_for_text("last: big"), "the page answered")
+            why = "sae: control channel: the program that started sae stopped reading: a frame waited 5 s and was not taken"
+            spec.assert_true(b.wait_for_console_secs(why, 15), "closed, saying why")
+            spec.assert_eq(running_(), 1, "sae still running")
+            spec.assert_eq(string.contains(uidriver.get_body("/windows"), "control channel on"), 0, "the title plain")
+            _r = responsive_(2, 100, "after")
+        }
+    }
+    saecontrol.stop(sl)
+    spec.assert_eq(running_(), 0, "stopped by the spec")
+    hs = launch_(1)
+    spec.describe(fw, "a parent that stops reading, without a window") {
+        spec.it("sae stops, though its write of the answer is still waiting") callback {
+            spec.assert_eq(saecontrol.wait_event(hs, "serving", 10000), 1, "serving")
+            stops = b.console_count("sae: control channel: no window and no channel: stopping")
+            spec.assert_str_eq(saecontrol.send_raw(hs, "{\"id\": 1, \"command\": \"big\"}"), "", "sent, and its answer never read")
+            spec.assert_eq(saecontrol.wait_exit(hs, 15), 0, "sae exited by itself, status 0")
+            spec.assert_eq(b.console_count("sae: control channel: no window and no channel: stopping"), stops + 1, "saying so")
+        }
+    }
+    saecontrol.stop(hs)
     return spec.run_summary(fw)
 }

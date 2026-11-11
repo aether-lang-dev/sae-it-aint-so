@@ -1,0 +1,20 @@
+// The backend of tests/apps/backend_deaf (docs/app-backend.md): it answers
+// its first call, then stops reading its stdin and never exits, so the calls
+// sae writes to it fill the pipe and stay there. spec_app_backend_deaf checks
+// that sae's window does not wait on them, and that sae stops it, saying why.
+//   AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main
+import std.io
+import saebackend
+
+main() {
+    sb, err = saebackend.open()
+    if err != "" {
+        _w = io.stderr_write("${err}\n")
+        exit(2)
+    }
+    id, _name, _arg, rerr = saebackend.next(sb)
+    if rerr != "" { exit(0) }
+    _r = saebackend.answer(sb, id, "deaf from now")
+    _s = io.stderr_write("the deaf backend: no longer reading its stdin\n")
+    while 1 == 1 { sleep(1000) }
+}

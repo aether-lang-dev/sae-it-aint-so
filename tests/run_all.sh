@@ -146,6 +146,7 @@ check_android_sources||check check_android_sources
 check_storage_scope||check check_storage_scope
 spec_app_backend|SAE_TEST_APP=tests/apps/backend|backend tests/apps/backend spec_app_backend
 spec_app_backend_stray|SAE_TEST_APP=tests/apps/backend_stray|backend tests/apps/backend_stray spec_app_backend_stray
+spec_app_backend_deaf|SAE_TEST_APP=tests/apps/backend_deaf|backend tests/apps/backend_deaf spec_app_backend_deaf
 spec_app_backend_wslc|SAE_TEST_APP=tests/apps/backend_wslc|wslc spec_app_backend_wslc
 spec_app_channel|SAE_TEST_PARENT=1 SAE_TEST_APP=tests/apps/bus|spec spec_app_channel
 check_sqlite_relaunch||check check_sqlite_relaunch

@@ -71,12 +71,23 @@ backend in a WSL container on Windows. The socket pair it began on is gone.
   is the channel: nothing but frames may be written there)`. Likewise a
   frame that is not JSON, a stream that ends inside a frame, and a frame
   not whole within 2 s.
+- A backend that stops reading its stdin cannot stall the window: sae
+  writes its calls on a thread of its own (`services/frames`' Writer, "The
+  write bound" below), and a call it has not taken within 5 s stops it,
+  killed at once (it is not reading, so closing its stdin would not end
+  it): `backend: it stopped reading its stdin: a frame waited 5 s and was
+  not taken (2097152 bytes waiting); it was killed`, the page's `on_gone`
+  and every call waiting told so.
 - Tests: `tests/apps/backend` and `tests/spec_app_backend.ae` (its args,
   answers, failures, events before the answer, print/println/raw fd 1
   writes after the claim kept out of the frames, the deadline, the backend
   exiting and being reaped, and `lsof` finding nothing listening);
   `tests/apps/backend_stray` and `spec_app_backend_stray` (output before
-  the claim: stopped, the bytes quoted); `tests/apps/backend_wslc` and
+  the claim: stopped, the bytes quoted); `tests/apps/backend_deaf` and
+  `spec_app_backend_deaf` (a backend that stops reading after its first
+  call, sent 2 MB of calls: the window answers the driver within a second
+  throughout, and after 5 s the backend is killed and the page told why;
+  before the write bound the window stopped answering for good); `tests/apps/backend_wslc` and
   `spec_app_backend_wslc` (on Windows the same test backend built for Linux
   into `sae-backend-test:dev` by `tests/apps/backend_wslc/build-image.sh`,
   elsewhere the refusal); `tests/escape/computed_fs.ts` tries `backend` by
@@ -164,7 +175,8 @@ JSON text.
   (The bus's handler goes with its page; a backend does not.) A reply for
   a page that has gone is dropped, as an HTTP reply is.
 - Bounded like everything else: a frame size limit, a queue limit, a
-  deadline on each `invoke`, and the page told when one is missed.
+  deadline on each `invoke`, and the page told when one is missed; and a
+  bound on each write the other way (the write bound, below).
 - A document the person picks could be opened by sae and handed over, so a
   backend without `fs` still reads exactly that file and no other. Not
   over the pipes (no descriptor crosses one): its bytes in frames, or a
@@ -259,6 +271,12 @@ an AI client -> spreadsheet-mcp.js (node)
   answered with errorCode 2 (id null when it had none) and the channel
   stays open; more than eight waiting is "busy". Bytes that are not frames
   close the channel, quoted as a backend's are.
+- **A parent that stops reading** cannot stall the window either: answers
+  go out on the write bound's thread, and one the parent has not taken
+  within 5 s closes the channel, `control channel: the program that
+  started sae stopped reading: a frame waited 5 s and was not taken (N
+  bytes waiting)`, as when the parent goes (below): a headless sae exits,
+  a windowed one stays.
 - **When the parent goes** (end of stream on sae's stdin, or a broken
   stream): with no window (`AETHER_UI_HEADLESS`) sae exits, as a child
   whose parent has gone should, so a headless app never outlives the
@@ -276,13 +294,61 @@ an AI client -> spreadsheet-mcp.js (node)
   channel kept, the deadline, bytes that are not frames (closed, quoted,
   the windowed app still running), no courier file and `lsof` finding
   nothing listening; then a headless launch that exits by itself when the
-  spec closes its stdin. Against a sae without the flag every case but
+  spec closes its stdin; then a parent that asks for a 2 MB answer and
+  never reads it (the window answers the driver within a second
+  throughout, the channel closes after 5 s saying why, the app stays) and
+  the same without a window (sae exits by itself, though its write is
+  still waiting). Against a sae without the flag every case but
   "nothing listening" fails (that sae prints its notes into its stdout,
   which the parent reads as a frame header). Passed (2026-11-11) on macOS,
   on ae-x64 (Ubuntu 22.04, GTK 4.6) and natively on win11, all on Aether
   0.908.0; `tests/run_all.sh` 66/66 on macOS and ae-x64. spraedsheet's
   `tests/mcp/channel.test.js` drives the real app through its MCP server
   this way, end to end (macOS; it needs node and lsof).
+
+### The write bound
+
+Reading never waits (a wait of 0, then the frame bounded by 2 s), so a
+peer cannot stall sae by sending. Writing to a pipe waits once the pipe is
+full (64 KB or so), and a peer that has stopped reading never empties it:
+before 2026-11-11 that write was on the UI thread, and the window froze
+until the peer read, exited or was killed. Aether 0.908.0's std.ipc can
+wait for a pipe to be readable but not writable, and every write writes all
+of its bytes (`asks/aether-ipc-wait-writable.md`), so:
+
+- `services/frames`' Writer (an instance per channel, no module state)
+  queues each frame and returns at once; from the owner's UI tick it hands
+  the queue to a thread of its own (`std.worker.run_detached`, one a
+  batch), which writes the frames in order and counts them in a
+  `std.sync` cell.
+- A frame not taken within **5 s** (`frames.WRITE_MS`), or more than 16 MB
+  queued behind one, is the peer's fault: the owner drops the channel with
+  a reason (above) and the page is told as for any other loss.
+- The thread may still be waiting in `write()` then. From that moment the
+  descriptor is the thread's: it closes it when `write()` returns, so no
+  descriptor is closed under a write (and reused). For a backend that is at
+  once (sae kills it, and the write fails); for the control channel it is
+  when the parent reads or exits (sae cannot kill its parent; a headless
+  sae exits anyway, and a windowed one keeps the one thread waiting).
+- The same code on Windows: `ipc.write_frame` on a pipe waits there too,
+  and the thread does the waiting.
+- Tests: `spec_app_backend_deaf` and the two "stops reading" cases of
+  `spec_app_channel` (above), each failing against a sae from before the
+  bound (the window did not answer the driver within 2 s) and passing with
+  it: on macOS (`tests/run_all.sh` 67/67), ae-x64 (every `spec_app_`
+  spec, Ubuntu 22.04, GTK 4.6) and natively on win11 (`spec_app_channel`,
+  `spec_app_backend_deaf`, `spec_app_backend_stray`, `spec_app_backend`),
+  2026-11-11, Aether 0.908.0.
+
+The other ends: `sdk/saebackend` and `sdk/saecontrol` write without a
+bound, as before. That is enough for them: sae reads both pipes every tick
+whatever its page is doing (the page's own work is cut off at 5 s), and
+when it gives a peer up it closes its end, so their write fails (EPIPE)
+rather than waits. node buffers what a pipe has not taken without limit,
+so spraedsheet's `mcp/sae-channel.js` holds the same 5 s bound: bytes sae
+has not taken within it fail every request waiting with `the app stopped
+reading its channel: N bytes not taken within 5 s`, and a headless sae is
+killed (a windowed one is left to the person, its channel closed).
 
 ### Alice, Bob and Eve, for the channel
 
@@ -358,16 +424,20 @@ did not run on Windows and nothing yet passed a descriptor.
    console-subsystem sae started from a GUI parent gets a console window
    of its own; a parent that wants none starts it with `CREATE_NO_WINDOW`
    (node's `windowsHide`).
-7. **The control channel and the page's output**: a parent that does not
-   read sae's stdout stalls sae once the pipe is full (a write on the UI
-   thread waits), as a backend that does not read its stdin stalls sae's
-   calls to it. A bound on that write is not built for either.
-8. **Both at once**: one launch has the channel or the bus. A person who
+7. **Both at once**: one launch has the channel or the bus. A person who
    wants to attach a REXX script to an app an MCP server started cannot
    yet; allowing both would be one more `ctl_answer_` case.
+8. **The control bus's own writes**: `services/bus` answers a connection
+   with `tcp.write` on the UI thread, so a local client that sends a
+   request and never reads its (sealed) answer can hold the window while
+   the socket's buffer is full. Not covered by the write bound (a socket,
+   not a pipe; std.tcp has the same gap, a `wait_writable` there would
+   close it).
 
-Done: Windows (2026-11-11, the stdio transport, native and wslc), and
-stray output (`saebackend.open()` claims stdin and stdout with
+Done: the write bound (2026-11-11: a parent or backend that stops reading
+no longer stalls the window; above, "The write bound"; what would replace
+its thread is `asks/aether-ipc-wait-writable.md`), Windows (2026-11-11,
+the stdio transport, native and wslc), and stray output (`saebackend.open()` claims stdin and stdout with
 `ipc.stdio_channel`; what still breaks the stream, output before the claim
 or from a wrapper, is quoted in the reason). Not masked even now: output
 before the claim, C code holding its own copy of fd 1, and a child process

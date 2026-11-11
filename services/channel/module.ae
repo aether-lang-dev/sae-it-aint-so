@@ -30,7 +30,11 @@
 //
 // Each Channel is an instance with its own state (the kernel holds one per
 // launch); nothing here is module state. The kernel polls it from a UI
-// timer, a tick at a time, so a parent cannot stall the window by sending.
+// timer, a tick at a time, so a parent cannot stall the window by sending;
+// and answers go out through a services/frames Writer, on a thread of their
+// own, so a parent cannot stall it by not reading either: an answer it has
+// not taken within frames.WRITE_MS (5 s) closes the channel, "the program
+// that started sae stopped reading".
 
 import std.ipc
 import std.io (fd_close)
@@ -58,7 +62,7 @@ const PER_TICK = 16
 
 struct Channel {
     rd: int          // what was stdin: requests come in, or -1 once closed
-    wr: int          // what was stdout: answers go out, or -1 once closed
+    out: ptr         // a services/frames Writer on what was stdout: answers go out, or null once closed
     max: int         // a command's most bytes (maxRequestBytes)
     why: string      // why it closed, "" while open
     waiting: ptr     // std.list of *Request, in arrival order; the first may be with the page
@@ -84,7 +88,7 @@ claim() -> (ptr, string) {
     if err != "" { return null, "control channel: ${err}" }
     c = heap.new(Channel)
     c.rd = rd
-    c.wr = wr
+    c.out = frames.writer(wr)
     c.max = 65536
     c.why = ""
     c.waiting = list.new()
@@ -134,6 +138,7 @@ log_line_(c: *Channel, s: string) {
 poll(h: ptr) {
     if alive(h) == 0 { return }
     c = h as *Channel
+    if pump_(c) == 0 { return }
     n = 0
     while n < PER_TICK && c.rd >= 0 {
         ready, werr = ipc.wait_readable(c.rd, 0)
@@ -266,10 +271,28 @@ event(h: ptr, name: string) {
     send_(c, "{\"event\":${quoted}}")
 }
 
+// A frame to the parent, queued: it goes out on the writer's thread.
 send_(c: *Channel, text: string) {
-    if c.wr < 0 { return }
-    werr = ipc.write_frame(c.wr, text)
-    if werr != "" { close(c as ptr, "control channel: the program that started sae stopped reading: ${werr}") }
+    if c.out == null { return }
+    werr = frames.put(c.out, text)
+    if werr != "" { lost_(c, werr) }
+}
+
+// The writer's last batch taken and the next begun: 1 while the channel is
+// open, 0 once the parent has not taken an answer within frames.WRITE_MS or
+// the write failed (the channel then closed).
+pump_(c: *Channel) -> int {
+    if c.out == null { return 0 }
+    werr = frames.pump(c.out)
+    if werr != "" {
+        lost_(c, werr)
+        return 0
+    }
+    return 1
+}
+
+lost_(c: *Channel, werr: string) {
+    close(c as ptr, "control channel: the program that started sae stopped reading: ${werr}")
 }
 
 // Close both ends; the first reason is kept. Requests still waiting are
@@ -281,9 +304,9 @@ close(h: ptr, reason: string) {
         _a = fd_close(c.rd)
         c.rd = 0 - 1
     }
-    if c.wr >= 0 {
-        _b = fd_close(c.wr)
-        c.wr = 0 - 1
+    if c.out != null {
+        frames.close_writer(c.out)
+        c.out = null
     }
     if c.why == "" { c.why = string.copy(reason) }
 }

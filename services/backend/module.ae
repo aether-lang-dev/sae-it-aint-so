@@ -20,7 +20,11 @@
 //                    {"event": "<name>", "data": "<string>"}
 //
 // The kernel reads them on the UI thread a tick at a time (poll never
-// waits for a frame to start), so a backend cannot stall the window.
+// waits for a frame to start), so a backend cannot stall the window by
+// writing; and calls go out through a services/frames Writer, on a thread
+// of their own, so it cannot stall the window by not reading either. A call
+// it has not taken within frames.WRITE_MS (5 s) stops it, killed at once:
+// "backend: it stopped reading its stdin".
 //
 // poll reads each frame with services/frames rather than with
 // ipc.read_frame_timeout, so that when the stream is not frames (a backend
@@ -50,7 +54,7 @@ const FRAME_MS = 2000
 const STOP_GRACE_S = 2
 
 struct Backend {
-    wr: int          // the child's stdin, written with frames, or -1 once closed
+    out: ptr         // a services/frames Writer on the child's stdin, or null once closed
     rd: int          // the child's stdout, read for frames, or -1 once closed
     pid: int         // the child's spawn token, or -1 once reaped
     why: string      // why it is no longer running, "" while it is
@@ -124,7 +128,7 @@ spawn_(program: string, args: ptr, hint: string) -> (ptr, string) {
     wr, rd, pid, err = os.run_stdio(program, args, null)
     if err != "" { return null, err }
     b = heap.new(Backend)
-    b.wr = wr
+    b.out = frames.writer(wr)
     b.rd = rd
     b.pid = pid
     b.why = ""
@@ -160,12 +164,24 @@ call(h: ptr, id: int, name: string, arg: string) -> string {
     json.json_free(o)
     if eerr != "" { return "backend: ${eerr}" }
     if string.length(text) > MAX_FRAME { return "backend: the request is larger than ${MAX_FRAME} bytes" }
-    werr = ipc.write_frame(b.wr, text)
+    werr = frames.put(b.out, text)
     if werr != "" {
-        lost_(b, "backend: the channel failed: ${werr}")
+        written_lost_(b)
         return b.why
     }
     return ""
+}
+
+// The writer has failed: the backend stopped reading its stdin (killed at
+// once: it is not reading, so closing its stdin would not end it), or the
+// write failed (it closed its end).
+written_lost_(b: *Backend) {
+    why = frames.pump(b.out)
+    if frames.stalled(b.out) == 1 {
+        lost_(b, "backend: it stopped reading its stdin: ${why}; it was killed", 1)
+    } else {
+        lost_(b, "backend: the channel failed: ${why}", 0)
+    }
 }
 
 // The next frame the backend has sent, if one has begun: (frame, "") with
@@ -174,23 +190,40 @@ call(h: ptr, id: int, name: string, arg: string) -> string {
 poll(h: ptr) -> (string, string) {
     if alive(h) == 0 { return "", why(h) }
     b = h as *Backend
+    // The calls written meanwhile, and the deadline on them held. A write
+    // that failed waits for the read side: a backend that exited is said to
+    // have, from its end of stream, not to have stopped reading.
+    wfail = 0
+    if frames.pump(b.out) != "" {
+        if frames.stalled(b.out) == 1 {
+            written_lost_(b)
+            return "", b.why
+        }
+        wfail = 1
+    }
     ready, werr = ipc.wait_readable(b.rd, 0)
     if werr != "" {
-        lost_(b, "backend: the channel failed: ${werr}")
+        lost_(b, "backend: the channel failed: ${werr}", 0)
         return "", b.why
     }
-    if ready == 0 { return "", "" }
+    if ready == 0 {
+        if wfail == 1 {
+            written_lost_(b)
+            return "", b.why
+        }
+        return "", ""
+    }
     data, st, rerr = frames.read(b.rd, MAX_FRAME, FRAME_MS, " (its stdout is the channel: nothing but frames may be written there)")
     if st == frames.EOF {
-        lost_(b, "")   // it closed its end: it has exited or is exiting
+        lost_(b, "", 0)   // it closed its end: it has exited or is exiting
         return "", b.why
     }
     if st == frames.BROKE {
-        lost_(b, "backend: ${rerr}")
+        lost_(b, "backend: ${rerr}", 0)
         return "", b.why
     }
     if st == frames.FAILED {
-        lost_(b, "backend: the channel failed: ${rerr}")
+        lost_(b, "backend: the channel failed: ${rerr}", 0)
         return "", b.why
     }
     b.frames = b.frames + 1
@@ -207,22 +240,28 @@ excerpt(s: string) -> string {
 stop(h: ptr) {
     if h == null { return }
     b = h as *Backend
-    lost_(b, "backend: stopped")
+    lost_(b, "backend: stopped", 0)
 }
 
 // Close the channel and reap the child, killing it if it has not exited
-// within STOP_GRACE_S. The first reason is kept; "" means the backend closed
-// its end itself, and the reason is how it exited.
-lost_(b: *Backend, reason: string) {
-    if b.wr >= 0 {
-        _c = fd_close(b.wr)
-        b.wr = 0 - 1
+// within STOP_GRACE_S, or at once with `kill_now` 1 (it stopped reading: a
+// grace would only hold the window up). The first reason is kept; "" means
+// the backend closed its end itself, and the reason is how it exited.
+lost_(b: *Backend, reason: string, kill_now: int) {
+    if b.out != null {
+        frames.close_writer(b.out)
+        b.out = null
     }
     if b.rd >= 0 {
         _d = fd_close(b.rd)
         b.rd = 0 - 1
     }
     how = ""
+    if b.pid >= 0 && kill_now == 1 {
+        _k0 = os.kill(b.pid, 9)
+        _w0 = os.wait_pid(b.pid)
+        b.pid = 0 - 1
+    }
     if b.pid >= 0 {
         st, timed_out, _we = os.wait_pid_timeout(b.pid, STOP_GRACE_S)
         how = "it exited with status ${st}"

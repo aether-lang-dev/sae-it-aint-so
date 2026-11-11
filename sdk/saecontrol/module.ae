@@ -19,6 +19,12 @@
 // The frames are services/channel's: {"id", "command"} out, the bus's answer
 // shape with the id back, and {"event": "serving"} unasked. Each SaeControl
 // is an instance with its own sae; nothing here is shared.
+//
+// A request's write waits while sae's stdin is full; sae reads it every tick
+// whatever its page is doing, and closes it when it gives the channel up, so
+// the write fails rather than waits for good. Read the answers: sae closes
+// the channel if one it sends is not taken within 5 s (docs/app-backend.md,
+// "The write bound").
 
 import std.os
 import std.ipc

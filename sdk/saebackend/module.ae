@@ -28,6 +28,12 @@
 //
 // The frames are services/backend's (one JSON object each). Each SaeBackend
 // is an instance with its own channel; nothing here is shared.
+//
+// Writes (answer, fail, emit) wait while the pipe is full. sae reads it every
+// tick whatever its page is doing, and when it gives the backend up it closes
+// its end, so a write fails rather than waits for good. The other way sae
+// holds the bound itself: a backend that stops reading its stdin for 5 s is
+// killed (docs/app-backend.md, "The write bound").
 
 import std.ipc
 import std.json

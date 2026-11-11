@@ -1,0 +1,108 @@
+// spec_app_backend_deaf.ae — a backend that stops reading its stdin
+// (docs/app-backend.md): sae writes its calls on a thread of its own
+// (services/frames' Writer), so the window does not wait on a pipe the
+// backend never empties; a call not taken within 5 s stops the backend,
+// killed at once, and the page is told why. Before 2026-11-11 the write was
+// on the UI thread, and the window stopped answering for good.
+//   (cd tests/apps/backend_deaf && AETHER_LIB_DIR=../../../sdk ae build backend/main.ae -o backend/main)
+//   SAE_TEST_APP=tests/apps/backend_deaf tests/run_spec.sh spec_app_backend_deaf
+import std.spec
+import std.string
+import std.list
+import std.os
+import std.http.client
+import std.time (now_ms)
+import saedriver as b
+import uidriver
+
+// How long the window took to answer the driver (GET /windows, served on
+// sae's UI thread), or -1 when it did not within 2 s.
+answered_in_() -> long {
+    t0 = now_ms()
+    req = client.request("GET", uidriver.url_of("/windows"))
+    _t = client.set_timeout(req, 2s)
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if cerr != "" { return 0 - 1 }
+    client.response_free(resp)
+    return now_ms() - t0
+}
+
+// The window answers the driver within a second, `n` times, `gap_ms` apart:
+// 1, or 0 (the case failed) at the first time it does not. A spec stops its
+// case on 0: every other driver call would wait on the stuck window too.
+responsive_(n: int, gap_ms: int, msg: string) -> int {
+    i = 0
+    while i < n {
+        ms = answered_in_()
+        spec.assert_true(ms >= 0 && ms < 1000, "${msg}: the window answered the driver in ${ms} ms (-1: not within 2 s)")
+        if ms < 0 || ms >= 1000 { return 0 }
+        sleep(gap_ms)
+        i = i + 1
+    }
+    return 1
+}
+
+// 1 while the deaf backend's process is running.
+backend_running_() -> int {
+    argv = list.new()
+    defer list.free(argv)
+    if os.platform() == "windows" {
+        list.add(argv, "-NoProfile")
+        list.add(argv, "-Command")
+        list.add(argv, "if (Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*backend_deaf*backend*main*' -and $_.Name -notlike 'powershell*' }) { exit 0 } else { exit 1 }")
+        _o, st, _e = os.run_capture("powershell", argv, null)
+        if st == 0 { return 1 }
+        return 0
+    }
+    list.add(argv, "-c")
+    list.add(argv, "pgrep -f '[b]ackend_deaf/backend/main' >/dev/null")
+    _o2, st2, _e2 = os.run_capture("sh", argv, null)
+    if st2 == 0 { return 1 }
+    return 0
+}
+
+// 1 once one of the page's texts holds `text`, within 5 s.
+page_says_(text: string) -> int {
+    i = 0
+    while i < 100 {
+        if string.contains(b.page_texts(), text) == 1 { return 1 }
+        sleep(50)
+        i = i + 1
+    }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "a backend that stops reading its stdin") {
+        spec.it("answers its first call, and is running") callback {
+            b.click("Deaf")
+            b.assert_text("result: deaf from now", "answered")
+            spec.assert_true(b.wait_for_console("the deaf backend: no longer reading its stdin"), "it says so, on stderr")
+            spec.assert_eq(backend_running_(), 1, "its process runs")
+        }
+        spec.it("calls past what the pipe holds: the window keeps answering while they wait") callback {
+            b.click("Flood")
+            sleep(1000)
+            if responsive_(6, 400, "while the calls wait") == 0 { return }
+            b.assert_text("result: flooded", "32 calls of 64 KB made")
+        }
+        spec.it("after 5 s the backend is stopped, killed, and the page told why") callback {
+            if answered_in_() < 0 {
+                spec.assert_true(false, "the window does not answer the driver")
+                return
+            }
+            why = "backend: it stopped reading its stdin: a frame waited 5 s and was not taken"
+            spec.assert_true(b.wait_for_console_secs(why, 15), "said once, with the reason")
+            spec.assert_eq(b.console_count(why), 1, "once")
+            spec.assert_true(page_says_("gone: ${why}"), "the page's on_gone told")
+            spec.assert_true(page_says_("failed: 32: ${why}"), "every call waiting failed with it")
+            spec.assert_true(page_says_("; it was killed"), "killed at once, saying so")
+            spec.assert_eq(backend_running_(), 0, "its process killed")
+            _r = responsive_(2, 100, "after")
+        }
+    }
+    return spec.run_summary(fw)
+}

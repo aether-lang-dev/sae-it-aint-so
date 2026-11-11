@@ -43,7 +43,7 @@ expect_imports services/backend/module.ae \
 expect_imports services/channel/module.ae \
     "import std.ipc|import std.io (fd_close)|import std.list|import std.string|import std.json|import services.frames"
 expect_imports services/frames/module.ae \
-    "import std.ipc|import std.string|import std.time (now_ms)"
+    "import std.ipc|import std.io (fd_close)|import std.list|import std.string|import std.sync|import std.time (now_ms)|import std.worker"
 expect_imports services/agent_auth/module.ae \
     "import std.nanoid|import std.cryptography (hmac_sha256_hex)|import std.string (bytes, string_length, string_char_at)"
 expect_imports services/secure_channel/module.ae \
