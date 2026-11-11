@@ -29,7 +29,6 @@ import lower
 import vg
 import vg.live
 import std.json
-import std.actors
 import services.files
 import services.documents
 import services.clipboard
@@ -147,6 +146,10 @@ struct Browser {
     printing: ptr    // services/print
     net: ptr         // services/net: capabilities.http
     stdlib: ptr      // services/stdlib: the sae: library
+    // The kernel's job tables: work a page asked for that finishes later.
+    sqlite_jobs: *SqliteJobs   // wave1/sqlite: the app's databases and the calls on them
+    native_jobs: *NativeJobs   // wave1/natives: the app's native modules and the calls on them
+    http_jobs: *HttpJobs       // http.get/post: the fetchers and the requests in flight
 }
 
 // A call to the backend not yet answered: which page made it (an answer for
@@ -218,6 +221,8 @@ struct Page {
     dgrids: ptr      // std.list of aether-ui datagrids this page made (ui.datagrid)
     menus: ptr       // std.list of *PageMenu: ui.context_menu's targets and items
     held: ptr        // std.list of *HeldRef: the callbacks widgets hold, to let go with their widget
+    sqlite_fns: ptr  // wave1/sqlite: its *SqlitePageFns, made on first use, or null
+    natives_set: string  // wave1/natives: the modules it gets, as ",engine,", worked out at api_register_
 }
 
 // A JS function a widget holds for its callback (a click, a change, a
@@ -5498,12 +5503,12 @@ esc_cors_refused_(j: *HttpJob, resp: ptr, cross: int, url: string) -> int {
 
 // How many requests page p has in flight: its callbacks still waiting.
 esc_http_inflight_(p: *Page) -> int {
-    if http_waits_ == null { return 0 }
+    waits = (p.browser as *Browser).http_jobs.waits
     c = 0
-    n = list.size(http_waits_)
+    n = list.size(waits)
     i = 0
     while i < n {
-        wv, _ = list.get(http_waits_, i)
+        wv, _ = list.get(waits, i)
         w = wv as *HttpWait
         if w.page == p as ptr && w.seq == p.seq { c = c + 1 }
         i = i + 1
@@ -5713,6 +5718,7 @@ struct SqliteDb {
     tx_page: ptr     // the page that owns it, and its load
     tx_seq: int
     waiting: ptr     // std.list of *SqliteJob held until the transaction ends
+    inbox: ptr       // the SqliteInbox its worker hands finished jobs to
 }
 
 struct SqliteJob {
@@ -5739,11 +5745,9 @@ struct SqliteWait {
 }
 
 // The two small JS functions the sqlite API hands a page, compiled once per
-// page and held: one makes an Error (a rejection carries a real Error), one
-// runs a transaction around the page's callback.
+// page and held (the page's sqlite_fns): one makes an Error (a rejection
+// carries a real Error), one runs a transaction around the page's callback.
 struct SqlitePageFns {
-    page: ptr
-    seq: int
     err_fn: int
     tx_fn: int
 }
@@ -5758,28 +5762,28 @@ actor SqliteWorker {
     receive {
         SqliteRun(job) -> {
             sqlite_do_(job)
-            ib = actors.whereis("sae-sqlite-inbox")
+            ib = ((job as *SqliteJob).db as *SqliteDb).inbox
             ib ! SqliteDone { job: job }
         }
     }
 }
 
-// Finished jobs, until the UI thread takes them. sqlite_done_ is touched only
-// in these handlers, so the actor serializes every access to it.
-var sqlite_done_: ptr = null
-
+// Finished jobs, until the UI thread takes them. done is the actor's own
+// and touched only in these handlers, so the actor serializes every access
+// to it.
 actor SqliteInbox {
+    state done: ptr = null
     receive {
         SqliteDone(job) -> {
-            if sqlite_done_ == null { sqlite_done_ = list.new() }
-            list.add(sqlite_done_, job)
+            if done == null { done = list.new() }
+            list.add(done, job)
         }
         SqliteTake() -> {
             long r = 0
-            if sqlite_done_ != null {
-                if list.size(sqlite_done_) > 0 {
-                    j, _ = list.get(sqlite_done_, 0)
-                    list.list_remove(sqlite_done_, 0)
+            if done != null {
+                if list.size(done) > 0 {
+                    j, _ = list.get(done, 0)
+                    list.list_remove(done, 0)
                     r = mem.ptr_to_long(j)
                 }
             }
@@ -5788,12 +5792,27 @@ actor SqliteInbox {
     }
 }
 
-var sqlite_dbs_: ptr = null      // std.list of *SqliteDb, from app.json, at start
-var sqlite_waits_: ptr = null    // std.list of *SqliteWait
-var sqlite_fns_: ptr = null      // std.list of *SqlitePageFns
-var sqlite_ids_ = 0
-var sqlite_tx_ids_ = 0
-var sqlite_timer_ = 0
+// The browser's sqlite work: the databases app.json declares (opened at
+// start), the calls pages are waiting on, and the timer that polls for them.
+struct SqliteJobs {
+    dbs: ptr       // std.list of *SqliteDb, from app.json, at start
+    waits: ptr     // std.list of *SqliteWait
+    ids: int       // the last call id handed out
+    tx_ids: int    // the last transaction id handed out
+    timer: int     // the UI timer polling the inbox, or 0
+    inbox: ptr     // the SqliteInbox, spawned at start when a database is declared
+}
+
+sqlite_jobs_new_() -> *SqliteJobs {
+    sj = heap.new(SqliteJobs)
+    sj.dbs = list.new()
+    sj.waits = list.new()
+    sj.ids = 0
+    sj.tx_ids = 0
+    sj.timer = 0
+    sj.inbox = null
+    return sj
+}
 
 // On the worker: run the job's statement.
 sqlite_do_(jp: ptr) {
@@ -5808,22 +5827,12 @@ sqlite_do_(jp: ptr) {
     j.err = own_(err)
 }
 
-sqlite_inbox_() -> ptr {
-    ib = actors.whereis("sae-sqlite-inbox")
-    if ib == null {
-        ib = spawn(SqliteInbox())
-        actors.register("sae-sqlite-inbox", ib)
-    }
-    return ib
-}
-
 // The declared database called `name`, or null.
-sqlite_db_(name: string) -> ptr {
-    if sqlite_dbs_ == null { return null }
-    n = list.size(sqlite_dbs_)
+sqlite_db_(sj: *SqliteJobs, name: string) -> ptr {
+    n = list.size(sj.dbs)
     i = 0
     while i < n {
-        dv, _ = list.get(sqlite_dbs_, i)
+        dv, _ = list.get(sj.dbs, i)
         if (dv as *SqliteDb).name == name { return dv }
         i = i + 1
     }
@@ -5832,8 +5841,8 @@ sqlite_db_(name: string) -> ptr {
 
 // 1 if app.json declares a database called `name` (available_ asks, for
 // "seeks database <name>").
-sqlite_granted_(name: string) -> int {
-    if sqlite_db_(name) != null { return 1 }
+sqlite_granted_(b: *Browser, name: string) -> int {
+    if sqlite_db_(b.sqlite_jobs, name) != null { return 1 }
     return 0
 }
 
@@ -5861,8 +5870,8 @@ sqlite_name_ok_(s: string) -> int {
 // Returns "" or why the app cannot start (a database that cannot be opened,
 // a migration that fails: nothing of it is kept, and the app is refused with
 // the reason rather than run against a schema it did not ask for).
-sqlite_start_(manifest: ptr) -> string {
-    sqlite_dbs_ = list.new()
+sqlite_start_(b: *Browser, manifest: ptr) -> string {
+    sj = b.sqlite_jobs
     if manifest == null { return "" }
     caps = json.json_object_get_raw(manifest, "capabilities")
     if caps == null { return "" }
@@ -5921,10 +5930,17 @@ sqlite_start_(manifest: ptr) -> string {
         d.tx_page = null
         d.tx_seq = 0
         d.waiting = list.new()
-        list.add(sqlite_dbs_, d as ptr)
+        d.inbox = null
+        list.add(sj.dbs, d as ptr)
         say_("sae: sqlite ${name}: ${path}")
     }
-    _ib = sqlite_inbox_()
+    sj.inbox = spawn(SqliteInbox())
+    k2 = 0
+    while k2 < list.size(sj.dbs) {
+        dv2, _ = list.get(sj.dbs, k2)
+        (dv2 as *SqliteDb).inbox = sj.inbox
+        k2 = k2 + 1
+    }
     return ""
 }
 
@@ -5954,39 +5970,24 @@ sqlite_page_dbs_(p: *Page) -> string {
         if string.string_starts_with(e, "database ") == 0 { continue }
         name = string.string_substring(e, 9, string.length(e))
         if string.contains(p.absent, ",${e},") == 1 { continue }
-        if sqlite_db_(name) == null { continue }
+        if sqlite_db_((p.browser as *Browser).sqlite_jobs, name) == null { continue }
         if string.contains(out, ",${name},") == 0 { out = string.concat(out, "${name},") }
     }
     return out
 }
 
 // 1 if the page `pg` (as loaded `seq`) is the one on screen.
-sqlite_page_live_(pg: ptr, seq: int) -> int {
-    b = browser_
-    if b == null { return 0 }
-    cur = (b as *Browser).page
+sqlite_page_live_(b: *Browser, pg: ptr, seq: int) -> int {
+    cur = b.page
     if cur == null || cur != pg { return 0 }
     if (cur as *Page).seq != seq { return 0 }
     return 1
 }
 
-// The page's helper functions (SqlitePageFns), made on first use.
+// The page's helper functions (SqlitePageFns), made on first use; they go
+// with the page (their handles with its runtime).
 sqlite_fns_for_(ctx: ptr, p: *Page) -> *SqlitePageFns {
-    if sqlite_fns_ == null { sqlite_fns_ = list.new() }
-    // Entries for pages that are gone go first (their handles went with
-    // the runtime; nothing to release).
-    i = 0
-    while i < list.size(sqlite_fns_) {
-        fv, _ = list.get(sqlite_fns_, i)
-        f = fv as *SqlitePageFns
-        if f.page == p as ptr && f.seq == p.seq { return f }
-        if sqlite_page_live_(f.page, f.seq) == 0 {
-            list.list_remove(sqlite_fns_, i)
-            heap.free(f)
-        } else {
-            i = i + 1
-        }
-    }
+    if p.sqlite_fns != null { return p.sqlite_fns as *SqlitePageFns }
     es = "(function (m) { return new Error(m); })"
     ts = "(function (db, fn, id) { return db.__begin(id).then(function () { var tx = { __db: db.__db, __tx: id, all: db.all, get: db.get, run: db.run }; var r; try { r = Promise.resolve(fn(tx)); } catch (e) { r = Promise.reject(e); } return r.then(function (v) { return db.__end(id, true).then(function () { return v; }); }, function (e) { return db.__end(id, false).then(function () { throw e; }, function () { throw e; }); }); }); })"
     ef, e1 = quickjs.eval(ctx, es, "sae:sqlite")
@@ -5994,11 +5995,9 @@ sqlite_fns_for_(ctx: ptr, p: *Page) -> *SqlitePageFns {
     tf, e2 = quickjs.eval(ctx, ts, "sae:sqlite")
     if e2 != "" { return null }
     f = heap.new(SqlitePageFns)
-    f.page = p as ptr
-    f.seq = p.seq
     f.err_fn = ef
     f.tx_fn = tf
-    list.add(sqlite_fns_, f as ptr)
+    p.sqlite_fns = f as ptr
     return f
 }
 
@@ -6006,10 +6005,10 @@ sqlite_fns_for_(ctx: ptr, p: *Page) -> *SqlitePageFns {
 // transaction is open. Jobs reach the worker in the order they are sent,
 // and the worker runs them in that order, so the transaction's bracket is
 // exactly the jobs sent between its BEGIN and its END.
-sqlite_enqueue_(d: *SqliteDb, j: *SqliteJob) {
+sqlite_enqueue_(b: *Browser, d: *SqliteDb, j: *SqliteJob) {
     // A transaction whose page has gone is rolled back before anything
     // else runs on the database.
-    if d.tx_owner != 0 && sqlite_page_live_(d.tx_page, d.tx_seq) == 0 {
+    if d.tx_owner != 0 && sqlite_page_live_(b, d.tx_page, d.tx_seq) == 0 {
         sqlite_rollback_stale_(d)
     }
     if d.tx_owner != 0 && j.tx != d.tx_owner && (j.page != d.tx_page || j.seq != d.tx_seq) {
@@ -6017,7 +6016,7 @@ sqlite_enqueue_(d: *SqliteDb, j: *SqliteJob) {
         return
     }
     sqlite_send_(d, j)
-    if j.op == SQLITE_OP_END { sqlite_flush_(d) }
+    if j.op == SQLITE_OP_END { sqlite_flush_(b, d) }
 }
 
 sqlite_send_(d: *SqliteDb, j: *SqliteJob) {
@@ -6053,7 +6052,7 @@ sqlite_rollback_stale_(d: *SqliteDb) {
 // After a transaction ends: send what waited, in order, until the next
 // BEGIN among them opens another transaction (then its own jobs go, the
 // rest keep waiting). Jobs for pages that have gone are dropped.
-sqlite_flush_(d: *SqliteDb) {
+sqlite_flush_(b: *Browser, d: *SqliteDb) {
     held = d.waiting
     d.waiting = list.new()
     n = list.size(held)
@@ -6062,10 +6061,10 @@ sqlite_flush_(d: *SqliteDb) {
         jv, _ = list.get(held, i)
         i = i + 1
         j = jv as *SqliteJob
-        if sqlite_page_live_(j.page, j.seq) == 0 {
+        if sqlite_page_live_(b, j.page, j.seq) == 0 {
             // Its promise can never settle; the wait goes when the inbox is
             // next polled (sqlite_deliver_ frees a wait whose page is gone).
-            ib = sqlite_inbox_()
+            ib = d.inbox
             j.err = "the page is gone"
             ib ! SqliteDone { job: j as ptr }
             continue
@@ -6080,42 +6079,42 @@ sqlite_flush_(d: *SqliteDb) {
 }
 
 // On the UI thread: take every finished job and settle its page's promise.
-sqlite_poll_() {
-    ib = sqlite_inbox_()
+sqlite_poll_(b: *Browser) {
+    sj = b.sqlite_jobs
+    ib = sj.inbox
     while true {
         jl = ib ? SqliteTake {}
         if jl == 0 { break }
-        sqlite_deliver_(mem.long_to_ptr(jl) as *SqliteJob)
+        sqlite_deliver_(b, mem.long_to_ptr(jl) as *SqliteJob)
     }
     // A transaction whose page has gone, with nothing else asking: roll it
     // back now rather than at the next call.
-    if sqlite_dbs_ != null {
-        k = 0
-        while k < list.size(sqlite_dbs_) {
-            dv, _ = list.get(sqlite_dbs_, k)
-            d = dv as *SqliteDb
-            if d.tx_owner != 0 && sqlite_page_live_(d.tx_page, d.tx_seq) == 0 {
-                sqlite_rollback_stale_(d)
-                sqlite_flush_(d)
-            }
-            k = k + 1
+    k = 0
+    while k < list.size(sj.dbs) {
+        dv, _ = list.get(sj.dbs, k)
+        d = dv as *SqliteDb
+        if d.tx_owner != 0 && sqlite_page_live_(b, d.tx_page, d.tx_seq) == 0 {
+            sqlite_rollback_stale_(d)
+            sqlite_flush_(b, d)
         }
+        k = k + 1
     }
-    if list.size(sqlite_waits_) == 0 {
-        ui.timer_cancel(sqlite_timer_)
-        sqlite_timer_ = 0
+    if list.size(sj.waits) == 0 {
+        ui.timer_cancel(sj.timer)
+        sj.timer = 0
     }
 }
 
-sqlite_deliver_(j: *SqliteJob) {
-    n = list.size(sqlite_waits_)
+sqlite_deliver_(b: *Browser, j: *SqliteJob) {
+    sj = b.sqlite_jobs
+    n = list.size(sj.waits)
     i = 0
     while i < n {
-        wv, _ = list.get(sqlite_waits_, i)
+        wv, _ = list.get(sj.waits, i)
         w = wv as *SqliteWait
         if w.id == j.id && j.id != 0 {
-            list.list_remove(sqlite_waits_, i)
-            if sqlite_page_live_(w.page, w.seq) == 1 {
+            list.list_remove(sj.waits, i)
+            if sqlite_page_live_(b, w.page, w.seq) == 1 {
                 p = w.page as *Page
                 ctx = p.ctx
                 args = quickjs.new_array(ctx)
@@ -6179,7 +6178,9 @@ sqlite_this_(ctx: ptr, this_val: int) -> (string, int) {
 // Queue one job for the page and return the promise it settles.
 sqlite_submit_(ctx: ptr, kind: int, op: int, sql: string, params: string, name: string, tx: int) -> int {
     p = page_of_(ctx)
-    dv = sqlite_db_(name)
+    b = p.browser as *Browser
+    sj = b.sqlite_jobs
+    dv = sqlite_db_(sj, name)
     if dv == null { return sae_throw_type_error(ctx, "sqlite: no database called \"${name}\" (call it as sqlite.<name>.all/get/run)") }
     d = dv as *SqliteDb
     if string.contains(sqlite_page_dbs_(p), ",${name},") == 0 {
@@ -6188,15 +6189,14 @@ sqlite_submit_(ctx: ptr, kind: int, op: int, sql: string, params: string, name: 
     if op == SQLITE_OP_END && tx != d.tx_owner {
         return sae_throw_type_error(ctx, "sqlite.${name}: no such open transaction")
     }
-    if sqlite_waits_ == null { sqlite_waits_ = list.new() }
     pr = quickjs.new_promise(ctx)
     resolve, _e1 = quickjs.get(ctx, pr, "resolve")
     reject, _e2 = quickjs.get(ctx, pr, "reject")
     promise, _e3 = quickjs.get(ctx, pr, "promise")
     quickjs.release(ctx, pr)
-    sqlite_ids_ = sqlite_ids_ + 1
+    sj.ids = sj.ids + 1
     j = heap.new(SqliteJob)
-    j.id = sqlite_ids_
+    j.id = sj.ids
     j.db = dv
     j.kind = kind
     j.op = op
@@ -6213,9 +6213,9 @@ sqlite_submit_(ctx: ptr, kind: int, op: int, sql: string, params: string, name: 
     w.seq = p.seq
     w.resolve = resolve
     w.reject = reject
-    list.add(sqlite_waits_, w as ptr)
-    sqlite_enqueue_(d, j)
-    if sqlite_timer_ == 0 { sqlite_timer_ = ui.timer(10, || { sqlite_poll_() }) }
+    list.add(sj.waits, w as ptr)
+    sqlite_enqueue_(b, d, j)
+    if sj.timer == 0 { sj.timer = ui.timer(10, || { sqlite_poll_(b) }) }
     return promise
 }
 
@@ -6270,10 +6270,11 @@ sae_sqlite_transaction(ctx: ptr, this_val: int, argv: int) -> int {
     if string.contains(sqlite_page_dbs_(p), ",${name},") == 0 { return sae_throw_type_error(ctx, "sqlite.${name}: this page did not seek it") }
     f = sqlite_fns_for_(ctx, p)
     if f == null { return sae_throw_type_error(ctx, "sqlite: could not set up the transaction helper") }
-    sqlite_tx_ids_ = sqlite_tx_ids_ + 1
+    sj = (p.browser as *Browser).sqlite_jobs
+    sj.tx_ids = sj.tx_ids + 1
     args = quickjs.new_array(ctx)
     fh = quickjs.arg(ctx, argv, 0)
-    idh = quickjs.new_int(ctx, sqlite_tx_ids_)
+    idh = quickjs.new_int(ctx, sj.tx_ids)
     _s0 = quickjs.set_index(ctx, args, 0, this_val)
     _s1 = quickjs.set_index(ctx, args, 1, fh)
     _s2 = quickjs.set_index(ctx, args, 2, idh)
@@ -6293,7 +6294,7 @@ sae_sqlite_begin(ctx: ptr, this_val: int, argv: int) -> int {
     name, _tx = sqlite_this_(ctx, this_val)
     if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.transaction(fn)") }
     id = arg_int_(ctx, argv, argc, 0, 0)
-    if id <= 0 || id > sqlite_tx_ids_ { return sae_throw_type_error(ctx, "sqlite.${name}: no such transaction") }
+    if id <= 0 || id > browser_of_(ctx).sqlite_jobs.tx_ids { return sae_throw_type_error(ctx, "sqlite.${name}: no such transaction") }
     return sqlite_submit_(ctx, sqlite.KIND_EXEC, SQLITE_OP_BEGIN, "BEGIN", "", name, id)
 }
 
@@ -6364,15 +6365,22 @@ struct NativeWait {
     reject: int
 }
 
-var natives_mods_: ptr = null    // std.list of *NativeModule: declared in app.json and compiled in
-var natives_waits_: ptr = null   // std.list of *NativeWait
-var natives_ids_ = 0
-// The page that natives_page_mods_ was last worked out for (api_register_,
-// right after the page was lowered, when the lowerer's answers are its
-// own: modules it imports are lowered later), and what it came to.
-var natives_page_: ptr = null
-var natives_page_seq_ = 0
-var natives_page_set_ = ","
+// The browser's native modules: those app.json declares and this host has
+// compiled in (at start), and the calls pages are waiting on. What each page
+// gets is its own (Page.natives_set).
+struct NativeJobs {
+    mods: ptr      // std.list of *NativeModule: declared in app.json and compiled in
+    waits: ptr     // std.list of *NativeWait
+    ids: int       // the last call id handed out
+}
+
+native_jobs_new_() -> *NativeJobs {
+    nj = heap.new(NativeJobs)
+    nj.mods = list.new()
+    nj.waits = list.new()
+    nj.ids = 0
+    return nj
+}
 
 // On a pool thread: the module's function.
 natives_do_(jp: ptr) {
@@ -6383,7 +6391,7 @@ natives_do_(jp: ptr) {
 }
 
 // The module's next call, off the UI thread, if none runs.
-natives_next_(m: *NativeModule) {
+natives_next_(b: *Browser, m: *NativeModule) {
     if m.busy == 1 || list.size(m.queue) == 0 { return }
     jv, _ = list.get(m.queue, 0)
     list.list_remove(m.queue, 0)
@@ -6392,33 +6400,32 @@ natives_next_(m: *NativeModule) {
     ok = ui.background(|| {
         natives_do_(jp)
         return jp
-    }, |r: ptr| { natives_finished_(r) })
+    }, |r: ptr| { natives_finished_(b, r) })
     if ok == 0 {
         j = jp as *NativeJob
         j.err = own_("no thread to run it on")
-        natives_finished_(jp)
+        natives_finished_(b, jp)
     }
 }
 
 // On the UI thread: a call done; its promise settled, the module's next begun.
-natives_finished_(jp: ptr) {
+natives_finished_(b: *Browser, jp: ptr) {
     j = jp as *NativeJob
-    mv = natives_mod_(j.unit)
-    natives_deliver_(j)
+    mv = natives_mod_(b.native_jobs, j.unit)
+    natives_deliver_(b, j)
     if mv != null {
         m = mv as *NativeModule
         m.busy = 0
-        natives_next_(m)
+        natives_next_(b, m)
     }
 }
 
 // The declared, compiled-in module called `name`, or null.
-natives_mod_(name: string) -> ptr {
-    if natives_mods_ == null { return null }
-    n = list.size(natives_mods_)
+natives_mod_(nj: *NativeJobs, name: string) -> ptr {
+    n = list.size(nj.mods)
     i = 0
     while i < n {
-        mv, _ = list.get(natives_mods_, i)
+        mv, _ = list.get(nj.mods, i)
         if (mv as *NativeModule).name == name { return mv }
         i = i + 1
     }
@@ -6426,8 +6433,8 @@ natives_mod_(name: string) -> ptr {
 }
 
 // 1 if this app has the native module `name` (available_ asks, for "seeks native <name>").
-natives_granted_(name: string) -> int {
-    if natives_mod_(name) != null { return 1 }
+natives_granted_(b: *Browser, name: string) -> int {
+    if natives_mod_(b.native_jobs, name) != null { return 1 }
     return 0
 }
 
@@ -6436,8 +6443,8 @@ natives_granted_(name: string) -> int {
 // (natives.functions()); one not compiled in is said, and the app runs
 // without it (a page that seeks it as required is refused, one that can do
 // without it does). Returns "" or why app.json's "natives" is malformed.
-natives_start_(manifest: ptr) -> string {
-    natives_mods_ = list.new()
+natives_start_(b: *Browser, manifest: ptr) -> string {
+    nj = b.native_jobs
     if manifest == null { return "" }
     decl = json.json_object_get_raw(manifest, "natives")
     if decl == null { return "" }
@@ -6473,7 +6480,7 @@ natives_start_(manifest: ptr) -> string {
         m.fns = own_(fns)
         m.queue = list.new()
         m.busy = 0
-        list.add(natives_mods_, m as ptr)
+        list.add(nj.mods, m as ptr)
         say_("sae: native ${name}: ${string.substring(fns, 1, string.length(fns) - 1)}")
     }
     return ""
@@ -6493,7 +6500,7 @@ natives_page_mods_(p: *Page) -> string {
         if string.string_starts_with(e, "native ") == 0 { continue }
         name = string.string_substring(e, 7, string.length(e))
         if string.contains(p.absent, ",${e},") == 1 { continue }
-        if natives_mod_(name) == null { continue }
+        if natives_mod_((p.browser as *Browser).native_jobs, name) == null { continue }
         if string.contains(out, ",${name},") == 0 { out = string.concat(out, "${name},") }
     }
     return out
@@ -6502,7 +6509,7 @@ natives_page_mods_(p: *Page) -> string {
 // The page's natives object: each module it gets, with its declared
 // functions, each calling the raw gate. Names are identifiers (checked at
 // start), so they go into the JavaScript as they are.
-natives_js_(mods: string) -> string {
+natives_js_(nj: *NativeJobs, mods: string) -> string {
     body = ""
     parts = string.split(mods, ",")
     n = string.string_array_size(parts)
@@ -6511,7 +6518,7 @@ natives_js_(mods: string) -> string {
         name = string.string_array_get(parts, i)
         i = i + 1
         if name == "" { continue }
-        mv = natives_mod_(name)
+        mv = natives_mod_(nj, name)
         if mv == null { continue }
         fns = string.split((mv as *NativeModule).fns, ",")
         nf = string.string_array_size(fns)
@@ -6529,15 +6536,16 @@ natives_js_(mods: string) -> string {
 }
 
 // The page's promise for a call settled, if the page is still there; the job freed.
-natives_deliver_(j: *NativeJob) {
-    n = list.size(natives_waits_)
+natives_deliver_(b: *Browser, j: *NativeJob) {
+    nj = b.native_jobs
+    n = list.size(nj.waits)
     i = 0
     while i < n {
-        wv, _ = list.get(natives_waits_, i)
+        wv, _ = list.get(nj.waits, i)
         w = wv as *NativeWait
         if w.id == j.id {
-            list.list_remove(natives_waits_, i)
-            if sqlite_page_live_(w.page, w.seq) == 1 {
+            list.list_remove(nj.waits, i)
+            if sqlite_page_live_(b, w.page, w.seq) == 1 {
                 p = w.page as *Page
                 ctx = p.ctx
                 args = quickjs.new_array(ctx)
@@ -6594,21 +6602,21 @@ sae_natives_call(ctx: ptr, this_val: int, argv: int) -> int {
 // Queue one call for the page and return the promise it settles.
 natives_submit_(ctx: ptr, unit: string, fname: string, arg: string) -> int {
     p = page_of_(ctx)
-    mv = natives_mod_(unit)
-    sought = ","
-    if natives_page_ == p as ptr && natives_page_seq_ == p.seq { sought = natives_page_set_ }
+    b = p.browser as *Browser
+    nj = b.native_jobs
+    mv = natives_mod_(nj, unit)
+    sought = p.natives_set
     if mv == null || string.contains(sought, ",${unit},") == 0 { return sae_throw_type_error(ctx, "natives.${unit}: this page did not seek it (\"seeks native ${unit}\"), or the app has no such module") }
     m = mv as *NativeModule
     if string.contains(m.fns, ",${fname},") == 0 { return sae_throw_type_error(ctx, "natives.${unit}.${fname}: not one of the functions app.json declares") }
-    if natives_waits_ == null { natives_waits_ = list.new() }
     pr = quickjs.new_promise(ctx)
     resolve, _e1 = quickjs.get(ctx, pr, "resolve")
     reject, _e2 = quickjs.get(ctx, pr, "reject")
     promise, _e3 = quickjs.get(ctx, pr, "promise")
     quickjs.release(ctx, pr)
-    natives_ids_ = natives_ids_ + 1
+    nj.ids = nj.ids + 1
     j = heap.new(NativeJob)
-    j.id = natives_ids_
+    j.id = nj.ids
     j.unit = own_(unit)
     j.fn = own_(fname)
     j.arg = own_(arg)
@@ -6622,9 +6630,9 @@ natives_submit_(ctx: ptr, unit: string, fname: string, arg: string) -> int {
     w.seq = p.seq
     w.resolve = resolve
     w.reject = reject
-    list.add(natives_waits_, w as ptr)
+    list.add(nj.waits, w as ptr)
     list.add(m.queue, j as ptr)
-    natives_next_(m)
+    natives_next_(b, m)
     return promise
 }
 // ===== end wave1/natives =====
@@ -8455,6 +8463,7 @@ struct HttpJob {
     err: string
     refused_hop: int // err is capabilities.http refusing a redirect hop: logged on delivery
     net: ptr         // the browser's services/net, which every hop is held to
+    inbox: ptr       // the HttpInbox its fetcher hands it to when done
 }
 
 // A request a page is waiting on: which page (by load), and its callback.
@@ -8475,28 +8484,28 @@ actor HttpFetcher {
     receive {
         HttpRun(job) -> {
             http_do_(job)
-            ib = actors.whereis("sae-http-inbox")
+            ib = (job as *HttpJob).inbox
             ib ! HttpDone { job: job }
         }
     }
 }
 
-// Finished jobs, until the UI thread takes them. http_done_ is touched only
-// in these handlers, so the actor serializes every access to it.
-var http_done_: ptr = null
-
+// Finished jobs, until the UI thread takes them. done is the actor's own
+// and touched only in these handlers, so the actor serializes every access
+// to it.
 actor HttpInbox {
+    state done: ptr = null
     receive {
         HttpDone(job) -> {
-            if http_done_ == null { http_done_ = list.new() }
-            list.add(http_done_, job)
+            if done == null { done = list.new() }
+            list.add(done, job)
         }
         HttpTake() -> {
             long r = 0
-            if http_done_ != null {
-                if list.size(http_done_) > 0 {
-                    j, _ = list.get(http_done_, 0)
-                    list.list_remove(http_done_, 0)
+            if done != null {
+                if list.size(done) > 0 {
+                    j, _ = list.get(done, 0)
+                    list.list_remove(done, 0)
                     r = mem.ptr_to_long(j)
                 }
             }
@@ -8507,11 +8516,27 @@ actor HttpInbox {
 
 const HTTP_FETCHERS = 4
 
-var http_pool_: ptr = null      // std.list of the fetchers, spawned on first use
-var http_next_ = 0
-var http_waits_: ptr = null     // std.list of *HttpWait
-var http_ids_ = 0
-var http_timer_ = 0
+// The browser's requests: the fetchers and the inbox (spawned on first
+// use), the requests pages are waiting on, and the timer that polls.
+struct HttpJobs {
+    pool: ptr      // std.list of the fetchers, or null before the first request
+    next: int      // the fetcher the next request goes to
+    waits: ptr     // std.list of *HttpWait
+    ids: int       // the last request id handed out
+    timer: int     // the UI timer polling the inbox, or 0
+    inbox: ptr     // the HttpInbox, or null before the first request
+}
+
+http_jobs_new_() -> *HttpJobs {
+    hj = heap.new(HttpJobs)
+    hj.pool = null
+    hj.next = 0
+    hj.waits = list.new()
+    hj.ids = 0
+    hj.timer = 0
+    hj.inbox = null
+    return hj
+}
 
 // A redirect status: the response names where to go next.
 is_redirect_(status: int) -> int {
@@ -8729,10 +8754,11 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     }
     esc_log_mixed_(p, url)   // wave1/escape: mixed content, logged once here
     if esc_http_inflight_(p) >= ESC_HTTP_INFLIGHT_MAX { return esc_http_refuse_(ctx, p, ref) }   // wave1/escape: the in-flight cap
-    if http_waits_ == null { http_waits_ = list.new() }
-    http_ids_ = http_ids_ + 1
+    hb = p.browser as *Browser
+    hj = hb.http_jobs
+    hj.ids = hj.ids + 1
     j = heap.new(HttpJob)
-    j.id = http_ids_
+    j.id = hj.ids
     j.method = method
     j.url = own_(url)
     j.body = body
@@ -8751,16 +8777,17 @@ http_start_(ctx: ptr, method: string, url_arg: string, body: string, ctype: stri
     w.page = p as ptr
     w.seq = p.seq
     w.ref = ref
-    list.add(http_waits_, w as ptr)
+    list.add(hj.waits, w as ptr)
+    j.inbox = http_inbox_(hj)
     if j.err != "" {
         // Refused: no request, but the answer comes the same way, later.
-        ib0 = http_inbox_()
+        ib0 = j.inbox
         ib0 ! HttpDone { job: j as ptr }
     } else {
-        f = http_fetcher_()
+        f = http_fetcher_(hj)
         f ! HttpRun { job: j as ptr }
     }
-    if http_timer_ == 0 { http_timer_ = ui.timer(20, || { http_poll_() }) }
+    if hj.timer == 0 { hj.timer = ui.timer(20, || { http_poll_(hb) }) }
     // The request object: { id, cancel() }.
     if http_helpers_(ctx, p) == 0 { return rethrow_(ctx) }
     args = quickjs.new_array(ctx)
@@ -8791,14 +8818,14 @@ http_helpers_(ctx: ptr, p: *Page) -> int {
 }
 
 http_cancel_(p: *Page, id: int) {
-    if http_waits_ == null { return }
-    n = list.size(http_waits_)
+    waits = (p.browser as *Browser).http_jobs.waits
+    n = list.size(waits)
     i = 0
     while i < n {
-        wv, _ = list.get(http_waits_, i)
+        wv, _ = list.get(waits, i)
         w = wv as *HttpWait
         if w.id == id && w.page == p as ptr {
-            list.list_remove(http_waits_, i)
+            list.list_remove(waits, i)
             heap.free(w)
             return
         }
@@ -8806,62 +8833,56 @@ http_cancel_(p: *Page, id: int) {
     }
 }
 
-http_inbox_() -> ptr {
-    ib = actors.whereis("sae-http-inbox")
-    if ib == null {
-        ib = spawn(HttpInbox())
-        actors.register("sae-http-inbox", ib)
-    }
-    return ib
+http_inbox_(hj: *HttpJobs) -> ptr {
+    if hj.inbox == null { hj.inbox = spawn(HttpInbox()) }
+    return hj.inbox
 }
 
-http_fetcher_() -> ptr {
-    _ib = http_inbox_()
-    if http_pool_ == null {
-        http_pool_ = list.new()
+http_fetcher_(hj: *HttpJobs) -> ptr {
+    if hj.pool == null {
+        hj.pool = list.new()
         k = 0
         while k < HTTP_FETCHERS {
-            list.add(http_pool_, spawn(HttpFetcher()))
+            list.add(hj.pool, spawn(HttpFetcher()))
             k = k + 1
         }
     }
-    f, _ = list.get(http_pool_, http_next_ % HTTP_FETCHERS)
-    http_next_ = http_next_ + 1
+    f, _ = list.get(hj.pool, hj.next % HTTP_FETCHERS)
+    hj.next = hj.next + 1
     return f
 }
 
 // On the UI thread: take every finished job and run its page's callback.
-http_poll_() {
-    ib = http_inbox_()
+http_poll_(b: *Browser) {
+    hj = b.http_jobs
+    ib = http_inbox_(hj)
     while true {
         jl = ib ? HttpTake {}
         if jl == 0 { break }
-        http_deliver_(mem.long_to_ptr(jl) as *HttpJob)
+        http_deliver_(b, mem.long_to_ptr(jl) as *HttpJob)
     }
-    if list.size(http_waits_) == 0 {
-        ui.timer_cancel(http_timer_)
-        http_timer_ = 0
+    if list.size(hj.waits) == 0 {
+        ui.timer_cancel(hj.timer)
+        hj.timer = 0
     }
 }
 
-http_deliver_(j: *HttpJob) {
+http_deliver_(b: *Browser, j: *HttpJob) {
     if j.refused_hop == 1 { net_log_(j.err) }
-    n = list.size(http_waits_)
+    waits = b.http_jobs.waits
+    n = list.size(waits)
     i = 0
     while i < n {
-        wv, _ = list.get(http_waits_, i)
+        wv, _ = list.get(waits, i)
         w = wv as *HttpWait
         if w.id == j.id {
-            list.list_remove(http_waits_, i)
-            b = browser_
-            if b != null {
-                cur = (b as *Browser).page
-                if cur != null && cur == w.page && (cur as *Page).seq == w.seq {
-                    p = cur as *Page
-                    r = call_http_(p, w.ref, j.status, j.resp, j.err, j.resp_headers)
-                    if r < 0 { report_exception_(p.ctx, "an http callback") }
-                    settle_(p.ctx)
-                }
+            list.list_remove(waits, i)
+            cur = b.page
+            if cur != null && cur == w.page && (cur as *Page).seq == w.seq {
+                p = cur as *Page
+                r = call_http_(p, w.ref, j.status, j.resp, j.err, j.resp_headers)
+                if r < 0 { report_exception_(p.ctx, "an http callback") }
+                settle_(p.ctx)
             }
             heap.free(w)
             heap.free(j)
@@ -8971,8 +8992,8 @@ available_(b: *Browser, nm: string) -> int {
     if nm == "open-urls" { return shell.granted(b.shell) }
     if nm == "print" { return printing.granted(b.printing) }
     if nm == "backend" { return b.backend_declared }
-    if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
-    if string.string_starts_with(nm, "native ") == 1 { return natives_granted_(string.string_substring(nm, 7, string.length(nm))) }   // wave1/natives
+    if string.string_starts_with(nm, "database ") == 1 { return sqlite_granted_(b, string.string_substring(nm, 9, string.length(nm))) }   // wave1/sqlite
+    if string.string_starts_with(nm, "native ") == 1 { return natives_granted_(b, string.string_substring(nm, 7, string.length(nm))) }   // wave1/natives
     return 0
 }
 
@@ -9772,15 +9793,13 @@ api_register_(p: *Page) {
 
     // ===== wave1/natives: natives.<module> for each native module the page seeks and the app has =====
     nmods = natives_page_mods_(p)
-    natives_page_ = p as ptr
-    natives_page_seq_ = p.seq
-    natives_page_set_ = own_(nmods)
+    p.natives_set = own_(nmods)
     if nmods != "," {
         nr = quickjs.new_object(q)
         reg_(q, nr, "call", 3, sae_natives_call)
         quickjs.set_global(q, "__sae_natives", nr)
         quickjs.release(q, nr)
-        nw, _nwe = quickjs.eval(q, natives_js_(nmods), "sae:natives")
+        nw, _nwe = quickjs.eval(q, natives_js_((p.browser as *Browser).native_jobs, nmods), "sae:natives")
         quickjs.release(q, nw)
     }
     // ===== end wave1/natives =====
@@ -9869,6 +9888,8 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string) -> *Pag
     p.dgrids = list.new()
     p.menus = list.new()
     p.held = list.new()
+    p.sqlite_fns = null
+    p.natives_set = ","
     page_seq_ = page_seq_ + 1
     p.seq = page_seq_
     p.http_res = 0
@@ -9926,6 +9947,7 @@ page_free_(p: *Page) {
         i = i + 1
     }
     engine_dispose_(p.ctx)
+    if p.sqlite_fns != null { heap.free(p.sqlite_fns as *SqlitePageFns) }
     free(p.stack)
     heap.free(p)
 }
@@ -10602,6 +10624,9 @@ browser_new_() -> *Browser {
     b.printing = printing.new()
     b.net = net.new()
     b.stdlib = stdlib.new()
+    b.sqlite_jobs = sqlite_jobs_new_()
+    b.native_jobs = native_jobs_new_()
+    b.http_jobs = http_jobs_new_()
     pm = env_("SAE_PAGE_MEM")
     if pm != "" {
         v, perr = string.to_long(pm)
@@ -10750,8 +10775,8 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int)
         }
         start_url = resolve_("app:/", app_setting_(manifest, "start", "/"))
         read_capabilities_(b, manifest)
-        sqlite_why = sqlite_start_(manifest)   // wave1/sqlite: before any page runs
-        if sqlite_why == "" { sqlite_why = natives_start_(manifest) }   // wave1/natives
+        sqlite_why = sqlite_start_(b, manifest)   // wave1/sqlite: before any page runs
+        if sqlite_why == "" { sqlite_why = natives_start_(b, manifest) }   // wave1/natives
         if sqlite_why == "" { sqlite_why = backend_start_(b, manifest) }   // the app's backend
         if b.control != null { control_start_(b) }   // --control-stdio
         build_content_(b, mem.long_to_ptr(root))
