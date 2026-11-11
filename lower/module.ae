@@ -28,7 +28,7 @@ import std.strbuilder
 import std.strarr
 import std.mem
 
-exports (lower_source, lower_module, page_seeks, page_optional, page_scopes, page_imports, page_wrapped, LOWER_VERSION)
+exports (Lowered, lower_source, lower_module, lowered_free, LOWER_VERSION)
 
 extern malloc(n: long) -> ptr
 extern realloc(p: ptr, n: long) -> ptr
@@ -2750,38 +2750,41 @@ lx_free_(x: *Lx) {
     heap.free(x)
 }
 
-// What the last page lowered seeks: the privileges it requires, as
-// ",local-filesystem,"; those it can do without; and its scoped seeks, one
-// per line as "privilege\tVERBS\tpattern".
-var last_seeks_: string = ""
-var last_optional_: string = ""
-var last_scopes_: string = ""
-// ... and what it imports ("spec\tline\tcol" per line), and whether its
-// output is a function expression to call with the loader object.
-var last_imports_: string = ""
-var last_wrapped_: int = 0
+// One lowering's results, the caller's to free (lowered_free): the
+// JavaScript and the error ("" on success, or "name:line:col: message"),
+// and, on success, what the unit seeks: the privileges it requires, as
+// ",local-filesystem,"; those it can do without; its scoped seeks, one per
+// line as "privilege\tVERBS\tpattern"; what it imports ("spec\tline\tcol"
+// per line); and whether its output is a function expression to call with
+// the loader object.
+struct Lowered {
+    js: string
+    err: string
+    seeks: string
+    optional: string
+    scopes: string
+    imports: string
+    wrapped: int
+}
 
-page_seeks() -> string { return last_seeks_ }
-page_optional() -> string { return last_optional_ }
-page_scopes() -> string { return last_scopes_ }
-page_imports() -> string { return last_imports_ }
-page_wrapped() -> int { return last_wrapped_ }
+lowered_free(l: *Lowered) {
+    if l != null { heap.free(l) }
+}
 
-// Lower one page. Returns (js_source, error): error is "" on success, or
-// "name:line:col: message".
-lower_source(src: string, name: string) -> (string, string) {
+// Lower one page.
+lower_source(src: string, name: string) -> *Lowered {
     return lower_unit_(src, name, 0, "")
 }
 
 // Lower one module: exports allowed, no seeks of its own; it may name the
 // privileged objects of `seeks`, the importing page's (",outgoing-http,"),
 // as if it had sought them. Its output is always a function expression
-// (page_wrapped() is 1) taking ($sae, $exports).
-lower_module(src: string, name: string, seeks: string) -> (string, string) {
+// (wrapped is 1) taking ($sae, $exports).
+lower_module(src: string, name: string, seeks: string) -> *Lowered {
     return lower_unit_(src, name, 1, seeks)
 }
 
-lower_unit_(src: string, name: string, is_module: int, seeks: string) -> (string, string) {
+lower_unit_(src: string, name: string, is_module: int, seeks: string) -> *Lowered {
     x = lx_new_(src)
     x.is_module = is_module
     if is_module == 1 {
@@ -2797,22 +2800,23 @@ lower_unit_(src: string, name: string, is_module: int, seeks: string) -> (string
     lex_(x)
     if x.err == "" { match_brackets_(x) }
     if x.err == "" { parse_program_(x) }
-    out = ""
-    last_seeks_ = ""
-    last_optional_ = ""
-    last_scopes_ = ""
-    last_imports_ = ""
-    last_wrapped_ = 0
+    l = heap.new(Lowered)
+    l.js = ""
+    l.err = ""
+    l.seeks = ""
+    l.optional = ""
+    l.scopes = ""
+    l.imports = ""
+    l.wrapped = 0
     if x.err == "" {
-        out = apply_edits_(x)
-        last_seeks_ = string.copy(x.sought)
-        last_optional_ = string.copy(x.optional)
-        last_scopes_ = string.copy(x.scopes)
-        last_imports_ = string.copy(x.imports)
-        last_wrapped_ = x.wrapped
+        l.js = apply_edits_(x)
+        l.seeks = string.copy(x.sought)
+        l.optional = string.copy(x.optional)
+        l.scopes = string.copy(x.scopes)
+        l.imports = string.copy(x.imports)
+        l.wrapped = x.wrapped
     }
-    err = ""
-    if x.err != "" { err = "${name}:${x.err_line}:${x.err_col}: ${x.err}" }
+    if x.err != "" { l.err = "${name}:${x.err_line}:${x.err_col}: ${x.err}" }
     lx_free_(x)
-    return out, err
+    return l
 }

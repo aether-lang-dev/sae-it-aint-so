@@ -38,11 +38,14 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 ## Adding a page-API function
 
 1. A host function in `src/sae_host.ae` with the signature
-   `(ctx: ptr, this_val: int, argv: int) -> int` (`ctx` is the page's
-   contrib.quickjs runtime, `argv` an array of the arguments), whose first
-   line is the page veto (copy the `hide fs, os, client, ...` line from any
-   other one; "The page veto" in that file says why) and whose second is
-   `argc = quickjs.arg_count(ctx, argv)`. It returns a value handle, 0 for
+   `(p: *Page, this_val: int, argv: int) -> int` (`p` is the page whose
+   runtime calls it, handed over by `host_fn_`; `argv` an array of the
+   arguments), whose first line is the page veto (copy the `hide fs, os,
+   client, ...` line from any other one; "The page veto" in that file says
+   why), whose second is `ctx = p.ctx` (the page's contrib.quickjs runtime)
+   and whose third is `argc = quickjs.arg_count(ctx, argv)`. Nothing looks a
+   page up by its runtime, and there is no global browser: the Browser is
+   `p.browser`. It returns a value handle, 0 for
    undefined, or `sae_throw_type_error(...)`. If it needs something the
    veto hides, add a narrow kernel helper (as `now_ns_` wraps the clock)
    rather than dropping the line.

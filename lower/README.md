@@ -94,7 +94,7 @@ so line 1's columns move by its length, and the suffix `})` goes after the
 last character, after the final newline if there is one; a file without a
 final newline gets one first, the one case that adds a line. The host
 evaluates the text to that function and calls it with the loader object
-(and, for a module, its namespace); `page_wrapped()` tells it to. A page
+(and, for a module, its namespace); the result's `wrapped` tells it to. A page
 with neither import nor top-level `await` is the erased script it always
 was. Inside the wrapper, a page's top-level declarations are not globals.
 
@@ -111,8 +111,10 @@ with the line and column (`lower/tests/err`).
 
 `lower_module(src, name, seeks)` lowers a module (`seeks` is the importing
 page's, as `",outgoing-http,"`: the module may name what the page sought);
-`page_imports()` lists what the last unit imports (`spec\tline\tcol` per
-line) and `page_wrapped()` whether its output is a function to call.
+`lower_source` and `lower_module` return a `Lowered` (free it with
+`lowered_free`): `js` and `err`, and on success `imports`, what the unit
+imports (`spec\tline\tcol` per line), and `wrapped`, whether its output is
+a function to call.
 `saelower --module`, `--imports` and `--module-imports` expose them.
 
 ## Directives: seeks and hide
@@ -126,12 +128,12 @@ optionally scoped
 which a page may not name otherwise: `page.ts:3:1: fs needs "seeks
 local-filesystem" at the top of the page`. `database` takes the database's
 name (a letter or `_`, then letters, digits and `_`), one line per database;
-the name is part of the privilege (`"database notes"` in `page_seeks()`),
+the name is part of the privilege (`"database notes"` in the result's `seeks`),
 so `"seeks database notes"` unlocks `sqlite` and the host installs
 `sqlite.notes`. The lowerer checks the grammar
 (methods, patterns, one privilege per line, required or optional but not
-both) and keeps what it found for the host: `page_seeks()` (required
-privileges), `page_optional()` and `page_scopes()`. The host checks them
+both) and hands what it found to the host in the result: `seeks` (required
+privileges), `optional` and `scopes`. The host checks them
 against the page's grants before running it, and every request against the
 scopes. A function's first statement may be `"hide fs, http";`: those names
 are refused in that function and every function inside it. A name the code
