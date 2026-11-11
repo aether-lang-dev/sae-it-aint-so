@@ -9,11 +9,8 @@
 # even then (how a pin bump is checked against a release).
 set -e
 ROOT=$(cd "$(dirname "$0")" && pwd)
-if [ "${SAE_AETHER_HOME:-}" = none ]; then
-    unset SAE_AETHER_HOME
-elif [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
-    SAE_AETHER_HOME=$(cd "$ROOT/../aether" && pwd)
-fi
+. "$ROOT/tools/aether_home.sh"
+sae_aether_home_ "$ROOT"
 if [ -n "${SAE_AETHER_HOME:-}" ]; then
     export SAE_AETHER_HOME
     export AETHER_HOME="$SAE_AETHER_HOME"

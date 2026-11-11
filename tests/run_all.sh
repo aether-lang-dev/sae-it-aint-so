@@ -56,11 +56,25 @@ fi
 for f in target/build/bin/sae target/build/bin/sae-driver target/pageserver target/saelower target/saejs; do
     [ -x "$f" ] || { echo "run_all.sh: no $f (AGENTS.md \"Build and test\")" >&2; exit 2; }
 done
+# A binary older than the sources it is built from tests old code, and passes
+# or fails for reasons that are not the tree's (2026-11-11: a sae-driver from
+# before --control-stdio failed every spec_app_channel case). The specs drive
+# sae-driver; sae is built alongside it.
+for f in target/build/bin/sae target/build/bin/sae-driver; do
+    newer=$(find -H .build.ae src services sdk lower natives aether-ui/backend aether-ui/ui aether-ui/vg \
+        -type f -newer "$f" 2>/dev/null | head -3)
+    if [ -n "$newer" ]; then
+        echo "run_all.sh: $f is older than its sources (e.g. $(echo $newer | tr '\n' ' '))" >&2
+        echo "run_all.sh: rebuild with: ./build.sh && AETHER_UI_WITH_DRIVER=1 ./build.sh" >&2
+        exit 2
+    fi
+done
 # The window-less specs and the in-tree toolchain, as run_spec.sh chooses it.
-if [ -f "$ROOT/../aether/build/libaether.a" ] && [ "${SAE_AETHER_HOME:-}" != none ]; then
-    AE_HOME=${SAE_AETHER_HOME:-$(cd "$ROOT/../aether" && pwd)}
-    PATH="$AE_HOME/build:$PATH"; export PATH
-    AETHER_HOME=$AE_HOME; export AETHER_HOME
+. "$ROOT/tools/aether_home.sh"
+sae_aether_home_ "$ROOT"
+if [ -n "${SAE_AETHER_HOME:-}" ]; then
+    PATH="$SAE_AETHER_HOME/build:$PATH"; export PATH
+    AETHER_HOME=$SAE_AETHER_HOME; export AETHER_HOME
 fi
 
 LOGS=target/run_all

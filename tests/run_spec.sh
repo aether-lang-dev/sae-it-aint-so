@@ -53,12 +53,9 @@ while ! mkdir "$LOCK" 2>/dev/null; do
 done
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
-# Same toolchain choice as build.sh: an Aether dev tree beside sae wins.
-if [ "${SAE_AETHER_HOME:-}" = none ]; then
-    unset SAE_AETHER_HOME
-elif [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
-    SAE_AETHER_HOME=$(cd "$ROOT/../aether" && pwd)
-fi
+# Same toolchain choice as build.sh (tools/aether_home.sh).
+. "$ROOT/tools/aether_home.sh"
+sae_aether_home_ "$ROOT"
 if [ -n "${SAE_AETHER_HOME:-}" ]; then
     export AETHER_HOME="$SAE_AETHER_HOME"
     PATH="$SAE_AETHER_HOME/build:$PATH"

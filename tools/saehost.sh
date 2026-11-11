@@ -29,12 +29,9 @@ src="${1:?usage: saehost.sh <app-dir> [out-dir]}"
 src=$(cd "$src" && pwd)
 [ -f "$src/app.json" ] || { echo "saehost: $src has no app.json" >&2; exit 2; }
 
-# Same toolchain as build.sh: an Aether dev tree beside sae wins.
-if [ "${SAE_AETHER_HOME:-}" = none ]; then
-    unset SAE_AETHER_HOME
-elif [ -z "${SAE_AETHER_HOME:-}" ] && [ -f "$ROOT/../aether/build/libaether.a" ]; then
-    SAE_AETHER_HOME=$(cd "$ROOT/../aether" && pwd)
-fi
+# Same toolchain as build.sh (tools/aether_home.sh).
+. "$ROOT/tools/aether_home.sh"
+sae_aether_home_ "$ROOT"
 if [ -n "${SAE_AETHER_HOME:-}" ]; then
     export SAE_AETHER_HOME
     export AETHER_HOME="$SAE_AETHER_HOME"
