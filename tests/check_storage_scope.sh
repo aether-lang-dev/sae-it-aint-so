@@ -20,6 +20,10 @@ run() {   # run PHASE [APP]
 run app_a "$ROOT/tests/apps/samename_a"
 run app_b "$ROOT/tests/apps/samename_b"
 run app_a2 "$ROOT/tests/apps/samename_a"
-SAE_TEST_START="$ROOT/tests/storage_pages/one/store.ts" run files
+# exported, not a prefix on the function call: FreeBSD's sh does not pass a
+# prefix assignment on to what the function starts.
+SAE_TEST_START="$ROOT/tests/storage_pages/one/store.ts"; export SAE_TEST_START
+run files
+unset SAE_TEST_START
 echo "storage folders: $(ls "$STORE" | tr '\n' ' ')"
 exit $fails

@@ -148,7 +148,8 @@ and `../aeb` is missing, shallow, at the refs in `pins` (aether at tag
 aeb into `target/toolchain`. A sibling that already exists is never touched,
 and with all three present the script is an instant no-op (no git, no
 network). It installs no system packages: on Linux the browser also needs
-`libgtk-4-dev libepoxy-dev` (and `xvfb` for the specs); the headless half
+`libgtk-4-dev libepoxy-dev` (and `xvfb` for the specs; on FreeBSD the X server package, `Xvfb`: with no display
+`tests/run_all.sh` starts and stops its own, as it uses xvfb-run on Linux); the headless half
 (`lower/run-tests.sh`, `saelower`, `saejs`, the `check_*` scripts) does not.
 SQLite's amalgamation comes from `www.sqlite.org` (aether's `make contrib`),
 which a cloud environment's network policy blocks; there the script takes

@@ -14,16 +14,38 @@
 # here with every new spec.
 #
 # Needs AETHER_UI_WITH_DRIVER=1 ./build.sh, ./build.sh, target/pageserver,
-# target/saelower and target/saejs (AGENTS.md "Build and test"). On Linux with no display it reruns itself
-# under xvfb-run.
+# target/saelower and target/saejs (AGENTS.md "Build and test"). With no display it runs under xvfb-run (Linux) or
+# an Xvfb of its own (FreeBSD and the other BSDs, 1920x1200), stopped on exit.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 1
 FILTER=${1:-}
-if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
-   && [ -z "${SAE_RUN_ALL_XVFB:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
-    # A screen named: xvfb-run's own default differs by distribution (640x480
-    # on Arch), and the resize specs need room to grow a window to 900x800.
-    SAE_RUN_ALL_XVFB=1 exec xvfb-run -a -s "-screen 0 1920x1200x24" sh "$0" "$@"
+XVFB_SCREEN="-screen 0 1920x1200x24"
+if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && [ -z "${SAE_RUN_ALL_XVFB:-}" ]; then
+    if [ "$(uname -s)" = Linux ] && command -v xvfb-run >/dev/null 2>&1; then
+        # A screen named: xvfb-run's own default differs by distribution (640x480
+        # on Arch), and the resize specs need room to grow a window to 900x800.
+        SAE_RUN_ALL_XVFB=1 exec xvfb-run -a -s "$XVFB_SCREEN" sh "$0" "$@"
+    elif [ "$(uname -s)" != Darwin ] && command -v Xvfb >/dev/null 2>&1; then
+        # No xvfb-run (FreeBSD, NetBSD, OpenBSD): start an Xvfb of our own.
+        # -displayfd lets the server pick a free display number and write it
+        # to the descriptor once it is listening; it is stopped on any exit.
+        XVFB_FILE=$(mktemp "${TMPDIR:-/tmp}/sae-xvfb.XXXXXX") || exit 2
+        # shellcheck disable=SC2086 -- XVFB_SCREEN is a list of words
+        Xvfb -nolisten tcp $XVFB_SCREEN -displayfd 3 3>"$XVFB_FILE" >/dev/null 2>&1 &
+        XVFB_PID=$!
+        trap 'kill "$XVFB_PID" 2>/dev/null; wait "$XVFB_PID" 2>/dev/null; rm -f "$XVFB_FILE"' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM HUP
+        n=0
+        while [ ! -s "$XVFB_FILE" ]; do
+            n=$((n + 1))
+            if [ "$n" -gt 100 ] || ! kill -0 "$XVFB_PID" 2>/dev/null; then
+                echo "run_all.sh: Xvfb did not start" >&2; exit 2
+            fi
+            sleep 0.1
+        done
+        DISPLAY=:$(head -n 1 "$XVFB_FILE"); export DISPLAY
+    fi
 fi
 for f in target/build/bin/sae target/build/bin/sae-driver target/pageserver target/saelower target/saejs; do
     [ -x "$f" ] || { echo "run_all.sh: no $f (AGENTS.md \"Build and test\")" >&2; exit 2; }
