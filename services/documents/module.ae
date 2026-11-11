@@ -23,48 +23,64 @@ import std.strarr
 import std.sandbox
 import std.encoding
 
-exports (configure, granted, adopt, name, read_text, write_text, read_base64, write_base64)
+exports (new, configure, granted, adopt, name, read_text, write_text, read_base64, write_base64)
 
-var enabled_: int = 0     // 0 in the browser, or an app whose app.json does not grant documents
-var paths_: ptr = null    // strarr: the picked paths; handle h is paths_[h - 1]
-
-configure(enabled: int) {
-    enabled_ = enabled
-    paths_ = strarr.new()
+// One launch's picked documents: the kernel holds one (new()) and passes it
+// to every call; nothing here is module state.
+struct Documents {
+    enabled: int   // 0 in the browser, or an app whose app.json does not grant documents
+    paths: ptr     // strarr: the picked paths; handle h is paths[h - 1]
 }
 
-granted() -> int {
-    return enabled_
+// None granted, none picked.
+new() -> ptr {
+    d = heap.new(Documents)
+    d.enabled = 0
+    d.paths = null
+    return d as ptr
+}
+
+configure(dh: ptr, enabled: int) {
+    d = dh as *Documents
+    d.enabled = enabled
+    d.paths = strarr.new()
+}
+
+granted(dh: ptr) -> int {
+    d = dh as *Documents
+    return d.enabled
 }
 
 // A path the person picked (the picker's answer, "" for a cancel) kept as a
 // handle, or 0.
-adopt(path: string) -> int {
-    if enabled_ == 0 || path == "" { return 0 }
-    strarr.push_copy(paths_, path)
-    return strarr.size(paths_)
+adopt(dh: ptr, path: string) -> int {
+    d = dh as *Documents
+    if d.enabled == 0 || path == "" { return 0 }
+    strarr.push_copy(d.paths, path)
+    return strarr.size(d.paths)
 }
 
-path_(h: int) -> string {
-    if paths_ == null || h < 1 || h > strarr.size(paths_) { return "" }
-    return strarr.get(paths_, h - 1)
+path_(dh: ptr, h: int) -> string {
+    d = dh as *Documents
+    if d.paths == null || h < 1 || h > strarr.size(d.paths) { return "" }
+    return strarr.get(d.paths, h - 1)
 }
 
 // What the person sees of a document: its file name, not where it is.
-name(h: int) -> string {
-    p = path_(h)
+name(dh: ptr, h: int) -> string {
+    p = path_(dh, h)
     k = string.length(p) - 1
     while k >= 0 && string.char_at(p, k) != 47 { k = k - 1 }
     return string.string_substring(p, k + 1, string.length(p))
 }
 
 // (its text, "") or ("", why).
-read_text(h: int) -> (string, string) {
+read_text(dh: ptr, h: int) -> (string, string) {
     // What the fenced block sets is declared before any return
     // (asks/aether-closure-capture-early-return.md).
     text = ""
     err = ""
-    p = path_(h)
+    p = path_(dh, h)
     if p == "" { return "", "documents: no document ${h}" }
     one = sandbox.new("documents: one file") {
         grant_fs_read(p)
@@ -73,14 +89,14 @@ read_text(h: int) -> (string, string) {
         text, err = fs.read(p)
     }
     sandbox.free(one)
-    if err != "" { return "", "documents.read_text ${name(h)}: ${err}" }
+    if err != "" { return "", "documents.read_text ${name(dh, h)}: ${err}" }
     return text, ""
 }
 
 // "" or why.
-write_text(h: int, text: string) -> string {
+write_text(dh: ptr, h: int, text: string) -> string {
     err = ""
-    p = path_(h)
+    p = path_(dh, h)
     if p == "" { return "documents: no document ${h}" }
     one = sandbox.new("documents: one file") {
         grant_fs_write(p)
@@ -89,16 +105,16 @@ write_text(h: int, text: string) -> string {
         err = fs.write_atomic(p, string.bytes(text))
     }
     sandbox.free(one)
-    if err != "" { return "documents.write_text ${name(h)}: ${err}" }
+    if err != "" { return "documents.write_text ${name(dh, h)}: ${err}" }
     return ""
 }
 
 // A binary file's bytes as base64: (its base64, "") or ("", why).
-read_base64(h: int) -> (string, string) {
+read_base64(dh: ptr, h: int) -> (string, string) {
     data = ""
     n = 0
     err = ""
-    p = path_(h)
+    p = path_(dh, h)
     if p == "" { return "", "documents: no document ${h}" }
     one = sandbox.new("documents: one file") {
         grant_fs_read(p)
@@ -107,18 +123,18 @@ read_base64(h: int) -> (string, string) {
         data, n, err = fs.read_binary(p)
     }
     sandbox.free(one)
-    if err != "" { return "", "documents.read_base64 ${name(h)}: ${err}" }
+    if err != "" { return "", "documents.read_base64 ${name(dh, h)}: ${err}" }
     if n == 0 { return "", "" }
     return encoding.base64_encode_padded(string.bytes(data)), ""
 }
 
 // Bytes given as base64 written: "" or why.
-write_base64(h: int, b64: string) -> string {
+write_base64(dh: ptr, h: int, b64: string) -> string {
     err = ""
-    p = path_(h)
+    p = path_(dh, h)
     if p == "" { return "documents: no document ${h}" }
     raw, derr = encoding.base64_decode(b64)
-    if derr != "" { return "documents.write_base64 ${name(h)}: not base64" }
+    if derr != "" { return "documents.write_base64 ${name(dh, h)}: not base64" }
     one = sandbox.new("documents: one file") {
         grant_fs_write(p)
     }
@@ -126,6 +142,6 @@ write_base64(h: int, b64: string) -> string {
         err = fs.write_atomic(p, string.bytes(raw))
     }
     sandbox.free(one)
-    if err != "" { return "documents.write_base64 ${name(h)}: ${err}" }
+    if err != "" { return "documents.write_base64 ${name(dh, h)}: ${err}" }
     return ""
 }

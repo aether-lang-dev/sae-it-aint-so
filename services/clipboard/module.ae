@@ -20,25 +20,46 @@
 import ui (clipboard_read, clipboard_write)
 import std.string
 
-exports (configure, grant_write, grant_read, write_text, read_text)
+exports (new, configure, grant_write, grant_read, write_text, read_text)
 
 const PASTE = 2   // the person's own paste
 
-var write_any_: int = 0
-var read_any_: int = 0
-
-// For a web page (no grants) or an app, before its grants are read.
-configure() {
-    write_any_ = 0
-    read_any_ = 0
+// One launch's clipboard grants: the kernel holds one (new()) and passes it
+// to every call; nothing here is module state.
+struct Clipboard {
+    write_any: int   // app.json grants clipboard "write"
+    read_any: int    // app.json grants clipboard "read"
 }
 
-grant_write() { write_any_ = 1 }
-grant_read() { read_any_ = 1 }
+// For a web page (no grants) or an app, before its grants are read.
+new() -> ptr {
+    c = heap.new(Clipboard)
+    c.write_any = 0
+    c.read_any = 0
+    return c as ptr
+}
+
+// Back to no grants.
+configure(h: ptr) {
+    c = h as *Clipboard
+    c.write_any = 0
+    c.read_any = 0
+}
+
+grant_write(h: ptr) {
+    c = h as *Clipboard
+    c.write_any = 1
+}
+
+grant_read(h: ptr) {
+    c = h as *Clipboard
+    c.read_any = 1
+}
 
 // "" or why not. `gesture` is the kernel's: 0, CLICK or PASTE.
-write_text(text: string, gesture: int) -> string {
-    if gesture == 0 && write_any_ == 0 {
+write_text(h: ptr, text: string, gesture: int) -> string {
+    c = h as *Clipboard
+    if gesture == 0 && c.write_any == 0 {
         return "clipboard.write_text: only while the page handles a click or a key"
     }
     clipboard_write(text)
@@ -47,8 +68,9 @@ write_text(text: string, gesture: int) -> string {
 
 // (its text, "") or ("", why not). `sought_read` is 1 when the page seeks
 // clipboard-read (and so may use an app's read grant).
-read_text(gesture: int, sought_read: int) -> (string, string) {
-    if gesture != PASTE && (read_any_ == 0 || sought_read == 0) {
+read_text(h: ptr, gesture: int, sought_read: int) -> (string, string) {
+    c = h as *Clipboard
+    if gesture != PASTE && (c.read_any == 0 || sought_read == 0) {
         return "", "clipboard.read_text: only while the page handles the person's paste (Ctrl or Cmd+V)"
     }
     return clipboard_read(), ""

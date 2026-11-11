@@ -39,24 +39,38 @@ import std.http.client (request)
 import std.string
 import std.strarr
 
-exports (configure, allow, granted, refusal, open_request, origin_of,
+exports (new, configure, allow, granted, refusal, open_request, origin_of,
          origin_text, cross_origin, mixed_content, allows_origin)
 
-var enabled_: int = 0     // 0 in the browser: no allowlist applies
-var entries_: ptr = null  // strarr: "scheme://host:port\tpath", host maybe "*.rest"
+// One launch's allowlist: the kernel holds one (new()) and passes it to every
+// call that checks it; nothing here is module state.
+struct Net {
+    enabled: int   // 0 in the browser: no allowlist applies
+    entries: ptr   // strarr: "scheme://host:port\tpath", host maybe "*.rest"
+}
+
+// For a web page: no allowlist.
+new() -> ptr {
+    n = heap.new(Net)
+    n.enabled = 0
+    n.entries = null
+    return n as ptr
+}
 
 // Set up for an app (enabled 1) or a web page (0). An app starts with
 // nothing allowed.
-configure(enabled: int) {
-    enabled_ = enabled
-    entries_ = strarr.new()
+configure(h: ptr, enabled: int) {
+    n = h as *Net
+    n.enabled = enabled
+    n.entries = strarr.new()
 }
 
 // Add one prefix of app.json capabilities.http. "" if it was added, else
 // why not (the caller reports it; an entry that is not understood allows
 // nothing).
-allow(entry: string) -> string {
-    if entries_ == null { return "net: not configured" }
+allow(h: ptr, entry: string) -> string {
+    nt = h as *Net
+    if nt.entries == null { return "net: not configured" }
     e = entry
     sep = string.index_of(e, "://")
     path = ""
@@ -82,14 +96,15 @@ allow(entry: string) -> string {
     if err == "" && string.contains(path, "*") == 1 { err = "no wildcard in the path" }
     if err != "" { return "app.json capabilities.http: ignoring \"${entry}\": ${err}; an entry is a URL prefix, scheme://host[:port]/path, the host maybe *.host" }
     if wild == 1 { host = string.concat("*.", host) }
-    strarr.push_copy(entries_, "${scheme}://${host}:${port}\t${path}")
+    strarr.push_copy(nt.entries, "${scheme}://${host}:${port}\t${path}")
     return ""
 }
 
 // 1 if the app may reach anything at all.
-granted() -> int {
-    if enabled_ == 0 || entries_ == null { return 0 }
-    if strarr.size(entries_) > 0 { return 1 }
+granted(h: ptr) -> int {
+    nt = h as *Net
+    if nt.enabled == 0 || nt.entries == null { return 0 }
+    if strarr.size(nt.entries) > 0 { return 1 }
     return 0
 }
 
@@ -224,21 +239,22 @@ dot_segment_(path: string) -> int {
 // Why this app may not open a connection for `url`, or "". The server is
 // checked first, then the path; either way the refusal is the same, naming
 // capabilities.http. Always "" in the browser.
-refusal(url: string) -> string {
-    if enabled_ == 0 { return "" }
+refusal(h: ptr, url: string) -> string {
+    nt = h as *Net
+    if nt.enabled == 0 { return "" }
     why = "this app may not reach ${url} (app.json capabilities.http lists what it may)"
     scheme, host, port, err = origin_of(url)
-    if err != "" || entries_ == null { return why }
+    if err != "" || nt.entries == null { return why }
     sep = string.index_of(url, "://")
     rest = string.string_substring(url, sep + 3, string.length(url))
     slash = string.index_of(rest, "/")
     path = "/"
     if slash >= 0 { path = string.string_substring(rest, slash, string.length(rest)) }
     if dot_segment_(path) == 1 { return why }
-    n = strarr.size(entries_)
+    n = strarr.size(nt.entries)
     i = 0
     while i < n {
-        ent = strarr.get(entries_, i)
+        ent = strarr.get(nt.entries, i)
         tab = string.index_of(ent, "\t")
         if covers_(string.string_substring(ent, 0, tab), scheme, host, port) == 1 {
             if string.string_starts_with(path, string.string_substring(ent, tab + 1, string.length(ent))) == 1 { return "" }
@@ -251,8 +267,8 @@ refusal(url: string) -> string {
 // A client request for `method` on `url`, if the allowlist lets it be made:
 // (request, "") or (null, why not). Built, not sent; the caller sets it up,
 // sends and frees it.
-open_request(method: string, url: string) -> (ptr, string) {
-    why = refusal(url)
+open_request(h: ptr, method: string, url: string) -> (ptr, string) {
+    why = refusal(h, url)
     if why != "" { return null, why }
     req = request(method, url)
     if req == null { return null, "not a valid URL: ${url}" }

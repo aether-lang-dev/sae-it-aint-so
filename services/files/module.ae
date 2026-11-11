@@ -23,52 +23,77 @@ import std.strarr
 import std.sandbox
 import std.encoding
 
-exports (configure, grant_read, grant_write, granted, resolve, path,
+exports (new, configure, grant_read, grant_write, granted, resolve, path,
          read_text, write_text, read_base64, write_base64, exists, list_json, mkdir, remove)
 
-var enabled_: int = 0        // 0 in the browser: pages there get no fs
-var app_data_: string = ""   // $APPDATA, and where relative paths go
-var home_: string = ""
-var temp_: string = ""
-var windows_: int = 0        // 1: paths are C:/... (the kernel's form of C:\...)
-var reads_: ptr = null       // strarr: resolved directory prefixes ending in "/"
-var writes_: ptr = null      // ... that may also be changed
+// One launch's file grants: the kernel holds one (new()), configures it for
+// an app, and passes it to every call; nothing here is module state.
+struct Files {
+    enabled: int        // 0 in the browser: pages there get no fs
+    app_data: string    // $APPDATA, and where relative paths go
+    home: string
+    temp: string
+    windows: int        // 1: paths are C:/... (the kernel's form of C:\...)
+    reads: ptr          // strarr: resolved directory prefixes ending in "/"
+    writes: ptr         // ... that may also be changed
+}
+
+// Grants for a web page: none.
+new() -> ptr {
+    f = heap.new(Files)
+    f.enabled = 0
+    f.app_data = ""
+    f.home = ""
+    f.temp = ""
+    f.windows = 0
+    f.reads = null
+    f.writes = null
+    return f as ptr
+}
 
 // Set up for an app (enabled 1) or a web page (0), with the roots the
 // $-prefixes expand to. The kernel reads them from the environment, with
 // "/" separators. windows is 1 on Windows: an absolute path there starts
 // with a drive (C:/), and a page's "\" is a separator, as Windows reads it.
-configure(enabled: int, app_data: string, home: string, temp: string, windows: int) {
-    enabled_ = enabled
-    windows_ = windows
-    app_data_ = string.copy(app_data)
-    home_ = string.copy(home)
-    temp_ = string.copy(temp)
-    reads_ = strarr.new()
-    writes_ = strarr.new()
+configure(h: ptr, enabled: int, app_data: string, home: string, temp: string, windows: int) {
+    f = h as *Files
+    f.enabled = enabled
+    f.windows = windows
+    f.app_data = string.copy(app_data)
+    f.home = string.copy(home)
+    f.temp = string.copy(temp)
+    f.reads = strarr.new()
+    f.writes = strarr.new()
 }
 
 // A read grant: everything under `root` ($APPDATA/, $DOCUMENTS/notes/, ...).
 // A root that cannot be resolved grants nothing.
-grant_read(root: string) { add_root_(reads_, root) }
+grant_read(h: ptr, root: string) {
+    f = h as *Files
+    add_root_(h, f.reads, root)
+}
 
 // A write grant: create, overwrite, remove and mkdir under `root` (and read).
-grant_write(root: string) { add_root_(writes_, root) }
+grant_write(h: ptr, root: string) {
+    f = h as *Files
+    add_root_(h, f.writes, root)
+}
 
 // 1 if the app has any fs grant at all (a page that seeks fs is refused at
 // load without one).
-granted() -> int {
-    if enabled_ == 0 { return 0 }
+granted(h: ptr) -> int {
+    f = h as *Files
+    if f.enabled == 0 { return 0 }
     n = 0
-    if reads_ != null { n = n + strarr.size(reads_) }
-    if writes_ != null { n = n + strarr.size(writes_) }
+    if f.reads != null { n = n + strarr.size(f.reads) }
+    if f.writes != null { n = n + strarr.size(f.writes) }
     if n > 0 { return 1 }
     return 0
 }
 
-add_root_(l: ptr, raw: string) {
+add_root_(h: ptr, l: ptr, raw: string) {
     if l == null { return }
-    r = resolve(raw)
+    r = resolve(h, raw)
     if r == "" { return }
     if string.string_ends_with(r, "/") == 0 { r = string.concat(r, "/") }
     strarr.push_copy(l, r)
@@ -76,16 +101,17 @@ add_root_(l: ptr, raw: string) {
 
 // $APPDATA, $HOME, $DOCUMENTS, $DOWNLOADS, $DESKTOP, $TEMP at the front of a
 // path, expanded.
-expand_(s: string) -> string {
+expand_(h: ptr, s: string) -> string {
+    f = h as *Files
     if string.string_starts_with(s, "$APPDATA") == 1 {
-        _m = fs.mkdir_p(app_data_)
-        return string.concat(app_data_, string.string_substring(s, 8, string.length(s)))
+        _m = fs.mkdir_p(f.app_data)
+        return string.concat(f.app_data, string.string_substring(s, 8, string.length(s)))
     }
-    if string.string_starts_with(s, "$HOME") == 1 { return string.concat(home_, string.string_substring(s, 5, string.length(s))) }
-    if string.string_starts_with(s, "$DOCUMENTS") == 1 { return string.concat("${home_}/Documents", string.string_substring(s, 10, string.length(s))) }
-    if string.string_starts_with(s, "$DOWNLOADS") == 1 { return string.concat("${home_}/Downloads", string.string_substring(s, 10, string.length(s))) }
-    if string.string_starts_with(s, "$DESKTOP") == 1 { return string.concat("${home_}/Desktop", string.string_substring(s, 8, string.length(s))) }
-    if string.string_starts_with(s, "$TEMP") == 1 { return string.concat(temp_, string.string_substring(s, 5, string.length(s))) }
+    if string.string_starts_with(s, "$HOME") == 1 { return string.concat(f.home, string.string_substring(s, 5, string.length(s))) }
+    if string.string_starts_with(s, "$DOCUMENTS") == 1 { return string.concat("${f.home}/Documents", string.string_substring(s, 10, string.length(s))) }
+    if string.string_starts_with(s, "$DOWNLOADS") == 1 { return string.concat("${f.home}/Downloads", string.string_substring(s, 10, string.length(s))) }
+    if string.string_starts_with(s, "$DESKTOP") == 1 { return string.concat("${f.home}/Desktop", string.string_substring(s, 8, string.length(s))) }
+    if string.string_starts_with(s, "$TEMP") == 1 { return string.concat(f.temp, string.string_substring(s, 5, string.length(s))) }
     return s
 }
 
@@ -103,20 +129,21 @@ expand_(s: string) -> string {
 // On Windows the walk is the same below the drive: "C:/x/../y" is C:/y, a
 // ".." at the drive's root stays there, and a path with no drive ("/x",
 // "//server/share") gives "", as no grant names one.
-resolve(raw: string) -> string {
-    p = expand_(raw)
+resolve(h: ptr, raw: string) -> string {
+    f = h as *Files
+    p = expand_(h, raw)
     drive = ""
-    if windows_ == 1 {
+    if f.windows == 1 {
         p = string.string_replace_all(p, "\\", "/")
         if drive_of_(p) == "" {
             if string.string_starts_with(p, "/") == 1 { return "" }
-            p = "${app_data_}/${p}"
+            p = "${f.app_data}/${p}"
         }
         drive = drive_of_(p)
         if drive == "" { return "" }
         p = string.string_substring(p, 2, string.length(p))
     } else if string.string_starts_with(p, "/") == 0 {
-        p = "${app_data_}/${p}"
+        p = "${f.app_data}/${p}"
     }
     res = ""
     n = string.length(p)
@@ -136,7 +163,7 @@ resolve(raw: string) -> string {
                 rp, _k, err = fs.realpath("${drive}${res}")
                 if err != "" { return "" }
                 res = string.copy(rp)
-                if windows_ == 1 {
+                if f.windows == 1 {
                     res = string.string_replace_all(res, "\\", "/")
                     if string.string_starts_with(res, "//?/") == 1 { res = string.string_substring(res, 4, string.length(res)) }
                     drive = drive_of_(res)
@@ -154,8 +181,8 @@ resolve(raw: string) -> string {
 
 // 1 for a Windows path that is absolute but names no drive ("/etc/hosts",
 // \\server\share), which resolve refuses.
-driveless_(raw: string) -> int {
-    p = string.string_replace_all(expand_(raw), "\\", "/")
+driveless_(h: ptr, raw: string) -> int {
+    p = string.string_replace_all(expand_(h, raw), "\\", "/")
     if drive_of_(p) == "" && string.string_starts_with(p, "/") == 1 { return 1 }
     return 0
 }
@@ -190,36 +217,40 @@ within_(l: ptr, p: string) -> int {
 
 // The resolved path a call may use, or why not: (path, "") or ("", reason).
 // write is 1 for a change. `what` names the page's call in the reason.
-path(raw: string, write: int, what: string) -> (string, string) {
-    if enabled_ == 0 { return "", "${what}: fs is not available to a web page" }
-    p = resolve(raw)
-    if p == "" && windows_ == 1 && driveless_(raw) == 1 {
+path(h: ptr, raw: string, write: int, what: string) -> (string, string) {
+    f = h as *Files
+    if f.enabled == 0 { return "", "${what}: fs is not available to a web page" }
+    p = resolve(h, raw)
+    if p == "" && f.windows == 1 && driveless_(h, raw) == 1 {
         kind = "read"
         if write == 1 { kind = "write" }
         return "", "${what}: outside this app's fs.${kind} grant: ${raw} (no drive)"
     }
     if p == "" { return "", "${what}: cannot resolve ${raw} (a dangling symlink, or a loop)" }
     if write == 1 {
-        if within_(writes_, p) == 1 { return p, "" }
+        if within_(f.writes, p) == 1 { return p, "" }
         return "", "${what}: outside this app's fs.write grant: ${p}"
     }
-    if within_(reads_, p) == 1 || within_(writes_, p) == 1 { return p, "" }
+    if within_(f.reads, p) == 1 || within_(f.writes, p) == 1 { return p, "" }
     return "", "${what}: outside this app's fs.read grant: ${p}"
 }
 
 // The app's grants as a std.sandbox grant list: read roots readable, write
 // roots readable, writable and made and removed in. Release with
 // sandbox.free.
-fence_() -> sandbox.Grants {
+fence_(h: ptr) -> sandbox.Grants {
+    f = h as *Files
+    reads = f.reads
+    writes = f.writes
     return sandbox.new("fs: this app's app.json grants") {
         i = 0
-        while i < strarr.size(reads_) {
-            grant_fs_read("${strarr.get(reads_, i)}*")
+        while i < strarr.size(reads) {
+            grant_fs_read("${strarr.get(reads, i)}*")
             i = i + 1
         }
         j = 0
-        while j < strarr.size(writes_) {
-            grant_fs("${strarr.get(writes_, j)}*")
+        while j < strarr.size(writes) {
+            grant_fs("${strarr.get(writes, j)}*")
             j = j + 1
         }
     }
@@ -227,14 +258,14 @@ fence_() -> sandbox.Grants {
 
 // The operations: each checks first, then acts, fenced. (text, "") or ("", error).
 
-read_text(raw: string) -> (string, string) {
+read_text(h: ptr, raw: string) -> (string, string) {
     // What the fenced block sets is declared before any return
     // (asks/aether-closure-capture-early-return.md).
     t = ""
     err = ""
-    p, why = path(raw, 0, "fs.read_text")
+    p, why = path(h, raw, 0, "fs.read_text")
     if why != "" { return "", why }
-    perms = fence_()
+    perms = fence_(h)
     sandbox.enforce(perms) callback {
         t, err = fs.read(p)
     }
@@ -243,11 +274,11 @@ read_text(raw: string) -> (string, string) {
     return t, ""
 }
 
-write_text(raw: string, text: string) -> string {
+write_text(h: ptr, raw: string, text: string) -> string {
     err = ""
-    p, why = path(raw, 1, "fs.write_text")
+    p, why = path(h, raw, 1, "fs.write_text")
     if why != "" { return why }
-    perms = fence_()
+    perms = fence_(h)
     sandbox.enforce(perms) callback {
         err = fs.write_atomic(p, string.bytes(text))
     }
@@ -257,13 +288,13 @@ write_text(raw: string, text: string) -> string {
 }
 
 // A binary file's bytes as base64 (padded): (its base64, "") or ("", why).
-read_base64(raw: string) -> (string, string) {
+read_base64(h: ptr, raw: string) -> (string, string) {
     data = ""
     n = 0
     err = ""
-    p, why = path(raw, 0, "fs.read_base64")
+    p, why = path(h, raw, 0, "fs.read_base64")
     if why != "" { return "", why }
-    perms = fence_()
+    perms = fence_(h)
     sandbox.enforce(perms) callback {
         data, n, err = fs.read_binary(p)
     }
@@ -274,13 +305,13 @@ read_base64(raw: string) -> (string, string) {
 }
 
 // Bytes given as base64 written atomically: "" or why.
-write_base64(raw: string, b64: string) -> string {
+write_base64(h: ptr, raw: string, b64: string) -> string {
     err = ""
-    p, why = path(raw, 1, "fs.write_base64")
+    p, why = path(h, raw, 1, "fs.write_base64")
     if why != "" { return why }
     bytes, derr = encoding.base64_decode(b64)
     if derr != "" { return "fs.write_base64: not base64" }
-    perms = fence_()
+    perms = fence_(h)
     sandbox.enforce(perms) callback {
         err = fs.write_atomic(p, string.bytes(bytes))
     }
@@ -290,11 +321,11 @@ write_base64(raw: string, b64: string) -> string {
 }
 
 // (1 or 0, "") or (0, reason).
-exists(raw: string) -> (int, string) {
+exists(h: ptr, raw: string) -> (int, string) {
     yes = 0
-    p, why = path(raw, 0, "fs.exists")
+    p, why = path(h, raw, 0, "fs.exists")
     if why != "" { return 0, why }
-    perms = fence_()
+    perms = fence_(h)
     sandbox.enforce(perms) callback {
         yes = fs.exists(p)
     }
@@ -303,12 +334,12 @@ exists(raw: string) -> (int, string) {
 }
 
 // The names in a directory, as a JSON array of strings.
-list_json(raw: string) -> (string, string) {
+list_json(h: ptr, raw: string) -> (string, string) {
     l = null
     lerr = ""
-    p, why = path(raw, 0, "fs.list")
+    p, why = path(h, raw, 0, "fs.list")
     if why != "" { return "", why }
-    perms = fence_()
+    perms = fence_(h)
     sandbox.enforce(perms) callback {
         l, lerr = dir.list(p)
     }
@@ -325,11 +356,11 @@ list_json(raw: string) -> (string, string) {
     return string.concat(out, "]"), ""
 }
 
-mkdir(raw: string) -> string {
+mkdir(h: ptr, raw: string) -> string {
     made = 0
-    p, why = path(raw, 1, "fs.mkdir")
+    p, why = path(h, raw, 1, "fs.mkdir")
     if why != "" { return why }
-    perms = fence_()
+    perms = fence_(h)
     sandbox.enforce(perms) callback {
         _m = fs.mkdir_p(p)
         made = fs.exists(p)
@@ -339,11 +370,11 @@ mkdir(raw: string) -> string {
     return ""
 }
 
-remove(raw: string) -> string {
+remove(h: ptr, raw: string) -> string {
     e = ""
-    p, why = path(raw, 1, "fs.remove")
+    p, why = path(h, raw, 1, "fs.remove")
     if why != "" { return why }
-    perms = fence_()
+    perms = fence_(h)
     sandbox.enforce(perms) callback {
         kind, _sz, _mt, serr = fs.file_stat(p)
         if serr != "" {

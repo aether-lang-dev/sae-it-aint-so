@@ -18,23 +18,39 @@ import std.string
 import std.strarr
 import std.cryptography (sha256_hex)
 
-exports (configure, dir, read_module, sha256, integrity_of, name_ok)
+exports (new, configure, dir, read_module, sha256, integrity_of, name_ok)
 
-var dir_: string = ""        // lib/sae, as the kernel found it ("" if none)
-var manifest_: string = ""   // its MANIFEST text, read once
+// One launch's library: the kernel holds one (new()) and passes it to every
+// call that reads it; nothing here is module state.
+struct Stdlib {
+    dir: string        // lib/sae, as the kernel found it ("" if none)
+    manifest: string   // its MANIFEST text, read once
+}
+
+// No library until configured.
+new() -> ptr {
+    l = heap.new(Stdlib)
+    l.dir = ""
+    l.manifest = ""
+    return l as ptr
+}
 
 // Where the library is (the kernel locates it: $SAE_LIB_DIR, or beside the
 // binary); "" when there is none.
-configure(d: string) {
-    dir_ = string.copy(d)
-    manifest_ = ""
-    if dir_ != "" {
-        m, err = read("${dir_}/MANIFEST")
-        if err == "" { manifest_ = string.copy(m) }
+configure(h: ptr, d: string) {
+    l = h as *Stdlib
+    l.dir = string.copy(d)
+    l.manifest = ""
+    if l.dir != "" {
+        m, err = read("${l.dir}/MANIFEST")
+        if err == "" { l.manifest = string.copy(m) }
     }
 }
 
-dir() -> string { return dir_ }
+dir(h: ptr) -> string {
+    l = h as *Stdlib
+    return l.dir
+}
 
 // The SHA-256 of text, as lowercase hex ("" if the digest is unavailable).
 sha256(text: string) -> string {
@@ -63,8 +79,9 @@ name_ok(name: string) -> int {
 }
 
 // The hash MANIFEST records for name, or "".
-manifest_hash_(name: string) -> string {
-    lines = string.split(manifest_, "\n")
+manifest_hash_(h: ptr, name: string) -> string {
+    lib = h as *Stdlib
+    lines = string.split(lib.manifest, "\n")
     n = string.string_array_size(lines)
     i = 0
     while i < n {
@@ -79,14 +96,15 @@ manifest_hash_(name: string) -> string {
 
 // The source of library module `name` (as in "sae:<name>"), checked against
 // the manifest. Returns (source, "") or ("", why).
-read_module(name: string) -> (string, string) {
+read_module(h: ptr, name: string) -> (string, string) {
+    lib = h as *Stdlib
     if name_ok(name) == 0 { return "", "\"sae:${name}\" is not a library module name (letters, digits and dashes)" }
-    if dir_ == "" { return "", "sae:${name}: this sae has no page standard library (no lib/sae beside the binary and no SAE_LIB_DIR)" }
-    path = "${dir_}/${name}.ts"
+    if lib.dir == "" { return "", "sae:${name}: this sae has no page standard library (no lib/sae beside the binary and no SAE_LIB_DIR)" }
+    path = "${lib.dir}/${name}.ts"
     if exists(path) == 0 { return "", "sae:${name}: no such library module (${path})" }
     src, err = read(path)
     if err != "" { return "", "sae:${name}: ${err}" }
-    want = manifest_hash_(name)
+    want = manifest_hash_(h, name)
     if want == "" { return "", "sae:${name} is not in lib/sae/MANIFEST (run tools/hash-lib.sh after adding a module)" }
     got = sha256(src)
     if got != want {
