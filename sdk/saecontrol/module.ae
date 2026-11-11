@@ -1,0 +1,223 @@
+// saecontrol — the parent side of sae's control channel
+// (docs/app-backend.md, "The control channel"): an Aether program that
+// starts `sae --app <dir> --control-stdio` and drives the app over sae's
+// stdin and stdout. The inverse of saebackend: there sae starts the program
+// and the program answers; here the program starts sae and sae answers.
+//
+//   import saecontrol
+//   main() {
+//       sc, err = saecontrol.start("sae", ["--app", "app", "--control-stdio"] as a std.list, null)
+//       if err != "" { ... }
+//       if saecontrol.wait_event(sc, "serving", 10000) == 0 { ... }   // a page serves
+//       ok, result, why = saecontrol.request(sc, "SETCELL(\"A1\", \"100\")", 12000)
+//       saecontrol.stop(sc)
+//   }
+//
+// Build it with this folder on the module path:
+//   AETHER_LIB_DIR=<sae>/sdk ae build main.ae
+//
+// The frames are services/channel's: {"id", "command"} out, the bus's answer
+// shape with the id back, and {"event": "serving"} unasked. Each SaeControl
+// is an instance with its own sae; nothing here is shared.
+
+import std.os
+import std.ipc
+import std.io (fd_close)
+import std.json
+import std.list
+import std.string
+import std.time (now_ms)
+
+exports (start, request, request_raw, send_raw, send_bytes, read_answer, wait_event, close_input, wait_exit, stop, pid, MAX_FRAME)
+
+// The most an answer may be: sae's screenshots (base64 PNGs) are the large ones.
+const MAX_FRAME = 67108864
+
+struct SaeControl {
+    wr: int          // sae's stdin, or -1 once closed
+    rd: int          // sae's stdout, or -1 once closed
+    pid: int         // the spawn token, or -1 once reaped
+    ids: int         // the last request id
+    events: ptr      // std.list of event names heard and not yet waited for
+}
+
+// Start `program` (sae, or a wrapper that execs it) with `argv` (a std.list
+// of strings, `--control-stdio` among them) and `env` (null: this process's
+// own). (control, "") or (null, why).
+start(program: string, argv: ptr, env: ptr) -> (ptr, string) {
+    wr, rd, p, err = os.run_stdio(program, argv, env)
+    if err != "" { return null, "saecontrol: could not start ${program}: ${err}" }
+    c = heap.new(SaeControl)
+    c.wr = wr
+    c.rd = rd
+    c.pid = p
+    c.ids = 0
+    c.events = list.new()
+    return c as ptr, ""
+}
+
+// sae's spawn token (os.wait_pid and os.kill take it).
+pid(h: ptr) -> int {
+    c = h as *SaeControl
+    return c.pid
+}
+
+// One command, and its answer within `timeout_ms`: (1, result JSON, "") or
+// (0, "", why). Events that come first are kept for wait_event.
+request(h: ptr, command: string, timeout_ms: int) -> (int, string, string) {
+    c = h as *SaeControl
+    c.ids = c.ids + 1
+    id = c.ids
+    o = json.obj()
+    _i = json.set(o, "id", json.from_int(id))
+    _c = json.set(o, "command", json.str(command))
+    text, eerr = json.encode(o)
+    json.json_free(o)
+    if eerr != "" { return 0, "", "saecontrol: ${eerr}" }
+    werr = send_raw(h, text)
+    if werr != "" { return 0, "", werr }
+    frame, rerr = read_answer(h, timeout_ms)
+    if rerr != "" { return 0, "", rerr }
+    v, perr = json.parse(frame)
+    if perr != "" || v == null { return 0, "", "saecontrol: an answer that is not JSON: ${frame}" }
+    okv = json.json_object_get_raw(v, "success")
+    ok = 0
+    if okv != null { ok = json.json_get_bool(okv) }
+    if ok == 1 {
+        rv = json.json_object_get_raw(v, "result")
+        result = "null"
+        if rv != null {
+            rt, _re = json.encode(rv)
+            result = string.copy(rt)
+        }
+        json.json_free(v)
+        return 1, result, ""
+    }
+    why, _we = json.get_string(json.json_object_get_raw(v, "error"))
+    why = string.copy(why)
+    json.json_free(v)
+    return 0, "", why
+}
+
+// A request frame as it is (a test's: one a well-behaved client never sends),
+// and the next answer frame as it is. ("", why) when there was none.
+request_raw(h: ptr, text: string, timeout_ms: int) -> (string, string) {
+    werr = send_raw(h, text)
+    if werr != "" { return "", werr }
+    frame, rerr = read_answer(h, timeout_ms)
+    return frame, rerr
+}
+
+// One frame to sae. "" or why not.
+send_raw(h: ptr, text: string) -> string {
+    c = h as *SaeControl
+    if c.wr < 0 { return "saecontrol: sae's input is closed" }
+    werr = ipc.write_frame(c.wr, text)
+    if werr != "" { return "saecontrol: ${werr}" }
+    return ""
+}
+
+// Bytes to sae as they are, not a frame (a test's: what breaks the
+// protocol). "" or why not.
+send_bytes(h: ptr, bytes: string) -> string {
+    c = h as *SaeControl
+    if c.wr < 0 { return "saecontrol: sae's input is closed" }
+    werr = ipc.write(c.wr, bytes)
+    if werr != "" { return "saecontrol: ${werr}" }
+    return ""
+}
+
+// The next frame that is not an event, within `timeout_ms` (events are kept
+// for wait_event): (frame, "") or ("", why).
+read_answer(h: ptr, timeout_ms: int) -> (string, string) {
+    c = h as *SaeControl
+    until = now_ms() + timeout_ms
+    while 1 == 1 {
+        left = (until - now_ms()) as int
+        if left < 0 { left = 0 }
+        frame, err = ipc.read_frame_timeout(c.rd, MAX_FRAME, left)
+        if err != "" {
+            if err == ipc.TIMED_OUT_BETWEEN_FRAMES { return "", "saecontrol: no answer within ${timeout_ms} ms" }
+            return "", "saecontrol: ${err}"
+        }
+        name = event_of_(frame)
+        if name == "" { return frame, "" }
+        list.add(c.events, name)
+    }
+}
+
+// The event's name when `frame` is {"event": ...}, else "".
+event_of_(frame: string) -> string {
+    if string.starts_with(frame, "{\"event\"") == 0 { return "" }
+    v, perr = json.parse(frame)
+    if perr != "" || v == null { return "" }
+    name, _e = json.get_string(json.json_object_get_raw(v, "event"))
+    name = string.copy(name)
+    json.json_free(v)
+    return name
+}
+
+// 1 once sae has sent the event `name` (heard earlier, or within
+// `timeout_ms`), else 0. An answer that comes meanwhile is a protocol error
+// here (nothing was asked): 0.
+wait_event(h: ptr, name: string, timeout_ms: int) -> int {
+    c = h as *SaeControl
+    until = now_ms() + timeout_ms
+    while 1 == 1 {
+        i = 0
+        while i < list.size(c.events) {
+            ev, _e = list.get_string(c.events, i)
+            if ev == name {
+                list.list_remove(c.events, i)
+                return 1
+            }
+            i = i + 1
+        }
+        left = (until - now_ms()) as int
+        if left <= 0 { return 0 }
+        frame, err = ipc.read_frame_timeout(c.rd, MAX_FRAME, left)
+        if err != "" { return 0 }
+        got = event_of_(frame)
+        if got == "" { return 0 }
+        list.add(c.events, got)
+    }
+}
+
+// Close sae's stdin: the channel's end, as when the parent goes.
+close_input(h: ptr) {
+    c = h as *SaeControl
+    if c.wr >= 0 {
+        _c = fd_close(c.wr)
+        c.wr = 0 - 1
+    }
+}
+
+// sae's exit status within `secs`, or -1 when it is still running then.
+wait_exit(h: ptr, secs: int) -> int {
+    c = h as *SaeControl
+    if c.pid < 0 { return -1 }
+    st, timed_out, _e = os.wait_pid_timeout(c.pid, secs)
+    if timed_out == 1 { return -1 }
+    c.pid = 0 - 1
+    return st
+}
+
+// Close the channel, give sae 2 s to go by itself (it does without a
+// window), then kill it, and reap it. Safe to call twice.
+stop(h: ptr) {
+    if h == null { return }
+    c = h as *SaeControl
+    close_input(h)
+    if c.rd >= 0 {
+        _d = fd_close(c.rd)
+        c.rd = 0 - 1
+    }
+    if c.pid >= 0 {
+        _st, timed_out, _we = os.wait_pid_timeout(c.pid, 2)
+        if timed_out == 1 {
+            _k = os.kill(c.pid, 9)
+            _w = os.wait_pid(c.pid)
+        }
+        c.pid = 0 - 1
+    }
+}

@@ -1,0 +1,176 @@
+// spec_app_channel.ae — the control channel (docs/app-backend.md, "The
+// control channel"): this spec is the program that starts sae, as
+// `sae-driver --app tests/apps/bus --control-stdio`, and drives the app over
+// sae's own stdin and stdout with sdk/saecontrol. The same page serves as on
+// the control bus (bus.serve); nothing is written to the file system and
+// nothing listens. It also sends what a well-behaved parent never would.
+//   SAE_TEST_PARENT=1 SAE_TEST_APP=tests/apps/bus tests/run_spec.sh spec_app_channel
+import std.spec
+import std.string
+import std.fs
+import std.os
+import std.os (os_getenv)
+import std.list
+import std.ipc
+import saedriver as b
+import uidriver
+import saecontrol
+
+// The app's data folder for these launches: empty, so a courier file would
+// show.
+appdata_() -> string {
+    return "${os_getenv("SAE_TEST_LOG")}.appdata"
+}
+
+// sae-driver on the test app, its stdin and stdout the channel. It is
+// started directly (no shell between, so its spawn token is sae's own on
+// every platform) and inherits this spec's environment, set here first:
+// its data folder, and with `headless` 1 no window (AETHER_UI_HEADLESS).
+// Its stderr is this spec's, which run_spec.sh's parent mode appends to the
+// log saedriver's console verbs read.
+launch_(headless: int) -> ptr {
+    _m = fs.mkdir_p(appdata_())
+    _s = os.setenv("SAE_APPDATA_DIR", appdata_())
+    if headless == 1 {
+        _h = os.setenv("AETHER_UI_HEADLESS", "1")
+    } else {
+        _u = os.unsetenv("AETHER_UI_HEADLESS")
+    }
+    argv = list.new()
+    list.add(argv, "--app")
+    list.add(argv, os_getenv("SAE_TEST_APP_DIR"))
+    list.add(argv, "--control-stdio")
+    sc, err = saecontrol.start(os_getenv("SAE_TEST_DRIVER_BIN"), argv, null)
+    list.free(argv)
+    spec.assert_str_eq(err, "", "sae started")
+    return sc
+}
+
+// The listening sockets (TCP and Unix) of sae-driver, as lsof names them,
+// except the UI driver's own port (the test's): "" when there are none.
+// "(no lsof)" where lsof is missing. On Windows, the TCP ones.
+listeners_() -> string {
+    argv = list.new()
+    defer list.free(argv)
+    tool = "sh"
+    if os.platform() == "windows" {
+        tool = "powershell"
+        list.add(argv, "-NoProfile")
+        list.add(argv, "-Command")
+        list.add(argv, "$ids = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'sae-driver*' -and $_.CommandLine -like '*--control-stdio*' } | ForEach-Object { $_.ProcessId }); Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess -and $_.LocalPort -ne 9222 } | ForEach-Object { \"$($_.LocalAddress):$($_.LocalPort)\" }")
+    } else {
+        list.add(argv, "-c")
+        list.add(argv, "command -v lsof >/dev/null || { echo '(no lsof)'; exit 0; }; for p in $(pgrep -f '[s]ae-driver --app .*--control-stdio'); do lsof -nP -a -p $p -iTCP -sTCP:LISTEN -Fn 2>/dev/null | grep '^n' | grep -vE ':9222(->[*]:[*])?$'; lsof -nP -a -p $p -U -Fn 2>/dev/null | grep '^n/'; done; true")
+    }
+    out, _st, _err = os.run_capture(tool, argv, null)
+    return string.trim(out)
+}
+
+// 1 while a sae-driver started with --control-stdio is running.
+running_() -> int {
+    argv = list.new()
+    defer list.free(argv)
+    if os.platform() == "windows" {
+        list.add(argv, "-NoProfile")
+        list.add(argv, "-Command")
+        list.add(argv, "if (Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'sae-driver*' -and $_.CommandLine -like '*--control-stdio*' }) { exit 0 } else { exit 1 }")
+        _o, st, _e = os.run_capture("powershell", argv, null)
+        if st == 0 { return 1 }
+        return 0
+    }
+    list.add(argv, "-c")
+    list.add(argv, "pgrep -f '[s]ae-driver --app .*--control-stdio' >/dev/null")
+    _o2, st2, _e2 = os.run_capture("sh", argv, null)
+    if st2 == 0 { return 1 }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    _rm = fs.delete("${appdata_()}/.control-bus")
+    sc = launch_(0)
+    uidriver.wait_server()
+    spec.describe(fw, "the control channel: the program that started sae drives it over stdin and stdout") {
+        spec.it("a page serves: sae says so on the channel, and the title is marked") callback {
+            spec.assert_eq(saecontrol.wait_event(sc, "serving", 10000), 1, "the serving event")
+            spec.assert_true(b.wait_for_console("sae: control channel: on"), "said on stderr, not on the channel")
+            spec.assert_contains(uidriver.get_body("/windows"), "Bus test - control channel on", "the title marked")
+        }
+        spec.it("a command reaches the page's handler, and its answer comes back with the request's id") callback {
+            ok, result, why = saecontrol.request(sc, "SETCELL(A1, 100)", 12000)
+            spec.assert_eq(ok, 1, "succeeded: ${why}")
+            spec.assert_contains(result, "\"echo\":\"SETCELL(A1, 100)\"", "the handler's result")
+            b.assert_text("last: SETCELL(A1, 100)", "the page saw it")
+            raw, rerr = saecontrol.request_raw(sc, "{\"id\": \"mine-7\", \"command\": \"x\"}", 12000)
+            spec.assert_str_eq(rerr, "", "answered")
+            spec.assert_true(string.starts_with(raw, "{\"id\":\"mine-7\",\"success\":true,") == 1, "a string id echoed: ${raw}")
+        }
+        spec.it("nothing on the file system, nothing listening") callback {
+            spec.assert_eq(fs.exists("${appdata_()}/.control-bus"), 0, "no courier file")
+            spec.assert_str_eq(listeners_(), "", "nothing listens, TCP or Unix, but the test's UI driver")
+        }
+        spec.it("requests sent together are answered one at a time, in order") callback {
+            spec.assert_str_eq(saecontrol.send_raw(sc, "{\"id\": 101, \"command\": \"later\"}"), "", "sent")
+            spec.assert_str_eq(saecontrol.send_raw(sc, "{\"id\": 102, \"command\": \"boom\"}"), "", "sent")
+            spec.assert_str_eq(saecontrol.send_raw(sc, "{\"id\": 103, \"command\": \"third\"}"), "", "sent")
+            a1, _e1 = saecontrol.read_answer(sc, 12000)
+            a2, _e2 = saecontrol.read_answer(sc, 12000)
+            a3, _e3 = saecontrol.read_answer(sc, 12000)
+            spec.assert_contains(a1, "\"id\":101,\"success\":true,\"result\":{\"late\":true}", "an async handler's value, first")
+            spec.assert_contains(a2, "\"id\":102,\"success\":false", "the one that throws, second")
+            spec.assert_contains(a2, "the handler failed", "saying why")
+            spec.assert_contains(a3, "\"id\":103,\"success\":true", "the third")
+        }
+        spec.it("the ui channel is the app's to grant, as on the bus: refused here") callback {
+            ok, _r, why = saecontrol.request(sc, "@ui GET /widgets", 12000)
+            spec.assert_eq(ok, 0, "refused")
+            spec.assert_contains(why, "does not grant capabilities.controlBus.ui", "saying why")
+        }
+        spec.it("a request that is too large, not JSON, or has no command is refused, and the channel stays open") callback {
+            big = "x"
+            while string.length(big) < 5000 { big = string.concat(big, big) }
+            ok, _r, why = saecontrol.request(sc, big, 12000)
+            spec.assert_eq(ok, 0, "too large")
+            spec.assert_contains(why, "larger than this app's maxRequestBytes (4096)", "app.json's limit")
+            nj, _ne = saecontrol.request_raw(sc, "not json", 12000)
+            spec.assert_contains(nj, "{\"id\":null,\"success\":false,\"result\":null,\"errorCode\":2,\"error\":\"the request is not JSON\"}", "not JSON")
+            nc, _nce = saecontrol.request_raw(sc, "{\"id\": 5}", 12000)
+            spec.assert_contains(nc, "\"id\":5,\"success\":false", "no command")
+            spec.assert_contains(nc, "the request has no command", "saying why")
+            ok2, result2, _w2 = saecontrol.request(sc, "after", 12000)
+            spec.assert_eq(ok2, 1, "and the next one is answered")
+            spec.assert_contains(result2, "\"echo\":\"after\"", "by the page")
+        }
+        spec.it("a request the page never answers is answered at the deadline, and the page told") callback {
+            ok, _r, why = saecontrol.request(sc, "hang", 15000)
+            spec.assert_eq(ok, 0, "failed")
+            spec.assert_contains(why, "the app did not answer in 10 s", "the deadline's reason")
+            b.assert_text("stopped: deadline (1)", "the page's stopped handler ran")
+        }
+        spec.it("bytes that are not frames close the channel, quoted; with a window, the app stays, its title plain") callback {
+            spec.assert_str_eq(saecontrol.send_bytes(sc, "hello, sae\n"), "", "sent")
+            spec.assert_true(b.wait_for_console("sae: control channel: the program that started sae broke the protocol: \"hello, sae\\n\" is not a frame"), "closed, the bytes quoted")
+            _f, ferr = saecontrol.read_answer(sc, 3000)
+            spec.assert_contains(ferr, "end of", "sae closed its end: ${ferr}")
+            spec.assert_eq(running_(), 1, "sae still running")
+            spec.assert_eq(string.contains(uidriver.get_body("/windows"), "control channel on"), 0, "the title plain")
+            spec.assert_eq(b.console_count("sae: control channel: no window and no channel"), 0, "not stopped")
+        }
+    }
+    saecontrol.stop(sc)
+    spec.assert_eq(running_(), 0, "stopped by the spec")
+    hl = launch_(1)
+    spec.describe(fw, "the control channel without a window") {
+        spec.it("sae stops when the program that started it closes the channel") callback {
+            spec.assert_eq(saecontrol.wait_event(hl, "serving", 10000), 1, "serving")
+            ok, _r, why = saecontrol.request(hl, "headless", 12000)
+            spec.assert_eq(ok, 1, "answered: ${why}")
+            saecontrol.close_input(hl)
+            spec.assert_eq(saecontrol.wait_exit(hl, 10), 0, "sae exited by itself, status 0")
+            spec.assert_true(b.wait_for_console("sae: control channel: closed by the program that started sae"), "saying why")
+            spec.assert_true(b.wait_for_console("sae: control channel: no window and no channel: stopping"), "and that it stops")
+        }
+    }
+    saecontrol.stop(hl)
+    return spec.run_summary(fw)
+}

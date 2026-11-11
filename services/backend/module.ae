@@ -22,10 +22,10 @@
 // The kernel reads them on the UI thread a tick at a time (poll never
 // waits for a frame to start), so a backend cannot stall the window.
 //
-// poll reads each frame itself (std.ipc's read and wait_readable) rather
-// than with ipc.read_frame_timeout, so that when the stream is not frames
-// (a backend printed to stdout before it claimed the channel, or a wrapper
-// wrote to it) the reason can quote the bytes that broke it.
+// poll reads each frame with services/frames rather than with
+// ipc.read_frame_timeout, so that when the stream is not frames (a backend
+// printed to stdout before it claimed the channel, or a wrapper wrote to it)
+// the reason can quote the bytes that broke it.
 
 import std.os
 import std.io (fd_close)
@@ -33,7 +33,7 @@ import std.ipc
 import std.list
 import std.string
 import std.json
-import std.time (now_ms)
+import services.frames
 
 exports (start, start_wslc, alive, why, call, poll, stop, excerpt, MAX_FRAME)
 
@@ -48,9 +48,6 @@ const FRAME_MS = 2000
 // Grace between closing the channel and killing a backend that has not
 // exited by itself.
 const STOP_GRACE_S = 2
-
-// How much of a stream that broke the protocol a reason quotes.
-const EXCERPT_BYTES = 48
 
 struct Backend {
     wr: int          // the child's stdin, written with frames, or -1 once closed
@@ -183,111 +180,26 @@ poll(h: ptr) -> (string, string) {
         return "", b.why
     }
     if ready == 0 { return "", "" }
-    data, rerr = read_frame_(b)
-    if rerr != "" {
-        if rerr == "eof" { lost_(b, "") } else { lost_(b, rerr) }   // eof: it closed its end, it has exited or is exiting
+    data, st, rerr = frames.read(b.rd, MAX_FRAME, FRAME_MS, " (its stdout is the channel: nothing but frames may be written there)")
+    if st == frames.EOF {
+        lost_(b, "")   // it closed its end: it has exited or is exiting
+        return "", b.why
+    }
+    if st == frames.BROKE {
+        lost_(b, "backend: ${rerr}")
+        return "", b.why
+    }
+    if st == frames.FAILED {
+        lost_(b, "backend: the channel failed: ${rerr}")
         return "", b.why
     }
     b.frames = b.frames + 1
     return data, ""
 }
 
-// One frame from the backend, the first byte of which has arrived: (data,
-// ""), or ("", "eof") when the stream ended before a frame began, or ("",
-// why) when it is not frames, the why quoting the bytes that broke it.
-read_frame_(b: *Backend) -> (string, string) {
-    start = now_ms()
-    head = ""
-    while string.length(head) < 4 {
-        chunk, st = read_some_(b, 4 - string.length(head), start)
-        if st == 1 {
-            if string.length(head) == 0 { return "", "eof" }
-            return "", "backend: it broke the protocol: the stream ended inside a frame's header, after ${excerpt(head)}"
-        }
-        if st == 2 {
-            return "", "backend: it broke the protocol: ${excerpt(head)} and then nothing for ${FRAME_MS} ms, which is not a frame"
-        }
-        if st == 3 { return "", chunk }
-        head = string.concat(head, chunk)
-    }
-    n = byte_(head, 0) * 16777216 + byte_(head, 1) * 65536 + byte_(head, 2) * 256 + byte_(head, 3)
-    if n > MAX_FRAME {
-        // Not a header: quote what came, with whatever follows at once.
-        more = ""
-        r, _we = ipc.wait_readable(b.rd, 50)
-        if r == 1 {
-            m, _re = ipc.read(b.rd, EXCERPT_BYTES)
-            more = m
-        }
-        return "", "backend: it broke the protocol: ${excerpt(string.concat(head, more))} is not a frame (its stdout is the channel: nothing but frames may be written there)"
-    }
-    data = ""
-    while string.length(data) < n {
-        chunk, st = read_some_(b, n - string.length(data), start)
-        if st == 1 {
-            return "", "backend: it broke the protocol: the stream ended inside a frame of ${n} bytes, after ${excerpt(data)}"
-        }
-        if st == 2 {
-            return "", "backend: it broke the protocol: a frame of ${n} bytes not whole within ${FRAME_MS} ms, after ${excerpt(data)}"
-        }
-        if st == 3 { return "", chunk }
-        data = string.concat(data, chunk)
-    }
-    return data, ""
-}
-
-// Up to `want` bytes, within FRAME_MS of `start`: (bytes, 0), ("", 1) at
-// end of stream, ("", 2) at the deadline, (why, 3) when the channel failed.
-read_some_(b: *Backend, want: int, start: long) -> (string, int) {
-    left = FRAME_MS - ((now_ms() - start) as int)
-    if left < 0 { left = 0 }
-    ready, werr = ipc.wait_readable(b.rd, left)
-    if werr != "" { return "backend: the channel failed: ${werr}", 3 }
-    if ready == 0 { return "", 2 }
-    chunk, rerr = ipc.read(b.rd, want)
-    if rerr != "" { return "backend: the channel failed: ${rerr}", 3 }
-    if string.length(chunk) == 0 { return "", 1 }
-    return chunk, 0
-}
-
-byte_(s: string, i: int) -> int {
-    c = string.string_char_at(s, i)
-    if c < 0 { c = c + 256 }
-    return c
-}
-
-// `s` quoted for a reason: at most EXCERPT_BYTES bytes, printable ASCII as
-// it is, \n \r \t \" \\ as such and any other byte as \xHH, then "..." if
-// there was more.
+// `s` quoted for a reason (services/frames' excerpt).
 excerpt(s: string) -> string {
-    hex = "0123456789abcdef"
-    out = "\""
-    n = string.length(s)
-    i = 0
-    while i < n && i < EXCERPT_BYTES {
-        c = byte_(s, i)
-        if c == 10 {
-            out = string.concat(out, "\\n")
-        } else if c == 13 {
-            out = string.concat(out, "\\r")
-        } else if c == 9 {
-            out = string.concat(out, "\\t")
-        } else if c == 34 {
-            out = string.concat(out, "\\\"")
-        } else if c == 92 {
-            out = string.concat(out, "\\\\")
-        } else if c >= 32 && c < 127 {
-            out = string.concat(out, string.string_from_char(c))
-        } else {
-            hi = string.string_substring(hex, c / 16, c / 16 + 1)
-            lo = string.string_substring(hex, c % 16, c % 16 + 1)
-            out = string.concat(out, "\\x${hi}${lo}")
-        }
-        i = i + 1
-    }
-    out = string.concat(out, "\"")
-    if n > EXCERPT_BYTES { out = string.concat(out, "...") }
-    return out
+    return frames.excerpt(s)
 }
 
 // Close the channel, give the backend STOP_GRACE_S to exit by itself, then

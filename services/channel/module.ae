@@ -1,0 +1,289 @@
+// services/channel — the control channel: the program that started sae
+// drives the app over sae's own stdin and stdout (docs/app-backend.md, "The
+// control channel"). The inverse of services/backend: there sae is the
+// parent and holds the pipes to a program it started; here sae is the child,
+// started with `sae --app <dir> --control-stdio` by a program that holds the
+// other ends (os.run_stdio in Aether, child_process.spawn in node, a shell
+// pipe). Nothing is written to the file system, nothing listens, and there
+// is no key: holding the descriptors is the capability, and only sae and the
+// program that started it hold them.
+//
+// It carries what the control bus carries (services/bus), one command at a
+// time to the page that serves (bus.serve), with the bus's answer shape:
+//
+//   parent -> sae   {"id": <number or string>, "command": "<string>"}
+//   sae -> parent   {"id": <the same>, "success": true, "result": <JSON>, "errorCode": 0, "error": ""}
+//                   {"id": <the same>, "success": false, "result": null, "errorCode": 1, "error": "<why>"}
+//                   {"event": "serving"}     a page serves: commands reach it from now
+//
+// Frames are std.ipc's (a 4-byte big-endian length, then the bytes), each
+// one JSON object. A request that is not JSON, has no command, or is longer
+// than app.json's maxRequestBytes is answered as failed (errorCode 2), and
+// the channel stays open; a stream that is not frames closes it.
+//
+// claim() takes stdin and stdout first thing in main (ipc.stdio_channel):
+// from then on fd 0 reads the null device and fd 1 writes to stderr, so
+// sae's own output (the page's print, its notes) never lands in a frame,
+// and the two channel descriptors are close-on-exec (non-inheritable on
+// Windows): a program sae starts later (an app's backend) does not hold
+// them.
+//
+// Each Channel is an instance with its own state (the kernel holds one per
+// launch); nothing here is module state. The kernel polls it from a UI
+// timer, a tick at a time, so a parent cannot stall the window by sending.
+
+import std.ipc
+import std.io (fd_close)
+import std.list
+import std.string
+import std.json
+import services.frames
+
+exports (claim, configure, alive, why, poll, next, answer, event, close, take_log, MAX_FRAME)
+
+// The largest frame either side may send; a header announcing more closes
+// the channel. A request's command is held to app.json's maxRequestBytes
+// (at most this) besides.
+const MAX_FRAME = 1048576
+
+// A frame that has begun must be whole within this.
+const FRAME_MS = 2000
+
+// Requests waiting for the page, past which one is answered "busy" (the
+// bus's limit).
+const MAX_WAITING = 8
+
+// Frames read in one tick, at most: the rest wait for the next.
+const PER_TICK = 16
+
+struct Channel {
+    rd: int          // what was stdin: requests come in, or -1 once closed
+    wr: int          // what was stdout: answers go out, or -1 once closed
+    max: int         // a command's most bytes (maxRequestBytes)
+    why: string      // why it closed, "" while open
+    waiting: ptr     // std.list of *Request, in arrival order; the first may be with the page
+    ids: int         // the last local id handed out
+    log: string      // lines for the kernel to print (take_log)
+}
+
+// A request: sae's own id for it (what the page answers), the parent's id as
+// JSON text (what the answer echoes), the command, and whether it is with
+// the page.
+struct Request {
+    id: int
+    ref: string
+    command: string
+    out: int
+}
+
+// Claim stdin and stdout as the channel: (channel, "") or (null, why).
+// Call it first thing in main, before anything is printed: a byte written
+// to stdout before the claim lands in the channel.
+claim() -> (ptr, string) {
+    rd, wr, err = ipc.stdio_channel()
+    if err != "" { return null, "control channel: ${err}" }
+    c = heap.new(Channel)
+    c.rd = rd
+    c.wr = wr
+    c.max = 65536
+    c.why = ""
+    c.waiting = list.new()
+    c.ids = 0
+    c.log = ""
+    return c as ptr, ""
+}
+
+// A command's most bytes: app.json's maxRequestBytes, at most MAX_FRAME.
+configure(h: ptr, max_bytes: int) {
+    c = h as *Channel
+    c.max = max_bytes
+    if c.max <= 0 { c.max = 65536 }
+    if c.max > MAX_FRAME { c.max = MAX_FRAME }
+}
+
+// 1 while the channel is open.
+alive(h: ptr) -> int {
+    if h == null { return 0 }
+    c = h as *Channel
+    if c.rd < 0 { return 0 }
+    return 1
+}
+
+// Why the channel closed ("" while it is open).
+why(h: ptr) -> string {
+    if h == null { return "control channel: none" }
+    c = h as *Channel
+    return c.why
+}
+
+// Lines the kernel prints (requests refused here), then forgotten.
+take_log(h: ptr) -> string {
+    c = h as *Channel
+    l = c.log
+    c.log = ""
+    return l
+}
+
+log_line_(c: *Channel, s: string) {
+    if c.log == "" { c.log = "sae: control channel: ${s}" } else { c.log = "${c.log}\nsae: control channel: ${s}" }
+}
+
+// Read the requests that have arrived, without waiting for one to begin.
+// A stream that is not frames, or the parent closing its end, closes the
+// channel (why says which).
+poll(h: ptr) {
+    if alive(h) == 0 { return }
+    c = h as *Channel
+    n = 0
+    while n < PER_TICK && c.rd >= 0 {
+        ready, werr = ipc.wait_readable(c.rd, 0)
+        if werr != "" {
+            close(h, "control channel: it failed: ${werr}")
+            return
+        }
+        if ready == 0 { return }
+        data, st, rerr = frames.read(c.rd, MAX_FRAME, FRAME_MS, " (sae's stdin is the channel: nothing but frames may be written there)")
+        if st == frames.EOF {
+            close(h, "control channel: closed by the program that started sae")
+            return
+        }
+        if st == frames.BROKE {
+            // rerr is "it broke the protocol: ...": it, the parent.
+            close(h, "control channel: the program that started sae ${string.substring(rerr, 3, string.length(rerr))}")
+            return
+        }
+        if st == frames.FAILED {
+            close(h, "control channel: it failed: ${rerr}")
+            return
+        }
+        take_(c, data)
+        n = n + 1
+    }
+}
+
+// One request frame: queued, or answered here as failed.
+take_(c: *Channel, data: string) {
+    v, perr = json.parse(data)
+    if perr != "" || v == null {
+        refuse_(c, "null", "the request is not JSON")
+        return
+    }
+    ref = "null"
+    idv = json.json_object_get_raw(v, "id")
+    if idv != null {
+        t, eerr = json.encode(idv)
+        if eerr == "" { ref = string.copy(t) }
+    }
+    cv = json.json_object_get_raw(v, "command")
+    if cv == null {
+        json.json_free(v)
+        refuse_(c, ref, "the request has no command")
+        return
+    }
+    command, serr = json.get_string(cv)
+    if serr != "" {
+        json.json_free(v)
+        refuse_(c, ref, "the request's command is not text")
+        return
+    }
+    command = string.copy(command)
+    json.json_free(v)
+    if string.length(command) > c.max {
+        refuse_(c, ref, "the request is larger than this app's maxRequestBytes (${c.max})")
+        return
+    }
+    if list.size(c.waiting) >= MAX_WAITING {
+        reply_(c, ref, 0, "", 1, "the control channel is busy (${MAX_WAITING} requests waiting)")
+        return
+    }
+    r = heap.new(Request)
+    c.ids = c.ids + 1
+    r.id = c.ids
+    r.ref = ref
+    r.command = command
+    r.out = 0
+    list.add(c.waiting, r as ptr)
+}
+
+refuse_(c: *Channel, ref: string, why: string) {
+    log_line_(c, "refused ${why}")
+    reply_(c, ref, 0, "", 2, why)
+}
+
+// The oldest request, now with the page: (its id, its command), or (0, "")
+// when none is waiting or one is with the page already (one at a time, in
+// order).
+next(h: ptr) -> (int, string) {
+    if alive(h) == 0 { return 0, "" }
+    c = h as *Channel
+    if list.size(c.waiting) == 0 { return 0, "" }
+    rv, _e = list.get(c.waiting, 0)
+    r = rv as *Request
+    if r.out == 1 { return 0, "" }
+    r.out = 1
+    return r.id, r.command
+}
+
+// The answer to request `id`: success, the result as JSON ("" for none), and
+// why it failed. Sent with the parent's id; a request already answered (its
+// deadline passed) is not answered twice.
+answer(h: ptr, id: int, success: int, result_json: string, error: string) {
+    if alive(h) == 0 { return }
+    c = h as *Channel
+    i = 0
+    while i < list.size(c.waiting) {
+        rv, _e = list.get(c.waiting, i)
+        r = rv as *Request
+        if r.id == id {
+            code = 1
+            if success == 1 { code = 0 }
+            ref = r.ref
+            list.list_remove(c.waiting, i)
+            reply_(c, ref, success, result_json, code, error)
+            heap.free(r)
+            return
+        }
+        i = i + 1
+    }
+}
+
+// The bus's answer shape, with the request's id: {"id", "success",
+// "result", "errorCode", "error"}. A write that fails closes the channel.
+reply_(c: *Channel, ref: string, success: int, result_json: string, code: int, error: string) {
+    ok = "false"
+    if success == 1 { ok = "true" }
+    res = result_json
+    if res == "" { res = "null" }
+    quoted, _e = json.encode(json.str(error))
+    send_(c, "{\"id\":${ref},\"success\":${ok},\"result\":${res},\"errorCode\":${code},\"error\":${quoted}}")
+}
+
+// An event the parent hears unasked: {"event": "<name>"}.
+event(h: ptr, name: string) {
+    if alive(h) == 0 { return }
+    c = h as *Channel
+    quoted, _e = json.encode(json.str(name))
+    send_(c, "{\"event\":${quoted}}")
+}
+
+send_(c: *Channel, text: string) {
+    if c.wr < 0 { return }
+    werr = ipc.write_frame(c.wr, text)
+    if werr != "" { close(c as ptr, "control channel: the program that started sae stopped reading: ${werr}") }
+}
+
+// Close both ends; the first reason is kept. Requests still waiting are
+// dropped (there is no one to answer). Safe to call twice.
+close(h: ptr, reason: string) {
+    if h == null { return }
+    c = h as *Channel
+    if c.rd >= 0 {
+        _a = fd_close(c.rd)
+        c.rd = 0 - 1
+    }
+    if c.wr >= 0 {
+        _b = fd_close(c.wr)
+        c.wr = 0 - 1
+    }
+    if c.why == "" { c.why = string.copy(reason) }
+}

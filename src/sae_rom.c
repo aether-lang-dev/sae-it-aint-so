@@ -6,3 +6,6 @@
 #include <stdio.h>
 
 void *sae_stdout(void) { return stdout; }
+/* Where sae says why it cannot start when its stdout is not its own (the
+ * control channel, --control-stdio, could not be claimed). */
+void *sae_stderr(void) { return stderr; }

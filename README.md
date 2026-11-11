@@ -385,6 +385,10 @@ service touches files, and each of its operations runs inside Aether's
   Other programs send commands with `target/sae-bus <app name> <command>`
   (`tools/saebus.ae`), which does the finding and sealing. The spreadsheet
   (RexxJS/example-app-spreadsheet) run so answers its REXX scripts' commands.
+  A program that starts the app itself takes the same `bus.serve` over
+  sae's own stdin and stdout instead (`sae --app <dir> --control-stdio`, the
+  control channel: no file, nothing listening, docs/app-backend.md);
+  spraedsheet's MCP server does.
 - A web page has no `fs`, no `documents`, no `shell`, no `printing` and no `sqlite` at all.
 
 A page says at its top which privileges it seeks, one per line:

@@ -66,7 +66,10 @@ Aether's `hide` (`aether/docs/hide-and-seal.md`):
   request a string, the answer the handler's value), while the person has
   switched it on for this launch (`sae --app <dir> --control-bus`). Loopback
   only, a courier key in `$APPDATA/.control-bus` (0600) and every message
-  sealed with it (docs/control-bus.md). Held in `services/bus`. An
+  sealed with it (docs/control-bus.md). Held in `services/bus`. Or the
+  program that started the app sends the same commands over sae's stdin and
+  stdout (`--control-stdio`, `services/channel`; docs/app-backend.md, "The
+  control channel"): no file and nothing listening. An
   installer would say, of an app that declares it: "Other programs you run
   can control this app, while you have it switched on"; and, with `fs`,
   `documents` or `shell` too: "Other programs you run could then read and

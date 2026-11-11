@@ -10,6 +10,12 @@
 #       host's) instead of starting target/pageserver
 #   SAE_TEST_BIN=<sae-driver> tests/run_spec.sh <spec>   another sae-driver: an
 #       app's own host, built by tools/saehost.sh with its natives (docs/natives.md)
+#   SAE_TEST_PARENT=1 SAE_TEST_APP=<dir> tests/run_spec.sh <spec>   the spec
+#       starts sae-driver itself, as the program that drives it over
+#       --control-stdio (sdk/saecontrol): it is given SAE_TEST_DRIVER_BIN,
+#       SAE_TEST_APP_DIR, AETHER_UI_TEST_PORT and SAE_TEST_LOG, and stops
+#       what it starts; the spec's stderr, which sae inherits, is appended
+#       to SAE_TEST_LOG
 #   tests/run_spec.sh /path/to/spec_x.ae [site-dir]   a spec of another repo's
 #       (an app built on sae, such as ../spraedsheet); its own
 #       test libraries go first on the module path with SAE_TEST_LIB_DIR.
@@ -108,19 +114,30 @@ else
         sleep 0.1; i=$((i + 1))
     done
 fi
-if [ -n "${SAE_TEST_APP:-}" ]; then
+SAE=
+if [ -n "${SAE_TEST_PARENT:-}" ]; then
+    export SAE_TEST_DRIVER_BIN="$DRIVER_BIN" AETHER_UI_TEST_PORT=$DRIVER_PORT
+    [ -n "${SAE_TEST_APP:-}" ] && export SAE_TEST_APP_DIR="$(cd "$SAE_TEST_APP" && pwd)"
+    : >"$LOG"
+elif [ -n "${SAE_TEST_APP:-}" ]; then
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$DRIVER_BIN" \
         --app "$(cd "$SAE_TEST_APP" && pwd)" ${SAE_TEST_FLAGS:-} >"$LOG" 2>&1 &
 else
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$DRIVER_BIN" \
         "${SAE_TEST_START:-http://127.0.0.1:$SITE_PORT/}" >"$LOG" 2>&1 &
 fi
-SAE=$!
+[ -n "${SAE_TEST_PARENT:-}" ] || SAE=$!
 trap 'kill $SAE $SERVER 2>/dev/null || true; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
 cd "$SPEC_DIR"
 status=0
-env AETHER_LIB_DIR="${SAE_TEST_LIB_DIR:+$SAE_TEST_LIB_DIR:}$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT" \
-    SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
-    ae run "$SPEC.ae" || status=$?
+if [ -n "${SAE_TEST_PARENT:-}" ]; then
+    env AETHER_LIB_DIR="${SAE_TEST_LIB_DIR:+$SAE_TEST_LIB_DIR:}$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT:$ROOT/sdk" \
+        SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
+        ae run "$SPEC.ae" 2>>"$LOG" || status=$?
+else
+    env AETHER_LIB_DIR="${SAE_TEST_LIB_DIR:+$SAE_TEST_LIB_DIR:}$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT:$ROOT/sdk" \
+        SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
+        ae run "$SPEC.ae" || status=$?
+fi
 exit $status

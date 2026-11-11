@@ -39,7 +39,11 @@ expect_imports services/clipboard/module.ae \
 expect_imports services/bus/module.ae \
     "import std.tcp|import std.fs|import std.list|import std.string|import std.strarr|import std.json|import std.time (now_ms)|import services.agent_auth|import services.secure_channel"
 expect_imports services/backend/module.ae \
-    "import std.os|import std.io (fd_close)|import std.ipc|import std.list|import std.string|import std.json|import std.time (now_ms)"
+    "import std.os|import std.io (fd_close)|import std.ipc|import std.list|import std.string|import std.json|import services.frames"
+expect_imports services/channel/module.ae \
+    "import std.ipc|import std.io (fd_close)|import std.list|import std.string|import std.json|import services.frames"
+expect_imports services/frames/module.ae \
+    "import std.ipc|import std.string|import std.time (now_ms)"
 expect_imports services/agent_auth/module.ae \
     "import std.nanoid|import std.cryptography (hmac_sha256_hex)|import std.string (bytes, string_length, string_char_at)"
 expect_imports services/secure_channel/module.ae \

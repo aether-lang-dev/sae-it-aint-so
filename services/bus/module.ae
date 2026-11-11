@@ -34,7 +34,7 @@ import std.time (now_ms)
 import services.agent_auth
 import services.secure_channel
 
-exports (configure, declared, start, stop, listening, address, poll, next, answer, take_log)
+exports (configure, declared, request_limit, start, stop, listening, address, poll, next, answer, take_log)
 
 const MAX_WAITING = 8
 
@@ -68,6 +68,12 @@ configure(name: string, max_bytes: int) {
 declared() -> int {
     if name_ == "" { return 0 }
     return 1
+}
+
+// A request's most bytes (maxRequestBytes), which the control channel
+// (services/channel) holds its commands to as well.
+request_limit() -> int {
+    return max_
 }
 
 listening() -> int {

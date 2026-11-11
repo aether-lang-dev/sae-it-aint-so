@@ -83,7 +83,9 @@ backend in a WSL container on Windows. The socket pair it began on is gone.
   a computed name.
 
 Not yet: a picked document for the backend (no descriptor crosses a pipe),
-containment, plugins, and anything about the bus.
+containment and plugins. The other direction, a program that starts sae
+and drives the app over sae's own stdin and stdout, is built: "The
+control channel", below.
 
 ## The shape
 
@@ -193,13 +195,14 @@ descriptor, and only sae and the child it started hold one.
 
 ## What it does not replace
 
-- **Scripts started on their own** (spraedsheet's REXX from a shell, an
-  AI client's MCP server it launched itself) cannot inherit a descriptor
-  from a sae that is already running. For those there is still the bus,
-  or, better than its loopback port, a Unix socket in a 0700 directory
-  (no port, no key, no browser can reach it; Aether has `tcp.listen_unix`).
-  Or the other way round: the MCP server starts sae, holds the channel,
-  and so owns the instance it drives.
+- **Scripts started on their own** (spraedsheet's REXX from a shell, a
+  `sae-bus` command) cannot inherit a descriptor from a sae that is
+  already running. For those there is still the bus, or, better than its
+  loopback port, a Unix socket in a 0700 directory (no port, no key, no
+  browser can reach it; Aether has `tcp.listen_unix`). A program that can
+  start the app itself (spraedsheet's MCP server and its `sheet` CLI) takes
+  the other way round: it starts sae, holds the channel, and so owns the
+  instance it drives ("The control channel", next).
 - **Across machines**: a Linux script, a Linux server and a Windows sae
   meet on the server (the page long-polls it). Across the WSL boundary a
   backend sae starts itself does cross, through `wslc run -i` (above); a
@@ -207,6 +210,106 @@ descriptor, and only sae and the child it started hold one.
 - **Natives** stay: compiled into the host, capability-empty, for pure
   functions where a frame round trip would cost too much. A backend is for
   effects.
+
+## The control channel: a program that starts sae drives the app
+
+**Built 2026-11-11.** The inverse of a backend: there sae starts a program
+and holds its stdin and stdout; here a program starts sae and holds sae's.
+The first user is spraedsheet's MCP server (and its `sheet` CLI), which
+until now drove the app over the control bus.
+
+```
+an AI client -> spreadsheet-mcp.js (node)
+                  |  spawn: sae --app app --control-stdio, stdin and stdout pipes
+                  v
+               sae: claims fd 0 and fd 1 first thing in main (ipc.stdio_channel),
+                    serves the same bus.serve the bus feeds
+```
+
+- **The flag**: `sae --app <dir> --control-stdio`, in the place
+  `--control-bus` takes (one or the other, per launch). `main()` claims
+  stdin and stdout with `ipc.stdio_channel` before anything else runs, so
+  nothing sae or a page prints can reach the channel: from then on fd 0
+  reads the null device and fd 1 writes to stderr, and the two channel
+  descriptors are close-on-exec (non-inheritable on Windows), so a
+  backend sae starts, or anything else, does not hold them.
+  `services/channel` (an instance per launch, no module state) reads and
+  answers frames; `services/frames` is the frame reader it shares with
+  `services/backend`. A claim that fails says why on stderr and exits 2.
+- **The same page API.** The app declares `capabilities.controlBus` and
+  its page calls `bus.serve(fn, stopped)` as for the bus; the page does not
+  know which way the commands come. The same tick (`bus_tick_`) hands them
+  to it, one at a time, with the same 10 s deadline, the same `stopped`
+  reasons, the same `@ui` paths (with `controlBus.ui` and a driver build),
+  and the request size held to the same `maxRequestBytes`. Only where a
+  command is read and where its answer goes differ (`ctl_next_`,
+  `ctl_answer_`).
+- **The frames** (std.ipc's, a 4-byte big-endian length then JSON):
+
+  ```
+  parent -> sae   {"id": <number or string>, "command": "<string>"}
+  sae -> parent   {"id": <the same>, "success": true, "result": <JSON>, "errorCode": 0, "error": ""}
+                  {"id": <the same>, "success": false, "result": null, "errorCode": 1, "error": "<why>"}
+                  {"event": "serving"}     a page called bus.serve: commands reach it from now
+  ```
+
+  The answer is the bus's object (what `sae-bus` prints) with the id, so a
+  client moves between the two without reading answers differently. A
+  request that is not JSON, has no command or is past `maxRequestBytes` is
+  answered with errorCode 2 (id null when it had none) and the channel
+  stays open; more than eight waiting is "busy". Bytes that are not frames
+  close the channel, quoted as a backend's are.
+- **When the parent goes** (end of stream on sae's stdin, or a broken
+  stream): with no window (`AETHER_UI_HEADLESS`) sae exits, as a child
+  whose parent has gone should, so a headless app never outlives the
+  program that started it. With a window it stays: the person may be using
+  it, so only the title's mark (`- control channel on`) goes. Closing the
+  window ends sae, and the parent reads the end of the stream.
+- **The parent's side**: `sdk/saecontrol` for an Aether program (`start`,
+  `request`, `wait_event`, `close_input`, `stop`), and spraedsheet's
+  `mcp/sae-channel.js` for node.
+- **Tests**: `tests/spec_app_channel.ae` is the parent (`run_spec.sh`'s
+  `SAE_TEST_PARENT=1`: the spec starts sae-driver itself) on
+  `tests/apps/bus`: the serving event and the title, answers with numeric
+  and string ids, requests sent together answered in order, the `@ui`
+  refusal, oversized, non-JSON and command-less requests refused with the
+  channel kept, the deadline, bytes that are not frames (closed, quoted,
+  the windowed app still running), no courier file and `lsof` finding
+  nothing listening; then a headless launch that exits by itself when the
+  spec closes its stdin. Against a sae without the flag every case but
+  "nothing listening" fails (that sae prints its notes into its stdout,
+  which the parent reads as a frame header). Passed (2026-11-11) on macOS,
+  on ae-x64 (Ubuntu 22.04, GTK 4.6) and natively on win11, all on Aether
+  0.908.0; `tests/run_all.sh` 66/66 on macOS and ae-x64. spraedsheet's
+  `tests/mcp/channel.test.js` drives the real app through its MCP server
+  this way, end to end (macOS; it needs node and lsof).
+
+### Alice, Bob and Eve, for the channel
+
+| Eve is | The control bus | The control channel |
+|---|---|---|
+| Another account on the machine | Must not read `$APPDATA/.control-bus` (0600; on Windows not yet held) | Nothing to read: no file, no address, no key |
+| Another account, connecting | Reaches the loopback port; refused without the key | Nothing listens |
+| A web page in some browser | Refused by the key, `Origin` and `Host` | Nothing to send to |
+| A program sae starts (an app's backend, the shell's opener) | Could read the courier file if it may read the app's data folder | Does not hold the channel: its descriptors are close-on-exec |
+| Another program of Alice's that wants in later | Reads the courier file and drives the app | Cannot: only the program that started this sae holds the channel; it must start its own |
+| Malware running as Alice | Reads the courier file | Can attach to the parent or to sae (ptrace, a debugger), as to any of Alice's programs |
+
+The fifth row is the trade: the channel cannot be joined. A REXX script
+started from a shell, or `sae-bus`, needs the app already running, so the
+bus stays for them, off unless the person starts the app with
+`--control-bus`.
+
+### Windows
+
+sae is a console-subsystem program (no `-mwindows`), so its stdin and
+stdout are the handles its parent gives it; `ipc.stdio_channel` on
+Windows duplicates them as non-inheritable handles and points the CRT's
+fd 0 and fd 1 and the Win32 standard handles at NUL and stderr.
+`spec_app_channel` passes natively on win11 (MSYS2 MINGW64, the spec
+starting `sae-driver.exe` itself). Not run there yet: the full
+`tests/run_all.sh` with it, and spraedsheet's MCP server on the channel
+(its end-to-end test uses `lsof` and `pgrep`).
 
 ## Transports
 
@@ -245,8 +348,23 @@ did not run on Windows and nothing yet passed a descriptor.
    modules, other Aether libraries) and how `app.json` declares them.
 4. **A picked document for the backend**, now that no descriptor crosses
    the channel (What the kernel does, above).
-5. **The bus's future**: if backends and a Unix socket cover its cases,
-   the loopback TCP bus, its courier file and its sealing could go.
+5. **The bus's future**: if backends, the control channel and a Unix
+   socket cover its cases, the loopback TCP bus, its courier file and its
+   sealing could go. What still needs it: attaching to an app already
+   running (spraedsheet's REXX scripts and `sae-bus`, the MCP server's
+   `--attach`).
+6. **The control channel on Windows**: `spec_app_channel` passes on
+   win11; spraedsheet's MCP server driving sae there is not yet run. A
+   console-subsystem sae started from a GUI parent gets a console window
+   of its own; a parent that wants none starts it with `CREATE_NO_WINDOW`
+   (node's `windowsHide`).
+7. **The control channel and the page's output**: a parent that does not
+   read sae's stdout stalls sae once the pipe is full (a write on the UI
+   thread waits), as a backend that does not read its stdin stalls sae's
+   calls to it. A bound on that write is not built for either.
+8. **Both at once**: one launch has the channel or the bus. A person who
+   wants to attach a REXX script to an app an MCP server started cannot
+   yet; allowing both would be one more `ctl_answer_` case.
 
 Done: Windows (2026-11-11, the stdio transport, native and wslc), and
 stray output (`saebackend.open()` claims stdin and stdout with

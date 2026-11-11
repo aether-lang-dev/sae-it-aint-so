@@ -1,0 +1,126 @@
+// services/frames — reading std.ipc's frames (a 4-byte big-endian length,
+// then the bytes) from a pipe on the UI thread, for the two channels sae
+// holds: an app's backend (services/backend, sae the parent) and the control
+// channel (services/channel, sae the child). Nothing here is shared between
+// channels: each call takes the descriptor it reads.
+//
+// read() takes a frame whose first byte has arrived (the caller asked
+// ipc.wait_readable with a wait of 0 first), and bounds the rest of it by
+// `frame_ms`. It reads the bytes itself, rather than with
+// ipc.read_frame_timeout, so that when the stream is not frames (a program
+// printed to the channel, or a wrapper wrote to it) the reason can quote the
+// bytes that broke it.
+
+import std.ipc
+import std.string
+import std.time (now_ms)
+
+exports (read, excerpt, OK, EOF, BROKE, FAILED)
+
+// read's outcomes.
+const OK = 0       // (data, OK, "")
+const EOF = 1      // the stream ended before a frame began: the other end closed it
+const BROKE = 2    // not frames: why is "it broke the protocol: ..."
+const FAILED = 3   // the descriptor failed: why is std.ipc's reason
+
+// How much of a stream that broke the protocol a reason quotes.
+const EXCERPT_BYTES = 48
+
+// One frame from `fd`, at most `max` bytes, its first byte already there:
+// (data, OK, ""), ("", EOF, ""), ("", BROKE, why) or ("", FAILED, why).
+// `note` follows the excerpt when what came is not a frame header at all
+// (" (its stdout is the channel: ...)"), saying where the bytes went wrong.
+read(fd: int, max: int, frame_ms: int, note: string) -> (string, int, string) {
+    start = now_ms()
+    head = ""
+    while string.length(head) < 4 {
+        chunk, st = some_(fd, 4 - string.length(head), start, frame_ms)
+        if st == 1 {
+            if string.length(head) == 0 { return "", EOF, "" }
+            return "", BROKE, "it broke the protocol: the stream ended inside a frame's header, after ${excerpt(head)}"
+        }
+        if st == 2 {
+            return "", BROKE, "it broke the protocol: ${excerpt(head)} and then nothing for ${frame_ms} ms, which is not a frame"
+        }
+        if st == 3 { return "", FAILED, chunk }
+        head = string.concat(head, chunk)
+    }
+    n = byte_(head, 0) * 16777216 + byte_(head, 1) * 65536 + byte_(head, 2) * 256 + byte_(head, 3)
+    if n > max {
+        // Not a header: quote what came, with whatever follows at once.
+        more = ""
+        r, _we = ipc.wait_readable(fd, 50)
+        if r == 1 {
+            m, _re = ipc.read(fd, EXCERPT_BYTES)
+            more = m
+        }
+        return "", BROKE, "it broke the protocol: ${excerpt(string.concat(head, more))} is not a frame${note}"
+    }
+    data = ""
+    while string.length(data) < n {
+        chunk, st = some_(fd, n - string.length(data), start, frame_ms)
+        if st == 1 {
+            return "", BROKE, "it broke the protocol: the stream ended inside a frame of ${n} bytes, after ${excerpt(data)}"
+        }
+        if st == 2 {
+            return "", BROKE, "it broke the protocol: a frame of ${n} bytes not whole within ${frame_ms} ms, after ${excerpt(data)}"
+        }
+        if st == 3 { return "", FAILED, chunk }
+        data = string.concat(data, chunk)
+    }
+    return data, OK, ""
+}
+
+// Up to `want` bytes, within frame_ms of `start`: (bytes, 0), ("", 1) at
+// end of stream, ("", 2) at the deadline, (why, 3) when the descriptor failed.
+some_(fd: int, want: int, start: long, frame_ms: int) -> (string, int) {
+    left = frame_ms - ((now_ms() - start) as int)
+    if left < 0 { left = 0 }
+    ready, werr = ipc.wait_readable(fd, left)
+    if werr != "" { return werr, 3 }
+    if ready == 0 { return "", 2 }
+    chunk, rerr = ipc.read(fd, want)
+    if rerr != "" { return rerr, 3 }
+    if string.length(chunk) == 0 { return "", 1 }
+    return chunk, 0
+}
+
+byte_(s: string, i: int) -> int {
+    c = string.string_char_at(s, i)
+    if c < 0 { c = c + 256 }
+    return c
+}
+
+// `s` quoted for a reason: at most EXCERPT_BYTES bytes, printable ASCII as
+// it is, \n \r \t \" \\ as such and any other byte as \xHH, then "..." if
+// there was more.
+excerpt(s: string) -> string {
+    hex = "0123456789abcdef"
+    out = "\""
+    n = string.length(s)
+    i = 0
+    while i < n && i < EXCERPT_BYTES {
+        c = byte_(s, i)
+        if c == 10 {
+            out = string.concat(out, "\\n")
+        } else if c == 13 {
+            out = string.concat(out, "\\r")
+        } else if c == 9 {
+            out = string.concat(out, "\\t")
+        } else if c == 34 {
+            out = string.concat(out, "\\\"")
+        } else if c == 92 {
+            out = string.concat(out, "\\\\")
+        } else if c >= 32 && c < 127 {
+            out = string.concat(out, string.string_from_char(c))
+        } else {
+            hi = string.string_substring(hex, c / 16, c / 16 + 1)
+            lo = string.string_substring(hex, c % 16, c % 16 + 1)
+            out = string.concat(out, "\\x${hi}${lo}")
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "\"")
+    if n > EXCERPT_BYTES { out = string.concat(out, "...") }
+    return out
+}

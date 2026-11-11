@@ -34,6 +34,7 @@ import services.files
 import services.documents
 import services.clipboard
 import services.bus
+import services.channel
 import services.backend
 import services.shell
 import services.print as printing
@@ -54,6 +55,7 @@ import std.strbuilder
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
 extern sae_stdout() -> ptr
+extern sae_stderr() -> ptr
 extern putchar(c: int) -> int
 extern fputs(s: string, stream: ptr) -> int
 extern fflush(stream: ptr) -> int
@@ -117,6 +119,10 @@ struct Browser {
     backend_calls: ptr   // std.list of *BackendCall: calls not yet answered
     backend_timer: int   // the UI timer reading its frames, or 0
     backend_deadline_ms: int  // a call not answered in this is failed (app.json deadlineMs)
+    // The control channel (--control-stdio, services/channel): the program
+    // that started sae drives the app over sae's stdin and stdout.
+    control: ptr     // services/channel's instance, or null (not started that way)
+    control_timer: int   // the UI timer reading it, or 0
 }
 
 // A call to the backend not yet answered: which page made it (an answer for
@@ -4114,6 +4120,14 @@ sae_fs_read_text(ctx: ptr, this_val: int, argv: int) -> int {
 // request to the page's dispatcher, one at a time, and the page's answer
 // comes back through bus.answer. A request the page has not answered in
 // BUS_DEADLINE_MS is answered for it, as failed.
+//
+// The control channel (--control-stdio, services/channel) is the other way
+// in, to the same bus.serve: the program that started sae sends the same
+// commands over sae's stdin and stdout, and nothing listens. One launch has
+// one or the other: with the channel, bus.serve tells the parent a page
+// serves ({"event": "serving"}) instead of listening, and the same tick
+// (bus_tick_) reads the channel instead of the listener. ctl_next_ and
+// ctl_answer_ are the one place the two differ.
 
 var control_bus_flag_: int = 0    // the person started the app with --control-bus
 var bus_ui_granted_: int = 0      // app.json capabilities.controlBus.ui: the UI driver's keys, pointer and screenshots, over the bus
@@ -4138,6 +4152,11 @@ sae_bus_serve(ctx: ptr, this_val: int, argv: int) -> int {
     }
     if argc >= 2 && is_fn_arg_(ctx, argv, 1) == 1 { p.bus_stopped_ref = hold_arg_(ctx, argv, 1) }
     bus_page_ = p as ptr
+    ch = control_()
+    if ch != null {
+        channel.event(ch, "serving")
+        return 0
+    }
     if control_bus_flag_ == 0 {
         if bus_told_off_ == 0 {
             bus_told_off_ = 1
@@ -4171,7 +4190,7 @@ sae_bus_answer(ctx: ptr, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     id = arg_int_(ctx, argv, argc, 0, 0)
     if id != bus_inflight_ { return 0 }   // answered already (its deadline passed)
-    bus.answer(id, arg_int_(ctx, argv, argc, 1, 0), own_(arg_str_(ctx, argv, argc, 2)), own_(arg_str_(ctx, argv, argc, 3)))
+    ctl_answer_(id, arg_int_(ctx, argv, argc, 1, 0), own_(arg_str_(ctx, argv, argc, 2)), own_(arg_str_(ctx, argv, argc, 3)))
     bus_inflight_ = 0
     return 0
 }
@@ -4204,9 +4223,20 @@ bus_silence_() {
 // handed to the page (one at a time).
 bus_tick_() {
     bus_ui_poll_()
-    bus.poll()
-    l = bus.take_log()
-    if l != "" { say_(l) }
+    ch = control_()
+    if ch != null {
+        channel.poll(ch)
+        cl = channel.take_log(ch)
+        if cl != "" { say_(cl) }
+        if channel.alive(ch) == 0 {
+            control_gone_()
+            return
+        }
+    } else {
+        bus.poll()
+        l = bus.take_log()
+        if l != "" { say_(l) }
+    }
     if bus_inflight_ != 0 {
         if bus_interrupted_ == 1 {
             bus_stop_request_("interrupted", "stopped: it ran past the app's limit of ${PAGE_TIME_MS / 1000} s for one piece of work")
@@ -4215,19 +4245,23 @@ bus_tick_() {
         }
         return
     }
-    id, command = bus.next()
+    id, command = ctl_next_()
     if id == 0 { return }
     if string.starts_with(command, "@ui ") == 1 {
         bus_ui_(id, command)
         return
     }
+    if bus.declared() == 0 {
+        ctl_answer_(id, 0, "", "this app's app.json does not declare a control bus (capabilities.controlBus)")
+        return
+    }
     if bus_page_ == null {
-        bus.answer(id, 0, "", "no page of this app is serving the control bus")
+        ctl_answer_(id, 0, "", "no page of this app is serving the control bus")
         return
     }
     p = bus_page_ as *Page
     if p.bus_ref == 0 {
-        bus.answer(id, 0, "", "no page of this app is serving the control bus")
+        ctl_answer_(id, 0, "", "no page of this app is serving the control bus")
         return
     }
     bus_inflight_ = id
@@ -4250,6 +4284,67 @@ bus_tick_() {
     }
 }
 
+// The launch's control channel (--control-stdio), or null.
+control_() -> ptr {
+    if browser_ == null { return null }
+    b = browser_ as *Browser
+    return b.control
+}
+
+// The next request for the page, from the channel or the bus.
+ctl_next_() -> (int, string) {
+    ch = control_()
+    if ch != null {
+        id, command = channel.next(ch)
+        return id, command
+    }
+    id2, command2 = bus.next()
+    return id2, command2
+}
+
+// A request answered, on the channel or the bus it came by.
+ctl_answer_(id: int, success: int, result_json: string, error: string) {
+    ch = control_()
+    if ch != null {
+        channel.answer(ch, id, success, result_json, error)
+        return
+    }
+    bus.answer(id, success, result_json, error)
+}
+
+// At launch, with --control-stdio: the channel held to the bus's request
+// size, the window marked, and the tick that reads it started. It needs no
+// page yet: requests that come before one serves are answered so.
+control_start_(b: *Browser) {
+    channel.configure(b.control, bus.request_limit())
+    if bus.declared() == 0 {
+        say_("sae: control channel: this app's app.json does not declare a control bus (capabilities.controlBus): every request is refused")
+    } else {
+        say_("sae: control channel: on (the program that started sae can control ${app_name_}; nothing listens)")
+    }
+    b.control_timer = ui.timer(20, || { bus_tick_() })
+}
+
+// The program that started sae closed the channel, or broke it. Without a
+// window (AETHER_UI_HEADLESS) no one else can use the app, so sae stops, as
+// a child whose parent has gone should; with one, the person may be using
+// it, so it stays and only the title's mark goes.
+control_gone_() {
+    b = browser_ as *Browser
+    say_("sae: ${channel.why(b.control)}")
+    if b.control_timer != 0 {
+        ui.timer_cancel(b.control_timer)
+        b.control_timer = 0
+    }
+    bus_inflight_ = 0
+    if env_("AETHER_UI_HEADLESS") != "" {
+        say_("sae: control channel: no window and no channel: stopping")
+        if b.backend != null { backend.stop(b.backend) }
+        exit(0)
+    }
+    ui.set_window_title(1, app_name_)
+}
+
 // The control bus's ui channel (app.json capabilities.controlBus.ui, and a
 // sae-driver build run with AETHER_UI_TEST_PORT): "@ui GET /widgets",
 // "@ui POST /window/key?combo=Down", "@ui GET /screenshot?b64=1" (answered as
@@ -4261,30 +4356,30 @@ bus_tick_() {
 // answered on the bus when the driver has closed it.
 bus_ui_(id: int, command: string) {
     if bus_ui_granted_ == 0 {
-        bus.answer(id, 0, "", "this app's app.json does not grant capabilities.controlBus.ui")
+        ctl_answer_(id, 0, "", "this app's app.json does not grant capabilities.controlBus.ui")
         return
     }
     port = env_("AETHER_UI_TEST_PORT")
     if port == "" {
-        bus.answer(id, 0, "", "this sae has no UI driver (a sae-driver build, started with AETHER_UI_TEST_PORT)")
+        ctl_answer_(id, 0, "", "this sae has no UI driver (a sae-driver build, started with AETHER_UI_TEST_PORT)")
         return
     }
     rest = string.substring(command, 4, string.length(command))
     sp = string.index_of(rest, " ")
     if sp <= 0 {
-        bus.answer(id, 0, "", "@ui <GET|POST> <path>")
+        ctl_answer_(id, 0, "", "@ui <GET|POST> <path>")
         return
     }
     method = string.substring(rest, 0, sp)
     path = string.trim(string.substring(rest, sp + 1, string.length(rest)))
     if bus_ui_path_ok_(method, path) == 0 {
-        bus.answer(id, 0, "", "@ui: ${method} ${path} is not a path the control bus passes to the UI driver")
+        ctl_answer_(id, 0, "", "@ui: ${method} ${path} is not a path the control bus passes to the UI driver")
         return
     }
     p_port, perr = string.to_int(port)
     sock, cerr = tcp.connect("127.0.0.1", p_port)
     if cerr != "" {
-        bus.answer(id, 0, "", "the UI driver: no connection: ${cerr}")
+        ctl_answer_(id, 0, "", "the UI driver: no connection: ${cerr}")
         return
     }
     req = "${method} ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
@@ -4325,7 +4420,7 @@ bus_ui_poll_() {
         }
         if done == 0 && now_ms_() - pend.since > BUS_DEADLINE_MS {
             _c = tcp.tcp_close(pend.sock)
-            bus.answer(pend.id, 0, "", "the UI driver did not answer in ${BUS_DEADLINE_MS / 1000} s")
+            ctl_answer_(pend.id, 0, "", "the UI driver did not answer in ${BUS_DEADLINE_MS / 1000} s")
             list.list_remove(bus_ui_pending_, i)
             heap.free(pend)
             continue
@@ -4334,7 +4429,7 @@ bus_ui_poll_() {
             _c = tcp.tcp_close(pend.sock)
             end = string.index_of(pend.got, "\r\n\r\n")
             if end < 0 {
-                bus.answer(pend.id, 0, "", "the UI driver answered nothing")
+                ctl_answer_(pend.id, 0, "", "the UI driver answered nothing")
             } else {
                 line = string.substring(pend.got, 0, string.index_of(pend.got, "\r\n"))
                 status = 0
@@ -4387,19 +4482,19 @@ bus_ui_path_ok_(method: string, path: string) -> int {
 // The driver's answer on the bus: a JSON body as it is, other text as a JSON string.
 bus_ui_answer_(id: int, status: int, body: string, err: string) {
     if err != "" {
-        bus.answer(id, 0, "", "the UI driver: ${err}")
+        ctl_answer_(id, 0, "", "the UI driver: ${err}")
         return
     }
     if status < 200 || status >= 300 {
-        bus.answer(id, 0, "", "the UI driver answered ${status}: ${body}")
+        ctl_answer_(id, 0, "", "the UI driver answered ${status}: ${body}")
         return
     }
     if string.starts_with(body, "{") == 1 || string.starts_with(body, "[") == 1 {
-        bus.answer(id, 1, body, "")
+        ctl_answer_(id, 1, body, "")
         return
     }
     quoted = string.string_replace_all(string.string_replace_all(body, "\\", "\\\\"), "\"", "\\\"")
-    bus.answer(id, 1, "\"${quoted}\"", "")
+    ctl_answer_(id, 1, "\"${quoted}\"", "")
 }
 
 // The request in flight answered as failed, its handler no longer awaited,
@@ -4408,7 +4503,7 @@ bus_ui_answer_(id: int, status: int, body: string, err: string) {
 // promise never to settle; "deadline" when it was answered for it while
 // still running. The page puts back what the request had done.
 bus_stop_request_(reason: string, why: string) {
-    bus.answer(bus_inflight_, 0, "", why)
+    ctl_answer_(bus_inflight_, 0, "", why)
     bus_inflight_ = 0
     bus_interrupted_ = 0
     if bus_page_ == null { return }
@@ -10477,6 +10572,8 @@ browser_new_() -> *Browser {
     b.backend_calls = list.new()
     b.backend_timer = 0
     b.backend_deadline_ms = BACKEND_DEADLINE_MS
+    b.control = null
+    b.control_timer = 0
     pm = env_("SAE_PAGE_MEM")
     if pm != "" {
         v, perr = string.to_long(pm)
@@ -10538,13 +10635,28 @@ base_name_(d: string) -> string {
 
 // sae <url | page>             the browser
 // sae --app <dir>              an app, without browser chrome
+// sae --app <dir> --control-bus     its control bus on (docs/control-bus.md)
+// sae --app <dir> --control-stdio   driven by the program that started it, over stdin and stdout (docs/app-backend.md)
 // sae (in a packaged .app)     the app bundled beside the binary
 // sae (in an APK)              the app among the files it runs in
 main() {
+    // sae --app <dir> --control-stdio: the program that started sae drives
+    // the app over sae's stdin and stdout (docs/app-backend.md, "The control
+    // channel"). Claimed before anything is printed: a byte written to
+    // stdout before the claim would land in the channel.
+    ctl = null
+    if os.args_get(1) == "--app" && os.args_get(3) == "--control-stdio" {
+        ch, cerr = channel.claim()
+        if cerr != "" {
+            _w = fputs("sae: ${cerr}\n", sae_stderr())
+            exit(2)
+        }
+        ctl = ch
+    }
     // sae --app <dir> --control-bus: the person switches the app's control
     // bus on for this launch (docs/control-bus.md, decision 2).
     if os.args_get(3) == "--control-bus" { control_bus_flag_ = 1 }
-    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()))
+    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()), ctl)
     if code != 0 { exit(code) }
 }
 
@@ -10557,7 +10669,7 @@ slashes_(p: string) -> string {
     return p
 }
 
-sae_main(arg1: string, arg2: string, exe: string) -> int {
+sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr) -> int {
     app = ""
     start_url = arg1
     if arg1 == "--app" { app = arg2 }
@@ -10571,6 +10683,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     h = 600
     b = browser_new_()
     browser_ = b as ptr
+    b.control = ctl
     stdlib.configure(lib_dir_(exe))   // wave1/imports: the sae: library
     root = aether_ui_vstack_create(6)
     b.root = root
@@ -10610,6 +10723,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
         sqlite_why = sqlite_start_(manifest)   // wave1/sqlite: before any page runs
         if sqlite_why == "" { sqlite_why = natives_start_(manifest) }   // wave1/natives
         if sqlite_why == "" { sqlite_why = backend_start_(b, manifest) }   // the app's backend
+        if b.control != null { control_start_(b) }   // --control-stdio
         build_content_(b, mem.long_to_ptr(root))
     } else {
         build_chrome_(b, root)
@@ -10633,6 +10747,7 @@ sae_main(arg1: string, arg2: string, exe: string) -> int {
     // The first page may have started the control bus before the window
     // existed: its title says so from the start.
     if bus.listening() == 1 { title = "${title} - control bus on" }
+    if channel.alive(b.control) == 1 { title = "${title} - control channel on" }
     window_up_ = 1
     if menu_bar_ != 0 {
         // The first page made menus: the window is made with its bar.
