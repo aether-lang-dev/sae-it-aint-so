@@ -36,6 +36,12 @@ if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && [ -z "${SAE_RUN_ALL_XVFB:-}" ]; 
         trap 'kill "$XVFB_PID" 2>/dev/null; wait "$XVFB_PID" 2>/dev/null; rm -f "$XVFB_FILE"' EXIT
         trap 'exit 130' INT
         trap 'exit 143' TERM HUP
+        trap 'exit 141' PIPE
+        # A shell killed by a signal it does not trap (SIGKILL, or SIGPIPE when
+        # a reader such as `| head` goes) never runs the EXIT trap: a watchdog
+        # outside the shell's own stdio stops Xvfb once this shell is gone.
+        ( while kill -0 $$ 2>/dev/null; do sleep 1; done; kill "$XVFB_PID" 2>/dev/null ) \
+            </dev/null >/dev/null 2>&1 &
         n=0
         while [ ! -s "$XVFB_FILE" ]; do
             n=$((n + 1))
