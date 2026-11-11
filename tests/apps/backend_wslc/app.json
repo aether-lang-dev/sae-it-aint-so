@@ -1,0 +1,9 @@
+{
+  "name": "Backend in a WSL container",
+  "capabilities": {
+    "backend": {
+      "wslc": { "image": "sae-backend-test:dev", "command": ["/sae/backend", "--greeting", "hello"] },
+      "deadlineMs": 60000
+    }
+  }
+}

@@ -1,14 +1,20 @@
 // saebackend — the backend side of an app's backend process (docs/app-backend.md): what an
 // app's own Aether program imports to answer its pages.
 //
-// sae starts the backend with its end of the channel at fd 3 (std.ipc's
-// parent_channel). A backend reads calls, answers each one, and may send
-// events its pages listen for:
+// sae starts the backend with the channel as its stdin and stdout (std.os's
+// run_stdio; `wslc run -i` passes them through from a container), and
+// open() claims them first thing (std.ipc's stdio_channel): from then on
+// stdin reads end of file and stdout is stderr, so a stray print, a
+// library's diagnostic or a panic lands on stderr, never inside a frame.
+// Print nothing before open(): that would go into the channel, and sae
+// stops a backend that writes something that is not a frame. A backend
+// reads calls, answers each one, and may send events its pages listen for:
 //
+//   import std.io
 //   import saebackend
 //   main() {
 //       sb, err = saebackend.open()
-//       if err != "" { println(err); exit(2) }
+//       if err != "" { io.stderr_write("${err}\n"); exit(2) }   // stderr: stdout may be the channel
 //       while 1 == 1 {
 //           id, name, arg, rerr = saebackend.next(sb)
 //           if rerr != "" { break }          // sae closed the channel: exit
@@ -32,16 +38,18 @@ exports (open, next, answer, fail, emit)
 const MAX_FRAME = 1048576
 
 struct SaeBackend {
-    ch: int
+    rd: int     // the channel's read end (what was stdin)
+    wr: int     // its write end (what was stdout)
 }
 
-// The channel sae started this program with: (backend, "") or (null, why).
+// Claim stdin and stdout as the channel sae started this program with:
+// (backend, "") or (null, why). Call it first thing in main, once.
 open() -> (ptr, string) {
-    ch = ipc.parent_channel()
-    if ch < 0 { return null, "saebackend: no channel: this program is an app's backend, started by sae" }
-    if ipc.parent_channel_kind() != "socket" { return null, "saebackend: the channel is not a socket" }
+    rd, wr, err = ipc.stdio_channel()
+    if err != "" { return null, "saebackend: ${err}" }
     b = heap.new(SaeBackend)
-    b.ch = ch
+    b.rd = rd
+    b.wr = wr
     return b as ptr, ""
 }
 
@@ -49,7 +57,7 @@ open() -> (ptr, string) {
 // has closed (sae is stopping: the backend should exit) or broke.
 next(h: ptr) -> (int, string, string, string) {
     b = h as *SaeBackend
-    data, err = ipc.read_frame(b.ch, MAX_FRAME)
+    data, err = ipc.read_frame(b.rd, MAX_FRAME)
     if err != "" { return 0, "", "", err }
     v, perr = json.parse(data)
     if perr != "" || v == null { return 0, "", "", "saebackend: a frame that is not JSON: ${perr}" }
@@ -95,5 +103,5 @@ send_(h: ptr, o: ptr) -> string {
     text, eerr = json.encode(o)
     json.json_free(o)
     if eerr != "" { return "saebackend: ${eerr}" }
-    return ipc.write_frame(b.ch, text)
+    return ipc.write_frame(b.wr, text)
 }

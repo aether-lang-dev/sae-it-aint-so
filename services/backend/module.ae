@@ -2,15 +2,17 @@
 // (docs/app-backend.md). The one place sae starts a program.
 //
 // sae is the parent: start() spawns the program app.json names with
-// os.run_socket, which hands the child one end of an AF_UNIX socket pair
-// at fd 3 (std.ipc's parent_channel) and keeps the other here. Nothing is
-// written to the file system, nothing listens, and there is no key: holding
-// the descriptor is the capability, and only sae and the child it started
-// hold one.
+// os.run_stdio, and the channel is the child's own stdin and stdout, two
+// pipes only sae holds the other ends of. Nothing is written to the file
+// system, nothing listens, and there is no key: holding the descriptors is
+// the capability, and only sae and the child it started hold them. The same
+// pipes work on every platform, Windows included, and through a container
+// runtime that passes stdin and stdout through: start_wslc() runs a Linux
+// backend in a WSL container on Windows (`wslc run --rm -i`).
 //
 // Each Backend is an instance with its own state (the kernel holds one per
 // app); nothing here is shared between them. Frames are std.ipc's
-// (a 4-byte length, then the bytes), each one JSON:
+// (a 4-byte big-endian length, then the bytes), each one JSON:
 //
 //   sae -> backend   {"id": n, "call": "<name>", "arg": "<string>"}
 //   backend -> sae   {"id": n, "ok": true, "result": "<string>"}
@@ -19,6 +21,11 @@
 //
 // The kernel reads them on the UI thread a tick at a time (poll never
 // waits for a frame to start), so a backend cannot stall the window.
+//
+// poll reads each frame itself (std.ipc's read and wait_readable) rather
+// than with ipc.read_frame_timeout, so that when the stream is not frames
+// (a backend printed to stdout before it claimed the channel, or a wrapper
+// wrote to it) the reason can quote the bytes that broke it.
 
 import std.os
 import std.io (fd_close)
@@ -26,8 +33,9 @@ import std.ipc
 import std.list
 import std.string
 import std.json
+import std.time (now_ms)
 
-exports (start, alive, why, call, poll, stop, MAX_FRAME)
+exports (start, start_wslc, alive, why, call, poll, stop, excerpt, MAX_FRAME)
 
 // The largest frame either side may send. A header announcing more is an
 // error, and the channel is closed.
@@ -41,10 +49,16 @@ const FRAME_MS = 2000
 // exited by itself.
 const STOP_GRACE_S = 2
 
+// How much of a stream that broke the protocol a reason quotes.
+const EXCERPT_BYTES = 48
+
 struct Backend {
-    ch: int          // our end of the socket pair, or -1 once closed
+    wr: int          // the child's stdin, written with frames, or -1 once closed
+    rd: int          // the child's stdout, read for frames, or -1 once closed
     pid: int         // the child's spawn token, or -1 once reaped
     why: string      // why it is no longer running, "" while it is
+    frames: int      // frames read so far
+    hint: string     // said after an exit status when it exits before its first frame
 }
 
 // Start `program` (a path the kernel has already resolved inside the app)
@@ -57,13 +71,68 @@ start(program: string, argv: ptr) -> (ptr, string) {
         args = list.new()
         own = 1
     }
-    ch, pid, err = os.run_socket(program, args, null)
+    h, err = spawn_(program, args, "")
     if own == 1 { list.free(args) }
     if err != "" { return null, "backend: could not start ${program}: ${err}" }
+    return h, ""
+}
+
+// Start a Linux backend in a WSL container on Windows: `wslc run --rm -i
+// --pull never <image> <command...>`, the container's stdin and stdout the
+// channel. `command` is a std.list of strings (the program inside the image
+// and its arguments; empty runs the image's own). The image must be there
+// already: sae does not pull one at launch (wslc writes its pull progress to
+// stderr, not into the channel, but a pull is a download the person did not
+// ask for, and calls would time out behind it). (backend, "") or (null, why);
+// anywhere but Windows, why.
+start_wslc(image: string, command: ptr) -> (ptr, string) {
+    if os.platform() != "windows" {
+        return null, "backend: a wslc backend runs only on Windows (wslc is Windows 11's WSL container tool); this is ${os.platform()}"
+    }
+    args = list.new()
+    list.add(args, "run")
+    list.add(args, "--rm")
+    list.add(args, "-i")
+    list.add(args, "--pull")
+    list.add(args, "never")
+    list.add(args, image)
+    if command != null {
+        n = list.size(command)
+        i = 0
+        while i < n {
+            cv, _ = list.get_string(command, i)
+            list.add(args, cv)
+            i = i + 1
+        }
+    }
+    hint = "(if wslc said the image is not there: wslc pull ${image}, or build it)"
+    h, err = spawn_("wslc", args, hint)
+    if err != "" {
+        // Not on this process's PATH (a shell that set its own, as MSYS2's
+        // does, without %ProgramFiles% either): where WSL installs it.
+        pf = os.getenv("ProgramFiles")
+        if pf == null || pf == "" { pf = "C:\\Program Files" }
+        h2, err2 = spawn_("${pf}\\WSL\\wslc.exe", args, hint)
+        if err2 == "" {
+            h = h2
+            err = ""
+        }
+    }
+    list.free(args)
+    if err != "" { return null, "backend: could not start wslc (Windows 11's WSL container tool): ${err}" }
+    return h, ""
+}
+
+spawn_(program: string, args: ptr, hint: string) -> (ptr, string) {
+    wr, rd, pid, err = os.run_stdio(program, args, null)
+    if err != "" { return null, err }
     b = heap.new(Backend)
-    b.ch = ch
+    b.wr = wr
+    b.rd = rd
     b.pid = pid
     b.why = ""
+    b.frames = 0
+    b.hint = hint
     return b as ptr, ""
 }
 
@@ -71,7 +140,7 @@ start(program: string, argv: ptr) -> (ptr, string) {
 alive(h: ptr) -> int {
     if h == null { return 0 }
     b = h as *Backend
-    if b.ch < 0 { return 0 }
+    if b.rd < 0 { return 0 }
     return 1
 }
 
@@ -94,7 +163,7 @@ call(h: ptr, id: int, name: string, arg: string) -> string {
     json.json_free(o)
     if eerr != "" { return "backend: ${eerr}" }
     if string.length(text) > MAX_FRAME { return "backend: the request is larger than ${MAX_FRAME} bytes" }
-    werr = ipc.write_frame(b.ch, text)
+    werr = ipc.write_frame(b.wr, text)
     if werr != "" {
         lost_(b, "backend: the channel failed: ${werr}")
         return b.why
@@ -108,22 +177,117 @@ call(h: ptr, id: int, name: string, arg: string) -> string {
 poll(h: ptr) -> (string, string) {
     if alive(h) == 0 { return "", why(h) }
     b = h as *Backend
-    ready, werr = ipc.wait_readable(b.ch, 0)
+    ready, werr = ipc.wait_readable(b.rd, 0)
     if werr != "" {
         lost_(b, "backend: the channel failed: ${werr}")
         return "", b.why
     }
     if ready == 0 { return "", "" }
-    data, rerr = ipc.read_frame_timeout(b.ch, MAX_FRAME, FRAME_MS)
-    if string.contains(rerr, "end of stream") == 1 {
-        lost_(b, "")    // it closed its end: it has exited, or is exiting
+    data, rerr = read_frame_(b)
+    if rerr != "" {
+        if rerr == "eof" { lost_(b, "") } else { lost_(b, rerr) }   // eof: it closed its end, it has exited or is exiting
         return "", b.why
     }
-    if rerr != "" {
-        lost_(b, "backend: ${rerr}")
-        return "", b.why
+    b.frames = b.frames + 1
+    return data, ""
+}
+
+// One frame from the backend, the first byte of which has arrived: (data,
+// ""), or ("", "eof") when the stream ended before a frame began, or ("",
+// why) when it is not frames, the why quoting the bytes that broke it.
+read_frame_(b: *Backend) -> (string, string) {
+    start = now_ms()
+    head = ""
+    while string.length(head) < 4 {
+        chunk, st = read_some_(b, 4 - string.length(head), start)
+        if st == 1 {
+            if string.length(head) == 0 { return "", "eof" }
+            return "", "backend: it broke the protocol: the stream ended inside a frame's header, after ${excerpt(head)}"
+        }
+        if st == 2 {
+            return "", "backend: it broke the protocol: ${excerpt(head)} and then nothing for ${FRAME_MS} ms, which is not a frame"
+        }
+        if st == 3 { return "", chunk }
+        head = string.concat(head, chunk)
+    }
+    n = byte_(head, 0) * 16777216 + byte_(head, 1) * 65536 + byte_(head, 2) * 256 + byte_(head, 3)
+    if n > MAX_FRAME {
+        // Not a header: quote what came, with whatever follows at once.
+        more = ""
+        r, _we = ipc.wait_readable(b.rd, 50)
+        if r == 1 {
+            m, _re = ipc.read(b.rd, EXCERPT_BYTES)
+            more = m
+        }
+        return "", "backend: it broke the protocol: ${excerpt(string.concat(head, more))} is not a frame (its stdout is the channel: nothing but frames may be written there)"
+    }
+    data = ""
+    while string.length(data) < n {
+        chunk, st = read_some_(b, n - string.length(data), start)
+        if st == 1 {
+            return "", "backend: it broke the protocol: the stream ended inside a frame of ${n} bytes, after ${excerpt(data)}"
+        }
+        if st == 2 {
+            return "", "backend: it broke the protocol: a frame of ${n} bytes not whole within ${FRAME_MS} ms, after ${excerpt(data)}"
+        }
+        if st == 3 { return "", chunk }
+        data = string.concat(data, chunk)
     }
     return data, ""
+}
+
+// Up to `want` bytes, within FRAME_MS of `start`: (bytes, 0), ("", 1) at
+// end of stream, ("", 2) at the deadline, (why, 3) when the channel failed.
+read_some_(b: *Backend, want: int, start: long) -> (string, int) {
+    left = FRAME_MS - ((now_ms() - start) as int)
+    if left < 0 { left = 0 }
+    ready, werr = ipc.wait_readable(b.rd, left)
+    if werr != "" { return "backend: the channel failed: ${werr}", 3 }
+    if ready == 0 { return "", 2 }
+    chunk, rerr = ipc.read(b.rd, want)
+    if rerr != "" { return "backend: the channel failed: ${rerr}", 3 }
+    if string.length(chunk) == 0 { return "", 1 }
+    return chunk, 0
+}
+
+byte_(s: string, i: int) -> int {
+    c = string.string_char_at(s, i)
+    if c < 0 { c = c + 256 }
+    return c
+}
+
+// `s` quoted for a reason: at most EXCERPT_BYTES bytes, printable ASCII as
+// it is, \n \r \t \" \\ as such and any other byte as \xHH, then "..." if
+// there was more.
+excerpt(s: string) -> string {
+    hex = "0123456789abcdef"
+    out = "\""
+    n = string.length(s)
+    i = 0
+    while i < n && i < EXCERPT_BYTES {
+        c = byte_(s, i)
+        if c == 10 {
+            out = string.concat(out, "\\n")
+        } else if c == 13 {
+            out = string.concat(out, "\\r")
+        } else if c == 9 {
+            out = string.concat(out, "\\t")
+        } else if c == 34 {
+            out = string.concat(out, "\\\"")
+        } else if c == 92 {
+            out = string.concat(out, "\\\\")
+        } else if c >= 32 && c < 127 {
+            out = string.concat(out, string.string_from_char(c))
+        } else {
+            hi = string.string_substring(hex, c / 16, c / 16 + 1)
+            lo = string.string_substring(hex, c % 16, c % 16 + 1)
+            out = string.concat(out, "\\x${hi}${lo}")
+        }
+        i = i + 1
+    }
+    out = string.concat(out, "\"")
+    if n > EXCERPT_BYTES { out = string.concat(out, "...") }
+    return out
 }
 
 // Close the channel, give the backend STOP_GRACE_S to exit by itself, then
@@ -138,14 +302,19 @@ stop(h: ptr) {
 // within STOP_GRACE_S. The first reason is kept; "" means the backend closed
 // its end itself, and the reason is how it exited.
 lost_(b: *Backend, reason: string) {
-    if b.ch >= 0 {
-        _c = fd_close(b.ch)
-        b.ch = 0 - 1
+    if b.wr >= 0 {
+        _c = fd_close(b.wr)
+        b.wr = 0 - 1
+    }
+    if b.rd >= 0 {
+        _d = fd_close(b.rd)
+        b.rd = 0 - 1
     }
     how = ""
     if b.pid >= 0 {
         st, timed_out, _we = os.wait_pid_timeout(b.pid, STOP_GRACE_S)
         how = "it exited with status ${st}"
+        if st != 0 && b.frames == 0 && b.hint != "" { how = "${how} ${b.hint}" }
         if timed_out == 1 {
             _k = os.kill(b.pid, 9)
             _w = os.wait_pid(b.pid)

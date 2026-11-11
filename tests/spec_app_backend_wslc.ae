@@ -1,0 +1,58 @@
+// spec_app_backend_wslc.ae — a backend in a WSL container
+// (docs/app-backend.md): app.json's capabilities.backend.wslc names an image
+// and a command, and sae runs `wslc run --rm -i --pull never <image>
+// <command...>` with the container's stdin and stdout as the channel. On
+// Windows it drives tests/apps/backend's program built for Linux
+// (sae-backend-test:dev, tests/apps/backend_wslc/build-image.sh); anywhere
+// else it checks that sae refuses the backend, says why, and the app runs
+// without it.
+//   sh tests/apps/backend_wslc/build-image.sh          # Windows only
+//   SAE_TEST_APP=tests/apps/backend_wslc tests/run_spec.sh spec_app_backend_wslc
+import std.spec
+import std.os
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    if os.platform() != "windows" {
+        spec.describe(fw, "a wslc backend, not on Windows") {
+            spec.it("is refused with why, and the app runs without it") callback {
+                why = "backend: a wslc backend runs only on Windows (wslc is Windows 11's WSL container tool); this is ${os.platform()}"
+                spec.assert_true(b.wait_for_console("sae: ${why}"), "said once")
+                b.click("Echo")
+                b.assert_text("failed: ${why}", "a call fails with why")
+            }
+        }
+        return spec.run_summary(fw)
+    }
+    spec.describe(fw, "a Linux backend in a WSL container") {
+        spec.it("starts with the app") callback {
+            spec.assert_true(b.wait_for_console("sae: backend: wslc sae-backend-test:dev started"), "started")
+        }
+        spec.it("invoke: answers from inside the container, with app.json's command") callback {
+            b.click("Echo")
+            // The first answer waits for the container to start: about 1.3 s warm,
+            // over 10 s when WSL's VM is cold (app.json gives calls 60 s).
+            spec.assert_true(b.wait_for_text_secs("result: a string, as given", 60) == 1, "echoed")
+            b.click("Greet")
+            b.assert_text("result: hello, page (call 2)", "its greeting from wslc.command, and its own state")
+        }
+        spec.it("stray output after the claim stays out of the frames") callback {
+            b.click("Chatty")
+            b.assert_text("result: chatted: intact", "answered")
+        }
+        spec.it("events before the answer") callback {
+            b.click("Tick")
+            b.assert_text("result: ticked", "answered")
+            b.assert_text("events: 1 of 2, 2 of 2", "both events, in order")
+        }
+        spec.it("when it exits: on_gone, with its status") callback {
+            b.click("Exit")
+            b.assert_text("result: bye", "its last answer")
+            b.assert_text("gone: backend: it exited with status 0", "on_gone told")
+        }
+    }
+    return spec.run_summary(fw)
+}

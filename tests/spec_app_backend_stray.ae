@@ -1,0 +1,23 @@
+// spec_app_backend_stray.ae — a backend that breaks the protocol
+// (docs/app-backend.md): it writes text to stdout before it claims the
+// channel, so the bytes sae reads are not a frame. sae stops it, and the
+// reason the page sees quotes what it wrote, escaped.
+//   (cd tests/apps/backend_stray && AETHER_LIB_DIR=../../../sdk ae build backend/main.ae -o backend/main)
+//   SAE_TEST_APP=tests/apps/backend_stray tests/run_spec.sh spec_app_backend_stray
+import std.spec
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "a backend that writes outside a frame") {
+        spec.it("is stopped, and the reason quotes the stray bytes") callback {
+            why = "backend: it broke the protocol: \"stray: printed before the claim\\n\" is not a frame (its stdout is the channel: nothing but frames may be written there)"
+            spec.assert_true(b.wait_for_console(why), "said once, with the bytes")
+            b.click("Echo")
+            b.assert_text("failed: ${why}", "a call fails with the same reason")
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -1,0 +1,21 @@
+// The backend of tests/apps/backend_stray (docs/app-backend.md): it writes
+// to stdout before it claims the channel, which is the protocol broken: the
+// bytes land where sae reads frames. spec_app_backend_stray checks that sae
+// stops it and says what it wrote.
+//   AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main
+import std.io
+import saebackend
+
+main() {
+    _w = io.stdout_write("stray: printed before the claim\n")
+    sb, err = saebackend.open()
+    if err != "" {
+        _w = io.stderr_write("${err}\n")
+        exit(2)
+    }
+    while 1 == 1 {
+        id, _name, arg, rerr = saebackend.next(sb)
+        if rerr != "" { break }
+        _r = saebackend.answer(sb, id, arg)
+    }
+}

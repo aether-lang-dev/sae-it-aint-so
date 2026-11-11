@@ -1,17 +1,22 @@
 // The backend of tests/apps/backend (docs/app-backend.md): sae starts it with
-// the channel at fd 3; it answers calls and sends events. spec_app_backend
-// drives every case through the page.
+// the channel as its stdin and stdout; it answers calls and sends events.
+// spec_app_backend drives every case through the page. The same program is
+// tests/apps/backend_wslc's, built for Linux into an image
+// (tests/apps/backend_wslc/build-image.sh).
 //   AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main
 import std.os
+import std.io
 import std.string
 import saebackend
 
 main() {
     sb, err = saebackend.open()
     if err != "" {
-        println(err)
+        _w = io.stderr_write("${err}\n")
         exit(2)
     }
+    // After the claim stdout is stderr: this is not in the channel.
+    println("the test backend: started; this line is on stderr, not in a frame")
     greeting = "hi"
     if os.args_get(1) == "--greeting" { greeting = os.args_get(2) }
     calls = 0
@@ -32,6 +37,13 @@ main() {
             _e1 = saebackend.emit(sb, "tick", "1 of 2")
             _e2 = saebackend.emit(sb, "tick", "2 of 2")
             _r = saebackend.answer(sb, id, "ticked")
+        } else if name == "chatty" {
+            // Stray output after the claim, by every route to fd 1: none of
+            // it may land inside the frames.
+            println("{\"id\": ${id}, a stray println that looks like a frame")
+            print("a stray print with no newline")
+            _w = io.stdout_write("a stray raw write to fd 1\n")
+            _r = saebackend.answer(sb, id, "chatted: ${arg}")
         } else if name == "ignore" {
             // No answer: the page's deadline fails the call.
         } else if name == "exit" {

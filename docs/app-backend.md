@@ -25,30 +25,63 @@ service only if every app may want it, and then it is reviewed as one.
 
 ## State
 
-**Built (2026-11-10), the first slice**, on macOS and Linux (the BSDs
-should follow; not yet run there), over the socket pair. Windows waits on
-the stdio transport (Transports, below).
+**Built (2026-11-10), the first slice; one transport since 2026-11-11**:
+the backend's own stdin and stdout, two pipes (`os.run_stdio`, Aether
+0.908.0), on macOS, Linux and Windows, and through `wslc run -i` to a Linux
+backend in a WSL container on Windows. The socket pair it began on is gone.
 
-- `app.json`: `"capabilities": { "backend": { "program": "backend/main",
-  "args": [...], "deadlineMs": 10000 } }`. `program` is a file inside the
-  app (`.exe` added on Windows); a path that climbs out, or a bad
-  `deadlineMs` (100 to 600000), refuses the app. A program that is missing
-  or does not start is said once, and the app runs without it: its pages'
-  calls fail with why.
+- `app.json`, a program in the app: `"capabilities": { "backend": {
+  "program": "backend/main", "args": [...], "deadlineMs": 10000 } }`.
+  `program` is a file inside the app (`.exe` added on Windows); a path that
+  climbs out, or a bad `deadlineMs` (100 to 600000), refuses the app. A
+  program that is missing or does not start is said once, and the app runs
+  without it: its pages' calls fail with why.
+- `app.json`, a Linux program in a WSL container (Windows):
+  `"capabilities": { "backend": { "wslc": { "image": "my-backend:1",
+  "command": ["/app/backend", "--flag"] }, "deadlineMs": 10000 } }`. sae
+  runs `wslc run --rm -i --pull never <image> <command...>`. `image` is
+  required and may not start with `-` or hold a space, `command` (the
+  program in the image and its arguments; empty runs the image's own) may
+  not start with an option, `args` beside `wslc` and `program` beside
+  `wslc` refuse the app. Anywhere but Windows the backend is refused at
+  launch (said once, calls fail with "a wslc backend runs only on
+  Windows ..."); sae does not fall back to docker or podman.
+- The image must be there before the app starts: `--pull never`, so a
+  missing one is wslc's "No such image" on sae's stderr and a backend that
+  exits with status 1 (the reason says to pull or build it). wslc writes
+  its pull progress to stderr, not stdout (checked on win11 with wslc
+  3.0.5: stdout held only the program's bytes), so a pull would not break
+  the frames; it is refused because it is a download nobody asked for at
+  launch, and calls would time out behind it.
 - The page: `"seeks backend"`, then `backend.invoke(name, arg)` (a promise
   for a string), `backend.on(name, fn)`, `backend.on_gone(fn)` and
   `backend.running()`.
 - The backend: `sdk/saebackend` (`open`, `next`, `answer`, `fail`, `emit`),
   built with `AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main`.
+  `saebackend.open()` claims stdin and stdout for the channel
+  (`ipc.stdio_channel`): from then on a print, a library's diagnostic or a
+  panic goes to stderr, never into a frame.
 - In sae: `services/backend` (an instance per backend, no module state; the
   one place sae starts a program, held so by `tests/check_layers.sh`) and
   the "backend" section of `src/sae_host.ae`.
+- A backend that breaks the protocol is stopped, and the reason quotes
+  what it wrote, escaped, at most 48 bytes: `backend: it broke the
+  protocol: "stray: printed before the claim\n" is not a frame (its stdout
+  is the channel: nothing but frames may be written there)`. Likewise a
+  frame that is not JSON, a stream that ends inside a frame, and a frame
+  not whole within 2 s.
 - Tests: `tests/apps/backend` and `tests/spec_app_backend.ae` (its args,
-  answers, failures, events before the answer, the deadline, the backend
+  answers, failures, events before the answer, print/println/raw fd 1
+  writes after the claim kept out of the frames, the deadline, the backend
   exiting and being reaped, and `lsof` finding nothing listening);
-  `tests/escape/computed_fs.ts` tries `backend` by a computed name.
+  `tests/apps/backend_stray` and `spec_app_backend_stray` (output before
+  the claim: stopped, the bytes quoted); `tests/apps/backend_wslc` and
+  `spec_app_backend_wslc` (on Windows the same test backend built for Linux
+  into `sae-backend-test:dev` by `tests/apps/backend_wslc/build-image.sh`,
+  elsewhere the refusal); `tests/escape/computed_fs.ts` tries `backend` by
+  a computed name.
 
-Not yet: passing a picked document's descriptor (`ipc.send_fd`),
+Not yet: a picked document for the backend (no descriptor crosses a pipe),
 containment, plugins, and anything about the bus.
 
 ## The shape
@@ -60,16 +93,16 @@ the same shape with the pieces it already has:
 ```
 command line -> sae.exe --app <dir> [args]
                   |  prepares the page space and the window (as app mode does now)
-                  |  os.run_socket(<the app's backend>) -> (channel, pid)
+                  |  os.run_stdio(<the app's backend>) -> (to_child, from_child, pid)
                   v
-               backend (Aether, plus plugins), its end of the channel at fd 3
+               backend (Aether, plus plugins), the channel its stdin and stdout
 ```
 
 - sae is the parent. The app's backend, a program in Aether, is its
   child, started once per launch.
-- The two talk over the `AF_UNIX` socket pair that `os.run_socket` makes:
-  `std.ipc`'s length-prefixed frames, timed reads, and descriptors passed
-  with `send_fd`/`recv_fd`.
+- The two talk over the child's stdin and stdout, two pipes that
+  `os.run_stdio` makes: `std.ipc`'s length-prefixed frames and timed reads.
+  No descriptor crosses a pipe.
 - Pages reach the backend only through the page API, as they reach every
   other effect: the kernel is still the one door.
 
@@ -121,17 +154,18 @@ JSON text.
   the app is packaged (`tools/saehost.sh`, `tools/saepack.sh`), so whoever
   runs it needs no toolchain. Its own grants (files, network, sqlite) are
   declared there too, beside the page's.
-- At launch, after the window: `os.run_socket`. The channel is read on an
-  actor and its frames are delivered on the UI thread, the pattern sae's
-  HTTP already uses.
+- At launch, after the window: `os.run_stdio`. A UI timer reads the
+  channel every 10 ms (a wait of 0, so it never blocks for a frame to
+  start) and hands each frame to the page on the UI thread.
 - The channel belongs to the app, not to a page: it survives navigation.
   (The bus's handler goes with its page; a backend does not.) A reply for
   a page that has gone is dropped, as an HTTP reply is.
 - Bounded like everything else: a frame size limit, a queue limit, a
   deadline on each `invoke`, and the page told when one is missed.
-- A document the person picks is opened by sae and handed over as an
-  open descriptor (`ipc.send_fd`), so a backend without `fs` still reads
-  exactly that file and no other.
+- A document the person picks could be opened by sae and handed over, so a
+  backend without `fs` still reads exactly that file and no other. Not
+  over the pipes (no descriptor crosses one): its bytes in frames, or a
+  second channel; open.
 - At exit: the channel closed, a grace period, then the child killed and
   reaped (`os.wait_pid`). A backend that dies is reported to the page; it
   does not take the window with it.
@@ -143,7 +177,7 @@ holds. What changes is how much there is for Eve to find.
 
 | Eve is | The control bus today | A backend on an inherited channel |
 |---|---|---|
-| Another account on the machine | Must not read `$APPDATA/.control-bus` (address and key). Rests on the file's 0600, and on Windows that is not set yet (`docs/windows.md`) | Nothing to read: no file, no address, no key. The channel is a socket pair that exists only as two descriptors, one in each process |
+| Another account on the machine | Must not read `$APPDATA/.control-bus` (address and key). Rests on the file's 0600, and on Windows that is not set yet (`docs/windows.md`) | Nothing to read: no file, no address, no key. The channel is two anonymous pipes that exist only as descriptors in sae and in the child |
 | Another account, connecting | Can reach the loopback port; refused without the key, every frame sealed | Nothing to connect to: nothing listens |
 | A web page in some browser | Can send to 127.0.0.1; refused by the key, the `Origin` and `Host` checks (DNS rebinding) | Nothing to send to |
 | A page inside sae | Has no `bus` object unless it is the app's page and seeks it | Has no `backend` object unless it is the app's page and seeks it; reaches it only through `invoke` |
@@ -165,59 +199,57 @@ descriptor, and only sae and the child it started hold one.
   (no port, no key, no browser can reach it; Aether has `tcp.listen_unix`).
   Or the other way round: the MCP server starts sae, holds the channel,
   and so owns the instance it drives.
-- **Across machines or across the WSL boundary**: a Linux script, a Linux
-  server and a Windows sae meet on the server (the page long-polls it).
-  `AF_UNIX` does not cross from WSL2's VM to Windows.
+- **Across machines**: a Linux script, a Linux server and a Windows sae
+  meet on the server (the page long-polls it). Across the WSL boundary a
+  backend sae starts itself does cross, through `wslc run -i` (above); a
+  Linux server started on its own does not.
 - **Natives** stay: compiled into the host, capability-empty, for pure
   functions where a frame round trip would cost too much. A backend is for
   effects.
 
 ## Transports
 
-The frames are the same over each; what differs is the channel the backend
-inherits.
+One: the backend's stdin and stdout, two pipes, on every platform. What
+differs is only what sae starts.
 
-| Transport | Where | The channel | Descriptors (`send_fd`) |
+| Backend | Where | sae starts | Descriptors |
 |---|---|---|---|
-| socket pair (built) | macOS, Linux, the BSDs | fd 3 of the child (`os.run_socket`) | yes |
-| stdio (next) | every platform | the child's stdin and stdout, two pipes | no |
-| wslc (after stdio) | Windows | stdio of `wslc run --rm -i <image> <command>`: a Linux backend in a WSL container | no (nothing crosses the VM) |
+| a program in the app | macOS, Linux, the BSDs, Windows | the program, `os.run_stdio` | no |
+| a Linux program in a WSL container | Windows | `wslc run --rm -i --pull never <image> <command...>`, `os.run_stdio` | no (nothing crosses the VM) |
 
-wslc, checked on win11 (2026-11-10): `echo hello | wslc run --rm -i alpine:3
-sh -c 'read l; echo got: $l'` answers `got: hello`, and a warm start takes
-about 1.3 s, once per launch. wslc has no daemon socket, and the channel is
-the two pipe handles sae holds, so the Alice/Bob/Eve table below holds for it
-as for the socket pair.
+wslc, checked on win11 (2026-11-10/11, wslc 3.0.5): the container's stdin
+and stdout are the program's, byte for byte, and a warm start takes about
+1.3 s, once per launch; the first after WSL's VM had stopped took more than
+10 s (a backend's first call needs a `deadlineMs` that allows for it). With `--pull missing` (wslc's default) an image
+pull's progress goes to stderr; stdout held only the program's output.
+wslc has no daemon socket, and the channel is the two pipe handles sae
+holds, so the Alice/Bob/Eve table above holds for it too.
 
-The stdio transport needs from Aether: a spawn with the child's stdin and
-stdout as pipes the parent keeps, on every platform, and on Windows
-`ipc.wait_readable` and `ipc.read_frame_timeout` for pipes (both say "not
-available on Windows" in 0.907.0). That also gives native Windows backends,
-which the socket pair cannot (`os.run_socket` is "unsupported on Windows").
+The socket pair the first slice used (`os.run_socket`, fd 3, descriptor
+passing) was removed on 2026-11-11 rather than kept beside the pipes: it
+did not run on Windows and nothing yet passed a descriptor.
 
 ## Open
 
-1. **Windows.** `os.run_socket` is "unsupported on Windows" in Aether
-   0.907.0 (checked 2026-11-10). The stdio transport (above) is the way
-   there, not a Windows socket pair with descriptor passing.
-2. **Containment.** `sandbox.spawn_socket` contains a child only on Linux
+1. **Containment.** `sandbox.spawn_socket` contains a child only on Linux
    with Landlock today; on macOS and Windows it refuses
    (`../aether-child-sandboxing`). Tauri's core runs uncontained; whether
    Bob's backend may, and on which platforms, is a decision, not a default.
-3. **The frame protocol**: names, ids for matching replies, errors,
+   A wslc backend is in a container already (its own file system and
+   network namespace in WSL's VM).
+2. **The frame protocol**: names, ids for matching replies, errors,
    cancellation (the guest-language work in aether-child-sandboxing has
    `CANCEL` with a grace period; reuse it rather than invent one).
-4. **Plugins**: what "Aether plus plugins" means for a backend (contrib
+3. **Plugins**: what "Aether plus plugins" means for a backend (contrib
    modules, other Aether libraries) and how `app.json` declares them.
-5. **Stray output on the stdio transport.** Once the child's stdout is the
-   channel, a stray print, a library's diagnostic or a panic message lands
-   in the frame stream (sae stops the backend for breaking the protocol; it
-   should say "wrote '<first bytes>' outside a frame"). The fix, after the
-   run_stdio PR: an Aether call that claims stdin and stdout for the channel
-   first thing in main (flush, dup 0 and 1 to private descriptors, point 0
-   at the null device and 1 at stderr), made by `saebackend.open()` on that
-   transport. Not masked even then: what was written before it, C code
-   holding its own copy of fd 1, and a wrapper's own output (a `wslc run`
-   that pulls its image: pull it first; to check).
-6. **The bus's future**: if backends and a Unix socket cover its cases,
+4. **A picked document for the backend**, now that no descriptor crosses
+   the channel (What the kernel does, above).
+5. **The bus's future**: if backends and a Unix socket cover its cases,
    the loopback TCP bus, its courier file and its sealing could go.
+
+Done: Windows (2026-11-11, the stdio transport, native and wslc), and
+stray output (`saebackend.open()` claims stdin and stdout with
+`ipc.stdio_channel`; what still breaks the stream, output before the claim
+or from a wrapper, is quoted in the reason). Not masked even now: output
+before the claim, C code holding its own copy of fd 1, and a child process
+started before the claim.

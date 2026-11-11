@@ -89,10 +89,41 @@ SAE_TEST_SERVER=external tests/run_spec.sh        # spec_nav: Windows sae, WSL p
 spec_nav is 48 passing that way on win11, as it is with both ends native on
 Windows and on macOS.
 
-## State (2026-11-10)
+## An app's backend on Windows
+
+An app's backend (`docs/app-backend.md`) runs on Windows over the same
+channel as everywhere: its stdin and stdout (`os.run_stdio`, Aether
+0.908.0). A native one is a `.exe` in the app (`program` gets `.exe`
+added); `spec_app_backend` and `spec_app_backend_stray` pass natively on
+win11.
+
+A Linux one runs in a WSL container: app.json's
+`"backend": { "wslc": { "image": "<image>", "command": [...] } }`, which sae
+runs as `wslc run --rm -i --pull never <image> <command...>`. `wslc` is found
+on PATH, else at `%ProgramFiles%\WSL\wslc.exe` (an MSYS2 shell's PATH does
+not have it). The image must already be there; wslc's own messages (pull
+progress, "No such image") go to stderr, never into the channel.
+
+The test image is tests/apps/backend's program compiled for Linux with the
+Aether in `pins` (or `AETHER_REF=<branch or SHA>` from source), inside the
+image, so nothing but wslc is needed on the Windows side:
+
+```sh
+sh tests/apps/backend_wslc/build-image.sh       # sae-backend-test:dev
+SAE_TEST_APP=tests/apps/backend_wslc tests/run_spec.sh spec_app_backend_wslc
+```
+
+`tests/run_all.sh` builds the image before the spec on Windows (a cached
+rebuild is seconds); elsewhere the spec checks that sae refuses a wslc
+backend and says why.
+
+## State (2026-11-11)
 
 `tests/run_all.sh` natively on win11 (page server and browser both Windows
-programs): 56 of 62 pass. What it took: the binary's path, `fs.realpath`,
+programs): 59 of 65 pass on Aether 0.908.0, the three backend specs among
+them (spec_app_backend_wslc through wslc); spec_escape's handle_across and
+spec_aevg each failed once in a full run while the wslc image built
+alongside, and passed when rerun. On 2026-11-10 it was 56 of 62. What it took: the binary's path, `fs.realpath`,
 `%APPDATA%`, `%USERPROFILE%` and `%TEMP%` in the kernel's "/" form
 (`slashes_`, `home_dir_`, `temp_dir_`); drive paths in services/files (a path
 with no drive is outside every grant there); and tests and tools that read

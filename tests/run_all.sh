@@ -103,6 +103,8 @@ check_layers||check check_layers
 check_android_sources||check check_android_sources
 check_storage_scope||check check_storage_scope
 spec_app_backend|SAE_TEST_APP=tests/apps/backend|backend tests/apps/backend spec_app_backend
+spec_app_backend_stray|SAE_TEST_APP=tests/apps/backend_stray|backend tests/apps/backend_stray spec_app_backend_stray
+spec_app_backend_wslc|SAE_TEST_APP=tests/apps/backend_wslc|wslc spec_app_backend_wslc
 check_sqlite_relaunch||check check_sqlite_relaunch
 check_natives||check check_natives
 check_module_rules||check check_module_rules
@@ -129,6 +131,11 @@ for line in $TABLE; do
         host)  set -- sh -c 'AETHER_UI_WITH_DRIVER=1 tools/saehost.sh "$1" && tests/run_spec.sh "$2"' host "$@" ;;
         # an app's backend program built first (sdk/saebackend, docs/app-backend.md), then its spec
         backend) set -- sh -c '(cd "$1" && AETHER_LIB_DIR="$2/sdk" ae build backend/main.ae -o backend/main) && tests/run_spec.sh "$3"' backend "$1" "$ROOT" "$2" ;;
+        # a backend in a WSL container: its image built first on Windows; elsewhere the spec checks the refusal
+        wslc) case "$(uname -s)" in
+                  MINGW*|MSYS*|CYGWIN*) set -- sh -c 'sh tests/apps/backend_wslc/build-image.sh && tests/run_spec.sh "$1"' wslc "$1" ;;
+                  *) set -- tests/run_spec.sh "$1" ;;
+              esac ;;
         aerun) set -- ae run "tests/$1.ae" ;;
         check) set -- sh "tests/$1.sh" ;;
         lower) set -- lower/run-tests.sh ;;

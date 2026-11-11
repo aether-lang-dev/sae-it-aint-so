@@ -1,5 +1,6 @@
 // spec_app_backend.ae — an app's backend (docs/app-backend.md): its own
-// backend process, started by sae with an inherited channel, reached by the
+// backend process, started by sae with its stdin and stdout as the channel
+// (os.run_stdio, claimed by saebackend.open()), reached by the
 // page through backend.invoke / backend.on / backend.on_gone.
 //   (cd tests/apps/backend && AETHER_LIB_DIR=../../../sdk ae build backend/main.ae -o backend/main)
 //   SAE_TEST_APP=tests/apps/backend tests/run_spec.sh spec_app_backend
@@ -11,26 +12,46 @@ import std.list
 import saedriver as b
 import uidriver
 
-// 1 when a process whose command line holds `what` is running (pgrep).
-running_(what: string) -> int {
+// 1 when a process whose command line holds `prog` and then `args` is
+// running: pgrep, or on Windows the process table through PowerShell (no
+// pgrep there; the command line has the program's full path, maybe quoted,
+// and .exe).
+running_(prog: string, args: string) -> int {
     argv = list.new()
     defer list.free(argv)
-    list.add(argv, "-f")
-    list.add(argv, what)
-    _out, status, _err = os.run_capture("pgrep", argv, null)
+    tool = "pgrep"
+    if os.platform() == "windows" {
+        tool = "powershell"
+        list.add(argv, "-NoProfile")
+        list.add(argv, "-Command")
+        list.add(argv, "if (Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*${prog}*${args}*' }) { exit 0 } else { exit 1 }")
+    } else {
+        list.add(argv, "-f")
+        list.add(argv, "${prog} ${args}")
+    }
+    _out, status, _err = os.run_capture(tool, argv, null)
     if status == 0 { return 1 }
     return 0
 }
 
 // The listening sockets (TCP and Unix) of sae-driver and of the backend,
 // as lsof names them, except the UI driver's own port (the test's): ""
-// when there are none. "(no lsof)" where lsof is missing.
+// when there are none. "(no lsof)" where lsof is missing. On Windows, the
+// TCP ones (Get-NetTCPConnection); nothing in sae makes a Unix socket there.
 listeners_() -> string {
     argv = list.new()
     defer list.free(argv)
-    list.add(argv, "-c")
-    list.add(argv, "command -v lsof >/dev/null || { echo '(no lsof)'; exit 0; }; for p in $(pgrep -f 'sae-driver --app') $(pgrep -f 'tests/apps/backend/backend/main'); do lsof -nP -a -p $p -iTCP -sTCP:LISTEN -Fn 2>/dev/null | grep '^n' | grep -v ':9222$'; lsof -nP -a -p $p -U -Fn 2>/dev/null | grep '^n/'; done; true")
-    out, _st, _err = os.run_capture("sh", argv, null)
+    tool = "sh"
+    if os.platform() == "windows" {
+        tool = "powershell"
+        list.add(argv, "-NoProfile")
+        list.add(argv, "-Command")
+        list.add(argv, "$ids = @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and ($_.CommandLine -like '*sae-driver*--app*' -or $_.CommandLine -like '*tests/apps/backend/backend/main*') } | ForEach-Object { $_.ProcessId }); Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess -and $_.LocalPort -ne 9222 } | ForEach-Object { \"$($_.LocalAddress):$($_.LocalPort)\" }")
+    } else {
+        list.add(argv, "-c")
+        list.add(argv, "command -v lsof >/dev/null || { echo '(no lsof)'; exit 0; }; for p in $(pgrep -f 'sae-driver --app') $(pgrep -f 'tests/apps/backend/backend/main'); do lsof -nP -a -p $p -iTCP -sTCP:LISTEN -Fn 2>/dev/null | grep '^n' | grep -v ':9222$'; lsof -nP -a -p $p -U -Fn 2>/dev/null | grep '^n/'; done; true")
+    }
+    out, _st, _err = os.run_capture(tool, argv, null)
     return string.trim(out)
 }
 
@@ -41,7 +62,7 @@ main() {
         spec.it("starts with the app, with app.json's args, and nothing listens") callback {
             spec.assert_true(b.wait_for_console("sae: backend: backend/main started"), "started")
             b.assert_text("running: true", "the page sees it running")
-            spec.assert_true(running_("tests/apps/backend/backend/main --greeting hello") == 1, "a child with app.json's args")
+            spec.assert_true(running_("tests/apps/backend/backend/main", "--greeting hello") == 1, "a child with app.json's args")
             spec.assert_str_eq(listeners_(), "", "nothing listens, TCP or Unix, but the test's UI driver")
         }
         spec.it("invoke: a string there, the backend's answer back") callback {
@@ -63,6 +84,12 @@ main() {
             b.assert_text("result: ticked", "answered")
             b.assert_text("events: 1 of 2, 2 of 2", "both events, in order")
         }
+        spec.it("stray output after the claim goes to stderr, not into the frames") callback {
+            b.click("Chatty")
+            b.assert_text("result: chatted: intact", "answered, with println, print and a raw fd 1 write before it")
+            b.click("Echo")
+            b.assert_text("result: a string, as given", "and the stream still in step")
+        }
         spec.it("a call it never answers fails at the deadline; the backend stays") callback {
             b.click("Ignore")
             b.assert_text("failed: the backend did not answer in 1000 ms", "the deadline")
@@ -76,7 +103,7 @@ main() {
             spec.assert_true(b.wait_for_console("sae: backend: it exited with status 0"), "said once")
             b.click("After")
             b.assert_text("failed: backend: it exited with status 0", "a call after it")
-            spec.assert_true(running_("tests/apps/backend/backend/main --greeting hello") == 0, "and reaped")
+            spec.assert_true(running_("tests/apps/backend/backend/main", "--greeting hello") == 0, "and reaped")
         }
     }
     return spec.run_summary(fw)

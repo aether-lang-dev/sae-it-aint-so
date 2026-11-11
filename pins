@@ -79,7 +79,18 @@
 # the std tree is the release's own) builds sae, sae-driver and the four tools.
 # Verified: lower/run-tests.sh 70 and tests/run_all.sh 61/61 on macOS and on
 # ae-x64 (Ubuntu 22.04, GTK 4.6), spraedsheet's run-tests.sh on macOS.
-AE_PIN=0.905.0
+# 0.908.0 (2026-11-11): a real floor move, evidence-based. An app's backend
+# runs over its own stdin and stdout on every platform: services/backend
+# starts it with os.run_stdio, and sdk/saebackend's open() claims the pair
+# with ipc.stdio_channel (aether #3647, first released in 0.908.0, which also
+# gives Windows ipc.wait_readable and read_frame_timeout on pipes). The socket
+# pair (os.run_socket) is gone. Verified: the bare release (SAE_AETHER_HOME=none)
+# builds sae, sae-driver and the four tools, tests/run_all.sh 65/65 on macOS;
+# against the tree tagged v0.908.0 (same content): ae-x64 65/65, win11 59/65
+# (the six Win32 failures in docs/windows.md; the three backend specs pass,
+# the wslc one on an image built from the 0.908.0 release), spraedsheet's
+# run-tests.sh 9/9 on macOS.
+AE_PIN=0.908.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and

@@ -4428,9 +4428,10 @@ bus_stop_request_(reason: string, why: string) {
 // --- the page API: backend, the app's own process (docs/app-backend.md) ---
 //
 // app.json capabilities.backend { "program": "<file in the app>", "args":
-// [...] } names a program sae starts when the app does (services/backend:
-// os.run_socket, its channel inherited, nothing on the file system and
-// nothing listening). A page that seeks it gets `backend`: invoke(name, arg)
+// [...] } names a program sae starts when the app does, or { "wslc": {
+// "image": "<image>", "command": [...] } } a Linux one in a WSL container on
+// Windows (services/backend: os.run_stdio, its stdin and stdout the
+// channel, nothing on the file system and nothing listening). A page that seeks it gets `backend`: invoke(name, arg)
 // is a promise for the backend's answer, on(name, fn) hears what it sends
 // unasked, on_gone(fn) hears that it has gone. A UI timer reads its frames
 // and hands each to the page that is showing; an answer for a page that has
@@ -4461,15 +4462,16 @@ backend_program_(prog: string) -> (string, string) {
 }
 
 // Start the backend app.json declares, before the first page runs. A wrong
-// declaration refuses the app (returned); a program that does not start is
-// said, and the app runs without it (its pages' calls fail with why).
+// declaration refuses the app (returned); a program that does not start, or
+// a wslc backend anywhere but Windows, is said, and the app runs without it
+// (its pages' calls fail with why).
 backend_start_(b: *Browser, manifest: ptr) -> string {
     if manifest == null { return "" }
     caps = json.json_object_get_raw(manifest, "capabilities")
     if caps == null { return "" }
     decl = json.json_object_get_raw(caps, "backend")
     if decl == null { return "" }
-    if json.json_type(decl) != 5 { return "app.json capabilities.backend must be an object: { \"program\": \"<file>\", \"args\": [...] }" }
+    if json.json_type(decl) != 5 { return "app.json capabilities.backend must be an object: { \"program\": \"<file>\", \"args\": [...] } or { \"wslc\": { \"image\": \"<image>\", \"command\": [...] } }" }
     b.backend_declared = 1
     dmv = json.json_object_get_raw(decl, "deadlineMs")
     if dmv != null {
@@ -4479,24 +4481,41 @@ backend_start_(b: *Browser, manifest: ptr) -> string {
         }
         b.backend_deadline_ms = dm
     }
+    wv = json.json_object_get_raw(decl, "wslc")
     pv = json.json_object_get_raw(decl, "program")
-    prog = ""
-    if pv != null {
-        ps, _pe = json.get_string(pv)
-        prog = own_(ps)
-    }
-    full, perr = backend_program_(prog)
-    if perr != "" && string.string_starts_with(perr, "app.json") == 1 { return perr }
+    if wv != null && pv != null { return "app.json capabilities.backend: a \"program\" or a \"wslc\" container, not both" }
     b.backend_why = "backend: not started"
-    if perr != "" {
-        b.backend_why = own_(perr)
-        say_("sae: ${perr}")
-        return ""
+    h = null
+    serr = ""
+    what = ""
+    if wv != null {
+        image, command, werr = backend_wslc_(wv, decl)
+        if werr != "" {
+            list.free(command)
+            return werr
+        }
+        h, serr = backend.start_wslc(image, command)
+        list.free(command)
+        what = "wslc ${image}"
+    } else {
+        prog = ""
+        if pv != null {
+            ps, _pe = json.get_string(pv)
+            prog = own_(ps)
+        }
+        full, perr = backend_program_(prog)
+        if perr != "" && string.string_starts_with(perr, "app.json") == 1 { return perr }
+        if perr != "" {
+            b.backend_why = own_(perr)
+            say_("sae: ${perr}")
+            return ""
+        }
+        args = list.new()
+        grants_from_(decl, "args", |a: string| { list.add(args, own_(a)) })
+        h, serr = backend.start(full, args)
+        list.free(args)
+        what = prog
     }
-    args = list.new()
-    grants_from_(decl, "args", |a: string| { list.add(args, own_(a)) })
-    h, serr = backend.start(full, args)
-    list.free(args)
     if serr != "" {
         b.backend_why = own_(serr)
         say_("sae: ${serr}")
@@ -4504,9 +4523,38 @@ backend_start_(b: *Browser, manifest: ptr) -> string {
     }
     b.backend = h
     b.backend_why = ""
-    say_("sae: backend: ${prog} started")
+    say_("sae: backend: ${what} started")
     b.backend_timer = ui.timer(10, || { backend_tick_(b) })
     return ""
+}
+
+// app.json capabilities.backend.wslc { "image": "<image>", "command":
+// ["<program in the image>", "<arg>", ...] }: (image, command as a std.list
+// the caller frees, "") or (_, list, why the app is refused). The image is a
+// name wslc knows (no spaces, not an option); the command may be empty (the
+// image's own) and its first word is not an option either, so neither can
+// reach wslc as one of its own flags.
+backend_wslc_(wv: ptr, decl: ptr) -> (string, ptr, string) {
+    command = list.new()
+    if json.json_type(wv) != 5 { return "", command, "app.json capabilities.backend.wslc must be an object: { \"image\": \"<image>\", \"command\": [...] }" }
+    if json.json_object_get_raw(decl, "args") != null { return "", command, "app.json capabilities.backend: a wslc backend's arguments go in wslc.command, not args" }
+    iv = json.json_object_get_raw(wv, "image")
+    image = ""
+    if iv != null {
+        is, _ie = json.get_string(iv)
+        image = own_(is)
+    }
+    if image == "" || string.string_starts_with(image, "-") == 1 || string.contains(image, " ") == 1 {
+        return "", command, "app.json capabilities.backend.wslc.image: the image to run, as wslc names it (\"${image}\" is not one)"
+    }
+    grants_from_(wv, "command", |a: string| { list.add(command, own_(a)) })
+    if list.size(command) > 0 {
+        fv, _ = list.get_string(command, 0)
+        if string.string_starts_with(fv, "-") == 1 {
+            return "", command, "app.json capabilities.backend.wslc.command: the program in the image first, not an option"
+        }
+    }
+    return image, command, ""
 }
 
 sae_backend_listen(ctx: ptr, this_val: int, argv: int) -> int {
@@ -4633,7 +4681,7 @@ backend_tick_(b: *Browser) {
         if frame == "" { break }
         v, perr = json.parse(frame)
         if perr != "" || v == null {
-            backend_gone_(b, "backend: it sent something that is not a frame of JSON")
+            backend_gone_(b, "backend: it broke the protocol: the frame ${backend.excerpt(frame)} is not JSON")
             return
         }
         ev = json.json_object_get_raw(v, "event")

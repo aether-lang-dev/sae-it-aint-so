@@ -1,0 +1,6 @@
+{
+  "name": "Backend stray output test",
+  "capabilities": {
+    "backend": { "program": "backend/main", "deadlineMs": 1000 }
+  }
+}
