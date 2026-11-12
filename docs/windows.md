@@ -121,7 +121,7 @@ backend and says why.
 
 `tests/run_all.sh` natively on win11 (browser a Windows program, page server
 the one already answering on 8091, so `SAE_TEST_SERVER=external`): 63 of 66
-pass on Aether 0.908.0 and aether-ui 93d1b24e, the three backend specs among
+passed on Aether 0.908.0 and aether-ui 93d1b24e, the three backend specs among
 them. The four aether-ui Win32 failures of the earlier 59 of 65 are fixed
 there: set_focusable taken away from a stack (spec_keys), onsubmit in a
 field's block (spec_grid: the driver's submit went through the key handlers,
@@ -134,20 +134,25 @@ canvas row). What it took before that: the binary's path, `fs.realpath`,
 with no drive is outside every grant there); and tests and tools that read
 CRLF output or MSYS2's `/c/...` spelling of `C:/...`.
 
-Still failing, each a fix upstream (both in aether PR #3649, not yet released):
-
-- spec_app_bus: the courier file is to be readable only by its user. Aether's
-  `fs.chmod` on Windows toggles the read-only attribute and ignores the rest,
-  so the key is as readable as its folder. Needs an owner-only file in
-  std.fs (a DACL on Windows).
-- spec_app_httplist: `api.localhost` does not resolve on Windows (macOS and
-  Linux resolve every `*.localhost` to loopback, RFC 6761). Needs Aether's
-  resolver to do so on every platform.
-
 spec_escape failed in that run only because a page server left running on
 8091 answered for it (it serves `site/`, and the spec needs its own site
-directory). Rerun alone with 8091 free (2026-11-11), it passes, 19 of 19, so
-64 of 66 pass. aether PR #3649 carries both upstream fixes above.
+directory). Rerun alone with 8091 free (2026-11-11), it passes, 19 of 19.
+
+The last two failures were upstream, and pass natively on win11 since Aether
+0.909.0 (aether #3649), checked 2026-11-12 with the spec_app_backend and
+spec_app_channel specs:
+
+- spec_app_bus: the courier file is readable only by its user. `fs.chmod`
+  0600 on Windows now sets a protected DACL with no inherited entries (the
+  user, SYSTEM and Administrators); before, it toggled the read-only
+  attribute and the key was as readable as its folder. The spec reads the
+  DACL back as SDDL (PowerShell's `Get-Acl`) there, as stat's mode bits
+  elsewhere.
+- spec_app_httplist: `api.localhost` resolves to loopback on Windows too
+  (macOS and Linux always did, RFC 6761).
+
+So nothing in `tests/run_all.sh` is known to fail on win11; the full run on
+0.909.0 is still to be repeated there.
 
 A page server already answering on 8091 (the WSL container) takes a native
 run's requests on Windows, as wslc's 127.0.0.1 relay wins over the native

@@ -28,12 +28,22 @@ main() {
             spec.assert_true(string.starts_with(url, "http://127.0.0.1:") == 1, "on loopback: ${url}")
             spec.assert_true(string.ends_with(url, "/api/sheet") == 1, "at the app's name")
             spec.assert_true(string.length(key) >= 20, "a key")
-            argv = list.new()
-            list.add(argv, "-c")
-            list.add(argv, "stat -c %a \"$0\" 2>/dev/null || stat -f %Lp \"$0\"")
-            list.add(argv, courier_path_())
-            mode, _code, _merr = os.run_capture("sh", argv, null)
-            spec.assert_str_eq(string.trim(mode), "600", "readable only by this user")
+            if os.platform() == "windows" {
+                // The DACL, as SDDL (principals by SID, any locale): protected,
+                // nothing inherited from the folder, and none of Users,
+                // Authenticated Users or Everyone (fs.chmod 0600, aether #3649).
+                dacl = dacl_of_(courier_path_())
+                spec.assert_true(string.starts_with(dacl, "D:P") == 1, "a protected DACL: ${dacl}")
+                spec.assert_eq(string.contains(dacl, "ID;"), 0, "nothing inherited: ${dacl}")
+                spec.assert_eq(string.contains(dacl, ";;;BU)") + string.contains(dacl, ";;;AU)") + string.contains(dacl, ";;;WD)"), 0, "readable only by this user: ${dacl}")
+            } else {
+                argv = list.new()
+                list.add(argv, "-c")
+                list.add(argv, "stat -c %a \"$0\" 2>/dev/null || stat -f %Lp \"$0\"")
+                list.add(argv, courier_path_())
+                mode, _code, _merr = os.run_capture("sh", argv, null)
+                spec.assert_str_eq(string.trim(mode), "600", "readable only by this user")
+            }
             spec.assert_contains(uidriver.get_body("/windows"), "Bus test - control bus on", "the title marked")
         }
         spec.it("a sealed command reaches the page's handler; its answer comes back sealed") callback {
@@ -129,6 +139,26 @@ main() {
         }
     }
     return spec.run_summary(fw)
+}
+
+// The DACL part of `path`'s security descriptor on Windows, in SDDL
+// (PowerShell's Get-Acl), "" when it cannot be read. An MSYS2 path
+// (/c/...) is given to PowerShell as C:/...
+dacl_of_(path: string) -> string {
+    p = path
+    if string.length(p) > 2 && string.starts_with(p, "/") == 1 && string.substring(p, 2, 3) == "/" {
+        p = "${string.to_upper(string.substring(p, 1, 2))}:${string.substring(p, 2, string.length(p))}"
+    }
+    av = list.new()
+    list.add(av, "-NoProfile")
+    list.add(av, "-NonInteractive")
+    list.add(av, "-Command")
+    list.add(av, "(Get-Acl -LiteralPath '${p}').Sddl")
+    out, _st, _err = os.run_capture("powershell.exe", av, null)
+    list.free(av)
+    at = string.index_of(out, "D:")
+    if at < 0 { return "" }
+    return string.trim(string.substring(out, at, string.length(out)))
 }
 
 target_log_() -> string {
