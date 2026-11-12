@@ -104,7 +104,16 @@
 # spec_app_httplist passes, with every spec_app_backend, spec_app_channel and
 # spec_app_bus spec; ae-x64 (a get.sh install of 0.909.0) and macOS (the dev
 # tree at v0.909.0) likewise, run with the two commits after this one.
-AE_PIN=0.909.0
+# 0.912.0 (2026-11-12): a real floor move, evidence-based. aether #3653 gives
+# `import ns hiding (a, b)` and `hide ns.member`, which the commit after this
+# one uses: src/sae_host.ae and aevg/module.ae import `ui hiding (open_url,
+# print_pdf, clipboard_read, clipboard_write)` and std.http.client hiding
+# (request), so the compiler holds the layer rules tests/check_layers.sh
+# grepped for (asks/aether-hide-one-member.md). Nothing older parses the
+# `hiding` clause. The release also carries #3655 (optional-return string
+# ownership, loop sole-read copied not moved, http client skipping interim
+# 1xx). aeb and aether-ui refs unchanged: nothing needs a newer one.
+AE_PIN=0.912.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
