@@ -1,11 +1,13 @@
 # Ask (aether): `hide` one member of an imported module
 
-**Fixed upstream, waiting on a release (2026-11-11).** Both forms below are
-in aether PR #3653 (https://github.com/aether-lang-dev/aether/pull/3653; aether `asks/REPLY-aether-hide-one-member.md`):
-`hide ui.open_url` in a block, and `import ui hiding (open_url)` holding every
-body in the file, the importing file's own rule. Once a release carries it and
-sae's `AE_PIN` moves there, the kernel imports `ui hiding (open_url)` and
-`tests/check_layers.sh`'s open_url grep can go. Until then sae keeps the grep.
+**RESOLVED (released in Aether 0.912.0, aether PR #3653; aether
+`asks/REPLY-aether-hide-one-member.md`).** sae's `AE_PIN` moved to 0.912.0
+and `src/sae_host.ae` and `aevg/module.ae` import `ui hiding (open_url,
+print_pdf, clipboard_read, clipboard_write)`, `src/sae_host.ae` also
+`std.http.client hiding (request)`; a planted use of any of them is E0304.
+`tests/check_layers.sh` lost its four grep rules for them and now only
+checks that every importer carries the `hiding` clause. The text below is
+the original ask.
 
 ## Motivation
 

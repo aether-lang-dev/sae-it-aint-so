@@ -36,13 +36,14 @@ and the guest can only ask, through the gate, for what a service will do.
    with a `hide` line naming the kernel (fs, os, the network client, the
    lowerer, page lifecycle, the engine's parse/run), so a gate cannot name
    them at any depth (`tests/check_page_veto.sh`).
-3. **Layer rules, checked by a script.** `tests/check_layers.sh` holds each
+3. **Layer rules, checked by the compiler and a script.** The kernel
+   imports `ui hiding (open_url, print_pdf, clipboard_read, clipboard_write)`
+   and `std.http.client hiding (request)`, so naming any of them outside
+   `services/shell`, `print`, `clipboard` and `net` is E0304 (Aether 0.912.0,
+   `asks/aether-hide-one-member.md`). `tests/check_layers.sh` holds each
    service to its exact import list (widening one is a reviewed change to
-   that script) and fails if `open_url` is named anywhere but
-   `services/shell`, or `client.request` anywhere but `services/net`. The kernel imports all of `ui` to build the browser,
-   and Aether can hide a namespace but not one of its members
-   (`asks/aether-hide-one-member.md`); when it can, the rule becomes a
-   `hide ui.open_url` the compiler checks.
+   that script), that no file imports `ui` or `std.http.client` without the
+   `hiding` clause, and the listener, process-start and `std.dir` rules.
 4. **Grants, checked at run time by the services.** Every path is resolved
    to where it leads and every URL compared with the app's grants before
    anything is touched (`docs/app-capabilities.md`).

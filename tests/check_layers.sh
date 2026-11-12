@@ -8,9 +8,10 @@
 # list, so widening one is a reviewed change to this file, and checks that
 # ui.open_url (the system URL opener) is named nowhere but services/shell,
 # and client.request (an outgoing request) nowhere but services/net.
-# The kernel imports all of ui to build the browser, and Aether can hide a
-# namespace but not one member of it (asks/aether-hide-one-member.md), so
-# that rule is a grep until it can be a `hide`.
+# Those member rules (open_url, print_pdf, clipboard_read/write, client.request)
+# are the compiler's: the kernel imports `ui hiding (...)` and
+# `std.http.client hiding (request)` (Aether 0.912.0, aether #3653), and a
+# use is E0304. What is left here is that no file imports either module whole.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
@@ -97,58 +98,31 @@ if [ -n "$hits" ]; then
 else
     echo "ok   sae starts a program only in services/backend"
 fi
-# ui.clipboard_read and clipboard_write only in services/clipboard: every
-# read and write of the system clipboard goes through its rules.
-hits=$(grep -rnE '(^|[^_a-zA-Z0-9])clipboard_(read|write)[[:space:]]*\(' \
-        --include='*.ae' src services lower tools gen 2>/dev/null \
-      | grep -v '^services/clipboard/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
-if [ -n "$hits" ]; then
-    echo "FAIL the system clipboard named outside services/clipboard:"
-    echo "$hits" | sed 's/^/       /'
-    fail=1
-else
-    echo "ok   the system clipboard is named only in services/clipboard"
-fi
-
-# ui.open_url, or a bare open_url from a selective import, only in services/shell.
-hits=$(grep -rnE '(^|[^_a-zA-Z0-9])open_url[[:space:]]*\(|import ui \([^)]*open_url' \
-        --include='*.ae' src services lower tools gen 2>/dev/null \
-      | grep -v '^services/shell/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
-if [ -n "$hits" ]; then
-    echo "FAIL open_url named outside services/shell:"
-    echo "$hits" | sed 's/^/       /'
-    fail=1
-else
-    echo "ok   open_url is named only in services/shell"
-fi
-
-# ui.print_pdf, or a bare print_pdf from a selective import, only in
-# services/print: every print request is checked against capabilities.print.
-hits=$(grep -rnE '(^|[^_a-zA-Z0-9])print_pdf[[:space:]]*\(|import ui \([^)]*print_pdf' \
-        --include='*.ae' src services lower tools gen 2>/dev/null \
-      | grep -v '^services/print/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
-if [ -n "$hits" ]; then
-    echo "FAIL print_pdf named outside services/print:"
-    echo "$hits" | sed 's/^/       /'
-    fail=1
-else
-    echo "ok   print_pdf is named only in services/print"
-fi
-
-# client.request (building an outgoing request), or a bare request() from a
-# selective import, only in services/net: every request sae makes is opened
-# there, after app.json capabilities.http is checked. The kernel still sends, reads and
-# frees requests (send_request, response_*, request_free), which need one.
-hits=$(grep -rnE 'client\.request[[:space:]]*\(|import std\.http\.client \([^)]*request[,)]' \
-        --include='*.ae' src services lower tools gen 2>/dev/null \
-      | grep -v '^services/net/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
-if [ -n "$hits" ]; then
-    echo "FAIL client.request named outside services/net:"
-    echo "$hits" | sed 's/^/       /'
-    fail=1
-else
-    echo "ok   client.request is named only in services/net"
-fi
+# Who may name ui.open_url, ui.print_pdf, ui.clipboard_read/write and
+# client.request is the compiler's rule (E0304): outside services/shell,
+# print, clipboard and net, a file importing ui or std.http.client must say
+# `hiding (...)` with each of them, so dropping a name from the list is a
+# reviewed change here. (A grep for a use would only repeat the compiler.)
+check_hiding() {   # check_hiding MODULE-REGEX LABEL NAME...
+    mod=$1; label=$2; shift 2
+    files=$(grep -rlE "^import $mod( |\$)" --include='*.ae' src services lower tools aevg vg ui 2>/dev/null || true)
+    for f in $files; do
+        case $f in services/shell/*|services/print/*|services/clipboard/*|services/net/*) continue;; esac
+        line=$(grep -E "^import $mod( |\$)" "$f" | head -1)
+        bad=""
+        for n in "$@"; do
+            case $line in *hiding*"$n"*) ;; *) bad="$bad $n";; esac
+        done
+        if [ -n "$bad" ]; then
+            echo "FAIL $f: '$line' does not hide$bad"
+            fail=1
+        else
+            echo "ok   $f hides $label"
+        fi
+    done
+}
+check_hiding 'ui' 'ui.open_url, print_pdf, clipboard_read/write' open_url print_pdf clipboard_read clipboard_write
+check_hiding 'std\.http\.client' 'client.request' request
 
 # The kernel does not list directories; services/files does, for pages.
 if grep -qE '^import std\.dir' src/sae_host.ae; then

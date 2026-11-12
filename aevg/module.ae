@@ -42,7 +42,7 @@ exports (
     K_SCENE, K_GROUP, K_SHAPE, K_TEXT
 )
 
-import ui
+import ui hiding (open_url, print_pdf, clipboard_read, clipboard_write)
 import vg
 import vg.live
 import vg.grammar.factories

@@ -13,14 +13,14 @@
 // be destroyed; so the request is recorded and carried out on the next turn
 // of the event loop, after the JS call has returned.
 
-import ui
+import ui hiding (open_url, print_pdf, clipboard_read, clipboard_write)
 import std.mem
 import std.fs
 import std.os
 import std.list
 import std.strarr
 import std.string
-import std.http.client
+import std.http.client hiding (request)
 import std.tcp
 // HTTPS in a build without OpenSSL (every cross-build, including Android):
 // std.http.client uses the pure-Aether TLS 1.3 client when it is linked.
