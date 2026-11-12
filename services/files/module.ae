@@ -259,12 +259,10 @@ fence_(h: ptr) -> sandbox.Grants {
 // The operations: each checks first, then acts, fenced. (text, "") or ("", error).
 
 read_text(h: ptr, raw: string) -> (string, string) {
-    // What the fenced block sets is declared before any return
-    // (asks/aether-closure-capture-early-return.md).
-    t = ""
-    err = ""
     p, why = path(h, raw, 0, "fs.read_text")
     if why != "" { return "", why }
+    t = ""
+    err = ""
     perms = fence_(h)
     sandbox.enforce(perms) callback {
         t, err = fs.read(p)

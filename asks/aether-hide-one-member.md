@@ -1,5 +1,12 @@
 # Ask (aether): `hide` one member of an imported module
 
+**Fixed upstream, waiting on a release (2026-11-11).** Both forms below are
+in aether PR #3653 (https://github.com/aether-lang-dev/aether/pull/3653; aether `asks/REPLY-aether-hide-one-member.md`):
+`hide ui.open_url` in a block, and `import ui hiding (open_url)` holding every
+body in the file, the importing file's own rule. Once a release carries it and
+sae's `AE_PIN` moves there, the kernel imports `ui hiding (open_url)` and
+`tests/check_layers.sh`'s open_url grep can go. Until then sae keeps the grep.
+
 ## Motivation
 
 sae confines each effect a web page can ask for to one module

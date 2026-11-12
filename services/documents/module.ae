@@ -76,12 +76,10 @@ name(dh: ptr, h: int) -> string {
 
 // (its text, "") or ("", why).
 read_text(dh: ptr, h: int) -> (string, string) {
-    // What the fenced block sets is declared before any return
-    // (asks/aether-closure-capture-early-return.md).
-    text = ""
-    err = ""
     p = path_(dh, h)
     if p == "" { return "", "documents: no document ${h}" }
+    text = ""
+    err = ""
     one = sandbox.new("documents: one file") {
         grant_fs_read(p)
     }

@@ -1,5 +1,13 @@
 # Ask (aether): a captured string assigned in a closure, after an early return, does not compile
 
+**RESOLVED, 2026-11-11.** Fixed upstream before this note: the repro below
+compiles and prints `read 213` on Aether 0.908.0 and 0.909.0, and runs clean
+under `leaks`. aether's answer is `asks/REPLY-aether-closure-capture-early-return.md`
+there, with a regression test (`tests/regression/test_closure_capture_after_early_return.ae`)
+in aether PR #3653. sae's workaround is gone: `services/files` and
+`services/documents` declare what the fenced block sets after their early
+returns. The history below is kept as it was.
+
 ## Motivation
 
 sae's `services/files` and `services/documents` run each file operation
