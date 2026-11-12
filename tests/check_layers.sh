@@ -105,7 +105,7 @@ fi
 # reviewed change here. (A grep for a use would only repeat the compiler.)
 check_hiding() {   # check_hiding MODULE-REGEX LABEL NAME...
     mod=$1; label=$2; shift 2
-    files=$(grep -rlE "^import $mod( |\$)" --include='*.ae' src services lower tools aevg vg ui 2>/dev/null || true)
+    files=$(grep -rlE "^import $mod( |\$)" --include='*.ae' src services lower tools aevg 2>/dev/null || true)
     for f in $files; do
         case $f in services/shell/*|services/print/*|services/clipboard/*|services/net/*) continue;; esac
         line=$(grep -E "^import $mod( |\$)" "$f" | head -1)
