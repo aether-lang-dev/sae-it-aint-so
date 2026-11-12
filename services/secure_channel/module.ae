@@ -1,5 +1,6 @@
 // COPIED from aeo (aether-lang-dev/aeo) lib/secure_channel/module.ae at 4c01bb7, unchanged
-// below this note. sae's control bus (services/bus, docs/control-bus.md)
+// below this note but for to_hex, which sae builds in one buffer (2026-11-11:
+// aeo's grew a string a byte pair at a time, quadratic, 80 s for a 2 MB answer). sae's control bus (services/bus, docs/control-bus.md)
 // uses the same courier key and envelope as aeo's agent channel. A copy for
 // now (Paul, 2026-10-14): both are to move into one module aeo and sae import.
 //
@@ -227,16 +228,27 @@ _rand16() -> ptr {
     return _sbytes(raw)
 }
 
-// bytes -> lowercase hex string.
+// bytes -> lowercase hex string, built in one buffer (linear: the bus's
+// sealed answers run to megabytes, and a string grown a byte pair at a time
+// took 80 s on the UI thread for 2 MB).
 to_hex(b: ptr, n: int) -> string {
-    out = ""
+    out = bytes.new(n * 2 + 1)
     i = 0
     while i < n {
         v = bytes.get(b, i)
-        out = "${out}${_nib((v >> 4) & 15)}${_nib(v & 15)}"
+        _h = bytes.set(out, i * 2, _nibc((v >> 4) & 15))
+        _l = bytes.set(out, i * 2 + 1, _nibc(v & 15))
         i = i + 1
     }
-    return out
+    return bytes.finish(out, n * 2)
+}
+
+// nibble (0-15) -> hex char code.
+_nibc(v: int) -> int {
+    if v < 10 {
+        return 48 + v
+    }
+    return 97 + (v - 10)
 }
 
 // hex string -> fresh std.bytes buffer, or null on odd length / bad digit.
@@ -259,13 +271,6 @@ from_hex(s: string) -> ptr {
     return out
 }
 
-// nibble (0-15) -> hex char.
-_nib(v: int) -> string {
-    if v < 10 {
-        return string_from_char(48 + v)     // '0'..'9'
-    }
-    return string_from_char(97 + (v - 10))  // 'a'..'f'
-}
 
 // hex char code -> nibble, or -1 if not a hex digit.
 _unnib(c: int) -> int {

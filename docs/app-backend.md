@@ -425,16 +425,18 @@ did not run on Windows and nothing yet passed a descriptor.
 7. **Both at once**: one launch has the channel or the bus. A person who
    wants to attach a REXX script to an app an MCP server started cannot
    yet; allowing both would be one more `ctl_answer_` case.
-8. **The control bus's own writes**: `services/bus` answers a connection
-   with `tcp.write` on the UI thread, so a local client that sends a
-   request and never reads its (sealed) answer can hold the window while
-   the socket's buffer is full. Not covered by the write bound (a socket,
-   not a pipe; std.tcp has the same gap, a `wait_writable` there would
-   close it).
 
-Done: the write bound (2026-11-11: a parent or backend that stops reading
-no longer stalls the window; above, "The write bound"; what would replace
-its thread is `asks/aether-ipc-wait-writable.md`), Windows (2026-11-11,
+Done: the control bus's own writes (open item 8, 2026-11-11): `services/bus`
+answered a connection with one `tcp.write` on the UI thread, so a local
+client that sent a request and never read its sealed answer held the window
+while the socket's buffer was full (up to 30 s a send); it now writes with
+`tcp.write_some` (Aether 0.909.0) a tick at a time, and drops a client that
+has not taken its whole answer within 5 s, `sae: control bus: dropped a
+client that did not read its answer: N of M bytes not taken within 5 s`
+(`spec_app_bus`, which failed on the old code). The write bound
+(2026-11-11: a parent or backend that stops reading no longer stalls the
+window; above, "The write bound"; on std.ipc's frame writer since
+`asks/aether-ipc-wait-writable.md` was resolved in 0.909.0), Windows (2026-11-11,
 the stdio transport, native and wslc), and stray output (`saebackend.open()` claims stdin and stdout with
 `ipc.stdio_channel`; what still breaks the stream, output before the claim
 or from a wrapper, is quoted in the reason). Not masked even now: output

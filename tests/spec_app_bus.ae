@@ -13,6 +13,8 @@ import std.json
 import std.os (os_getenv)
 import std.os
 import std.list
+import std.http.client
+import std.time (now_ms)
 import saedriver as b
 import uidriver
 import services.secure_channel
@@ -123,6 +125,40 @@ main() {
             _p, why = secure_channel.open_line(key, fake)
             spec.assert_true(string.length(why) > 0, "refused: ${why}")
         }
+        // A client that asks and then never reads: the answer ("big", 4 MB
+        // sealed) is far more than the socket holds. sae writes what the
+        // socket takes, a tick at a time, so the window keeps answering;
+        // after 5 s the client is dropped, saying so. Before 2026-11-11 the
+        // answer was one tcp.write on the UI thread, and the window stopped
+        // answering for as long as the socket stayed full (35 s on macOS).
+        spec.it("a client that never reads its answer: the window keeps answering, and after 5 s the client is dropped, saying so") callback {
+            url, key = courier_()
+            port = port_of_(url)
+            sock, cerr = tcp.connect_buffered("127.0.0.1", port, 16384)
+            spec.assert_str_eq(cerr, "", "connected")
+            if cerr != "" { return }
+            o = json.obj()
+            _c = json.set(o, "command", json.str("big"))
+            plain_in, _se = json.encode(o)
+            json.json_free(o)
+            _w = tcp.write(sock, request_(port, "/api/sheet", "127.0.0.1:${port}", "", secure_channel.seal_line(key, plain_in)))
+            sleep(300)
+            if responsive_(8, 400, "while the answer waits") == 0 {
+                _x = tcp.tcp_close(sock)
+                return
+            }
+            spec.assert_true(b.wait_for_text("last: big"), "the page answered")
+            // Winsock takes the whole answer however little the client reads
+            // (64 MB in 31 ms on win11), so there the socket never fills and
+            // there is nothing to drop; the window answering is the point.
+            if os.platform() != "windows" {
+                spec.assert_true(b.wait_for_console_secs("sae: control bus: dropped a client that did not read its answer", 15), "dropped, saying so")
+            }
+            _r = responsive_(2, 100, "after")
+            _x = tcp.tcp_close(sock)
+            _s, after = command_(key, "after the deaf one")
+            spec.assert_contains(after, "\"echo\":\"after the deaf one\"", "and the next request served")
+        }
         spec.it("bus.stop: the courier file goes, the title is plain again, nothing listens") callback {
             url, _k = courier_()
             port = port_of_(url)
@@ -139,6 +175,33 @@ main() {
         }
     }
     return spec.run_summary(fw)
+}
+
+// How long the window took to answer the driver (GET /windows, served on
+// sae's UI thread), or -1 when it did not within 2 s.
+answered_in_() -> long {
+    t0 = now_ms()
+    req = client.request("GET", uidriver.url_of("/windows"))
+    _t = client.set_timeout(req, 2s)
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if cerr != "" { return 0 - 1 }
+    client.response_free(resp)
+    return now_ms() - t0
+}
+
+// The window answers the driver within a second, `n` times, `gap_ms` apart:
+// 1, or 0 (the case failed) at the first time it does not.
+responsive_(n: int, gap_ms: int, msg: string) -> int {
+    i = 0
+    while i < n {
+        ms = answered_in_()
+        spec.assert_true(ms >= 0 && ms < 1000, "${msg}: the window answered the driver in ${ms} ms (-1: not within 2 s)")
+        if ms < 0 || ms >= 1000 { return 0 }
+        sleep(gap_ms)
+        i = i + 1
+    }
+    return 1
 }
 
 // The DACL part of `path`'s security descriptor on Windows, in SDDL

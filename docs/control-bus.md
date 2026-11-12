@@ -196,6 +196,15 @@ being done.
      UI thread).
    - At most 8 are queued. Past that the request is refused (503), as a
      page's ninth request in flight is.
+   - Nothing waits on a client: a request is read only once it has
+     arrived, and the answer is written with `tcp.write_some` (Aether
+     0.909.0), what the socket takes now, the rest a tick later. A client
+     that has not taken its whole answer within 5 s is dropped, logged as
+     `sae: control bus: dropped a client that did not read its answer`
+     (`spec_app_bus`; before 2026-11-11 one `tcp.write` on the UI thread
+     held the window while such a client's socket stayed full). On
+     Windows Winsock takes a whole answer however little the client reads
+     (64 MB in 31 ms on win11), so nothing is dropped there.
    - A handler that throws answers `{rc: 1, error: <message>}`. One that
      runs past 5 s in one entry is stopped as any entry is, and its
      request answered at once ("stopped: it ran past the app's limit of

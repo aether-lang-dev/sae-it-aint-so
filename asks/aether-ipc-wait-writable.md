@@ -1,8 +1,28 @@
 # std.ipc: a bounded write (wait_writable, or a write that does not wait)
 
 **From:** sae (the control channel and an app's backend, 2026-11-11).
-**Aether:** 0.908.0. **Status:** open; not filed upstream (aether is PR-only,
-through Paul).
+**Aether:** 0.908.0. **Status:** RESOLVED in Aether 0.909.0 (aether #3650).
+
+## RESOLVED (2026-11-11, Aether 0.909.0)
+
+aether #3650, first released in 0.909.0, has both halves and more:
+`ipc.wait_writable(ch, ms)`, `ipc.write_some(fd, bytes, offset)`, the
+per-descriptor frame writer (`ipc.frame_writer(fd)`, `frame_writer_put`,
+`frame_writer_flush(w, ms)`, `frame_writer_pending`, `frame_writer_free`),
+and the same for sockets, `tcp.wait_writable` and `tcp.write_some`. No
+descriptor's flags are changed. On Windows a pipe is written no more than
+its free room, so the frame writer never waits there either (its
+`wait_writable` reads that room and can time out on an empty pipe whose
+reader waits in a large read; the frame writer does not rely on it).
+
+sae took it as this ask's last section said: `services/frames`' Writer is
+an `ipc.frame_writer` flushed with a wait of 0 from the owner's UI tick, no
+thread at all, the same 5 s bound and 16 MB cap, and a dropped channel's
+descriptor closes at once (`spec_app_channel` now reads the answer cut short
+right after the channel closes). `services/bus` answers with
+`tcp.write_some` a tick at a time, and drops a client that has not taken its
+answer within 5 s (docs/app-backend.md, open item 8, closed;
+`spec_app_bus`). The text below is the ask as it was.
 
 ## Motivation
 

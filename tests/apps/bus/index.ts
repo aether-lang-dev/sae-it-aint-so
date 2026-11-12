@@ -16,8 +16,9 @@ const handler = async (command: string) => {
   if (command === "spin") { let n = 0; for (;;) n++; }
   // Never settles: the bus's deadline answers for it.
   if (command === "hang") return await new Promise(() => {});
-  // An answer far larger than a pipe holds: a parent that does not read it
-  // leaves sae's write waiting (spec_app_channel).
+  // An answer far larger than a pipe or a socket holds: a parent or a bus
+  // client that does not read it leaves sae's write waiting
+  // (spec_app_channel, spec_app_bus).
   if (command === "big") return "x".repeat(2000000);
   return { echo: command, served };
 };

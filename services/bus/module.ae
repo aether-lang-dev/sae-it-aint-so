@@ -19,7 +19,14 @@
 //     it).
 // It runs on the UI thread: the kernel calls poll() from a timer while the
 // bus listens, takes each authenticated command with next(), and answers it
-// with answer() once the page's handler has. Nothing here runs a page.
+// with answer() once the page's handler has. Nothing here runs a page, and
+// nothing here waits on a client: a request is read only when poll says it
+// has arrived, and an answer is written with tcp.write_some, what the socket
+// takes now, the rest on the next tick (aether #3650, first released in
+// 0.909.0). A client that has not taken its whole answer within WRITE_MS is
+// dropped, saying so; before 2026-11-11 the answer was one tcp.write, and a
+// client that sent a request and never read the answer held the window for
+// as long as the socket's buffer stayed full (up to 30 s a send).
 //
 // Each Bus is an instance with its own state (the kernel holds one per
 // launch, made with new() and passed to every call); nothing here is module
@@ -42,12 +49,18 @@ exports (new, configure, declared, request_limit, start, stop, listening, addres
 
 const MAX_WAITING = 8
 
+// An answer must be taken whole within this, or its client is dropped.
+const WRITE_MS = 5000
+
 struct BusConn {
     sock: ptr
     buf: string       // what has arrived of the request
     id: int           // its number, for next() and answer()
-    state: int        // 0 reading, 1 ready (authenticated, waiting), 2 with the page
+    state: int        // 0 reading, 1 ready (authenticated, waiting), 2 with the page, 3 answering
     command: string   // the opened command, once ready
+    out: string       // the answer, once answering
+    off: int          // how much of it the client has taken
+    since: long       // when the answer began
 }
 
 // One launch's control bus: what app.json declares, and while it listens,
@@ -217,6 +230,9 @@ poll(h: ptr) {
         c.id = u.next_id
         c.state = 0
         c.command = ""
+        c.out = ""
+        c.off = 0
+        c.since = 0
         list.add(u.conns, c)
     }
     i = 0
@@ -232,14 +248,36 @@ poll(h: ptr) {
                     continue
                 }
                 c.buf = "${c.buf}${data}"
-                if parse_(u, c) == 1 {
-                    drop_(u, i)
-                    continue
-                }
+                _a = parse_(u, c)
             }
+        }
+        if c.state == 3 && send_(u, c) == 1 {
+            drop_(u, i)
+            continue
         }
         i = i + 1
     }
+}
+
+// What the client takes now of its answer written, never waiting: 1 when
+// the connection is done with (the answer all taken, the client gone, or the
+// answer not taken within WRITE_MS: dropped, saying so), 0 to come back on
+// the next tick.
+send_(u: *Bus, c: *BusConn) -> int {
+    data = string.bytes(c.out)
+    total = string.length(c.out)
+    while c.off < total {
+        n, werr = tcp.write_some(c.sock, data[c.off..total])
+        if werr != "" { return 1 }
+        if n == 0 { break }
+        c.off = c.off + n
+    }
+    if c.off >= total { return 1 }
+    if now_ms() - c.since > WRITE_MS {
+        log_line_(u, "dropped a client that did not read its answer: ${total - c.off} of ${total} bytes not taken within ${WRITE_MS / 1000} s")
+        return 1
+    }
+    return 0
 }
 
 // Close and forget connection i.
@@ -257,14 +295,15 @@ waiting_(u: *Bus) -> int {
     while i < list.size(u.conns) {
         cv, _e = list.get(u.conns, i)
         c = cv as *BusConn
-        if c.state != 0 { n = n + 1 }
+        if c.state == 1 || c.state == 2 { n = n + 1 }
         i = i + 1
     }
     return n
 }
 
-// A request as far as it has arrived: 0 to keep it (still arriving, or ready
-// for the page), 1 when it was answered here and can be dropped.
+// A request as far as it has arrived: 0 while it is still arriving or is
+// ready for the page, 1 when it was answered here (its answer then goes out
+// from poll, state 3).
 parse_(u: *Bus, c: *BusConn) -> int {
     if string.length(c.buf) > u.max + 8192 { return answer_(c, 413, "Payload Too Large", "the request is larger than this app's maxRequestBytes") }
     end = string.index_of(c.buf, "\r\n\r\n")
@@ -376,8 +415,8 @@ next(h: ptr) -> (int, string) {
 }
 
 // The page's answer to request `id`: success, the result as JSON ("" for
-// none), and an error message when it failed. Sealed, then the connection
-// closed.
+// none), and an error message when it failed. Sealed, and written as the
+// client takes it (poll goes on with it); the connection closed once it is.
 answer(h: ptr, id: int, success: int, result_json: string, error: string) {
     u = h as *Bus
     if u.conns == null { return }
@@ -389,7 +428,7 @@ answer(h: ptr, id: int, success: int, result_json: string, error: string) {
             code = 1
             if success == 1 { code = 0 }
             _s = sealed_(u, c, 200, "OK", reply_json_(success, result_json, code, error))
-            drop_(u, i)
+            if send_(u, c) == 1 { drop_(u, i) }
             return
         }
         i = i + 1
@@ -414,7 +453,15 @@ refused_(u: *Bus, c: *BusConn, status: int, text: string, why: string) -> int {
 
 // A plain answer (not sealed: the request was not this launch's).
 answer_(c: *BusConn, status: int, text: string, body: string) -> int {
-    _w = tcp.write(c.sock, "HTTP/1.1 ${status} ${text}\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(body)}\r\nConnection: close\r\n\r\n${body}")
+    return reply_(c, "HTTP/1.1 ${status} ${text}\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(body)}\r\nConnection: close\r\n\r\n${body}")
+}
+
+// The connection answering: `whole` goes out from send_, a tick at a time.
+reply_(c: *BusConn, whole: string) -> int {
+    c.out = whole
+    c.off = 0
+    c.since = now_ms()
+    c.state = 3
     return 1
 }
 
@@ -422,6 +469,5 @@ answer_(c: *BusConn, status: int, text: string, body: string) -> int {
 // this sae can it open.
 sealed_(u: *Bus, c: *BusConn, status: int, text: string, plain: string) -> int {
     frame = secure_channel.seal_line(u.key, plain)
-    _w = tcp.write(c.sock, "HTTP/1.1 ${status} ${text}\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(frame)}\r\nConnection: close\r\n\r\n${frame}")
-    return 1
+    return reply_(c, "HTTP/1.1 ${status} ${text}\r\nContent-Type: text/plain\r\nContent-Length: ${string.length(frame)}\r\nConnection: close\r\n\r\n${frame}")
 }
