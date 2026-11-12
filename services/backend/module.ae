@@ -21,8 +21,9 @@
 //
 // The kernel reads them on the UI thread a tick at a time (poll never
 // waits for a frame to start), so a backend cannot stall the window by
-// writing; and calls go out through a services/frames Writer, on a thread
-// of their own, so it cannot stall the window by not reading either. A call
+// writing; and calls go out through a services/frames Writer, written a
+// tick at a time as the backend takes them (never with a write that waits),
+// so it cannot stall the window by not reading either. A call
 // it has not taken within frames.WRITE_MS (5 s) stops it, killed at once:
 // "backend: it stopped reading its stdin".
 //

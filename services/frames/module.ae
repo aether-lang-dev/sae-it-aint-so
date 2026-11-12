@@ -14,24 +14,20 @@
 //
 // A Writer sends frames without the UI thread ever waiting for the peer to
 // read them. A write to a pipe blocks once the pipe is full (64 KB or so),
-// and a peer that has stopped reading never empties it; Aether 0.908.0's
-// std.ipc has no way to ask whether a pipe will take more, nor a write that
-// does not wait (asks/aether-ipc-wait-writable.md). So the frames go to a
-// thread of their own (std.worker's run_detached, one a batch): put() queues
-// a frame and returns at once, and pump(), from the owner's UI tick, hands the
-// queue to a new thread when the last batch is done. A frame not taken within
-// WRITE_MS is the peer's fault: pump() says so, and the owner drops the
-// channel. The thread may still be waiting in write() then; it owns the
-// descriptor from that moment and closes it when write() returns (the peer
-// reads, exits or is killed), so no descriptor is closed under it.
+// and a peer that has stopped reading never empties it. So nothing here
+// writes with a write that waits: put() queues a frame and returns, and
+// pump(), from the owner's UI tick, writes what the pipe takes now with
+// std.ipc's frame writer (ipc.frame_writer_flush with a wait of 0, aether
+// #3650, first released in 0.909.0), which keeps its place inside a frame
+// the pipe cut short. A frame not taken within WRITE_MS is the peer's fault:
+// pump() says so, and the owner drops the channel; close_writer() closes the
+// descriptor then and there, as no thread is left writing to it.
 
 import std.ipc
 import std.io (fd_close)
 import std.list
 import std.string
-import std.sync
 import std.time (now_ms)
-import std.worker
 
 exports (read, excerpt, writer, put, pump, stalled, close_writer, OK, EOF, BROKE, FAILED, WRITE_MS)
 
@@ -149,57 +145,45 @@ excerpt(s: string) -> string {
 // has stopped reading.
 const WRITE_MS = 5000
 
-// Bytes queued and not yet handed to the thread past which the peer is not
-// keeping up, however recently it took a frame.
+// Bytes waiting to be taken past which the peer is not keeping up, however
+// recently it took a frame.
 const MOST_QUEUED = 16777216
 
-// A Writer's thread state (its `state` cell).
-const IDLE = 0        // no thread: the UI thread may touch batch and err
-const WRITING = 1     // a thread is writing the batch
-const ABANDONED = 2   // a thread is writing, and the owner has closed the writer: the thread closes fd
-const CLOSED = 3      // fd closed
-
 struct Writer {
-    fd: int          // the descriptor written; the thread's alone once ABANDONED
-    queue: ptr       // std.list of frames not yet handed to a thread (UI thread only)
+    fd: int          // the descriptor written, or -1 once closed
+    fw: ptr          // std.ipc's frame writer on fd: the frame being written, or null once closed
+    queue: ptr       // std.list of the frames behind it, in order
+    head: int        // the first of them not yet handed to fw
     queued: int      // their bytes
-    batch: ptr       // std.list of the frames the thread is writing, or null
-    batched: int     // their bytes
-    state: ptr       // std.sync cell: IDLE, WRITING, ABANDONED or CLOSED
-    taken: ptr       // std.sync cell: frames of the batch written so far
-    err: string      // the thread's failure, read once IDLE
-    seen: long       // taken, as pump last saw it
-    since: long      // when pump last saw it move, or the batch began
+    since: long      // when fw was handed the frame it is writing
     why: string      // why the writer failed, "" while it has not
     stall: int       // 1 when why is the peer not reading
 }
 
-// A writer for `fd`: frames put with put() go out in order on a thread of
-// their own. close_writer() closes fd (or has the thread close it).
+// A writer for `fd`: frames put with put() go out in order, as the peer
+// takes them, from pump(). close_writer() closes fd.
 writer(fd: int) -> ptr {
     w = heap.new(Writer)
     w.fd = fd
+    w.fw = ipc.frame_writer(fd)
     w.queue = list.new()
+    w.head = 0
     w.queued = 0
-    w.batch = null
-    w.batched = 0
-    w.state = sync.atomic_new(IDLE)
-    w.taken = sync.atomic_new(0)
-    w.err = ""
-    w.seen = 0
     w.since = 0
     w.why = ""
     w.stall = 0
+    if w.fw == null { fail_(w, "no frame writer for descriptor ${fd}", 0) }
     return w as ptr
 }
 
-// Queue `data` as one frame and start it on its way: "" or why the writer
-// has failed (pump's reasons).
+// Queue `data` as one frame and write what the peer takes of it now: "" or
+// why the writer has failed (pump's reasons).
 put(h: ptr, data: string) -> string {
     w = h as *Writer
     if w.why != "" { return w.why }
-    if sync.atomic_load(w.state) >= ABANDONED { return "closed" }
-    if w.queued + string.length(data) > MOST_QUEUED {
+    if w.fw == null { return "closed" }
+    waiting = (w.queued as long) + ipc.frame_writer_pending(w.fw) + (string.length(data) as long)
+    if waiting > (MOST_QUEUED as long) {
         fail_(w, "more than ${MOST_QUEUED / 1048576} MB waiting to be taken", 1)
         return w.why
     }
@@ -208,39 +192,48 @@ put(h: ptr, data: string) -> string {
     return pump(h)
 }
 
-// Called from the owner's UI tick: the last batch's outcome taken, the next
-// begun, and the deadline held. "" while all is well, or why the writer has
-// failed: the peer not taking a frame within WRITE_MS (stalled() is 1), or
-// the write's own error (the peer closed its end, say). Never waits.
+// Called from the owner's UI tick (and by put): what the peer takes now
+// written, one frame at a time, and the deadline on the frame being written
+// held. "" while all is well, or why the writer has failed: the peer not
+// taking a frame within WRITE_MS (stalled() is 1), or the write's own error
+// (the peer closed its end, say). Never waits.
 pump(h: ptr) -> string {
     w = h as *Writer
     if w.why != "" { return w.why }
-    st = sync.atomic_load(w.state)
-    if st == WRITING {
-        t = sync.atomic_load(w.taken)
-        now = now_ms()
-        if t != w.seen {
-            w.seen = t
-            w.since = now
+    if w.fw == null { return "closed" }
+    while true {
+        if ipc.frame_writer_pending(w.fw) > 0 {
+            err = ipc.frame_writer_flush(w.fw, 0)
+            if err != "" {
+                fail_(w, err, 0)
+                return w.why
+            }
+            if ipc.frame_writer_pending(w.fw) > 0 { break }
+        }
+        // The frame is taken: the next one is handed over, its deadline
+        // from now.
+        if w.head >= list.size(w.queue) {
+            if w.head > 0 {
+                list.free(w.queue)
+                w.queue = list.new()
+                w.head = 0
+            }
             return ""
         }
-        if now - w.since > WRITE_MS {
-            left = w.queued + w.batched
-            fail_(w, "a frame waited ${WRITE_MS / 1000} s and was not taken (${left} bytes waiting)", 1)
-        }
-        return w.why
-    }
-    if st != IDLE { return "closed" }
-    if w.batch != null {
-        if w.err != "" {
-            fail_(w, w.err, 0)
+        s, _ge = list.get_string(w.queue, w.head)
+        w.head = w.head + 1
+        w.queued = w.queued - string.length(s)
+        perr = ipc.frame_writer_put(w.fw, s)
+        if perr != "" {
+            fail_(w, perr, 0)
             return w.why
         }
-        list.free(w.batch)
-        w.batch = null
-        w.batched = 0
+        w.since = now_ms()
     }
-    if list.size(w.queue) > 0 { start_(w) }
+    if now_ms() - w.since > WRITE_MS {
+        left = (w.queued as long) + ipc.frame_writer_pending(w.fw)
+        fail_(w, "a frame waited ${WRITE_MS / 1000} s and was not taken (${left} bytes waiting)", 1)
+    }
     return w.why
 }
 
@@ -256,63 +249,21 @@ fail_(w: *Writer, why: string, stall: int) {
     w.stall = stall
 }
 
-// The queue handed to a new thread.
-start_(w: *Writer) {
-    w.batch = w.queue
-    w.batched = w.queued
-    w.queue = list.new()
-    w.queued = 0
-    w.err = ""
-    sync.atomic_store(w.taken, 0)
-    w.seen = 0
-    w.since = now_ms()
-    sync.atomic_store(w.state, WRITING)
-    wp = w as ptr
-    ok = worker.run_detached(|| {
-        write_batch_(wp)
-        return wp
-    })
-    if ok == false {
-        sync.atomic_store(w.state, IDLE)
-        fail_(w, "no thread to write with", 0)
-    }
-}
-
-// On the writer's thread: the batch, in order. The UI thread touches
-// neither the batch nor err until the state is IDLE again; if the owner
-// closed the writer meanwhile (ABANDONED), the descriptor is this thread's
-// to close.
-write_batch_(h: ptr) {
-    w = h as *Writer
-    n = list.size(w.batch)
-    i = 0
-    err = ""
-    while i < n {
-        s, _ge = list.get_string(w.batch, i)
-        e = ipc.write_frame(w.fd, s)
-        if e != "" {
-            err = e
-            break
-        }
-        _t = sync.atomic_add(w.taken, 1)
-        i = i + 1
-    }
-    if err != "" { w.err = string.copy(err) }
-    if sync.atomic_cas(w.state, WRITING, IDLE) == 0 {
-        _c = fd_close(w.fd)
-        sync.atomic_store(w.state, CLOSED)
-    }
-}
-
-// Close the writer: frames not yet written are dropped. The descriptor is
-// closed now, or by the thread still writing when its write returns. Safe
-// to call twice.
+// Close the writer and its descriptor, now: frames not yet taken are
+// dropped. Safe to call twice.
 close_writer(h: ptr) {
     if h == null { return }
     w = h as *Writer
-    if sync.atomic_cas(w.state, WRITING, ABANDONED) == 1 { return }
-    if sync.atomic_load(w.state) == IDLE {
+    if w.fw != null {
+        ipc.frame_writer_free(w.fw)
+        w.fw = null
+    }
+    if w.queue != null {
+        list.free(w.queue)
+        w.queue = null
+    }
+    if w.fd >= 0 {
         _c = fd_close(w.fd)
-        sync.atomic_store(w.state, CLOSED)
+        w.fd = 0 - 1
     }
 }

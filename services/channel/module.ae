@@ -31,10 +31,11 @@
 // Each Channel is an instance with its own state (the kernel holds one per
 // launch); nothing here is module state. The kernel polls it from a UI
 // timer, a tick at a time, so a parent cannot stall the window by sending;
-// and answers go out through a services/frames Writer, on a thread of their
-// own, so a parent cannot stall it by not reading either: an answer it has
-// not taken within frames.WRITE_MS (5 s) closes the channel, "the program
-// that started sae stopped reading".
+// and answers go out through a services/frames Writer, written a tick at a
+// time as the parent takes them (never with a write that waits), so a parent
+// cannot stall it by not reading either: an answer it has not taken within
+// frames.WRITE_MS (5 s) closes the channel, "the program that started sae
+// stopped reading", and both descriptors close then and there.
 
 import std.ipc
 import std.io (fd_close)
@@ -271,14 +272,14 @@ event(h: ptr, name: string) {
     send_(c, "{\"event\":${quoted}}")
 }
 
-// A frame to the parent, queued: it goes out on the writer's thread.
+// A frame to the parent: queued, and what the pipe takes of it now written.
 send_(c: *Channel, text: string) {
     if c.out == null { return }
     werr = frames.put(c.out, text)
     if werr != "" { lost_(c, werr) }
 }
 
-// The writer's last batch taken and the next begun: 1 while the channel is
+// What the parent takes of the queued answers written: 1 while the channel is
 // open, 0 once the parent has not taken an answer within frames.WRITE_MS or
 // the write failed (the channel then closed).
 pump_(c: *Channel) -> int {

@@ -72,8 +72,8 @@ backend in a WSL container on Windows. The socket pair it began on is gone.
   frame that is not JSON, a stream that ends inside a frame, and a frame
   not whole within 2 s.
 - A backend that stops reading its stdin cannot stall the window: sae
-  writes its calls on a thread of its own (`services/frames`' Writer, "The
-  write bound" below), and a call it has not taken within 5 s stops it,
+  writes its calls only as fast as the pipe takes them, a tick at a time
+  (`services/frames`' Writer, "The write bound" below), and a call it has not taken within 5 s stops it,
   killed at once (it is not reading, so closing its stdin would not end
   it): `backend: it stopped reading its stdin: a frame waited 5 s and was
   not taken (2097152 bytes waiting); it was killed`, the page's `on_gone`
@@ -272,7 +272,7 @@ an AI client -> spreadsheet-mcp.js (node)
   stays open; more than eight waiting is "busy". Bytes that are not frames
   close the channel, quoted as a backend's are.
 - **A parent that stops reading** cannot stall the window either: answers
-  go out on the write bound's thread, and one the parent has not taken
+  go out under the write bound, a tick at a time, and one the parent has not taken
   within 5 s closes the channel, `control channel: the program that
   started sae stopped reading: a frame waited 5 s and was not taken (N
   bytes waiting)`, as when the parent goes (below): a headless sae exits,
@@ -312,33 +312,31 @@ Reading never waits (a wait of 0, then the frame bounded by 2 s), so a
 peer cannot stall sae by sending. Writing to a pipe waits once the pipe is
 full (64 KB or so), and a peer that has stopped reading never empties it:
 before 2026-11-11 that write was on the UI thread, and the window froze
-until the peer read, exited or was killed. Aether 0.908.0's std.ipc can
-wait for a pipe to be readable but not writable, and every write writes all
-of its bytes (`asks/aether-ipc-wait-writable.md`), so:
+until the peer read, exited or was killed. Now nothing sae writes to a peer
+waits:
 
 - `services/frames`' Writer (an instance per channel, no module state)
-  queues each frame and returns at once; from the owner's UI tick it hands
-  the queue to a thread of its own (`std.worker.run_detached`, one a
-  batch), which writes the frames in order and counts them in a
-  `std.sync` cell.
-- A frame not taken within **5 s** (`frames.WRITE_MS`), or more than 16 MB
-  queued behind one, is the peer's fault: the owner drops the channel with
-  a reason (above) and the page is told as for any other loss.
-- The thread may still be waiting in `write()` then. From that moment the
-  descriptor is the thread's: it closes it when `write()` returns, so no
-  descriptor is closed under a write (and reused). For a backend that is at
-  once (sae kills it, and the write fails); for the control channel it is
-  when the parent reads or exits (sae cannot kill its parent; a headless
-  sae exits anyway, and a windowed one keeps the one thread waiting).
-- The same code on Windows: `ipc.write_frame` on a pipe waits there too,
-  and the thread does the waiting.
+  queues each frame and hands them, one at a time, to std.ipc's frame
+  writer (`ipc.frame_writer`, aether #3650, Aether 0.909.0), which it
+  flushes with a wait of 0 when a frame is queued and on the owner's UI
+  tick: what the pipe takes now is written, and a frame the pipe cut short
+  goes on where it stopped at the next tick. No thread is involved.
+- A frame not taken whole within **5 s** (`frames.WRITE_MS`) of being
+  handed over, or more than 16 MB waiting behind it, is the peer's fault:
+  the owner drops the channel with a reason (above) and the page is told as
+  for any other loss. The descriptor closes then and there; no write is
+  left holding it, so the peer reads the end of the stream inside the frame
+  it did not take (`spec_app_channel` reads it).
+- The same code on Windows: there `ipc.write_some` writes a pipe no more
+  than its free room, which never waits.
 - Tests: `spec_app_backend_deaf` and the two "stops reading" cases of
   `spec_app_channel` (above), each failing against a sae from before the
   bound (the window did not answer the driver within 2 s) and passing with
-  it: on macOS (`tests/run_all.sh` 67/67), ae-x64 (every `spec_app_`
-  spec, Ubuntu 22.04, GTK 4.6) and natively on win11 (`spec_app_channel`,
-  `spec_app_backend_deaf`, `spec_app_backend_stray`, `spec_app_backend`),
-  2026-11-11, Aether 0.908.0.
+  it. The thread-based bound they first held (2026-11-11, Aether 0.908.0:
+  one detached thread a batch, which could stay blocked in `write()` and
+  kept the descriptor until it returned) was replaced the same day by the
+  frame writer, with the same tests (`asks/aether-ipc-wait-writable.md`,
+  resolved).
 
 The other ends: `sdk/saebackend` and `sdk/saecontrol` write without a
 bound, as before. That is enough for them: sae reads both pipes every tick

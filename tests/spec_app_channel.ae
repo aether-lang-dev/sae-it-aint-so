@@ -204,10 +204,10 @@ main() {
     saecontrol.stop(hl)
     // A parent that asks and then does not read: the answer (2 MB, past what
     // a pipe holds) cannot all be written. sae's UI thread does not wait for
-    // it (the answer is written on a thread of its own), and once it has
-    // waited frames.WRITE_MS (5 s) the channel is closed, saying why.
-    // Before 2026-11-11 the write was on the UI thread: the window stopped
-    // answering until the parent read or went.
+    // it (it writes what the pipe takes, a tick at a time), and once the
+    // answer has waited frames.WRITE_MS (5 s) the channel is closed, saying
+    // why. Before 2026-11-11 the write was on the UI thread and waited: the
+    // window stopped answering until the parent read or went.
     sl = launch_(0)
     spec.describe(fw, "a parent that stops reading") {
         spec.it("the window stays responsive, and after 5 s the channel is closed, saying why; the app stays") callback {
@@ -218,6 +218,10 @@ main() {
             spec.assert_true(b.wait_for_text("last: big"), "the page answered")
             why = "sae: control channel: the program that started sae stopped reading: a frame waited 5 s and was not taken"
             spec.assert_true(b.wait_for_console_secs(why, 15), "closed, saying why")
+            // Closed then and there: what the pipe held of the answer, then
+            // the end of the stream inside it (no writer left to finish it).
+            _f, rerr = saecontrol.read_answer(sl, 3000)
+            spec.assert_true(rerr != "" && string.contains(rerr, "no answer within") == 0, "sae's end closed, the answer cut short: ${rerr}")
             spec.assert_eq(running_(), 1, "sae still running")
             spec.assert_eq(string.contains(uidriver.get_body("/windows"), "control channel on"), 0, "the title plain")
             _r = responsive_(2, 100, "after")
@@ -227,7 +231,7 @@ main() {
     spec.assert_eq(running_(), 0, "stopped by the spec")
     hs = launch_(1)
     spec.describe(fw, "a parent that stops reading, without a window") {
-        spec.it("sae stops, though its write of the answer is still waiting") callback {
+        spec.it("sae stops once the answer has waited 5 s untaken") callback {
             spec.assert_eq(saecontrol.wait_event(hs, "serving", 10000), 1, "serving")
             stops = b.console_count("sae: control channel: no window and no channel: stopping")
             spec.assert_str_eq(saecontrol.send_raw(hs, "{\"id\": 1, \"command\": \"big\"}"), "", "sent, and its answer never read")
