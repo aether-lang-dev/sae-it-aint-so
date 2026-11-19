@@ -113,6 +113,7 @@ tests/run_spec.sh spec_terrain                 # demo 13
 tests/run_spec.sh spec_life                    # demo 14
 tests/run_spec.sh spec_algos                   # demo 17: sorting generators race on the frame clock
 tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
+tests/check_spec_lock.sh                      # run_spec.sh's one-spec-at-a-time lock: kept while its owner lives, however old; cleared when it died; its owner's exit status untouched
 tests/check_timed_entries.sh                  # every host read of a page's value (getter, toString, valueOf, toJSON) is a timed entry: no raw quickjs.get/to_string/... outside the js_* helpers
 tests/check_gate.sh                          # the gate spec, sae.d.ts and the objects a page really sees agree (tools/gen-dts.sh regenerates the d.ts)
 tests/check_listeners.sh                      # tests/lib/listeners.sh (what the app specs ask of lsof: /proc on Linux) sees a TCP and a Unix listener

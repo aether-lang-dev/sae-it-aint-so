@@ -43,15 +43,13 @@ DRIVER_PORT="${AETHER_UI_TEST_PORT:-9222}"
 # One spec at a time per machine: the page server and the driver bind fixed
 # ports (the app specs' app.json lists 8091), so concurrent runs -- several
 # worktrees, several agents -- would collide. A mkdir lock is atomic on every
-# platform sae builds on (macOS has no flock); a stale lock from a killed run
-# is reclaimed after 10 minutes.
+# platform sae builds on (macOS has no flock); a lock whose owner has died is
+# cleared, one whose owner lives is waited for however long it has run
+# (tests/lib/spec_lock.sh).
 LOCK="${TMPDIR:-/tmp}/sae-run_spec.lock"
-_now() { date +%s; }
-while ! mkdir "$LOCK" 2>/dev/null; do
-    if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rmdir "$LOCK" 2>/dev/null; continue; fi
-    sleep 1
-done
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+. "$ROOT/tests/lib/spec_lock.sh"
+while ! spec_lock_try "$LOCK"; do sleep 1; done
+trap 'spec_lock_release "$LOCK"' EXIT INT TERM
 
 # Same toolchain choice as build.sh (tools/aether_home.sh).
 . "$ROOT/tools/aether_home.sh"
@@ -124,7 +122,7 @@ else
         "${SAE_TEST_START:-http://127.0.0.1:$SITE_PORT/}" >"$LOG" 2>&1 &
 fi
 [ -n "${SAE_TEST_PARENT:-}" ] || SAE=$!
-trap 'kill $SAE $SERVER 2>/dev/null || true; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+trap 'kill $SAE $SERVER 2>/dev/null || true; spec_lock_release "$LOCK"' EXIT INT TERM
 
 cd "$SPEC_DIR"
 status=0
