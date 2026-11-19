@@ -391,11 +391,12 @@ pop_(p: *Page) {
 
 // Call a held JS function with no arguments: 0, or -1 if it threw (the
 // error is in quickjs.last_error). Its promise jobs run after it.
-call0_(ctx: ptr, f: int) -> int {
+call0_(p: *Page, f: int) -> int {
+    ctx = p.ctx
     // The call holds a reference of its own: a handler may destroy its own
     // widget, which lets go of f (drop_held_), while it is still running.
     g = quickjs.dup(ctx, f)
-    r, err = js_call_(ctx, g, 0, 0)
+    r, err = js_call_(p, g, 0, 0)
     quickjs.release(ctx, g)
     if err != "" { return 0 - 1 }
     quickjs.release(ctx, r)
@@ -403,17 +404,19 @@ call0_(ctx: ptr, f: int) -> int {
 }
 
 // Call argument i (a function) with no arguments, as call0_.
-call_arg_(ctx: ptr, argv: int, i: int) -> int {
+call_arg_(p: *Page, argv: int, i: int) -> int {
+    ctx = p.ctx
     f = quickjs.arg(ctx, argv, i)
-    r = call0_(ctx, f)
+    r = call0_(p, f)
     quickjs.release(ctx, f)
     return r
 }
 
 // Call a held function with the elements of an args array: as call0_.
-calln_(ctx: ptr, f: int, args: int) -> int {
+calln_(p: *Page, f: int, args: int) -> int {
+    ctx = p.ctx
     g = quickjs.dup(ctx, f)
-    r, err = js_call_(ctx, g, 0, args)
+    r, err = js_call_(p, g, 0, args)
     quickjs.release(ctx, g)
     if err != "" { return 0 - 1 }
     quickjs.release(ctx, r)
@@ -431,7 +434,7 @@ rethrow_(ctx: ptr) -> int {
 // page stopped that request: the bus tick answers it and tells the page.
 settle_(p: *Page) {
     ctx = p.ctx
-    n, err = js_run_jobs_(ctx)
+    n, err = js_run_jobs_(p)
     if n < 0 {
         say_("sae: uncaught exception in a promise job:\n${err}")
         if p != null {
@@ -450,7 +453,7 @@ settle_(p: *Page) {
 // report what it throws, then run the promise jobs it queued.
 fire0_(p: *Page, ref: int, what: string) {
     ctx = p.ctx
-    if call0_(ctx, ref) < 0 { report_exception_(p, what) }
+    if call0_(p, ref) < 0 { report_exception_(p, what) }
     settle_(p)
 }
 
@@ -484,7 +487,7 @@ note_interrupted_(p: *Page, err: string) {
     if string.contains(err, "interrupted") == 0 { return }
     if p == null || p.on_interrupted == 0 || p.interrupting == 1 { return }
     p.interrupting = 1
-    if call0_(ctx, p.on_interrupted) < 0 { report_exception_(p, "an interrupted handler") }
+    if call0_(p, p.on_interrupted) < 0 { report_exception_(p, "an interrupted handler") }
     settle_(p)
     p.interrupting = 0
 }
@@ -603,7 +606,7 @@ container_(p: *Page, argv: int, argc: int, handle: int) -> int {
         if push_(p, handle) == 0 {
             return sae_throw_type_error(ctx, "containers nested too deeply")
         }
-        r = call_arg_(ctx, argv, argc - 1)
+        r = call_arg_(p, argv, argc - 1)
         pop_(p)
         if r < 0 { return rethrow_(ctx) }
     }
@@ -796,7 +799,7 @@ sae_ui_menu(p: *Page, this_val: int, argv: int) -> int {
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "ui.menu(label, fn): fn must be a function") }
     m = ui.menu(arg_str_(ctx, argv, argc, 0))
     b.menu_open = m
-    r = call_arg_(ctx, argv, 1)
+    r = call_arg_(p, argv, 1)
     b.menu_open = 0
     if r < 0 { return rethrow_(ctx) }
     if b.menu_bar == 0 || b.menu_bar_seq != p.seq {
@@ -910,12 +913,13 @@ arg_num_(ctx: ptr, argv: int, argc: int, i: int, dflt: float) -> float {
 }
 
 // Call a held JS function with one string argument.
-call1_str_(ctx: ptr, ref: int, s: string) -> int {
+call1_str_(p: *Page, ref: int, s: string) -> int {
+    ctx = p.ctx
     args = quickjs.new_array(ctx)
     v = quickjs.new_string(ctx, s)
-    _s = js_set_index_(ctx, args, 0, v)
+    _s = js_set_index_(p, args, 0, v)
     quickjs.release(ctx, v)
-    r = calln_(ctx, ref, args)
+    r = calln_(p, ref, args)
     quickjs.release(ctx, args)
     return r
 }
@@ -944,7 +948,7 @@ sae_ui_scroll(p: *Page, this_val: int, argv: int) -> int {
     // scroll(block): the block's widgets go in the scrolled stack
     if argc >= 1 && is_fn_arg_(ctx, argv, 0) != 0 {
         if push_(p, h) == 0 { return sae_throw_type_error(ctx, "containers nested too deeply") }
-        r = call_arg_(ctx, argv, 0)
+        r = call_arg_(p, argv, 0)
         pop_(p)
         if r < 0 { return rethrow_(ctx) }
     }
@@ -973,7 +977,7 @@ sae_ui_textfield(p: *Page, this_val: int, argv: int) -> int {
     }
     on_change = |s: string| {
         if has_fn == 1 {
-            r = call1_str_(ctx, ref, s)
+            r = call1_str_(p, ref, s)
             if r < 0 { report_exception_(p, "a textfield handler") }
             settle_(p)
         }
@@ -986,7 +990,7 @@ sae_ui_textfield(p: *Page, this_val: int, argv: int) -> int {
     // argument is the field's own block.
     if argc >= 3 && is_fn_arg_(ctx, argv, 2) != 0 {
         if push_(p, h) == 0 { return sae_throw_type_error(ctx, "containers nested too deeply") }
-        r = call_arg_(ctx, argv, 2)
+        r = call_arg_(p, argv, 2)
         pop_(p)
         if r < 0 { return rethrow_(ctx) }
     }
@@ -1009,7 +1013,7 @@ sae_ui_securefield(p: *Page, this_val: int, argv: int) -> int {
     }
     on_change = |s: string| {
         if has_fn == 1 {
-            r = call1_str_(ctx, ref, s)
+            r = call1_str_(p, ref, s)
             if r < 0 { report_exception_(p, "a securefield handler") }
             settle_(p)
         }
@@ -1062,16 +1066,16 @@ keys_deliver_(b: *Browser, k: string, m: int) {
                 ctx = p.ctx
                 args = quickjs.new_array(ctx)
                 ks = quickjs.new_string(ctx, k)
-                _a = js_set_index_(ctx, args, 0, ks)
+                _a = js_set_index_(p, args, 0, ks)
                 quickjs.release(ctx, ks)
                 ms = quickjs.new_int(ctx, m)
-                _b = js_set_index_(ctx, args, 1, ms)
+                _b = js_set_index_(p, args, 1, ms)
                 quickjs.release(ctx, ms)
                 // A key is a gesture; Ctrl or Cmd with V is the person's paste.
                 was = b.gesture
                 b.gesture = 1
                 if (k == "v" || k == "V") && ((m / 2) % 2 == 1 || (m / 8) % 2 == 1) { b.gesture = 2 }
-                r = calln_(ctx, p.key_ref, args)
+                r = calln_(p, p.key_ref, args)
                 quickjs.release(ctx, args)
                 if r < 0 { report_exception_(p, "a ui.on_key handler") }
                 settle_(p)
@@ -1236,15 +1240,17 @@ vg_key_fire_(kp: ptr, name: string) {
     k = kp as *VgKey
     if k.ref == 0 { return }
     ctx = k.ctx
+    kb = k.browser as *Browser
+    p = page_of_(kb, ctx)
+    if p == null { return }
     args = quickjs.new_array(ctx)
     ks = quickjs.new_string(ctx, name)
-    _a = js_set_index_(ctx, args, 0, ks)
+    _a = js_set_index_(p, args, 0, ks)
     quickjs.release(ctx, ks)
     // A key is a gesture, as ui.on_key's are.
-    kb = k.browser as *Browser
     was = kb.gesture
     kb.gesture = 1
-    r = calln_(ctx, k.ref, args)
+    r = calln_(p, k.ref, args)
     quickjs.release(ctx, args)
     kp2 = page_of_(kb, ctx)
     if r < 0 && kp2 != null { report_exception_(kp2, "a vg key handler") }
@@ -1283,7 +1289,7 @@ submit_to_(p: *Page, h: int, ref: int) {
     ctx = p.ctx
     track_(p, h, ref)
     _h = ui.on_submit(h) callback |t: string| {
-        r = call1_str_(ctx, ref, t)
+        r = call1_str_(p, ref, t)
         if r < 0 { report_exception_(p, "a submit handler") }
         settle_(p)
     }
@@ -1306,15 +1312,15 @@ call_iff_(p: *Page, ref: int, a: int, x: float, y: float, what: string) {
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     va = quickjs.new_int(ctx, a)
-    _a = js_set_index_(ctx, args, 0, va)
+    _a = js_set_index_(p, args, 0, va)
     quickjs.release(ctx, va)
     vx = quickjs.new_float(ctx, x)
-    _x = js_set_index_(ctx, args, 1, vx)
+    _x = js_set_index_(p, args, 1, vx)
     quickjs.release(ctx, vx)
     vy = quickjs.new_float(ctx, y)
-    _y = js_set_index_(ctx, args, 2, vy)
+    _y = js_set_index_(p, args, 2, vy)
     quickjs.release(ctx, vy)
-    if calln_(ctx, ref, args) < 0 { report_exception_(p, what) }
+    if calln_(p, ref, args) < 0 { report_exception_(p, what) }
     quickjs.release(ctx, args)
 }
 
@@ -1376,12 +1382,12 @@ call_ii_(p: *Page, ref: int, a: int, b: int, what: string) {
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     va = quickjs.new_int(ctx, a)
-    _a = js_set_index_(ctx, args, 0, va)
+    _a = js_set_index_(p, args, 0, va)
     quickjs.release(ctx, va)
     vb = quickjs.new_int(ctx, b)
-    _b = js_set_index_(ctx, args, 1, vb)
+    _b = js_set_index_(p, args, 1, vb)
     quickjs.release(ctx, vb)
-    if calln_(ctx, ref, args) < 0 { report_exception_(p, what) }
+    if calln_(p, ref, args) < 0 { report_exception_(p, what) }
     quickjs.release(ctx, args)
 }
 
@@ -1390,9 +1396,9 @@ call_i_(p: *Page, ref: int, n: int, what: string) {
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     v = quickjs.new_int(ctx, n)
-    _s = js_set_index_(ctx, args, 0, v)
+    _s = js_set_index_(p, args, 0, v)
     quickjs.release(ctx, v)
-    if calln_(ctx, ref, args) < 0 { report_exception_(p, what) }
+    if calln_(p, ref, args) < 0 { report_exception_(p, what) }
     quickjs.release(ctx, args)
 }
 
@@ -1537,7 +1543,7 @@ sae_ui_on_layout(p: *Page, this_val: int, argv: int) -> int {
     seq = p.seq
     ui.on_layout(h) callback |w: int, hh: int| {
         if ae_live_(lb_, ctx, seq) == 0 { return }
-        if call_nums_(ctx, ref, w * 1.0, hh * 1.0, 2) < 0 { report_exception_(p, "a layout handler") }
+        if call_nums_(p, ref, w * 1.0, hh * 1.0, 2) < 0 { report_exception_(p, "a layout handler") }
         settle_(p)
     }
     return quickjs.new_int(ctx, h)
@@ -1606,14 +1612,14 @@ appearance_to_page_(b: *Browser, dark: int) {
     if b.page == null { return }
     p = b.page as *Page
     if p.on_appearance == 0 { return }
-    if ae_call_bool_(p.ctx, p.on_appearance, dark) < 0 { report_exception_(p, "an appearance handler") }
+    if ae_call_bool_(p, p.on_appearance, dark) < 0 { report_exception_(p, "an appearance handler") }
     settle_(p)
 }
 
 // The window's size to the page's on_resize handler, if it has one.
 resize_to_page_(p: *Page, w: int, h: int) {
     if p.on_resize == 0 { return }
-    if call_nums_(p.ctx, p.on_resize, w * 1.0, h * 1.0, 2) < 0 { report_exception_(p, "a resize handler") }
+    if call_nums_(p, p.on_resize, w * 1.0, h * 1.0, 2) < 0 { report_exception_(p, "a resize handler") }
     settle_(p)
 }
 
@@ -1720,13 +1726,13 @@ call_ii_str_(p: *Page, ref: int, a: int, b: int, what: string) -> string {
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     va = quickjs.new_int(ctx, a)
-    _a = js_set_index_(ctx, args, 0, va)
+    _a = js_set_index_(p, args, 0, va)
     quickjs.release(ctx, va)
     vb = quickjs.new_int(ctx, b)
-    _b = js_set_index_(ctx, args, 1, vb)
+    _b = js_set_index_(p, args, 1, vb)
     quickjs.release(ctx, vb)
     g = quickjs.dup(ctx, ref)
-    r, err = js_call_(ctx, g, 0, args)
+    r, err = js_call_(p, g, 0, args)
     quickjs.release(ctx, g)
     quickjs.release(ctx, args)
     if err != "" {
@@ -1734,7 +1740,7 @@ call_ii_str_(p: *Page, ref: int, a: int, b: int, what: string) -> string {
         return ""
     }
     out = ""
-    if js_nothing_(ctx, r) == 0 { out = js_str_(ctx, r) }
+    if js_nothing_(p, r) == 0 { out = js_str_(p, r) }
     quickjs.release(ctx, r)
     return out
 }
@@ -1745,15 +1751,15 @@ call_iis_(p: *Page, ref: int, a: int, b: int, t: string, what: string) {
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     va = quickjs.new_int(ctx, a)
-    _a = js_set_index_(ctx, args, 0, va)
+    _a = js_set_index_(p, args, 0, va)
     quickjs.release(ctx, va)
     vb = quickjs.new_int(ctx, b)
-    _b = js_set_index_(ctx, args, 1, vb)
+    _b = js_set_index_(p, args, 1, vb)
     quickjs.release(ctx, vb)
     vt = quickjs.new_string(ctx, t)
-    _t = js_set_index_(ctx, args, 2, vt)
+    _t = js_set_index_(p, args, 2, vt)
     quickjs.release(ctx, vt)
-    if calln_(ctx, ref, args) < 0 { report_exception_(p, what) }
+    if calln_(p, ref, args) < 0 { report_exception_(p, what) }
     quickjs.release(ctx, args)
 }
 
@@ -1763,12 +1769,12 @@ call_si_(p: *Page, ref: int, t: string, n: int, what: string) {
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     vt = quickjs.new_string(ctx, t)
-    _t = js_set_index_(ctx, args, 0, vt)
+    _t = js_set_index_(p, args, 0, vt)
     quickjs.release(ctx, vt)
     vn = quickjs.new_int(ctx, n)
-    _n = js_set_index_(ctx, args, 1, vn)
+    _n = js_set_index_(p, args, 1, vn)
     quickjs.release(ctx, vn)
-    if calln_(ctx, ref, args) < 0 { report_exception_(p, what) }
+    if calln_(p, ref, args) < 0 { report_exception_(p, what) }
     quickjs.release(ctx, args)
 }
 
@@ -1900,13 +1906,13 @@ sae_ui_datagrid(p: *Page, this_val: int, argv: int) -> int {
     hnd = list.size(p.dgrids)
     if argc >= 6 {
         fh = quickjs.arg(ctx, argv, 5)
-        nparams = js_length_(ctx, fh)
+        nparams = js_length_(p, fh)
         quickjs.release(ctx, fh)
         if nparams >= 1 {
             _e = dg_cells_(p, g, argv, argc, 5)
         } else {
             if push_(p, ui.datagrid_widget(g)) == 0 { return sae_throw_type_error(ctx, "containers nested too deeply") }
-            r = call_arg_(ctx, argv, 5)
+            r = call_arg_(p, argv, 5)
             pop_(p)
             if r < 0 { return rethrow_(ctx) }
         }
@@ -2712,7 +2718,7 @@ sae_ui_textarea(p: *Page, this_val: int, argv: int) -> int {
     }
     on_change = |s: string| {
         if has_fn == 1 {
-            r = call1_str_(ctx, ref, s)
+            r = call1_str_(p, ref, s)
             if r < 0 { report_exception_(p, "a textarea handler") }
             settle_(p)
         }
@@ -3063,7 +3069,7 @@ vg_shape_done_(p: *Page, argv: int, argc: int, fn_at: int, node: @keep ptr) -> i
             return sae_throw_type_error(ctx, "a vg shape's block must be a function")
         }
         if vg_push_(p, node) == 0 { return sae_throw_type_error(ctx, "vg shapes nested too deeply") }
-        r = call_arg_(ctx, argv, fn_at)
+        r = call_arg_(p, argv, fn_at)
         p.vg_depth = p.vg_depth - 1
         if r < 0 { return rethrow_(ctx) }
     }
@@ -3092,17 +3098,18 @@ vg_repaint_(node: ptr) {
 }
 
 // Call a held JS function with number arguments (a, and b unless nb is 1).
-call_nums_(ctx: ptr, ref: int, a: float, b: float, nb: int) -> int {
+call_nums_(p: *Page, ref: int, a: float, b: float, nb: int) -> int {
+    ctx = p.ctx
     args = quickjs.new_array(ctx)
     va = quickjs.new_float(ctx, a)
-    _s1 = js_set_index_(ctx, args, 0, va)
+    _s1 = js_set_index_(p, args, 0, va)
     quickjs.release(ctx, va)
     if nb == 2 {
         vb = quickjs.new_float(ctx, b)
-        _s2 = js_set_index_(ctx, args, 1, vb)
+        _s2 = js_set_index_(p, args, 1, vb)
         quickjs.release(ctx, vb)
     }
-    r = calln_(ctx, ref, args)
+    r = calln_(p, ref, args)
     quickjs.release(ctx, args)
     return r
 }
@@ -3119,7 +3126,7 @@ held_fn_(ctx: ptr, argv: int, argc: int, i: int) -> int {
 fire_num_(p: *Page, ref: int, v: float, what: string) {
     ctx = p.ctx
     if ref == 0 { return }
-    if call_nums_(ctx, ref, v, 0.0, 1) < 0 { report_exception_(p, what) }
+    if call_nums_(p, ref, v, 0.0, 1) < 0 { report_exception_(p, what) }
     settle_(p)
 }
 
@@ -3252,23 +3259,24 @@ menu_label_refusal_(label: string) -> string {
 }
 
 // Why an items array is refused, or "".
-menu_items_refusal_(ctx: ptr, items: int) -> string {
+menu_items_refusal_(p: *Page, items: int) -> string {
+    ctx = p.ctx
     ti = quickjs.type_of(ctx, items)
     if ti != "array" && ti != "object" { return "context_menu(target, items): items is an array of { label, action } and \"-\"" }
-    n = js_length_(ctx, items)
+    n = js_length_(p, items)
     i = 0
     while i < n {
-        it, _e = js_get_index_(ctx, items, i)
+        it, _e = js_get_index_(p, items, i)
         t = quickjs.type_of(ctx, it)
         why = ""
         if t == "string" {
-            if js_str_(ctx, it) != "-" { why = "context_menu: a string item is \"-\", a separator" }
+            if js_str_(p, it) != "-" { why = "context_menu: a string item is \"-\", a separator" }
         } else if t == "object" {
-            why = menu_label_refusal_(js_prop_str_(ctx, it, "label", ""))
+            why = menu_label_refusal_(js_prop_str_(p, it, "label", ""))
             if why == "" {
-                f, _fe = js_get_(ctx, it, "action")
-                if quickjs.type_of(ctx, f) != "function" && js_prop_bool_(ctx, it, "enabled", 1) == 1 {
-                    why = "context_menu: \"${js_prop_str_(ctx, it, "label", "")}\" has no action (a function), and is not enabled: false"
+                f, _fe = js_get_(p, it, "action")
+                if quickjs.type_of(ctx, f) != "function" && js_prop_bool_(p, it, "enabled", 1) == 1 {
+                    why = "context_menu: \"${js_prop_str_(p, it, "label", "")}\" has no action (a function), and is not enabled: false"
                 }
                 quickjs.release(ctx, f)
             }
@@ -3283,11 +3291,12 @@ menu_items_refusal_(ctx: ptr, items: int) -> string {
 }
 
 // A boolean property of obj, or dflt when it is missing.
-js_prop_bool_(ctx: ptr, obj: int, name: string, dflt: int) -> int {
-    v, err = js_get_(ctx, obj, name)
+js_prop_bool_(p: *Page, obj: int, name: string, dflt: int) -> int {
+    ctx = p.ctx
+    v, err = js_get_(p, obj, name)
     if err != "" { return dflt }
     out = dflt
-    if js_nothing_(ctx, v) == 0 { out = js_to_bool_(ctx, v) }
+    if js_nothing_(p, v) == 0 { out = js_to_bool_(p, v) }
     quickjs.release(ctx, v)
     return out
 }
@@ -3329,7 +3338,7 @@ page_menus_free_(p: *Page) {
 
 // Open the context menu: the page's items (held array `items`, 0 none),
 // a divider, sae's section; popped at `anchor`.
-open_menu_(b: *Browser, ctx: @keep ptr, items: int, anchor: int) {
+open_menu_(b: *Browser, p: *Page, items: int, anchor: int) {
     if b.menu_h == 0 { b.menu_h = ui.menu("context") }
     m = b.menu_h
     ui.menu_clear(m)
@@ -3338,25 +3347,26 @@ open_menu_(b: *Browser, ctx: @keep ptr, items: int, anchor: int) {
     // the page's items (getters, toString) as it builds: one entry for all of
     // it, so a page's stuck getter costs the limit once and is reported once.
     long prev = 0
-    if ctx != null && items != 0 {
-        prev = entry_begin_(ctx)
-        n = js_length_(ctx, items)
+    if p != null && items != 0 {
+        ctx = p.ctx
+        prev = entry_begin_(p)
+        n = js_length_(p, items)
         i = 0
         last_sep = 1
         while i < n {
-            it, _e = js_get_index_(ctx, items, i)
+            it, _e = js_get_index_(p, items, i)
             t = quickjs.type_of(ctx, it)
             if t == "string" {
                 // A separator, never two together or one first.
                 if last_sep == 0 { ui.menu_separator(m); last_sep = 1 }
             } else if t == "object" {
-                label = js_prop_str_(ctx, it, "label", "")
+                label = js_prop_str_(p, it, "label", "")
                 if menu_label_refusal_(label) == "" {
-                    accel = js_prop_str_(ctx, it, "accel", "")
+                    accel = js_prop_str_(p, it, "accel", "")
                     text_ = label
                     if string.length(accel) > 0 { text_ = "${label}  ${accel}" }
-                    f, _fe = js_get_(ctx, it, "action")
-                    on = js_prop_bool_(ctx, it, "enabled", 1)
+                    f, _fe = js_get_(p, it, "action")
+                    on = js_prop_bool_(p, it, "enabled", 1)
                     if on == 1 && quickjs.type_of(ctx, f) == "function" {
                         idx = i
                         ui.menu_item(m, own_(text_), || {
@@ -3374,7 +3384,7 @@ open_menu_(b: *Browser, ctx: @keep ptr, items: int, anchor: int) {
             quickjs.release(ctx, it)
             i = i + 1
         }
-        entry_stopped_(ctx, prev, "the page's context menu")
+        entry_stopped_(p, prev, "the page's context menu")
     }
     if shown > 0 { ui.menu_separator(m) }
     // sae's own section: always there, always last, always these.
@@ -3389,10 +3399,10 @@ open_menu_(b: *Browser, ctx: @keep ptr, items: int, anchor: int) {
 // A page item chosen: its action, read again from the held array.
 fire_menu_item_(p: *Page, items: int, i: int) {
     ctx = p.ctx
-    prev = entry_begin_(ctx)
-    it, _e = js_get_index_(ctx, items, i)
-    f, _fe = js_get_(ctx, it, "action")
-    entry_stopped_(ctx, prev, "the chosen menu item")
+    prev = entry_begin_(p)
+    it, _e = js_get_index_(p, items, i)
+    f, _fe = js_get_(p, it, "action")
+    entry_stopped_(p, prev, "the chosen menu item")
     if quickjs.type_of(ctx, f) == "function" { fire_click_(p, f) }
     quickjs.release(ctx, f)
     quickjs.release(ctx, it)
@@ -3461,7 +3471,7 @@ sae_ui_context_menu(p: *Page, this_val: int, argv: int) -> int {
     if argc < 2 { return sae_throw_type_error(ctx, "context_menu(target, items): target (a widget, a vg shape or 0 for the page) and items") }
     target = arg_int_(ctx, argv, argc, 0, 0)
     items = hold_arg_(ctx, argv, 1)
-    why = menu_items_refusal_(ctx, items)
+    why = menu_items_refusal_(p, items)
     if why != "" { return sae_throw_type_error(ctx, why) }
     is_vg = 0
     if target > VG_BASE {
@@ -3496,7 +3506,7 @@ sae_ui_context_menu(p: *Page, this_val: int, argv: int) -> int {
         if target != 0 && is_vg == 0 {
             b = p.browser as *Browser
             ui.on_secondary_click(target, |x: float, y: float| {
-                open_menu_(b, ctx, page_menu_items_(p, target), target)
+                open_menu_(b, p, page_menu_items_(p, target), target)
             })
         }
     }
@@ -3602,42 +3612,46 @@ sae_ui_get_slider(p: *Page, this_val: int, argv: int) -> int {
 // browser's chrome; it is dropped when the page is left.
 
 // An owned copy of a JS value as a string.
-js_str_(ctx: ptr, v: int) -> string {
-    s, _e = js_to_string_(ctx, v)
+js_str_(p: *Page, v: int) -> string {
+    s, _e = js_to_string_(p, v)
     return s
 }
 
-js_num_(ctx: ptr, v: int) -> float { return js_to_float_(ctx, v) }
+js_num_(p: *Page, v: int) -> float { return js_to_float_(p, v) }
 
 // 1 if v is undefined or null.
-js_nothing_(ctx: ptr, v: int) -> int {
+js_nothing_(p: *Page, v: int) -> int {
+    ctx = p.ctx
     t = quickjs.type_of(ctx, v)
     if t == "undefined" || t == "null" { return 1 }
     return 0
 }
 
 // A string property of obj, or dflt when it is missing.
-js_prop_str_(ctx: ptr, obj: int, name: string, dflt: string) -> string {
-    v, err = js_get_(ctx, obj, name)
+js_prop_str_(p: *Page, obj: int, name: string, dflt: string) -> string {
+    ctx = p.ctx
+    v, err = js_get_(p, obj, name)
     if err != "" { return dflt }
     out = dflt
-    if js_nothing_(ctx, v) == 0 { out = js_str_(ctx, v) }
+    if js_nothing_(p, v) == 0 { out = js_str_(p, v) }
     quickjs.release(ctx, v)
     return out
 }
 
 // Key i of a keys array, as a string.
-js_key_(ctx: ptr, keys: int, i: int) -> string {
-    k, _e = js_get_index_(ctx, keys, i)
-    s = js_str_(ctx, k)
+js_key_(p: *Page, keys: int, i: int) -> string {
+    ctx = p.ctx
+    k, _e = js_get_index_(p, keys, i)
+    s = js_str_(p, k)
     quickjs.release(ctx, k)
     return s
 }
 
 // A colour: 0xRRGGBB, or "#rrggbb" / "#rgb". -1 when it is neither.
-js_colour_(ctx: ptr, v: int) -> int {
-    if quickjs.type_of(ctx, v) != "string" { return js_num_(ctx, v) as int }
-    s = js_str_(ctx, v)
+js_colour_(p: *Page, v: int) -> int {
+    ctx = p.ctx
+    if quickjs.type_of(ctx, v) != "string" { return js_num_(p, v) as int }
+    s = js_str_(p, v)
     n = string.length(s)
     if n < 1 || string.char_at(s, 0) != 35 { return 0 - 1 }
     hex = string.substring(s, 1, n)
@@ -3686,42 +3700,42 @@ selector_(sel: string) -> string {
 // message naming the first property it could not use.
 style_rule_(ctx: ptr, p: *Page, sel: string, rule: int) -> string {
     if quickjs.type_of(ctx, rule) != "object" { return "a rule must be an object" }
-    keys = js_keys_(ctx, rule)
-    n = js_length_(ctx, keys)
+    keys = js_keys_(p, rule)
+    n = js_length_(p, keys)
     bw = 0.0 - 1.0
     bc = 0 - 1
     bad = ""
     i = 0
     while i < n {
-        name = js_key_(ctx, keys, i)
-        v, _e = js_get_(ctx, rule, name)
+        name = js_key_(p, keys, i)
+        v, _e = js_get_(p, rule, name)
         if string.equals(name, "color") == 1 {
-            c = js_colour_(ctx, v)
+            c = js_colour_(p, v)
             if c < 0 { bad = "${sel} { color }: not 0xRRGGBB or \"#rrggbb\"" } else { ui.st_color(p.sheet, sel, c) }
         } else if string.equals(name, "background_color") == 1 || string.equals(name, "background") == 1 {
-            c = js_colour_(ctx, v)
+            c = js_colour_(p, v)
             if c < 0 { bad = "${sel} { ${name} }: not 0xRRGGBB or \"#rrggbb\"" } else { ui.st_bg(p.sheet, sel, c) }
         } else if string.equals(name, "font_size") == 1 {
-            ui.st_font_size(p.sheet, sel, js_num_(ctx, v))
+            ui.st_font_size(p.sheet, sel, js_num_(p, v))
         } else if string.equals(name, "font_weight") == 1 || string.equals(name, "font_style") == 1 {
-            w = js_str_(ctx, v)
+            w = js_str_(p, v)
             if string.contains(w, "bold") == 1 { ui.st_weight(p.sheet, sel, 1) } else { ui.st_weight(p.sheet, sel, 0) }
         } else if string.equals(name, "font_family") == 1 {
-            fam = js_str_(ctx, v)
+            fam = js_str_(p, v)
             list.add(p.sheet_strs, fam)
             ui.st_font_family(p.sheet, sel, fam)
         } else if string.equals(name, "opacity") == 1 {
-            ui.st_opacity(p.sheet, sel, js_num_(ctx, v))
+            ui.st_opacity(p.sheet, sel, js_num_(p, v))
         } else if string.equals(name, "border_radius") == 1 {
-            ui.st_radius(p.sheet, sel, js_num_(ctx, v))
+            ui.st_radius(p.sheet, sel, js_num_(p, v))
         } else if string.equals(name, "border_width") == 1 {
-            bw = js_num_(ctx, v)
+            bw = js_num_(p, v)
         } else if string.equals(name, "border_color") == 1 {
-            bc = js_colour_(ctx, v)
+            bc = js_colour_(p, v)
         } else if string.equals(name, "hover_color") == 1 {
-            ui.st_hover(p.sheet, sel, js_colour_(ctx, v))
+            ui.st_hover(p.sheet, sel, js_colour_(p, v))
         } else if string.equals(name, "active_color") == 1 {
-            ui.st_active(p.sheet, sel, js_colour_(ctx, v))
+            ui.st_active(p.sheet, sel, js_colour_(p, v))
         } else if bad == "" {
             bad = "${sel} { ${name} }: not a style property sae knows"
         }
@@ -3747,16 +3761,16 @@ sae_ui_styles(p: *Page, this_val: int, argv: int) -> int {
         quickjs.release(ctx, obj)
         return sae_throw_type_error(ctx, "styles(sheet): sheet must be an object")
     }
-    keys = js_keys_(ctx, obj)
+    keys = js_keys_(p, obj)
     if p.sheet == null { p.sheet = ui.create_styles() }
-    n = js_length_(ctx, keys)
+    n = js_length_(p, keys)
     bad = ""
     i = 0
     while i < n {
-        raw = js_key_(ctx, keys, i)
+        raw = js_key_(p, keys, i)
         sel = selector_(raw)
         list.add(p.sheet_strs, sel)
-        rule, _e = js_get_(ctx, obj, raw)
+        rule, _e = js_get_(p, obj, raw)
         e = style_rule_(ctx, p, sel, rule)
         quickjs.release(ctx, rule)
         if bad == "" { bad = e }
@@ -4008,8 +4022,8 @@ timers_wake_(p: *Page) {
         }
         p.timer_nesting = t.nesting
         r = 0
-        if t.args_h != 0 { r = calln_(ctx, t.fn_h, t.args_h) }
-        else { r = call0_(ctx, t.fn_h) }
+        if t.args_h != 0 { r = calln_(p, t.fn_h, t.args_h) }
+        else { r = call0_(p, t.fn_h) }
         p.timer_nesting = 0
         if r < 0 { report_exception_(p, "a timer") }
         settle_(p)
@@ -4059,13 +4073,14 @@ timers_free_(p: *Page) {
 }
 
 // Extra arguments i.. of a call as a held JS array, or 0 when there are none.
-rest_args_(ctx: ptr, argv: int, argc: int, i: int) -> int {
+rest_args_(p: *Page, argv: int, argc: int, i: int) -> int {
+    ctx = p.ctx
     if argc <= i { return 0 }
     a = quickjs.new_array(ctx)
     k = i
     while k < argc {
         h = quickjs.arg(ctx, argv, k)
-        _e = js_set_index_(ctx, a, k - i, h)
+        _e = js_set_index_(p, a, k - i, h)
         quickjs.release(ctx, h)
         k = k + 1
     }
@@ -4107,8 +4122,8 @@ sae_ui_sleep(p: *Page, this_val: int, argv: int) -> int {
     if esc_timers_pending_(p) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, p) }   // wave1/escape: the timers cap
     ms = delay_arg_(ctx, argv, argc, 0)
     pr = quickjs.new_promise(ctx)
-    resolve, _e1 = js_get_(ctx, pr, "resolve")
-    promise, _e2 = js_get_(ctx, pr, "promise")
+    resolve, _e1 = js_get_(p, pr, "resolve")
+    promise, _e2 = js_get_(p, pr, "promise")
     quickjs.release(ctx, pr)
     _id = timer_add_(p, resolve, 0, ms, 0, 0)
     return promise
@@ -4134,7 +4149,7 @@ sae_set_timeout(p: *Page, this_val: int, argv: int) -> int {
     ref = held_fn_(ctx, argv, argc, 0)
     if ref == 0 { return sae_throw_type_error(ctx, "setTimeout(fn, ms, ...args): fn must be a function (sae does not eval a string)") }
     ms = delay_arg_(ctx, argv, argc, 1)
-    return quickjs.new_int(ctx, timer_add_(p, ref, rest_args_(ctx, argv, argc, 2), ms, 0, 0))
+    return quickjs.new_int(ctx, timer_add_(p, ref, rest_args_(p, argv, argc, 2), ms, 0, 0))
 }
 
 // setInterval(fn, ms, ...args): call fn(...args) every ms until cleared.
@@ -4146,7 +4161,7 @@ sae_set_interval(p: *Page, this_val: int, argv: int) -> int {
     ref = held_fn_(ctx, argv, argc, 0)
     if ref == 0 { return sae_throw_type_error(ctx, "setInterval(fn, ms, ...args): fn must be a function (sae does not eval a string)") }
     ms = delay_arg_(ctx, argv, argc, 1)
-    return quickjs.new_int(ctx, timer_add_(p, ref, rest_args_(ctx, argv, argc, 2), ms, 1, 0))
+    return quickjs.new_int(ctx, timer_add_(p, ref, rest_args_(p, argv, argc, 2), ms, 1, 0))
 }
 
 // Release a list of PageRaf records' handles and free them.
@@ -4180,9 +4195,9 @@ rafs_frame_(p: *Page) {
             r.id = 0
             a = quickjs.new_array(ctx)
             fh = quickjs.new_float(ctx, ts)
-            _e = js_set_index_(ctx, a, 0, fh)
+            _e = js_set_index_(p, a, 0, fh)
             quickjs.release(ctx, fh)
-            if calln_(ctx, r.fn_h, a) < 0 { report_exception_(p, "an animation frame callback") }
+            if calln_(p, r.fn_h, a) < 0 { report_exception_(p, "an animation frame callback") }
             quickjs.release(ctx, a)
             settle_(p)
         }
@@ -4305,20 +4320,20 @@ sae_http_request(p: *Page, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     if argc < 2 { return sae_throw_type_error(ctx, "http.request(options, fn)") }
     opt = quickjs.arg(ctx, argv, 0)
-    method = js_prop_str_(ctx, opt, "method", "GET")
-    url = js_prop_str_(ctx, opt, "url", "")
-    body = js_prop_str_(ctx, opt, "body", "")
-    ctype = js_prop_str_(ctx, opt, "contentType", "")
+    method = js_prop_str_(p, opt, "method", "GET")
+    url = js_prop_str_(p, opt, "url", "")
+    body = js_prop_str_(p, opt, "body", "")
+    ctype = js_prop_str_(p, opt, "contentType", "")
     hdrs = null
-    hv, _e = js_get_(ctx, opt, "headers")
+    hv, _e = js_get_(p, opt, "headers")
     if quickjs.type_of(ctx, hv) == "object" {
-        keys = js_keys_(ctx, hv)
+        keys = js_keys_(p, hv)
         hdrs = strarr.new()
-        n = js_length_(ctx, keys)
+        n = js_length_(p, keys)
         i = 0
         while i < n {
-            name = js_key_(ctx, keys, i)
-            val = js_prop_str_(ctx, hv, name, "")
+            name = js_key_(p, keys, i)
+            val = js_prop_str_(p, hv, name, "")
             strarr.push_copy(hdrs, "${name}: ${val}")
             i = i + 1
         }
@@ -4501,13 +4516,13 @@ bus_tick_(b: *Browser) {
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     iv = quickjs.new_int(ctx, id)
-    _a = js_set_index_(ctx, args, 0, iv)
+    _a = js_set_index_(p, args, 0, iv)
     quickjs.release(ctx, iv)
     cv = quickjs.new_string(ctx, command)
-    _b = js_set_index_(ctx, args, 1, cv)
+    _b = js_set_index_(p, args, 1, cv)
     quickjs.release(ctx, cv)
     b.bus_interrupted = 0
-    r = calln_(ctx, p.bus_ref, args)
+    r = calln_(p, p.bus_ref, args)
     quickjs.release(ctx, args)
     if r < 0 { report_exception_(p, "the control bus's handler") }
     settle_(p)
@@ -4733,9 +4748,9 @@ bus_stop_request_(b: *Browser, reason: string, why: string) {
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     rv = quickjs.new_string(ctx, reason)
-    _a = js_set_index_(ctx, args, 0, rv)
+    _a = js_set_index_(p, args, 0, rv)
     quickjs.release(ctx, rv)
-    r = calln_(ctx, p.bus_stopped_ref, args)
+    r = calln_(p, p.bus_stopped_ref, args)
     quickjs.release(ctx, args)
     if r < 0 { report_exception_(p, "the control bus's stopped handler") }
     settle_(p)
@@ -4923,21 +4938,21 @@ backend_deliver_(b: *Browser, seq: int, kind: int, id: int, ok: int, name: strin
     ctx = p.ctx
     args = quickjs.new_array(ctx)
     v0 = quickjs.new_int(ctx, kind)
-    _a = js_set_index_(ctx, args, 0, v0)
+    _a = js_set_index_(p, args, 0, v0)
     quickjs.release(ctx, v0)
     v1 = quickjs.new_int(ctx, id)
-    _b = js_set_index_(ctx, args, 1, v1)
+    _b = js_set_index_(p, args, 1, v1)
     quickjs.release(ctx, v1)
     v2 = quickjs.new_int(ctx, ok)
-    _c = js_set_index_(ctx, args, 2, v2)
+    _c = js_set_index_(p, args, 2, v2)
     quickjs.release(ctx, v2)
     v3 = quickjs.new_string(ctx, name)
-    _d = js_set_index_(ctx, args, 3, v3)
+    _d = js_set_index_(p, args, 3, v3)
     quickjs.release(ctx, v3)
     v4 = quickjs.new_string(ctx, payload)
-    _e = js_set_index_(ctx, args, 4, v4)
+    _e = js_set_index_(p, args, 4, v4)
     quickjs.release(ctx, v4)
-    r = calln_(ctx, p.backend_ref, args)
+    r = calln_(p, p.backend_ref, args)
     quickjs.release(ctx, args)
     if r < 0 { report_exception_(p, "the backend's handler") }
     settle_(p)
@@ -5385,9 +5400,9 @@ js_print(p: *Page, this_val: int, argv: int) -> int {
         v = quickjs.arg(ctx, argv, i)
         t = quickjs.type_of(ctx, v)
         if t == "object" || t == "array" {
-            fputs(js_to_json_(ctx, v), out)
+            fputs(js_to_json_(p, v), out)
         } else {
-            fputs(js_str_(ctx, v), out)
+            fputs(js_str_(p, v), out)
         }
         quickjs.release(ctx, v)
         i = i + 1
@@ -6033,9 +6048,9 @@ sqlite_fns_for_(ctx: ptr, p: *Page) -> *SqlitePageFns {
     if p.sqlite_fns != null { return p.sqlite_fns as *SqlitePageFns }
     es = "(function (m) { return new Error(m); })"
     ts = "(function (db, fn, id) { return db.__begin(id).then(function () { var tx = { __db: db.__db, __tx: id, all: db.all, get: db.get, run: db.run }; var r; try { r = Promise.resolve(fn(tx)); } catch (e) { r = Promise.reject(e); } return r.then(function (v) { return db.__end(id, true).then(function () { return v; }); }, function (e) { return db.__end(id, false).then(function () { throw e; }, function () { throw e; }); }); }); })"
-    ef, e1 = js_eval_(ctx, es, "sae:sqlite")
+    ef, e1 = js_eval_(p, es, "sae:sqlite")
     if e1 != "" { return null }
-    tf, e2 = js_eval_(ctx, ts, "sae:sqlite")
+    tf, e2 = js_eval_(p, ts, "sae:sqlite")
     if e2 != "" { return null }
     f = heap.new(SqlitePageFns)
     f.err_fn = ef
@@ -6168,9 +6183,9 @@ sqlite_deliver_(b: *Browser, j: *SqliteJob) {
                     if perr != "" {
                         j.err = "bad JSON from the database actor: ${perr}"
                     } else {
-                        _s = js_set_index_(ctx, args, 0, vh)
+                        _s = js_set_index_(p, args, 0, vh)
                         quickjs.release(ctx, vh)
-                        r, e = js_call_(ctx, w.resolve, 0, args)
+                        r, e = js_call_(p, w.resolve, 0, args)
                     }
                 }
                 if j.err != "" {
@@ -6179,15 +6194,15 @@ sqlite_deliver_(b: *Browser, j: *SqliteJob) {
                     if f != null {
                         margs = quickjs.new_array(ctx)
                         ms = quickjs.new_string(ctx, j.err)
-                        _s1 = js_set_index_(ctx, margs, 0, ms)
+                        _s1 = js_set_index_(p, margs, 0, ms)
                         quickjs.release(ctx, ms)
-                        eh, _ee = js_call_(ctx, f.err_fn, 0, margs)
+                        eh, _ee = js_call_(p, f.err_fn, 0, margs)
                         quickjs.release(ctx, margs)
                     }
                     if eh == 0 { eh = quickjs.new_string(ctx, j.err) }
-                    _s2 = js_set_index_(ctx, args, 0, eh)
+                    _s2 = js_set_index_(p, args, 0, eh)
                     quickjs.release(ctx, eh)
-                    r, e = js_call_(ctx, w.reject, 0, args)
+                    r, e = js_call_(p, w.reject, 0, args)
                 }
                 quickjs.release(ctx, args)
                 if e != "" { report_exception_(p, "a sqlite promise") }
@@ -6206,13 +6221,14 @@ sqlite_deliver_(b: *Browser, j: *SqliteJob) {
 
 // The page's database `name` from this_val (sqlite.<name>, or a tx object),
 // with the transaction id it carries, or 0; "" if this is neither.
-sqlite_this_(ctx: ptr, this_val: int) -> (string, int) {
+sqlite_this_(p: *Page, this_val: int) -> (string, int) {
+    ctx = p.ctx
     if quickjs.type_of(ctx, this_val) != "object" { return "", 0 }
-    name = js_prop_str_(ctx, this_val, "__db", "")
+    name = js_prop_str_(p, this_val, "__db", "")
     tx = 0
-    th, terr = js_get_(ctx, this_val, "__tx")
+    th, terr = js_get_(p, this_val, "__tx")
     if terr == "" {
-        if quickjs.type_of(ctx, th) == "number" { tx = js_to_int_(ctx, th) }
+        if quickjs.type_of(ctx, th) == "number" { tx = js_to_int_(p, th) }
         quickjs.release(ctx, th)
     }
     return name, tx
@@ -6233,9 +6249,9 @@ sqlite_submit_(p: *Page, kind: int, op: int, sql: string, params: string, name: 
         return sae_throw_type_error(ctx, "sqlite.${name}: no such open transaction")
     }
     pr = quickjs.new_promise(ctx)
-    resolve, _e1 = js_get_(ctx, pr, "resolve")
-    reject, _e2 = js_get_(ctx, pr, "reject")
-    promise, _e3 = js_get_(ctx, pr, "promise")
+    resolve, _e1 = js_get_(p, pr, "resolve")
+    reject, _e2 = js_get_(p, pr, "reject")
+    promise, _e3 = js_get_(p, pr, "promise")
     quickjs.release(ctx, pr)
     sj.ids = sj.ids + 1
     j = heap.new(SqliteJob)
@@ -6269,14 +6285,14 @@ sqlite_submit_(p: *Page, kind: int, op: int, sql: string, params: string, name: 
 // message.
 sqlite_call_(p: *Page, this_val: int, argv: int, argc: int, kind: int, what: string) -> int {
     ctx = p.ctx
-    name, tx = sqlite_this_(ctx, this_val)
+    name, tx = sqlite_this_(p, this_val)
     if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.${what}(sql, params)") }
     if argc < 1 { return sae_throw_type_error(ctx, "sqlite.${name}.${what}(sql, params?)") }
     sql = arg_str_(ctx, argv, argc, 0)
     params = ""
     if argc > 1 {
         ph = quickjs.arg(ctx, argv, 1)
-        params = js_to_json_(ctx, ph)
+        params = js_to_json_(p, ph)
         quickjs.release(ctx, ph)
     }
     return sqlite_submit_(p, kind, SQLITE_OP_QUERY, sql, params, name, tx)
@@ -6311,7 +6327,7 @@ sae_sqlite_transaction(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    name, _tx = sqlite_this_(ctx, this_val)
+    name, _tx = sqlite_this_(p, this_val)
     if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.transaction(fn)") }
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "sqlite.${name}.transaction(fn): fn must be a function") }
     if string.contains(sqlite_page_dbs_(p), ",${name},") == 0 { return sae_throw_type_error(ctx, "sqlite.${name}: this page did not seek it") }
@@ -6322,12 +6338,12 @@ sae_sqlite_transaction(p: *Page, this_val: int, argv: int) -> int {
     args = quickjs.new_array(ctx)
     fh = quickjs.arg(ctx, argv, 0)
     idh = quickjs.new_int(ctx, sj.tx_ids)
-    _s0 = js_set_index_(ctx, args, 0, this_val)
-    _s1 = js_set_index_(ctx, args, 1, fh)
-    _s2 = js_set_index_(ctx, args, 2, idh)
+    _s0 = js_set_index_(p, args, 0, this_val)
+    _s1 = js_set_index_(p, args, 1, fh)
+    _s2 = js_set_index_(p, args, 2, idh)
     quickjs.release(ctx, fh)
     quickjs.release(ctx, idh)
-    r, err = js_call_(ctx, f.tx_fn, 0, args)
+    r, err = js_call_(p, f.tx_fn, 0, args)
     quickjs.release(ctx, args)
     if err != "" { return rethrow_(ctx) }
     return r
@@ -6339,7 +6355,7 @@ sae_sqlite_begin(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    name, _tx = sqlite_this_(ctx, this_val)
+    name, _tx = sqlite_this_(p, this_val)
     if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.transaction(fn)") }
     id = arg_int_(ctx, argv, argc, 0, 0)
     if id <= 0 || id > browser_of_(p).sqlite_jobs.tx_ids { return sae_throw_type_error(ctx, "sqlite.${name}: no such transaction") }
@@ -6351,13 +6367,13 @@ sae_sqlite_end(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    name, _tx = sqlite_this_(ctx, this_val)
+    name, _tx = sqlite_this_(p, this_val)
     if name == "" { return sae_throw_type_error(ctx, "sqlite: call it as sqlite.<name>.transaction(fn)") }
     id = arg_int_(ctx, argv, argc, 0, 0)
     sql = "ROLLBACK"
     if argc > 1 {
         bh = quickjs.arg(ctx, argv, 1)
-        if js_to_bool_(ctx, bh) == 1 { sql = "COMMIT" }
+        if js_to_bool_(p, bh) == 1 { sql = "COMMIT" }
         quickjs.release(ctx, bh)
     }
     return sqlite_submit_(p, sqlite.KIND_EXEC, SQLITE_OP_END, sql, "", name, id)
@@ -6602,24 +6618,24 @@ natives_deliver_(b: *Browser, j: *NativeJob) {
                 e = ""
                 if j.err == "" {
                     vh = quickjs.new_string(ctx, j.result)
-                    _s = js_set_index_(ctx, args, 0, vh)
+                    _s = js_set_index_(p, args, 0, vh)
                     quickjs.release(ctx, vh)
-                    r, e = js_call_(ctx, w.resolve, 0, args)
+                    r, e = js_call_(p, w.resolve, 0, args)
                 } else {
                     f = sqlite_fns_for_(ctx, p)
                     eh = 0
                     if f != null {
                         margs = quickjs.new_array(ctx)
                         ms = quickjs.new_string(ctx, "native ${j.unit}.${j.fn}: ${j.err}")
-                        _s1 = js_set_index_(ctx, margs, 0, ms)
+                        _s1 = js_set_index_(p, margs, 0, ms)
                         quickjs.release(ctx, ms)
-                        eh, _ee = js_call_(ctx, f.err_fn, 0, margs)
+                        eh, _ee = js_call_(p, f.err_fn, 0, margs)
                         quickjs.release(ctx, margs)
                     }
                     if eh == 0 { eh = quickjs.new_string(ctx, j.err) }
-                    _s2 = js_set_index_(ctx, args, 0, eh)
+                    _s2 = js_set_index_(p, args, 0, eh)
                     quickjs.release(ctx, eh)
-                    r, e = js_call_(ctx, w.reject, 0, args)
+                    r, e = js_call_(p, w.reject, 0, args)
                 }
                 quickjs.release(ctx, args)
                 if e != "" { report_exception_(p, "a native promise") }
@@ -6660,9 +6676,9 @@ natives_submit_(p: *Page, unit: string, fname: string, arg: string) -> int {
     m = mv as *NativeModule
     if string.contains(m.fns, ",${fname},") == 0 { return sae_throw_type_error(ctx, "natives.${unit}.${fname}: not one of the functions app.json declares") }
     pr = quickjs.new_promise(ctx)
-    resolve, _e1 = js_get_(ctx, pr, "resolve")
-    reject, _e2 = js_get_(ctx, pr, "reject")
-    promise, _e3 = js_get_(ctx, pr, "promise")
+    resolve, _e1 = js_get_(p, pr, "resolve")
+    reject, _e2 = js_get_(p, pr, "reject")
+    promise, _e3 = js_get_(p, pr, "promise")
     quickjs.release(ctx, pr)
     nj.ids = nj.ids + 1
     j = heap.new(NativeJob)
@@ -7076,22 +7092,24 @@ ae_repaint_(p: *Page) {
 // --- JS value helpers (reading a page's objects) ---
 
 // obj[name] as a string, "" when absent.
-ae_prop_str_(ctx: ptr, obj: int, name: string) -> string {
-    h, err = js_get_(ctx, obj, name)
+ae_prop_str_(p: *Page, obj: int, name: string) -> string {
+    ctx = p.ctx
+    h, err = js_get_(p, obj, name)
     if err != "" { return "" }
     t = quickjs.type_of(ctx, h)
     if t == "undefined" || t == "null" {
         quickjs.release(ctx, h)
         return ""
     }
-    s = own_(js_str_(ctx, h))
+    s = own_(js_str_(p, h))
     quickjs.release(ctx, h)
     return s
 }
 
 // 1 if obj has a non-undefined property `name`.
-ae_has_prop_(ctx: ptr, obj: int, name: string) -> int {
-    h, err = js_get_(ctx, obj, name)
+ae_has_prop_(p: *Page, obj: int, name: string) -> int {
+    ctx = p.ctx
+    h, err = js_get_(p, obj, name)
     if err != "" { return 0 }
     t = quickjs.type_of(ctx, h)
     quickjs.release(ctx, h)
@@ -7099,43 +7117,47 @@ ae_has_prop_(ctx: ptr, obj: int, name: string) -> int {
     return 1
 }
 
-ae_prop_num_(ctx: ptr, obj: int, name: string, dflt: float) -> float {
-    h, err = js_get_(ctx, obj, name)
+ae_prop_num_(p: *Page, obj: int, name: string, dflt: float) -> float {
+    ctx = p.ctx
+    h, err = js_get_(p, obj, name)
     if err != "" { return dflt }
     t = quickjs.type_of(ctx, h)
     if t == "undefined" || t == "null" {
         quickjs.release(ctx, h)
         return dflt
     }
-    v = js_to_float_(ctx, h)
+    v = js_to_float_(p, h)
     quickjs.release(ctx, h)
     return v
 }
 
 // arr[i] as a string ("" past the end).
-ae_index_str_(ctx: ptr, arr: int, i: int) -> string {
-    h, err = js_get_index_(ctx, arr, i)
+ae_index_str_(p: *Page, arr: int, i: int) -> string {
+    ctx = p.ctx
+    h, err = js_get_index_(p, arr, i)
     if err != "" { return "" }
     t = quickjs.type_of(ctx, h)
     if t == "undefined" {
         quickjs.release(ctx, h)
         return ""
     }
-    s = own_(js_str_(ctx, h))
+    s = own_(js_str_(p, h))
     quickjs.release(ctx, h)
     return s
 }
 
-ae_index_num_(ctx: ptr, arr: int, i: int) -> float {
-    h, err = js_get_index_(ctx, arr, i)
+ae_index_num_(p: *Page, arr: int, i: int) -> float {
+    ctx = p.ctx
+    h, err = js_get_index_(p, arr, i)
     if err != "" { return 0.0 }
-    v = js_to_float_(ctx, h)
+    v = js_to_float_(p, h)
     quickjs.release(ctx, h)
     return v
 }
 
 // Call a held JS function with up to four numbers.
-ae_call_nums4_(ctx: ptr, ref: int, a: float, b: float, c: float, d: float, n: int) -> int {
+ae_call_nums4_(p: *Page, ref: int, a: float, b: float, c: float, d: float, n: int) -> int {
+    ctx = p.ctx
     args = quickjs.new_array(ctx)
     i = 0
     while i < n {
@@ -7144,21 +7166,22 @@ ae_call_nums4_(ctx: ptr, ref: int, a: float, b: float, c: float, d: float, n: in
         if i == 2 { v = c }
         if i == 3 { v = d }
         vh = quickjs.new_float(ctx, v)
-        _s = js_set_index_(ctx, args, i, vh)
+        _s = js_set_index_(p, args, i, vh)
         quickjs.release(ctx, vh)
         i = i + 1
     }
-    r = calln_(ctx, ref, args)
+    r = calln_(p, ref, args)
     quickjs.release(ctx, args)
     return r
 }
 
-ae_call_bool_(ctx: ptr, ref: int, b: int) -> int {
+ae_call_bool_(p: *Page, ref: int, b: int) -> int {
+    ctx = p.ctx
     args = quickjs.new_array(ctx)
     vh = quickjs.new_bool(ctx, b)
-    _s = js_set_index_(ctx, args, 0, vh)
+    _s = js_set_index_(p, args, 0, vh)
     quickjs.release(ctx, vh)
-    r = calln_(ctx, ref, args)
+    r = calln_(p, ref, args)
     quickjs.release(ctx, args)
     return r
 }
@@ -7168,7 +7191,7 @@ ae_call_bool_(ctx: ptr, ref: int, b: int) -> int {
 ae_call_value_(p: *Page, ref: int, what: string) -> int {
     ctx = p.ctx
     g = quickjs.dup(ctx, ref)
-    r, err = js_call_(ctx, g, 0, 0)
+    r, err = js_call_(p, g, 0, 0)
     quickjs.release(ctx, g)
     if err != "" {
         report_exception_(p, what)
@@ -7250,7 +7273,7 @@ sae_ae_batch(p: *Page, this_val: int, argv: int) -> int {
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "batch(fn): fn must be a function") }
     threw = 0
     ui.ui_batch(|| {
-        if call_arg_(ctx, argv, 0) < 0 { threw = 1 }
+        if call_arg_(p, argv, 0) < 0 { threw = 1 }
     })
     if threw == 1 { return rethrow_(ctx) }
     return 0
@@ -7413,7 +7436,7 @@ ae_wire_canvas_(p: *Page, sc: *AeScene) {
         lp = p
         b = lp.browser as *Browser
         if r != null && r.h_menu != 0 {
-            open_menu_(b, ctx, r.h_menu, ui.canvas_widget(cid))
+            open_menu_(b, p, r.h_menu, ui.canvas_widget(cid))
         } else if r != null && r.h_right != 0 {
             aevg.hold_repaints(m)
             ae_fire_xy_(p, scene, r.h_right, x, y, "a vg right-click handler")
@@ -7421,7 +7444,7 @@ ae_wire_canvas_(p: *Page, sc: *AeScene) {
             aevg.scene_mark_dirty(sc)
             aevg.release_repaints(m)
         } else {
-            open_menu_(b, ctx, page_menu_items_(lp, 0), ui.canvas_widget(cid))
+            open_menu_(b, p, page_menu_items_(lp, 0), ui.canvas_widget(cid))
         }
     })
     ui.canvas_on_move(cid, |x: float, y: float| {
@@ -7474,7 +7497,7 @@ ae_wire_canvas_(p: *Page, sc: *AeScene) {
         aevg.hold_repaints(m)
         r = aevg.hit_at(m, sc, aevg.EV_SCROLL, sc.last_cx, sc.last_cy)
         if r != null {
-            if ae_call_nums4_(ctx, r.h_scroll, dx, dy, 0.0, 0.0, 2) < 0 { report_exception_(p, "a vg scroll handler") }
+            if ae_call_nums4_(p, r.h_scroll, dx, dy, 0.0, 0.0, 2) < 0 { report_exception_(p, "a vg scroll handler") }
             settle_(p)
         }
         if ae_live_(lb_, ctx, seq) == 0 { return }
@@ -7492,7 +7515,7 @@ ae_wire_canvas_(p: *Page, sc: *AeScene) {
 // Run a page handler with a point, in the scene's viewBox units.
 ae_fire_xy_(p: *Page, scene: ptr, ref: int, x: float, y: float, what: string) {
     ctx = p.ctx
-    if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(p, what) }
+    if ae_call_nums4_(p, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 0.0, 0.0, 2) < 0 { report_exception_(p, what) }
     settle_(p)
 }
 
@@ -7502,13 +7525,13 @@ ae_fire_drag_(p: *Page, scene: ptr, ref: int, x: float, y: float, dx: float, dy:
     ctx = p.ctx
     sx = vg.scene_px_to_vb_x(scene, dx) - vg.scene_px_to_vb_x(scene, 0.0)
     sy = vg.scene_px_to_vb_y(scene, dy) - vg.scene_px_to_vb_y(scene, 0.0)
-    if ae_call_nums4_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), sx, sy, 4) < 0 { report_exception_(p, "a vg drag handler") }
+    if ae_call_nums4_(p, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), sx, sy, 4) < 0 { report_exception_(p, "a vg drag handler") }
     settle_(p)
 }
 
 ae_fire_bool_(p: *Page, ref: int, b: int) {
     ctx = p.ctx
-    if ae_call_bool_(ctx, ref, b) < 0 { report_exception_(p, "a vg hover handler") }
+    if ae_call_bool_(p, ref, b) < 0 { report_exception_(p, "a vg hover handler") }
     settle_(p)
 }
 
@@ -7581,7 +7604,8 @@ sae_ae_path(p: *Page, this_val: int, argv: int) -> int {
 // polygon(points, fn?) and polyline(points, fn?): points as SVG writes them
 // ("x,y x,y ...") or as a flat array of numbers; a path underneath, as
 // aether-ui's transpiler and loader draw them.
-ae_points_arg_(ctx: ptr, argv: int, argc: int) -> string {
+ae_points_arg_(p: *Page, argv: int, argc: int) -> string {
+    ctx = p.ctx
     if argc < 1 { return "" }
     h = quickjs.arg(ctx, argv, 0)
     t = quickjs.type_of(ctx, h)
@@ -7589,14 +7613,14 @@ ae_points_arg_(ctx: ptr, argv: int, argc: int) -> string {
         quickjs.release(ctx, h)
         return own_(arg_str_(ctx, argv, argc, 0))
     }
-    n = js_length_(ctx, h)
+    n = js_length_(p, h)
     sb = strbuilder.new(64)
     i = 0
     while i < n {
         if i > 0 {
             if i % 2 == 1 { _c = strbuilder.append(sb, ",") } else { _s = strbuilder.append(sb, " ") }
         }
-        _v = strbuilder.append(sb, ae_index_str_(ctx, h, i))
+        _v = strbuilder.append(sb, ae_index_str_(p, h, i))
         i = i + 1
     }
     quickjs.release(ctx, h)
@@ -7608,7 +7632,7 @@ sae_ae_polygon(p: *Page, this_val: int, argv: int) -> int {
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.polygon() must be called inside vg.scene()") }
-    n = vg.path(vg_top_(p), utils.points_to_path(ae_points_arg_(ctx, argv, argc), 1))
+    n = vg.path(vg_top_(p), utils.points_to_path(ae_points_arg_(p, argv, argc), 1))
     return ae_shape_done_(p, argv, argc, 1, n, K_SHAPE)
 }
 
@@ -7617,7 +7641,7 @@ sae_ae_polyline(p: *Page, this_val: int, argv: int) -> int {
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.polyline() must be called inside vg.scene()") }
-    n = vg.path(vg_top_(p), utils.points_to_path(ae_points_arg_(ctx, argv, argc), 0))
+    n = vg.path(vg_top_(p), utils.points_to_path(ae_points_arg_(p, argv, argc), 0))
     return ae_shape_done_(p, argv, argc, 1, n, K_SHAPE)
 }
 
@@ -7689,7 +7713,7 @@ sae_ae_into(p: *Page, this_val: int, argv: int) -> int {
     if r == null || r.el != null { return sae_throw_type_error(ctx, "vg.into(h, fn): h is not a group or scene this page made") }
     if argc < 2 || is_fn_arg_(ctx, argv, 1) == 0 { return sae_throw_type_error(ctx, "vg.into(h, fn): fn must be a function") }
     if vg_push_(p, r.node) == 0 { return sae_throw_type_error(ctx, "vg shapes nested too deeply") }
-    c = call_arg_(ctx, argv, 1)
+    c = call_arg_(p, argv, 1)
     p.vg_depth = p.vg_depth - 1
     if c < 0 { return rethrow_(ctx) }
     ae_repaint_(p)
@@ -7939,34 +7963,35 @@ sae_ae_remove(p: *Page, this_val: int, argv: int) -> int {
 // Geometry keys write the element's shape geometry, which the next flush
 // draws from (circle: cx, cy, r; rect: x, y, w|width, h|height; line: x1,
 // y1, x2, y2), once the shape has been drawn once.
-ae_apply_prop_(ctx: ptr, r: *AeRec, key: string, obj: int) -> int {
-    if key == "fill" { aevg.rec_set_fill(r, ae_prop_str_(ctx, obj, key)); return 1 }
-    if key == "opacity" { aevg.rec_set_opacity(r, ae_prop_num_(ctx, obj, key, 1.0)); return 1 }
-    if key == "transform" { aevg.rec_set_transform(r, ae_prop_str_(ctx, obj, key)); return 1 }
+ae_apply_prop_(p: *Page, r: *AeRec, key: string, obj: int) -> int {
+    ctx = p.ctx
+    if key == "fill" { aevg.rec_set_fill(r, ae_prop_str_(p, obj, key)); return 1 }
+    if key == "opacity" { aevg.rec_set_opacity(r, ae_prop_num_(p, obj, key, 1.0)); return 1 }
+    if key == "transform" { aevg.rec_set_transform(r, ae_prop_str_(p, obj, key)); return 1 }
     if key == "visible" {
-        h, _e = js_get_(ctx, obj, key)
-        aevg.rec_set_visible(r, js_to_bool_(ctx, h))
+        h, _e = js_get_(p, obj, key)
+        aevg.rec_set_visible(r, js_to_bool_(p, h))
         quickjs.release(ctx, h)
         return 1
     }
     if key == "stroke" {
-        h2, _e2 = js_get_(ctx, obj, key)
+        h2, _e2 = js_get_(p, obj, key)
         if quickjs.type_of(ctx, h2) == "string" {
-            aevg.rec_set_stroke(r, own_(js_str_(ctx, h2)), 1.0)
+            aevg.rec_set_stroke(r, own_(js_str_(p, h2)), 1.0)
         } else {
-            aevg.rec_set_stroke(r, ae_index_str_(ctx, h2, 0), ae_index_num_(ctx, h2, 1))
+            aevg.rec_set_stroke(r, ae_index_str_(p, h2, 0), ae_index_num_(p, h2, 1))
         }
         quickjs.release(ctx, h2)
         return 1
     }
     if key == "stroke_width" {
         if r.el != null && element.element_has_stroke(r.el) == 1 {
-            aevg.rec_set_stroke(r, own_(element.element_last_stroke_color(r.el)), ae_prop_num_(ctx, obj, key, 1.0))
+            aevg.rec_set_stroke(r, own_(element.element_last_stroke_color(r.el)), ae_prop_num_(p, obj, key, 1.0))
         }
         return 1
     }
     if key == "text" {
-        if r.el != null { vg.element_set_text(r.el, ae_prop_str_(ctx, obj, key)) }
+        if r.el != null { vg.element_set_text(r.el, ae_prop_str_(p, obj, key)) }
         aevg.scene_mark_dirty(r.scene as *AeScene)
         return 1
     }
@@ -7977,8 +8002,8 @@ ae_apply_prop_(ctx: ptr, r: *AeRec, key: string, obj: int) -> int {
         if key == "x" || key == "y" {
             nx = element.element_geo0(r.el)
             ny = element.element_geo1(r.el)
-            if key == "x" { nx = ae_prop_num_(ctx, obj, key, nx) }
-            if key == "y" { ny = ae_prop_num_(ctx, obj, key, ny) }
+            if key == "x" { nx = ae_prop_num_(p, obj, key, nx) }
+            if key == "y" { ny = ae_prop_num_(p, obj, key, ny) }
             vg.element_text_set_pos(r.el, nx, ny)
             aevg.scene_mark_dirty(r.scene as *AeScene)
             return 1
@@ -8005,7 +8030,7 @@ ae_apply_prop_(ctx: ptr, r: *AeRec, key: string, obj: int) -> int {
         if key == "y2" { slot = 3 }
     }
     if slot < 0 { return 0 }
-    element.element_set_geo(r.el, slot, ae_prop_num_(ctx, obj, key, 0.0))
+    element.element_set_geo(r.el, slot, ae_prop_num_(p, obj, key, 0.0))
     // The flush syncs the draw attrs from the geometry only for a shape with
     // a position binding; give it one (never evaluated by sae).
     if element.element_pos_binding(r.el) == null {
@@ -8019,13 +8044,14 @@ ae_apply_prop_(ctx: ptr, r: *AeRec, key: string, obj: int) -> int {
 ae_no_pos_() -> ptr { return null }
 
 // Apply every property of a JS object.
-ae_apply_obj_(ctx: ptr, r: *AeRec, obj: int) {
-    ks = js_keys_(ctx, obj)
-    n = js_length_(ctx, ks)
+ae_apply_obj_(p: *Page, r: *AeRec, obj: int) {
+    ctx = p.ctx
+    ks = js_keys_(p, obj)
+    n = js_length_(p, ks)
     i = 0
     while i < n {
-        k = ae_index_str_(ctx, ks, i)
-        _a = ae_apply_prop_(ctx, r, k, obj)
+        k = ae_index_str_(p, ks, i)
+        _a = ae_apply_prop_(p, r, k, obj)
         i = i + 1
     }
     quickjs.release(ctx, ks)
@@ -8041,7 +8067,7 @@ sae_ae_set(p: *Page, this_val: int, argv: int) -> int {
     if r == null { return sae_throw_type_error(ctx, "vg.set(h, props): h is not a vg node") }
     if argc < 2 { return 0 }
     obj = quickjs.arg(ctx, argv, 1)
-    if quickjs.type_of(ctx, obj) == "object" { ae_apply_obj_(ctx, r, obj) }
+    if quickjs.type_of(ctx, obj) == "object" { ae_apply_obj_(p, r, obj) }
     quickjs.release(ctx, obj)
     ae_repaint_(p)
     return 0
@@ -8056,54 +8082,56 @@ sae_ae_get(p: *Page, this_val: int, argv: int) -> int {
     r = ae_rec_of_handle_(p, arg_int_(ctx, argv, argc, 0, 0))
     if r == null { return sae_throw_type_error(ctx, "vg.get(h): h is not a vg node") }
     o = quickjs.new_object(ctx)
-    ae_put_str_(ctx, o, "transform", r.tf)
-    ae_put_num_(ctx, o, "opacity", r.op)
+    ae_put_str_(p, o, "transform", r.tf)
+    ae_put_num_(p, o, "opacity", r.op)
     vb = quickjs.new_bool(ctx, r.visible)
-    _v = js_set_(ctx, o, "visible", vb)
+    _v = js_set_(p, o, "visible", vb)
     quickjs.release(ctx, vb)
     if r.el != null {
-        ae_put_str_(ctx, o, "fill", element.element_last_fill(r.el))
+        ae_put_str_(p, o, "fill", element.element_last_fill(r.el))
         if element.element_has_stroke(r.el) == 1 {
-            ae_put_str_(ctx, o, "stroke", element.element_last_stroke_color(r.el))
-            ae_put_num_(ctx, o, "stroke_width", element.element_last_stroke_width(r.el))
+            ae_put_str_(p, o, "stroke", element.element_last_stroke_color(r.el))
+            ae_put_num_(p, o, "stroke_width", element.element_last_stroke_width(r.el))
         }
         lt = element.element_last_text(r.el)
-        if lt != null { ae_put_str_(ctx, o, "text", lt) }
+        if lt != null { ae_put_str_(p, o, "text", lt) }
         if r.kind == K_TEXT {
-            ae_put_num_(ctx, o, "x", element.element_geo0(r.el))
-            ae_put_num_(ctx, o, "y", element.element_geo1(r.el))
+            ae_put_num_(p, o, "x", element.element_geo0(r.el))
+            ae_put_num_(p, o, "y", element.element_geo1(r.el))
         }
         st = element.element_shape_type(r.el)
         if st == SHAPE_CIRCLE {
-            ae_put_num_(ctx, o, "cx", element.element_geo0(r.el))
-            ae_put_num_(ctx, o, "cy", element.element_geo1(r.el))
-            ae_put_num_(ctx, o, "r", element.element_geo2(r.el))
+            ae_put_num_(p, o, "cx", element.element_geo0(r.el))
+            ae_put_num_(p, o, "cy", element.element_geo1(r.el))
+            ae_put_num_(p, o, "r", element.element_geo2(r.el))
         }
         if st == SHAPE_RECT {
-            ae_put_num_(ctx, o, "x", element.element_geo0(r.el))
-            ae_put_num_(ctx, o, "y", element.element_geo1(r.el))
-            ae_put_num_(ctx, o, "w", element.element_geo2(r.el))
-            ae_put_num_(ctx, o, "h", element.element_geo3(r.el))
+            ae_put_num_(p, o, "x", element.element_geo0(r.el))
+            ae_put_num_(p, o, "y", element.element_geo1(r.el))
+            ae_put_num_(p, o, "w", element.element_geo2(r.el))
+            ae_put_num_(p, o, "h", element.element_geo3(r.el))
         }
         if st == SHAPE_LINE {
-            ae_put_num_(ctx, o, "x1", element.element_geo0(r.el))
-            ae_put_num_(ctx, o, "y1", element.element_geo1(r.el))
-            ae_put_num_(ctx, o, "x2", element.element_geo2(r.el))
-            ae_put_num_(ctx, o, "y2", element.element_geo3(r.el))
+            ae_put_num_(p, o, "x1", element.element_geo0(r.el))
+            ae_put_num_(p, o, "y1", element.element_geo1(r.el))
+            ae_put_num_(p, o, "x2", element.element_geo2(r.el))
+            ae_put_num_(p, o, "y2", element.element_geo3(r.el))
         }
     }
     return o
 }
 
-ae_put_str_(ctx: ptr, o: int, k: string, v: string) {
+ae_put_str_(p: *Page, o: int, k: string, v: string) {
+    ctx = p.ctx
     h = quickjs.new_string(ctx, v)
-    _s = js_set_(ctx, o, k, h)
+    _s = js_set_(p, o, k, h)
     quickjs.release(ctx, h)
 }
 
-ae_put_num_(ctx: ptr, o: int, k: string, v: float) {
+ae_put_num_(p: *Page, o: int, k: string, v: float) {
+    ctx = p.ctx
     h = quickjs.new_float(ctx, v)
-    _s = js_set_(ctx, o, k, h)
+    _s = js_set_(p, o, k, h)
     quickjs.release(ctx, h)
 }
 
@@ -8216,26 +8244,26 @@ ae_eval_bind_(p: *Page, r: *AeRec, kind: int, fn_h: int) {
     if v == 0 { return }
     t = quickjs.type_of(ctx, v)
     if kind == AB_FILL {
-        if t != "undefined" { aevg.rec_set_fill(r, own_(js_str_(ctx, v))) }
+        if t != "undefined" { aevg.rec_set_fill(r, own_(js_str_(p, v))) }
     } else if kind == AB_STROKE {
-        if t == "string" { aevg.rec_set_stroke(r, own_(js_str_(ctx, v)), 1.0) }
-        else if t == "object" { aevg.rec_set_stroke(r, ae_index_str_(ctx, v, 0), ae_index_num_(ctx, v, 1)) }
+        if t == "string" { aevg.rec_set_stroke(r, own_(js_str_(p, v)), 1.0) }
+        else if t == "object" { aevg.rec_set_stroke(r, ae_index_str_(p, v, 0), ae_index_num_(p, v, 1)) }
     } else if kind == AB_OPACITY {
-        aevg.rec_set_opacity(r, js_to_float_(ctx, v))
+        aevg.rec_set_opacity(r, js_to_float_(p, v))
     } else if kind == AB_TEXT {
         if r.el != null {
-            vg.element_set_text(r.el, own_(js_str_(ctx, v)))
+            vg.element_set_text(r.el, own_(js_str_(p, v)))
             aevg.scene_mark_dirty(r.scene as *AeScene)
         }
     } else if kind == AB_POS {
-        if t == "object" { ae_apply_obj_(ctx, r, v) }
+        if t == "object" { ae_apply_obj_(p, r, v) }
     } else if kind == AB_TRANSFORM {
-        aevg.rec_set_transform(r, own_(js_str_(ctx, v)))
+        aevg.rec_set_transform(r, own_(js_str_(p, v)))
     } else if kind == AB_WHEN {
-        aevg.rec_set_visible(r, js_to_bool_(ctx, v))
+        aevg.rec_set_visible(r, js_to_bool_(p, v))
     } else if kind == AB_VIEWBOX {
         sc = r.scene as *AeScene
-        nv = own_(js_str_(ctx, v))
+        nv = own_(js_str_(p, v))
         if nv != sc.vb { aevg.scene_set_view_box(ae_model_(p), sc, nv) }
     }
     quickjs.release(ctx, v)
@@ -8274,7 +8302,7 @@ sae_ae_defs(p: *Page, this_val: int, argv: int) -> int {
     r = ae_top_rec_(p)
     ap.defs_sb = strbuilder.new(256)
     ap.defs_scene = r.scene
-    c = call_arg_(ctx, argv, 0)
+    c = call_arg_(p, argv, 0)
     svg = strbuilder.finish(ap.defs_sb)
     ap.defs_sb = null
     if c < 0 { return rethrow_(ctx) }
@@ -8293,15 +8321,16 @@ ae_defs_sb_(p: *Page, name: string) -> ptr {
 // for "array": contrib.quickjs's type_of names an array "array", not
 // "object" (checking "object" dropped every stop, so a gradient painted
 // nothing).
-ae_stops_(ctx: ptr, sb: ptr, stops: int) {
-    n = js_length_(ctx, stops)
+ae_stops_(p: *Page, sb: ptr, stops: int) {
+    ctx = p.ctx
+    n = js_length_(p, stops)
     i = 0
     while i < n {
-        st, _e = js_get_index_(ctx, stops, i)
+        st, _e = js_get_index_(p, stops, i)
         _a = strbuilder.append(sb, "<stop")
-        _b = strbuilder.append(sb, aevg.attr_str("offset", ae_index_str_(ctx, st, 0)))
-        _c = strbuilder.append(sb, aevg.attr_str("stop-color", ae_index_str_(ctx, st, 1)))
-        _d = strbuilder.append(sb, aevg.attr_str("stop-opacity", ae_index_str_(ctx, st, 2)))
+        _b = strbuilder.append(sb, aevg.attr_str("offset", ae_index_str_(p, st, 0)))
+        _c = strbuilder.append(sb, aevg.attr_str("stop-color", ae_index_str_(p, st, 1)))
+        _d = strbuilder.append(sb, aevg.attr_str("stop-opacity", ae_index_str_(p, st, 2)))
         _f = strbuilder.append(sb, "/>")
         quickjs.release(ctx, st)
         i = i + 1
@@ -8309,15 +8338,16 @@ ae_stops_(ctx: ptr, sb: ptr, stops: int) {
 }
 
 // The options a gradient may carry: { units, transform, href, spread }.
-ae_gradient_opts_(ctx: ptr, sb: ptr, argv: int, argc: int, at: int) {
+ae_gradient_opts_(p: *Page, sb: ptr, argv: int, argc: int, at: int) {
+    ctx = p.ctx
     if argc <= at { return }
     o = quickjs.arg(ctx, argv, at)
     if quickjs.type_of(ctx, o) == "object" {
-        _a = strbuilder.append(sb, aevg.attr_str("gradientUnits", ae_prop_str_(ctx, o, "units")))
-        _b = strbuilder.append(sb, aevg.attr_str("gradientTransform", ae_prop_str_(ctx, o, "transform")))
-        href = ae_prop_str_(ctx, o, "href")
+        _a = strbuilder.append(sb, aevg.attr_str("gradientUnits", ae_prop_str_(p, o, "units")))
+        _b = strbuilder.append(sb, aevg.attr_str("gradientTransform", ae_prop_str_(p, o, "transform")))
+        href = ae_prop_str_(p, o, "href")
         if string.length(href) > 0 { _c = strbuilder.append(sb, aevg.attr_str("xlink:href", "#${href}")) }
-        _d = strbuilder.append(sb, aevg.attr_str("spreadMethod", ae_prop_str_(ctx, o, "spread")))
+        _d = strbuilder.append(sb, aevg.attr_str("spreadMethod", ae_prop_str_(p, o, "spread")))
     }
     quickjs.release(ctx, o)
 }
@@ -8337,11 +8367,11 @@ sae_ae_linear_gradient(p: *Page, this_val: int, argv: int) -> int {
     _d = strbuilder.append(sb, aevg.attr_str("y1", arg_str_(ctx, argv, argc, 2)))
     _e = strbuilder.append(sb, aevg.attr_str("x2", arg_str_(ctx, argv, argc, 3)))
     _f = strbuilder.append(sb, aevg.attr_str("y2", arg_str_(ctx, argv, argc, 4)))
-    ae_gradient_opts_(ctx, sb, argv, argc, 6)
+    ae_gradient_opts_(p, sb, argv, argc, 6)
     _g = strbuilder.append(sb, ">")
     if argc > 5 {
         stops = quickjs.arg(ctx, argv, 5)
-        if quickjs.type_of(ctx, stops) == "array" { ae_stops_(ctx, sb, stops) }
+        if quickjs.type_of(ctx, stops) == "array" { ae_stops_(p, sb, stops) }
         quickjs.release(ctx, stops)
     }
     _h = strbuilder.append(sb, "</linearGradient>")
@@ -8363,16 +8393,16 @@ sae_ae_radial_gradient(p: *Page, this_val: int, argv: int) -> int {
     if argc > 5 {
         o = quickjs.arg(ctx, argv, 5)
         if quickjs.type_of(ctx, o) == "object" {
-            _fx = strbuilder.append(sb, aevg.attr_str("fx", ae_prop_str_(ctx, o, "fx")))
-            _fy = strbuilder.append(sb, aevg.attr_str("fy", ae_prop_str_(ctx, o, "fy")))
+            _fx = strbuilder.append(sb, aevg.attr_str("fx", ae_prop_str_(p, o, "fx")))
+            _fy = strbuilder.append(sb, aevg.attr_str("fy", ae_prop_str_(p, o, "fy")))
         }
         quickjs.release(ctx, o)
     }
-    ae_gradient_opts_(ctx, sb, argv, argc, 5)
+    ae_gradient_opts_(p, sb, argv, argc, 5)
     _g = strbuilder.append(sb, ">")
     if argc > 4 {
         stops = quickjs.arg(ctx, argv, 4)
-        if quickjs.type_of(ctx, stops) == "array" { ae_stops_(ctx, sb, stops) }
+        if quickjs.type_of(ctx, stops) == "array" { ae_stops_(p, sb, stops) }
         quickjs.release(ctx, stops)
     }
     _h = strbuilder.append(sb, "</radialGradient>")
@@ -8395,29 +8425,29 @@ sae_ae_clip_path(p: *Page, this_val: int, argv: int) -> int {
     if argc > 2 {
         o = quickjs.arg(ctx, argv, 2)
         if quickjs.type_of(ctx, o) == "object" {
-            _t = strbuilder.append(sb, aevg.attr_str("transform", ae_prop_str_(ctx, o, "transform")))
-            _u = strbuilder.append(sb, aevg.attr_str("clipPathUnits", ae_prop_str_(ctx, o, "units")))
+            _t = strbuilder.append(sb, aevg.attr_str("transform", ae_prop_str_(p, o, "transform")))
+            _u = strbuilder.append(sb, aevg.attr_str("clipPathUnits", ae_prop_str_(p, o, "units")))
         }
         quickjs.release(ctx, o)
     }
     _c = strbuilder.append(sb, ">")
     if argc > 1 {
         shapes = quickjs.arg(ctx, argv, 1)
-        n = js_length_(ctx, shapes)
+        n = js_length_(p, shapes)
         i = 0
         while i < n {
-            s, _e = js_get_index_(ctx, shapes, i)
-            kind = ae_index_str_(ctx, s, 0)
+            s, _e = js_get_index_(p, shapes, i)
+            kind = ae_index_str_(p, s, 0)
             if kind == "rect" {
-                _r = strbuilder.append(sb, "<rect${aevg.attr_str("x", ae_index_str_(ctx, s, 1))}${aevg.attr_str("y", ae_index_str_(ctx, s, 2))}${aevg.attr_str("width", ae_index_str_(ctx, s, 3))}${aevg.attr_str("height", ae_index_str_(ctx, s, 4))}/>")
+                _r = strbuilder.append(sb, "<rect${aevg.attr_str("x", ae_index_str_(p, s, 1))}${aevg.attr_str("y", ae_index_str_(p, s, 2))}${aevg.attr_str("width", ae_index_str_(p, s, 3))}${aevg.attr_str("height", ae_index_str_(p, s, 4))}/>")
             } else if kind == "circle" {
-                _ci = strbuilder.append(sb, "<circle${aevg.attr_str("cx", ae_index_str_(ctx, s, 1))}${aevg.attr_str("cy", ae_index_str_(ctx, s, 2))}${aevg.attr_str("r", ae_index_str_(ctx, s, 3))}/>")
+                _ci = strbuilder.append(sb, "<circle${aevg.attr_str("cx", ae_index_str_(p, s, 1))}${aevg.attr_str("cy", ae_index_str_(p, s, 2))}${aevg.attr_str("r", ae_index_str_(p, s, 3))}/>")
             } else if kind == "ellipse" {
-                _el = strbuilder.append(sb, "<ellipse${aevg.attr_str("cx", ae_index_str_(ctx, s, 1))}${aevg.attr_str("cy", ae_index_str_(ctx, s, 2))}${aevg.attr_str("rx", ae_index_str_(ctx, s, 3))}${aevg.attr_str("ry", ae_index_str_(ctx, s, 4))}/>")
+                _el = strbuilder.append(sb, "<ellipse${aevg.attr_str("cx", ae_index_str_(p, s, 1))}${aevg.attr_str("cy", ae_index_str_(p, s, 2))}${aevg.attr_str("rx", ae_index_str_(p, s, 3))}${aevg.attr_str("ry", ae_index_str_(p, s, 4))}/>")
             } else if kind == "path" {
-                _pa = strbuilder.append(sb, "<path${aevg.attr_str("d", ae_index_str_(ctx, s, 1))}/>")
+                _pa = strbuilder.append(sb, "<path${aevg.attr_str("d", ae_index_str_(p, s, 1))}/>")
             } else if kind == "polygon" {
-                _po = strbuilder.append(sb, "<polygon${aevg.attr_str("points", ae_index_str_(ctx, s, 1))}/>")
+                _po = strbuilder.append(sb, "<polygon${aevg.attr_str("points", ae_index_str_(p, s, 1))}/>")
             }
             quickjs.release(ctx, s)
             i = i + 1
@@ -8448,7 +8478,7 @@ ae_register_(p: *Page) {
     q = p.ctx
     // The JS surface over these: state, computed, bind, each, batch, the
     // bind tagged template, vg.animate, vg.items (src/sae_prelude.js).
-    pre, perr = js_eval_(q, sae_prelude(), "sae:prelude")
+    pre, perr = js_eval_(p, sae_prelude(), "sae:prelude")
     if perr != "" { say_("sae: the prelude failed:\n${perr}") }
     quickjs.release(q, pre)
 }
@@ -8806,9 +8836,9 @@ http_start_(p: *Page, method: string, url_arg: string, body: string, ctype: stri
     if http_helpers_(ctx, p) == 0 { return rethrow_(ctx) }
     args = quickjs.new_array(ctx)
     idh = quickjs.new_int(ctx, j.id)
-    _s = js_set_index_(ctx, args, 0, idh)
+    _s = js_set_index_(p, args, 0, idh)
     quickjs.release(ctx, idh)
-    r, err = js_call_(ctx, p.http_req, 0, args)
+    r, err = js_call_(p, p.http_req, 0, args)
     quickjs.release(ctx, args)
     if err != "" { return rethrow_(ctx) }
     return r
@@ -8822,10 +8852,10 @@ http_helpers_(ctx: ptr, p: *Page) -> int {
     if p.http_res != 0 { return 1 }
     rs = "(function (ok, status, text, error, raw) { var h = {}; var ls = raw.split(/\\r?\\n/); for (var i = 1; i < ls.length; i++) { var c = ls[i].indexOf(':'); if (c > 0) h[ls[i].slice(0, c).trim().toLowerCase()] = ls[i].slice(c + 1).trim(); } return { ok: ok, status: status, text: text, error: error, headers: h, json: function () { return JSON.parse(this.text); } }; })"
     qs = "(function (id) { return { id: id, cancel: function () { http.cancel(id); } }; })"
-    rf, e1 = js_eval_(ctx, rs, "sae:http")
+    rf, e1 = js_eval_(p, rs, "sae:http")
     if e1 != "" { return 0 }
     p.http_res = rf
-    qf, e2 = js_eval_(ctx, qs, "sae:http")
+    qf, e2 = js_eval_(p, qs, "sae:http")
     if e2 != "" { return 0 }
     p.http_req = qf
     return 1
@@ -8919,23 +8949,23 @@ call_http_(p: *Page, ref: int, status: int, text: string, err: string, raw_heade
     a2 = quickjs.new_string(ctx, text)
     a3 = quickjs.new_string(ctx, err)
     a4 = quickjs.new_string(ctx, raw_headers)
-    _s0 = js_set_index_(ctx, args, 0, a0)
-    _s1 = js_set_index_(ctx, args, 1, a1)
-    _s2 = js_set_index_(ctx, args, 2, a2)
-    _s3 = js_set_index_(ctx, args, 3, a3)
-    _s4 = js_set_index_(ctx, args, 4, a4)
+    _s0 = js_set_index_(p, args, 0, a0)
+    _s1 = js_set_index_(p, args, 1, a1)
+    _s2 = js_set_index_(p, args, 2, a2)
+    _s3 = js_set_index_(p, args, 3, a3)
+    _s4 = js_set_index_(p, args, 4, a4)
     quickjs.release(ctx, a0)
     quickjs.release(ctx, a1)
     quickjs.release(ctx, a2)
     quickjs.release(ctx, a3)
     quickjs.release(ctx, a4)
-    res, e1 = js_call_(ctx, p.http_res, 0, args)
+    res, e1 = js_call_(p, p.http_res, 0, args)
     quickjs.release(ctx, args)
     if e1 != "" { return 0 - 1 }
     args2 = quickjs.new_array(ctx)
-    _s5 = js_set_index_(ctx, args2, 0, res)
+    _s5 = js_set_index_(p, args2, 0, res)
     quickjs.release(ctx, res)
-    r = calln_(ctx, ref, args2)
+    r = calln_(p, ref, args2)
     quickjs.release(ctx, args2)
     return r
 }
@@ -9456,147 +9486,147 @@ page_time_ms_() -> int {
 // began first), and each puts back what it found when it ends, so no
 // deadline outlives its entry: host code that reads a JS value later is not
 // stopped by a deadline long past, and is not left unbounded either.
-entry_begin_(q: ptr) -> long {
-    prev = quickjs.deadline_ns(q)
+entry_begin_(p: *Page) -> long {
+    prev = quickjs.deadline_ns(p.ctx)
     if prev != 0 { return prev }
-    quickjs.clear_interrupted(q)
-    quickjs.set_deadline_ns(q, quickjs.now_ns() + (page_time_ms_() as long) * 1000000)
+    quickjs.clear_interrupted(p.ctx)
+    quickjs.set_deadline_ns(p.ctx, quickjs.now_ns() + (page_time_ms_() as long) * 1000000)
     return 0
 }
 
-entry_end_(q: ptr, prev: long) {
-    if prev == 0 { quickjs.set_deadline_ns(q, 0) }
+entry_end_(p: *Page, prev: long) {
+    if prev == 0 { quickjs.set_deadline_ns(p.ctx, 0) }
 }
 
 // The end of a host conversion that began an entry of its own (prev == 0):
 // if the time limit stopped the page's code, say so, once, naming what the
 // host was reading. Inside another entry that entry reports (a handler's
 // exception, a promise job's).
-entry_stopped_(q: ptr, prev: long, what: string) {
+entry_stopped_(p: *Page, prev: long, what: string) {
     if prev != 0 { return }
-    if quickjs.interrupted(q) != 0 {
+    if quickjs.interrupted(p.ctx) != 0 {
         say_("sae: stopped: the page's code ran past its limit of ${page_time_ms_()} ms while sae was reading ${what}")
-        quickjs.clear_interrupted(q)
+        quickjs.clear_interrupted(p.ctx)
     }
-    quickjs.set_deadline_ns(q, 0)
+    quickjs.set_deadline_ns(p.ctx, 0)
 }
 
 // quickjs.eval, call and run_jobs, each as one timed entry.
-js_eval_(q: ptr, code: string, filename: string) -> (int, string) {
-    prev = entry_begin_(q)
-    h, err = quickjs.eval(q, code, filename)
-    entry_end_(q, prev)
+js_eval_(p: *Page, code: string, filename: string) -> (int, string) {
+    prev = entry_begin_(p)
+    h, err = quickjs.eval(p.ctx, code, filename)
+    entry_end_(p, prev)
     return h, err
 }
 
-js_call_(q: ptr, f: int, this_h: int, args: int) -> (int, string) {
-    prev = entry_begin_(q)
-    h, err = quickjs.call(q, f, this_h, args)
-    entry_end_(q, prev)
+js_call_(p: *Page, f: int, this_h: int, args: int) -> (int, string) {
+    prev = entry_begin_(p)
+    h, err = quickjs.call(p.ctx, f, this_h, args)
+    entry_end_(p, prev)
     return h, err
 }
 
-js_run_jobs_(q: ptr) -> (int, string) {
-    prev = entry_begin_(q)
-    n, err = quickjs.run_jobs(q)
-    entry_end_(q, prev)
+js_run_jobs_(p: *Page) -> (int, string) {
+    prev = entry_begin_(p)
+    n, err = quickjs.run_jobs(p.ctx)
+    entry_end_(p, prev)
     return n, err
 }
 
 // The conversions and property accesses that can run page JS, each timed.
 // Host code calls these, never the quickjs.* they wrap.
-js_get_(q: ptr, obj: int, name: string) -> (int, string) {
-    prev = entry_begin_(q)
-    h, err = quickjs.get(q, obj, name)
-    entry_stopped_(q, prev, "property ${name}")
+js_get_(p: *Page, obj: int, name: string) -> (int, string) {
+    prev = entry_begin_(p)
+    h, err = quickjs.get(p.ctx, obj, name)
+    entry_stopped_(p, prev, "property ${name}")
     return h, err
 }
 
-js_get_index_(q: ptr, obj: int, i: int) -> (int, string) {
-    prev = entry_begin_(q)
-    h, err = quickjs.get_index(q, obj, i)
-    entry_stopped_(q, prev, "element ${i}")
+js_get_index_(p: *Page, obj: int, i: int) -> (int, string) {
+    prev = entry_begin_(p)
+    h, err = quickjs.get_index(p.ctx, obj, i)
+    entry_stopped_(p, prev, "element ${i}")
     return h, err
 }
 
-js_set_(q: ptr, obj: int, name: string, v: int) -> string {
-    prev = entry_begin_(q)
-    err = quickjs.set(q, obj, name, v)
-    entry_stopped_(q, prev, "setting property ${name}")
+js_set_(p: *Page, obj: int, name: string, v: int) -> string {
+    prev = entry_begin_(p)
+    err = quickjs.set(p.ctx, obj, name, v)
+    entry_stopped_(p, prev, "setting property ${name}")
     return err
 }
 
-js_set_index_(q: ptr, obj: int, i: int, v: int) -> string {
-    prev = entry_begin_(q)
-    err = quickjs.set_index(q, obj, i, v)
-    entry_stopped_(q, prev, "setting element ${i}")
+js_set_index_(p: *Page, obj: int, i: int, v: int) -> string {
+    prev = entry_begin_(p)
+    err = quickjs.set_index(p.ctx, obj, i, v)
+    entry_stopped_(p, prev, "setting element ${i}")
     return err
 }
 
-js_get_global_(q: ptr, name: string) -> (int, string) {
-    prev = entry_begin_(q)
-    h, err = quickjs.get_global(q, name)
-    entry_stopped_(q, prev, "global ${name}")
+js_get_global_(p: *Page, name: string) -> (int, string) {
+    prev = entry_begin_(p)
+    h, err = quickjs.get_global(p.ctx, name)
+    entry_stopped_(p, prev, "global ${name}")
     return h, err
 }
 
-js_set_global_(q: ptr, name: string, v: int) {
-    prev = entry_begin_(q)
-    quickjs.set_global(q, name, v)
-    entry_stopped_(q, prev, "setting global ${name}")
+js_set_global_(p: *Page, name: string, v: int) {
+    prev = entry_begin_(p)
+    quickjs.set_global(p.ctx, name, v)
+    entry_stopped_(p, prev, "setting global ${name}")
 }
 
-js_length_(q: ptr, obj: int) -> int {
-    prev = entry_begin_(q)
-    n = quickjs.length(q, obj)
-    entry_stopped_(q, prev, "a length")
+js_length_(p: *Page, obj: int) -> int {
+    prev = entry_begin_(p)
+    n = quickjs.length(p.ctx, obj)
+    entry_stopped_(p, prev, "a length")
     return n
 }
 
-js_keys_(q: ptr, obj: int) -> int {
-    prev = entry_begin_(q)
-    k = quickjs.keys(q, obj)
-    entry_stopped_(q, prev, "an object's keys")
+js_keys_(p: *Page, obj: int) -> int {
+    prev = entry_begin_(p)
+    k = quickjs.keys(p.ctx, obj)
+    entry_stopped_(p, prev, "an object's keys")
     return k
 }
 
-js_to_json_(q: ptr, h: int) -> string {
-    prev = entry_begin_(q)
-    j = quickjs.to_json(q, h)
-    entry_stopped_(q, prev, "a value as JSON")
+js_to_json_(p: *Page, h: int) -> string {
+    prev = entry_begin_(p)
+    j = quickjs.to_json(p.ctx, h)
+    entry_stopped_(p, prev, "a value as JSON")
     return j
 }
 
-js_to_int_(q: ptr, h: int) -> int {
-    prev = entry_begin_(q)
-    n = quickjs.to_int(q, h)
-    entry_stopped_(q, prev, "a number")
+js_to_int_(p: *Page, h: int) -> int {
+    prev = entry_begin_(p)
+    n = quickjs.to_int(p.ctx, h)
+    entry_stopped_(p, prev, "a number")
     return n
 }
 
-js_to_float_(q: ptr, h: int) -> float {
-    prev = entry_begin_(q)
-    d = quickjs.to_float(q, h)
-    entry_stopped_(q, prev, "a number")
+js_to_float_(p: *Page, h: int) -> float {
+    prev = entry_begin_(p)
+    d = quickjs.to_float(p.ctx, h)
+    entry_stopped_(p, prev, "a number")
     return d
 }
 
-js_to_bool_(q: ptr, h: int) -> int {
-    prev = entry_begin_(q)
-    b = quickjs.to_bool(q, h)
-    entry_stopped_(q, prev, "a boolean")
+js_to_bool_(p: *Page, h: int) -> int {
+    prev = entry_begin_(p)
+    b = quickjs.to_bool(p.ctx, h)
+    entry_stopped_(p, prev, "a boolean")
     return b
 }
 
-js_to_string_(q: ptr, h: int) -> (string, string) {
-    prev = entry_begin_(q)
-    s, err = quickjs.to_string(q, h)
-    entry_stopped_(q, prev, "a string")
+js_to_string_(p: *Page, h: int) -> (string, string) {
+    prev = entry_begin_(p)
+    s, err = quickjs.to_string(p.ctx, h)
+    entry_stopped_(p, prev, "a string")
     return s, err
 }
 
-engine_eval_(q: ptr, src: string, url: string) -> (int, string) {
-    return js_eval_(q, src, url)
+engine_eval_(p: *Page, src: string, url: string) -> (int, string) {
+    return js_eval_(p, src, url)
 }
 
 engine_dispose_(q: ptr) { quickjs.dispose(q) }
@@ -9613,14 +9643,14 @@ host_fn_(p: *Page, q: ptr, name: string, arity: int, f: @keep fn(*Page, int, int
 // One page-API function: obj[name] calls the Aether function f.
 reg_(p: *Page, q: ptr, obj: int, name: string, arity: int, f: @keep fn(*Page, int, int) -> int) {
     h = host_fn_(p, q, name, arity, f)
-    _e = js_set_(q, obj, name, h)
+    _e = js_set_(p, obj, name, h)
     quickjs.release(q, h)
 }
 
 // One global page-API function: globalThis[name] calls the Aether function f.
 glob_fn_(p: *Page, q: ptr, name: string, arity: int, f: @keep fn(*Page, int, int) -> int) {
     h = host_fn_(p, q, name, arity, f)
-    js_set_global_(q, name, h)
+    js_set_global_(p, name, h)
     quickjs.release(q, h)
 }
 
@@ -9864,7 +9894,7 @@ gate_space_(g: *Gate, name: string, cond: int, seek: string, raw: int, has_obj: 
         if cond == WHEN_APP_SEEKS && browser_of_(p).app_dir == "" { s.on = 0 }
         if s.on == 1 && has_obj == 1 {
             s.obj = quickjs.new_object(p.ctx)
-            js_set_global_(p.ctx, name, s.obj)
+            js_set_global_(p, name, s.obj)
         }
     } else {
         s.name = own_(name)
@@ -9934,7 +9964,7 @@ patch(_ctx: @keep ptr, g: *Gate, global: string, name: string, f: @keep fn(*Page
     gate_close_space_(g)
     if g.mode == G_REGISTER {
         p = g.p as *Page
-        d, _e = js_get_global_(p.ctx, global)
+        d, _e = js_get_global_(p, global)
         reg_(p, p.ctx, d, name, arity, f)
         quickjs.release(p.ctx, d)
         return g.en
@@ -9956,7 +9986,7 @@ value(_ctx: @keep ptr, name: string, t: int, src: int) {
             v = ""
             if src == V_PAGE_URL { v = p.url }
             h = quickjs.new_string(p.ctx, v)
-            _e = js_set_(p.ctx, s.obj, name, h)
+            _e = js_set_(p, s.obj, name, h)
             quickjs.release(p.ctx, h)
         }
         return
@@ -9999,7 +10029,7 @@ js_wrapper(_ctx: @keep ptr, name: string, source: string) {
     gate_flush_(g)
     if g.mode == G_REGISTER && s.on == 1 {
         p = g.p as *Page
-        r, _e = js_eval_(p.ctx, source, name)
+        r, _e = js_eval_(p, source, name)
         quickjs.release(p.ctx, r)
     }
 }
@@ -11975,7 +12005,7 @@ api_register_(p: *Page) {
             if sname == "" { continue }
             dbo = quickjs.new_object(q)
             nmh = quickjs.new_string(q, sname)
-            _sd = js_set_(q, dbo, "__db", nmh)
+            _sd = js_set_(p, dbo, "__db", nmh)
             quickjs.release(q, nmh)
             reg_(p, q, dbo, "all", 2, sae_sqlite_all)
             reg_(p, q, dbo, "get", 2, sae_sqlite_get)
@@ -11983,10 +12013,10 @@ api_register_(p: *Page) {
             reg_(p, q, dbo, "transaction", 1, sae_sqlite_transaction)
             reg_(p, q, dbo, "__begin", 1, sae_sqlite_begin)
             reg_(p, q, dbo, "__end", 2, sae_sqlite_end)
-            _so = js_set_(q, so, sname, dbo)
+            _so = js_set_(p, so, sname, dbo)
             quickjs.release(q, dbo)
         }
-        js_set_global_(q, "sqlite", so)
+        js_set_global_(p, "sqlite", so)
         quickjs.release(q, so)
     }
     // ===== end wave1/sqlite =====
@@ -11997,9 +12027,9 @@ api_register_(p: *Page) {
     if nmods != "," {
         nr = quickjs.new_object(q)
         reg_(p, q, nr, "call", 3, sae_natives_call)
-        js_set_global_(q, "__sae_natives", nr)
+        js_set_global_(p, "__sae_natives", nr)
         quickjs.release(q, nr)
-        nw, _nwe = js_eval_(q, natives_js_((p.browser as *Browser).native_jobs, nmods), "sae:natives")
+        nw, _nwe = js_eval_(p, natives_js_((p.browser as *Browser).native_jobs, nmods), "sae:natives")
         quickjs.release(q, nw)
     }
     // ===== end wave1/natives =====
@@ -12131,7 +12161,7 @@ page_free_(p: *Page) {
 page_run_(p: *Page, src: string, times_ns: ptr) -> int {
     long t0 = os.now_monotonic_ns()
     mem.set_long(times_ns, 0, 0)
-    v, err = engine_eval_(p.ctx, src, p.url)
+    v, err = engine_eval_(p, src, p.url)
     // wave1/imports: a page with imports or a top-level await is a function
     if err == "" && p.wrapped == 1 { v, err = modules_run_page_(p, v) }
     mem.set_long(times_ns, 8, os.now_monotonic_ns() - t0)
@@ -12296,17 +12326,18 @@ module_resolve_(b: *Browser, importer: string, spec: string) -> (string, string)
 const MOD_FACTORY_JS = "(function (m) { return function (url) { return { url: url, m: m, x: function (e) { for (var i = 1; i + 1 < arguments.length; i += 2) Object.defineProperty(e, arguments[i], { get: arguments[i + 1], enumerable: true, configurable: true }); }, all: function (e, ns) { Object.keys(ns).forEach(function (k) { if (k !== 'default' && !(k in e)) Object.defineProperty(e, k, { get: function () { return ns[k]; }, enumerable: true, configurable: true }); }); } }; }; })"
 
 // A one-element arguments array for quickjs.call (released by the caller).
-args1_(ctx: ptr, h: int) -> int {
+args1_(p: *Page, h: int) -> int {
+    ctx = p.ctx
     a = quickjs.new_array(ctx)
-    _e = js_set_index_(ctx, a, 0, h)
+    _e = js_set_index_(p, a, 0, h)
     return a
 }
 
 // A unit's $sae object (a new handle).
 mod_loader_(p: *Page, url: string) -> (int, string) {
     us = quickjs.new_string(p.ctx, url)
-    a = args1_(p.ctx, us)
-    lo, err = js_call_(p.ctx, p.mod_factory, 0, a)
+    a = args1_(p, us)
+    lo, err = js_call_(p, p.mod_factory, 0, a)
     quickjs.release(p.ctx, a)
     quickjs.release(p.ctx, us)
     return lo, err
@@ -12391,7 +12422,7 @@ mod_imports_(p: *Page, url: string, imports: string, seeks: string, chain: strin
 // Run a lowered module (a function of ($sae, $exports)) and register its
 // namespace.
 mod_run_(p: *Page, url: string, text: string) -> string {
-    fn, err = engine_eval_(p.ctx, text, url)
+    fn, err = engine_eval_(p, text, url)
     if err != "" { return "${url}: ${err}" }
     lo, lerr = mod_loader_(p, url)
     if lerr != "" {
@@ -12400,9 +12431,9 @@ mod_run_(p: *Page, url: string, text: string) -> string {
     }
     ns = quickjs.new_object(p.ctx)
     a = quickjs.new_array(p.ctx)
-    _e1 = js_set_index_(p.ctx, a, 0, lo)
-    _e2 = js_set_index_(p.ctx, a, 1, ns)
-    r, cerr = js_call_(p.ctx, fn, 0, a)
+    _e1 = js_set_index_(p, a, 0, lo)
+    _e2 = js_set_index_(p, a, 1, ns)
+    r, cerr = js_call_(p, fn, 0, a)
     quickjs.release(p.ctx, a)
     quickjs.release(p.ctx, lo)
     quickjs.release(p.ctx, fn)
@@ -12428,10 +12459,10 @@ modules_prepare_(p: *Page) -> string {
     imports = p.imports
     seeks = string.concat(p.seeks, p.optional)
     if imports == "" && p.wrapped == 0 { return "" }
-    f, ferr = engine_eval_(p.ctx, MOD_FACTORY_JS, "sae:loader")
+    f, ferr = engine_eval_(p, MOD_FACTORY_JS, "sae:loader")
     if ferr != "" { return "the module loader could not start: ${ferr}" }
-    a = args1_(p.ctx, p.mod_get)
-    fac, cerr = js_call_(p.ctx, f, 0, a)
+    a = args1_(p, p.mod_get)
+    fac, cerr = js_call_(p, f, 0, a)
     quickjs.release(p.ctx, a)
     quickjs.release(p.ctx, f)
     if cerr != "" { return "the module loader could not start: ${cerr}" }
@@ -12453,20 +12484,20 @@ modules_run_page_(p: *Page, fn: int) -> (int, string) {
         quickjs.release(p.ctx, fn)
         return 0, lerr
     }
-    a = args1_(p.ctx, lo)
-    r, err = js_call_(p.ctx, fn, 0, a)
+    a = args1_(p, lo)
+    r, err = js_call_(p, fn, 0, a)
     quickjs.release(p.ctx, a)
     quickjs.release(p.ctx, lo)
     quickjs.release(p.ctx, fn)
     if err != "" { return 0, err }
     if quickjs.type_of(p.ctx, r) == "promise" {
-        then, terr = js_get_(p.ctx, r, "then")
+        then, terr = js_get_(p, r, "then")
         if terr == "" {
             ta = quickjs.new_array(p.ctx)
             und = quickjs.new_undefined(p.ctx)
-            _t1 = js_set_index_(p.ctx, ta, 0, und)
-            _t2 = js_set_index_(p.ctx, ta, 1, p.mod_fail)
-            r2, _e = js_call_(p.ctx, then, r, ta)
+            _t1 = js_set_index_(p, ta, 0, und)
+            _t2 = js_set_index_(p, ta, 1, p.mod_fail)
+            r2, _e = js_call_(p, then, r, ta)
             quickjs.release(p.ctx, r2)
             quickjs.release(p.ctx, und)
             quickjs.release(p.ctx, ta)
@@ -12504,7 +12535,7 @@ sae_mod_get(p: *Page, this_val: int, argv: int) -> int {
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     spec = arg_str_(ctx, argv, argc, 0)
-    url = js_prop_str_(ctx, this_val, "url", p.url)
+    url = js_prop_str_(p, this_val, "url", p.url)
     target, why = module_resolve_(p.browser as *Browser, url, spec)
     if why != "" { return sae_throw_type_error(ctx, "import refused: ${why}") }
     m = mod_find_(p, target)
@@ -12762,7 +12793,7 @@ build_content_(b: *Browser, rctx: ptr) {
     ui.on_secondary_click(scroller, |x: float, y: float| {
         if b.page == null { open_menu_(b, null, 0, scroller); return }
         p = b.page as *Page
-        open_menu_(b, p.ctx, page_menu_items_(p, 0), scroller)
+        open_menu_(b, p, page_menu_items_(p, 0), scroller)
     })
 }
 
