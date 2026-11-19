@@ -42,11 +42,13 @@
 #       bin/tsc, run with node>, else a `tsc` on PATH; otherwise one `skip` line
 #       and nothing fails): sae.d.ts passes `tsc --strict` by itself, and each
 #       page of PAGES_TSC (real pages of site/ and tests/apps/, between them
-#       using every namespace) type-checks against it. Other pages do not,
+#       using every namespace, in the arrow form and the trailing-block form)
+#       type-checks against it, each first desugared by `saelower --ts`
+#       (tools/tscheck.sh). Other pages do not,
 #       for reasons that are the page's or the compiler's setup, not the
 #       declarations': docs/design/gate-dsl.md, "Step 11", lists them.
 #
-# Needs target/build/bin/sae and target/saegate.
+# Needs target/build/bin/sae and target/saegate (and target/saelower for vii).
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SAE="$ROOT/target/build/bin/sae"
 GATE="$ROOT/target/saegate"
@@ -202,13 +204,19 @@ else
     fi
     PAGES_TSC="site/counter.ts site/form.ts site/reactive.ts site/grid.ts site/clock.ts site/vg.ts site/aevg.ts site/http.ts site/clip.ts site/seeks_fs.ts site/banking.ts site/calculator.ts site/keys.ts site/menus.ts site/widgets.ts site/a11y.ts site/raster.ts
         tests/apps/sqlite_demo/index.ts tests/apps/documents/index.ts tests/apps/clipboard/index.ts tests/apps/bus/index.ts tests/apps/backend/index.ts tests/apps/natives/index.ts tests/apps/sandbox/index.ts tests/apps/menus/menus.ts tests/apps/resize/resize.ts"
-    npages=0; nbad=0
-    for page in $PAGES_TSC; do
-        npages=$((npages + 1))
-        if out=$(cd "$ROOT" && $TSC_CMD $TSC_FLAGS sae.d.ts "$page" 2>&1); then :; else
-            nbad=$((nbad + 1)); bad "tsc --strict: $page does not type-check against sae.d.ts:"; echo "$out" | sed 's/^/       /' | head -6
-        fi
-    done
-    [ $nbad -eq 0 ] && ok "tsc --strict: $npages real pages type-check against sae.d.ts"
+    # Through tools/tscheck.sh: each page desugared by saelower --ts first, so
+    # a page written with trailing blocks is held to sae.d.ts as an arrow-form
+    # one is (docs/design/trailing-blocks.md).
+    npages=0
+    for page in $PAGES_TSC; do npages=$((npages + 1)); done
+    if [ ! -x "$ROOT/target/saelower" ]; then
+        bad "tsc --strict: no target/saelower to desugar the pages with (AGENTS.md \"Build and test\")"
+    elif out=$(cd "$ROOT" && SAE_TSC="${SAE_TSC:-}" tools/tscheck.sh $PAGES_TSC 2>&1); then
+        ok "tsc --strict: $npages real pages type-check against sae.d.ts (desugared by saelower --ts)"
+    else
+        echo "$out" | grep '^FAIL' | while read -r _ page rest; do bad "tsc --strict: $page does not type-check against sae.d.ts"; done
+        fails=$((fails + $(echo "$out" | grep -c '^FAIL')))
+        echo "$out" | grep -v '^ok' | head -30 | sed 's/^/       /'
+    fi
 fi
 exit $fails
