@@ -1,0 +1,97 @@
+// spec_contacts.ae -- the Contacts port (examples/contacts) as an app: the
+// sample contacts with favourites first, a search, an add, a star, an edit,
+// a delete, and the contacts kept in app storage.
+//
+//   SAE_TEST_APP=examples/contacts SAE_STORAGE_DIR=target/spec-storage tests/run_spec.sh spec_contacts
+import std.spec
+import std.string
+import std.fs
+import std.dir
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+app_store(d: string) -> string {
+    l, err = dir.list(d)
+    if err != "" { return "${d}/(none)" }
+    n = dir.list_count(l)
+    i = 0
+    while i < n {
+        nm = dir.list_get(l, i)
+        if string.starts_with(nm, "app-contacts-") == 1 { return "${d}/${nm}" }
+        i = i + 1
+    }
+    return "${d}/(none)"
+}
+
+stored(key: string) -> string {
+    d = os_getenv("SAE_STORAGE_DIR")
+    if d == null { return "" }
+    body, err = fs.read("${app_store(d)}/${key}")
+    if string.length(err) > 0 { return "" }
+    return body
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Contacts on sae") {
+        spec.it("starts with six contacts, favourites first") callback {
+            b.assert_text("6 contacts", "the count")
+            b.assert_text("Favorites", "the favourites section")
+            b.assert_text("All Contacts (6)", "everyone")
+            b.assert_text("Alice Smith", "a favourite")
+            b.assert_text("+1 (555) 234-5678", "Bob's phone")
+            b.assert_text("Note: Work colleague", "a note")
+        }
+        spec.it("search narrows the list by name") callback {
+            b.set_field_by("Search contacts...", "bob")
+            b.assert_text("Search Results (1)", "one result")
+            b.assert_text("Bob Johnson", "Bob")
+            b.assert_no_text("Alice Smith", "not Alice")
+            b.assert_no_text("Favorites", "no favourites section while searching")
+        }
+        spec.it("a search with no match says so; clearing it brings everyone back") callback {
+            b.set_field_by("Search contacts...", "zzz")
+            b.assert_text("No contacts found", "none")
+            b.set_field_by("Search contacts...", "")
+            b.assert_text("All Contacts (6)", "everyone again")
+        }
+        spec.it("Add with no name or phone is refused") callback {
+            b.click("Add")
+            b.assert_text("New contact", "the form")
+            b.click("Save")
+            b.assert_text("A name and a phone number are needed", "the refusal")
+            b.click("Cancel")
+        }
+        spec.it("a contact is added through the form") callback {
+            b.click("Add")
+            b.set_field_by("Name", "Grace Hopper")
+            b.set_field_by("Phone", "+1 555 0100")
+            b.set_field_by("Email (optional)", "grace@navy.mil")
+            b.click("Save")
+            b.assert_text("7 contacts", "seven")
+            b.assert_text("Grace Hopper", "the new one")
+            b.assert_text("grace@navy.mil", "with her email")
+            spec.assert_contains(stored("contacts"), "\"name\":\"Grace Hopper\"", "kept in storage")
+        }
+        spec.it("Star makes a favourite") callback {
+            b.click_nth("Star", 0)
+            spec.assert_contains(stored("contacts"), "\"notes\":\"Work colleague\",\"isFavorite\":true", "Bob is a favourite now")
+        }
+        spec.it("Edit changes a contact") callback {
+            b.click_nth("Edit", 0)
+            b.assert_text("Edit contact", "the form")
+            b.set_field_by("Name", "Alice Smythe")
+            b.click("Save")
+            b.assert_text("Alice Smythe", "renamed")
+            b.assert_no_text("Alice Smith", "the old name is gone")
+        }
+        spec.it("Delete removes one") callback {
+            b.click_nth("Delete", 0)
+            b.assert_text("6 contacts", "six again")
+        }
+    }
+    return spec.run_summary(fw)
+}

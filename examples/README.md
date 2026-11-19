@@ -27,3 +27,4 @@ toolkit) are the apps only; none of Tsyne's framework code is used.
 | `dashboards` | Animated gauges and turnable dials | Tsyne `phone-apps/{gauge-dashboard,dial-dashboard}` | MIT, Paul Hammant |
 | `animations` | Spinner, fractal tree, particle fountain | Tsyne `phone-apps/{spinner,fractal-tree,particles}` | MIT, Paul Hammant |
 | `calendar` | Month calendar with events | Tsyne `phone-apps/calendar` | BSD-2-Clause terms, Paul Hammant |
+| `contacts` | Contacts with search and favourites | Tsyne `phone-apps/contacts` | BSD-2-Clause terms, Paul Hammant |
