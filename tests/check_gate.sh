@@ -38,6 +38,14 @@
 #       PRIVILEGED (the objects it refuses unless sought), sae_host.ae's
 #       unsought_ list, and tests/spec_globals.ae's SAE_EVERY_PAGE.
 #
+# (vii) when a TypeScript compiler is found (SAE_TSC=<path of typescript's
+#       bin/tsc, run with node>, else a `tsc` on PATH; otherwise one `skip` line
+#       and nothing fails): sae.d.ts passes `tsc --strict` by itself, and each
+#       page of PAGES_TSC (real pages of site/ and tests/apps/, between them
+#       using every namespace) type-checks against it. Other pages do not,
+#       for reasons that are the page's or the compiler's setup, not the
+#       declarations': docs/design/gate-dsl.md, "Step 11", lists them.
+#
 # Needs target/build/bin/sae and target/saegate.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SAE="$ROOT/target/build/bin/sae"
@@ -164,4 +172,32 @@ same "sae_host.ae unsought_ lists the spec's seeks (less database and native, pl
 "$GATE" --always < "$WORK/describe.jsonl" | LC_ALL=C sort -u > "$WORK/always.txt"
 sed -n 's/^const SAE_EVERY_PAGE = "\(.*\)"$/\1/p' "$ROOT/tests/spec_globals.ae" | tr ' ' '\n' | grep -v '^$' | LC_ALL=C sort -u > "$WORK/every-page.txt"
 same "tests/spec_globals.ae SAE_EVERY_PAGE is what the spec has in every page" "$WORK/always.txt" "$WORK/every-page.txt" "< spec, > SAE_EVERY_PAGE"
+
+# --- (vii) tsc over sae.d.ts and real pages ---
+TSC_CMD=""
+if [ -n "${SAE_TSC:-}" ] && [ -f "$SAE_TSC" ] && command -v node >/dev/null 2>&1; then
+    TSC_CMD="node $SAE_TSC"
+elif command -v tsc >/dev/null 2>&1; then
+    TSC_CMD="tsc"
+fi
+if [ -z "$TSC_CMD" ]; then
+    echo "skip tsc: no TypeScript compiler (set SAE_TSC to typescript's bin/tsc, which needs node, or put tsc on PATH)"
+else
+    TSC_FLAGS="--noEmit --strict --lib es2020 --target es2020 --typeRoots /nonexistent --module es2022 --moduleResolution bundler --allowImportingTsExtensions"
+    if out=$($TSC_CMD $TSC_FLAGS "$ROOT/sae.d.ts" 2>&1); then
+        ok "tsc --strict: sae.d.ts ($($TSC_CMD --version))"
+    else
+        bad "tsc --strict: sae.d.ts does not compile:"; echo "$out" | sed 's/^/       /' | head -10
+    fi
+    PAGES_TSC="site/counter.ts site/form.ts site/reactive.ts site/grid.ts site/clock.ts site/vg.ts site/aevg.ts site/http.ts site/clip.ts site/seeks_fs.ts site/banking.ts site/calculator.ts site/keys.ts site/menus.ts site/widgets.ts site/a11y.ts site/raster.ts
+        tests/apps/sqlite_demo/index.ts tests/apps/documents/index.ts tests/apps/clipboard/index.ts tests/apps/bus/index.ts tests/apps/backend/index.ts tests/apps/natives/index.ts tests/apps/sandbox/index.ts tests/apps/menus/menus.ts tests/apps/resize/resize.ts"
+    npages=0; nbad=0
+    for page in $PAGES_TSC; do
+        npages=$((npages + 1))
+        if out=$(cd "$ROOT" && $TSC_CMD $TSC_FLAGS sae.d.ts "$page" 2>&1); then :; else
+            nbad=$((nbad + 1)); bad "tsc --strict: $page does not type-check against sae.d.ts:"; echo "$out" | sed 's/^/       /' | head -6
+        fi
+    done
+    [ $nbad -eq 0 ] && ok "tsc --strict: $npages real pages type-check against sae.d.ts"
+fi
 exit $fails
