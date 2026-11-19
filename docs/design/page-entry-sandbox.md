@@ -32,6 +32,57 @@ A browser page's list holds its own storage folder and nothing else. An app page
 
 ---
 
+## Step 0 findings (2026-11-19, Aether 0.923.0, Mac / cachyos / ae-x64)
+
+The probes ran (P1 to P4). Where this section and the text below disagree,
+this section is right; the steps are to be read with it.
+
+**Held.** `sandbox_push`/`sandbox_pop` are compiler builtins a non-std module
+may call (undocumented; an exported `sandbox.enter`/`leave` is asked of
+Aether). Push lends the list: a grant added after the push takes effect at
+once. NULL allows everything, an empty list refuses everything, nesting
+intersects, pop restores. The depth limit is 64 and the 65th push aborts the
+process.
+
+**Cheaper than said.** Push and pop together are 6-18 ns, not 50-100.
+`enforce` with five grants is 400-900 ns, and building a five-grant list is
+17-32 µs (a realpath per grant), so the list is built once per page as
+designed. No actor-step cost after the first push could be measured.
+
+**Wrong in the text below.**
+- A refusal does not look like a missing file. `fs.read` gives
+  "<path>: Permission denied", the same as a real EACCES; `os.getenv` gives
+  "" as for an unset name; `os.exec` and `tcp.connect` give their generic
+  failures. Only the audit ring says it was the sandbox.
+- The audit ring cannot count refusals. It records allowed checks too, holds
+  256, and `denied_count()` reads 0 once 256 allowed checks follow a refusal.
+  Step 7 needs a monotonic denial count from Aether, or the
+  `AETHER_SANDBOX_AUDIT` sink (`AETHER_SANDBOX_LOG` is the preload's own).
+
+**Risk 2 confirmed.** sae-driver as built today exports no `aether_sandbox_*`
+symbol, so under the preload nothing is enforced and the suite passes 70 of 70
+for the wrong reason. `link_flag("-rdynamic")` in `.build.ae` (the
+linux/freebsd branch) exports them; aeb's link cache does not notice a changed
+`.build.ae`, so the binary must be deleted to relink. This goes in before the
+preload lane.
+
+**Risk 1 confirmed, with a different symptom.** With the preload and no grant
+file, the preload's `syscall()` returns ENOSYS to every caller. Nothing fails,
+but GLib's futex waits spin: an idle sae-driver burned 28 s of CPU in 12 s.
+The Aether scheduler's affinity and membarrier calls fail the same way. The
+preload lane cannot ship until Aether forwards `syscall()` when no sandbox is
+active.
+
+**New: write_atomic's temp file.** With enforcement live under the preload,
+`spec_app_documents` fails: `fs.write_atomic` writes `<path>.tmp.<pid>.<n>`
+and the grant covers `<path>` alone. The std layer checks the target, the
+libc layer its temp sibling. services/documents has this today; it is Aether's
+to settle (write_atomic checking or covering its own temp file).
+
+**Asked of Aether** (one batch, see OPEN-THREADS): `syscall()` forwarded when
+no sandbox is active; write_atomic and its temp file; `sandbox.enter`/`leave`;
+a monotonic denial count; denials-only audit.
+
 ## 1. Threat model
 
 Today a page reaches only the host functions `api_register_` installs, and some services check their own inputs. Under both, sae's own Aether code on the UI thread during a page entry (gates, kernel helpers, services) is also held to that page's grants by std's own checks (std/fs, os, net, udp: 38+31+4+2 call sites). On the LD_PRELOAD lane, libc `open`/`fopen`/`openat`, `connect` (AF_INET/6), `getenv` and the exec family on that thread are held too (preload:101-135). So a slip in that code becomes a refusal that is logged instead of an effect: a path joined from page input, a missing scope check, a service acting for the wrong page, or toolkit C opening a file a page named.
