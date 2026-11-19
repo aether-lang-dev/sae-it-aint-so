@@ -23,7 +23,7 @@ import std.strarr
 import std.sandbox
 import std.encoding
 
-exports (new, configure, grant_read, grant_write, granted, resolve, path,
+exports (new, configure, grant_read, grant_write, add_grants, granted, resolve, path,
          read_text, write_text, read_base64, write_base64, exists, list_json, mkdir, remove)
 
 // One launch's file grants: the kernel holds one (new()), configures it for
@@ -235,25 +235,37 @@ path(h: ptr, raw: string, write: int, what: string) -> (string, string) {
     return "", "${what}: outside this app's fs.read grant: ${p}"
 }
 
-// The app's grants as a std.sandbox grant list: read roots readable, write
-// roots readable, writable and made and removed in. Release with
-// sandbox.free.
-fence_(h: ptr) -> sandbox.Grants {
+// Add the app's grants to a std.sandbox grant list `g` (a ptr: the kernel
+// holds lists as ptrs): read roots readable, write roots readable, writable
+// and made and removed in. fence_ makes one for each operation; the kernel
+// adds the same roots to a page's own list (services/pagegrants), so what a
+// page's entries may do and what each operation fences to cannot drift apart.
+add_grants(h: ptr, gp: ptr) {
     f = h as *Files
+    g = gp as sandbox.Grants
     reads = f.reads
     writes = f.writes
-    return sandbox.new("fs: this app's app.json grants") {
+    if reads != null {
         i = 0
         while i < strarr.size(reads) {
-            grant_fs_read("${strarr.get(reads, i)}*")
+            sandbox.grant_fs_read(g, "${strarr.get(reads, i)}*")
             i = i + 1
         }
+    }
+    if writes != null {
         j = 0
         while j < strarr.size(writes) {
-            grant_fs("${strarr.get(writes, j)}*")
+            sandbox.grant_fs(g, "${strarr.get(writes, j)}*")
             j = j + 1
         }
     }
+}
+
+// The app's grants as a std.sandbox grant list. Release with sandbox.free.
+fence_(h: ptr) -> sandbox.Grants {
+    g = sandbox.new("fs: this app's app.json grants")
+    add_grants(h, g as ptr)
+    return g
 }
 
 // The operations: each checks first, then acts, fenced. (text, "") or ("", error).

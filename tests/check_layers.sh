@@ -49,6 +49,8 @@ expect_imports services/agent_auth/module.ae \
     "import std.nanoid|import std.cryptography (hmac_sha256_hex)|import std.string (bytes, string_length, string_char_at)"
 expect_imports services/secure_channel/module.ae \
     "import std.bytes|import std.string (string_length, string_char_at, string_index_of, string_substring, string_equals, string_from_char, string_from_long, to_long)|import std.cryptography.ascon_aead128 (aead_seal, aead_open)|import std.cryptography.hkdf (hkdf)|import std.cryptography (random_bytes)|import std.time (now_ms)"
+expect_imports services/pagegrants/module.ae \
+    "import std.sandbox|import std.string"
 expect_imports services/shell/module.ae \
     "import ui (open_url)|import std.fs (read, write_atomic)|import std.string|import std.strarr"
 expect_imports services/print/module.ae \

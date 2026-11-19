@@ -1,0 +1,195 @@
+// spec_page_grants.ae — the grant list a page's entries run under
+// (services/pagegrants, docs/design/page-entry-sandbox.md), without a
+// window: what each kind of page's list allows and refuses, checked by doing
+// the operation in the sandbox, not by reading the list. (Listing a folder is
+// not checked: fs.list_dir does not ask the sandbox in 0.923.0, so no list
+// refuses it; /Volumes/Mini3/claude-scratch/sae-gate/repro/listdir.ae.) tests/spec_app_sandbox
+// is end to end, through a running page.
+//
+//   ae run tests/spec_page_grants.ae          (from sae's root)
+import std.spec
+import std.string
+import std.fs
+import std.os
+import std.tcp
+import std.sandbox
+import services.pagegrants
+import services.files
+import services.documents
+
+const DIR = "target/spec_page_grants"
+
+// 1 when fs.read of path works, run as the kernel runs a page's entry: under
+// the list, pushed (the runtime's own sandbox_push, as sae_host's entry_begin_
+// does; sandbox.enforce would freeze a copy).
+read_ok(g: ptr, path: string) -> int {
+    err = ""
+    sandbox_push(g)
+    _t, err = fs.read(path)
+    sandbox_pop()
+    if err == "" { return 1 }
+    return 0
+}
+
+write_ok(g: ptr, path: string) -> int {
+    err = ""
+    sandbox_push(g)
+    err = fs.write_atomic(path, string.bytes("x"))
+    sandbox_pop()
+    if err == "" { return 1 }
+    return 0
+}
+
+env_seen(g: ptr, name: string) -> int {
+    sandbox_push(g)
+    v = os.getenv(name)
+    sandbox_pop()
+    if v == null { return 0 }
+    return 1
+}
+
+exec_ok(g: ptr) -> int {
+    sandbox_push(g)
+    _o, err = os.exec("true")
+    sandbox_pop()
+    if err == "" { return 1 }
+    return 0
+}
+
+tcp_ok(g: ptr, port: int) -> int {
+    sandbox_push(g)
+    c, err = tcp.connect("127.0.0.1", port)
+    sandbox_pop()
+    if err == "" {
+        _x = tcp.tcp_close(c)
+        return 1
+    }
+    return 0
+}
+
+main() {
+    // Absolute: the files service reads a relative root as under $APPDATA.
+    ROOT = "${os.getcwd()}/${DIR}"
+    _r = fs.remove_tree(ROOT)
+    store = "${ROOT}/storage/http___a.example_80"
+    other = "${ROOT}/storage/http___b.example_80"
+    _m1 = fs.mkdir_p(store)
+    _m2 = fs.mkdir_p(other)
+    _m3 = fs.mkdir_p("${ROOT}/readonly")
+    _m4 = fs.mkdir_p("${ROOT}/readwrite")
+    _m5 = fs.mkdir_p("${ROOT}/docs")
+    _w1 = fs.write_atomic("${store}/note", string.bytes("mine"))
+    _w2 = fs.write_atomic("${other}/token", string.bytes("theirs"))
+    _w3 = fs.write_atomic("${ROOT}/secret", string.bytes("kernel's"))
+    _w4 = fs.write_atomic("${ROOT}/readonly/r.txt", string.bytes("r"))
+    _w5 = fs.write_atomic("${ROOT}/readwrite/w.txt", string.bytes("w"))
+    _w6 = fs.write_atomic("${ROOT}/docs/picked.txt", string.bytes("picked"))
+    _w7 = fs.write_atomic("${ROOT}/docs/unpicked.txt", string.bytes("not picked"))
+
+    fw = spec.init()
+    spec.describe(fw, "a browser page's list: its own storage folder, nothing else") {
+        spec.it("reads and writes its own folder") callback {
+            g = pagegrants.new_page("http://a.example", store)
+            spec.assert_eq(read_ok(g, "${store}/note"), 1, "reads its key")
+            spec.assert_eq(write_ok(g, "${store}/new"), 1, "writes a key")
+            spec.assert_eq(write_ok(g, "${store}/note"), 1, "replaces a key")
+            pagegrants.free(g)
+        }
+        spec.it("refuses another origin's folder, a path out of its own, and the kernel's files") callback {
+            g = pagegrants.new_page("http://a.example", store)
+            spec.assert_eq(read_ok(g, "${other}/token"), 0, "another origin's key")
+            spec.assert_eq(read_ok(g, "${store}/../http___b.example_80/token"), 0, "../ into another origin")
+            spec.assert_eq(write_ok(g, "${other}/token"), 0, "writing another origin's key")
+            spec.assert_eq(read_ok(g, "${ROOT}/secret"), 0, "a file of the kernel's")
+            spec.assert_eq(read_ok(g, "${ROOT}/readonly/r.txt"), 0, "an app's fs root it does not have")
+            pagegrants.free(g)
+        }
+        spec.it("refuses the environment, exec and tcp") callback {
+            g = pagegrants.new_page("http://a.example", store)
+            spec.assert_eq(env_seen(g, "PATH"), 0, "PATH reads as unset")
+            spec.assert_eq(exec_ok(g), 0, "os.exec")
+            spec.assert_eq(tcp_ok(g, 9), 0, "tcp.connect")
+            pagegrants.free(g)
+        }
+        spec.it("the same operations work with no list in force (the checks above test the list)") callback {
+            spec.assert_eq(env_seen(null, "PATH"), 1, "PATH is set")
+            spec.assert_eq(exec_ok(null), 1, "true runs")
+            spec.assert_eq(read_ok(null, "${ROOT}/secret"), 1, "the kernel's file reads")
+        }
+        spec.it("a file page's list is the same shape, for its own folder") callback {
+            g = pagegrants.new_page("/tmp/site/a.ts", other)
+            spec.assert_eq(read_ok(g, "${other}/token"), 1, "its folder")
+            spec.assert_eq(read_ok(g, "${store}/note"), 0, "not another's")
+            pagegrants.free(g)
+        }
+        spec.it("deny_all refuses even a storage folder (a null list would allow everything)") callback {
+            g = pagegrants.deny_all("test")
+            spec.assert_eq(read_ok(g, "${store}/note"), 0, "storage")
+            spec.assert_eq(env_seen(g, "PATH"), 0, "env")
+            pagegrants.free(g)
+        }
+    }
+    spec.describe(fw, "an app page's list: storage, plus what app.json grants") {
+        spec.it("holds the fs roots: read-only reads, read-write reads and writes, nothing else") callback {
+            f = files.new()
+            files.configure(f, 1, "${ROOT}/appdata", "${ROOT}", "${ROOT}", 0)
+            files.grant_read(f, "${ROOT}/readonly")
+            files.grant_write(f, "${ROOT}/readwrite")
+            g = pagegrants.new_page("app:/", store)
+            files.add_grants(f, g)
+            spec.assert_eq(read_ok(g, "${ROOT}/readonly/r.txt"), 1, "reads a read root")
+            spec.assert_eq(write_ok(g, "${ROOT}/readonly/new.txt"), 0, "does not write a read root")
+            spec.assert_eq(read_ok(g, "${ROOT}/readwrite/w.txt"), 1, "reads a write root")
+            spec.assert_eq(write_ok(g, "${ROOT}/readwrite/new.txt"), 1, "writes a write root")
+            spec.assert_eq(read_ok(g, "${ROOT}/secret"), 0, "not a file outside its roots")
+            spec.assert_eq(read_ok(g, "${other}/token"), 0, "not another storage folder")
+            spec.assert_eq(env_seen(g, "PATH"), 0, "no environment")
+            spec.assert_eq(exec_ok(g), 0, "no exec")
+            pagegrants.free(g)
+        }
+        spec.it("without add_grants (fs absent) an app page has its storage only") callback {
+            g = pagegrants.new_page("app:/", store)
+            spec.assert_eq(read_ok(g, "${store}/note"), 1, "storage")
+            spec.assert_eq(read_ok(g, "${ROOT}/readonly/r.txt"), 0, "no fs root")
+            pagegrants.free(g)
+        }
+    }
+    spec.describe(fw, "documents: a picked file is added to the live list") {
+        spec.it("refused until picked, then that file only, in the same pushed scope") callback {
+            d = documents.new()
+            documents.configure(d, 1)
+            g = pagegrants.new_page("app:/", store)
+            picked = "${ROOT}/docs/picked.txt"
+            spec.assert_eq(read_ok(g, picked), 0, "before the pick")
+            // The runtime lends the pushed list: a grant added while it is
+            // in force is in force at once (what adopt relies on).
+            sandbox_push(g)
+            _a, e0 = fs.read(picked)
+            h = documents.adopt(d, picked)
+            documents.grant_path(g, picked)
+            _b, e1 = fs.read(picked)
+            e2 = fs.write_atomic(picked, string.bytes("edited"))
+            _c, e3 = fs.read("${ROOT}/docs/unpicked.txt")
+            sandbox_pop()
+            spec.assert_eq(string.length(e0) > 0, 1, "refused before it is picked")
+            spec.assert_eq(h, 1, "a handle")
+            spec.assert_str_eq(e1, "", "readable once picked, in the same entry")
+            spec.assert_str_eq(e2, "", "writable once picked")
+            spec.assert_eq(string.length(e3) > 0, 1, "its neighbour stays refused")
+            pagegrants.free(g)
+        }
+        spec.it("a page made after the pick holds the picked files") callback {
+            d = documents.new()
+            documents.configure(d, 1)
+            _h = documents.adopt(d, "${ROOT}/docs/picked.txt")
+            g = pagegrants.new_page("app:/", store)
+            documents.add_grants(d, g)
+            spec.assert_eq(read_ok(g, "${ROOT}/docs/picked.txt"), 1, "the picked file")
+            spec.assert_eq(read_ok(g, "${ROOT}/docs/unpicked.txt"), 0, "not its neighbour")
+            pagegrants.free(g)
+        }
+    }
+    s = spec.run_summary(fw)
+    _r2 = fs.remove_tree(ROOT)
+    return s
+}

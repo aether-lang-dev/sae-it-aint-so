@@ -1,0 +1,53 @@
+// services/pagegrants — what sae's own code may do while a page's JS is
+// running: the one grant list a page runs its entries under
+// (docs/design/page-entry-sandbox.md).
+//
+// A page reaches only the host functions the gate installs. This is the
+// second line: while an entry into the page's JS is running (a handler, a
+// timer, a promise job, a getter the host reads), the kernel's std
+// operations on that thread, the file system, the environment, exec and tcp,
+// are held to this list, so a slip in sae's own code (a path joined from page
+// input, a missing scope check) is refused instead of done.
+//
+// A page's list holds its own storage folder and nothing else: no tcp (a
+// request goes through the HTTP fetcher actors, which run with no grants of
+// their own), no environment, no exec, no native library. An app page's list
+// grows by what its app.json grants and nothing more: the fs roots
+// (services/files add_grants) and each document the person picked
+// (services/documents grant_path, add_grants). Anything else a host function
+// does on a page's behalf is done after the entry, not under it.
+//
+// Built once per page, in page_new_, and pushed by reference (the runtime's
+// sandbox_push lends the list: a grant added after the push is in force at
+// once, which is how a document picked during an entry is readable in the
+// same entry). The kernel holds it as a ptr; it is released with
+// free(). What this module can reach is its imports: std.sandbox and
+// std.string. tests/check_layers.sh holds the list.
+
+import std.sandbox
+import std.string
+
+exports (new_page, free, deny_all)
+
+// A page's grants: its storage folder, listed, and every key in it read,
+// written and removed. `label` names the page for the reader and for denial
+// logs. The folder exists (page_new_ makes it) so its path resolves.
+new_page(label: string, storage_dir: string) -> ptr {
+    g = sandbox.new("page ${label}") {
+        grant_fs_read(storage_dir)
+        grant_fs("${storage_dir}/*")
+    }
+    return g as ptr
+}
+
+// An empty list: every checked operation refused. What a level that must
+// refuse everything pushes, since a null list would allow everything.
+deny_all(label: string) -> ptr {
+    g = sandbox.new("deny all: ${label}")
+    return g as ptr
+}
+
+free(g: ptr) {
+    if g == null { return }
+    sandbox.free(g as sandbox.Grants)
+}

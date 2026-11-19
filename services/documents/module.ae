@@ -23,7 +23,7 @@ import std.strarr
 import std.sandbox
 import std.encoding
 
-exports (new, configure, granted, adopt, name, read_text, write_text, read_base64, write_base64)
+exports (new, configure, granted, adopt, grant_path, add_grants, name, read_text, write_text, read_base64, write_base64)
 
 // One launch's picked documents: the kernel holds one (new()) and passes it
 // to every call; nothing here is module state.
@@ -58,6 +58,25 @@ adopt(dh: ptr, path: string) -> int {
     if d.enabled == 0 || path == "" { return 0 }
     strarr.push_copy(d.paths, path)
     return strarr.size(d.paths)
+}
+
+// Add one picked file to a grant list (a ptr): read and write, that file only.
+grant_path(gp: ptr, path: string) {
+    g = gp as sandbox.Grants
+    sandbox.grant_fs_read(g, path)
+    sandbox.grant_fs_write(g, path)
+}
+
+// Add every file picked so far. The documents belong to the launch, not to a
+// page, so a page loaded after the pick holds them too (its handles work).
+add_grants(dh: ptr, gp: ptr) {
+    d = dh as *Documents
+    if d.paths == null { return }
+    i = 0
+    while i < strarr.size(d.paths) {
+        grant_path(gp, strarr.get(d.paths, i))
+        i = i + 1
+    }
 }
 
 path_(dh: ptr, h: int) -> string {
