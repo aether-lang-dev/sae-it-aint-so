@@ -1,0 +1,114 @@
+// spec_tsello.ae -- the Tsello port (examples/tsello) as an app: the sample
+// board, a card added, moved to the next list, edited, deleted, a card dragged
+// within its list, a list added, renamed and deleted (its cards with it), and
+// the board kept in app storage.
+//
+//   SAE_TEST_APP=examples/tsello SAE_STORAGE_DIR=target/spec-storage tests/run_spec.sh spec_tsello
+import std.spec
+import std.string
+import std.fs
+import std.dir
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+
+app_store(d: string) -> string {
+    l, err = dir.list(d)
+    if err != "" { return "${d}/(none)" }
+    n = dir.list_count(l)
+    i = 0
+    while i < n {
+        nm = dir.list_get(l, i)
+        if string.starts_with(nm, "app-tsello-") == 1 { return "${d}/${nm}" }
+        i = i + 1
+    }
+    return "${d}/(none)"
+}
+
+stored(key: string) -> string {
+    d = os_getenv("SAE_STORAGE_DIR")
+    if d == null { return "" }
+    body, err = fs.read("${app_store(d)}/${key}")
+    if string.length(err) > 0 { return "" }
+    return body
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Tsello on sae") {
+        spec.it("starts with Tsello's sample board: three lists, seven cards") callback {
+            b.assert_text("3 lists, 7 cards", "the counts")
+            b.assert_text("To Do", "list 1")
+            b.assert_text("Doing", "list 2")
+            b.assert_text("Done", "list 3")
+            b.assert_text("Design wireframes", "a card")
+            b.assert_text("Define requirements", "another")
+            spec.assert_true(b.button_exists("+ Add List"), "an Add List button")
+        }
+        spec.it("a card typed into To Do's field is added") callback {
+            b.set_field_by("Add a card to To Do", "Write docs")
+            b.click_nth("+ Add Card", 0)
+            b.assert_text("3 lists, 8 cards", "eight cards")
+            b.assert_text("Write docs", "the new card")
+            spec.assert_contains(stored("board"), "\"label\":\"Write docs\",\"listId\":\"list-001\"", "kept in storage")
+        }
+        spec.it("> moves the first card of To Do to Doing") callback {
+            b.click_nth(">", 0)
+            spec.assert_true(b.wait_for_text("Design wireframes") == 1, "still on the board")
+            spec.assert_contains(stored("board"), "\"label\":\"Design wireframes\",\"listId\":\"list-002\"", "now in Doing")
+            b.assert_text("3 lists, 8 cards", "none lost")
+        }
+        spec.it("< moves it back (Doing's third card; To Do has no < of its own)") callback {
+            b.click_nth("<", 2)
+            spec.assert_contains(stored("board"), "\"label\":\"Design wireframes\",\"listId\":\"list-001\"", "back in To Do")
+        }
+        spec.it("a card dragged down three rows lands two places lower") callback {
+            t = uidriver.widget_id_last_of("text", "Set up CI pipeline")
+            spec.assert_gt(t, 0, "the card's text is on the board")
+            ty = uidriver.widget_int_field_by_id(t, "y")
+            th = uidriver.widget_int_field_by_id(t, "h")
+            tw = uidriver.widget_int_field_by_id(t, "w")
+            uidriver.post_ok("/widget/${t}/drag?x=${tw / 2}&y=${th / 2}&dx=0&dy=${th * 3}", "drag the card down")
+            spec.assert_true(b.wait_for_text("Set up CI pipeline") == 1, "still there")
+            sleep(500)
+            spec.assert_contains(stored("board"), "\"cardIds\":[\"card-003\",\"card-008\",\"card-002\",\"card-001\"]", "To Do's order in storage: Set up CI pipeline went down two places")
+            spec.assert_true(ty > 0, "laid out")
+        }
+        spec.it("Edit swaps the card for a field; Save keeps the new text") callback {
+            b.click_nth("Edit", 0)
+            b.set_field_by("Card text", "Design wireframes v2")
+            b.click("Save")
+            b.assert_text("Design wireframes v2", "renamed")
+            spec.assert_contains(stored("board"), "Design wireframes v2", "kept")
+        }
+        spec.it("Delete removes a card") callback {
+            b.click_nth("Delete", 0)
+            b.assert_text("3 lists, 7 cards", "one fewer")
+            b.assert_no_text("Design wireframes v2", "gone")
+        }
+        spec.it("a list is added, renamed, and deleted with its cards") callback {
+            b.set_field_by("New list title", "Backlog")
+            b.click("+ Add List")
+            b.assert_text("4 lists, 7 cards", "four lists")
+            b.assert_text("Backlog", "the list")
+            b.click_nth("Rename", 3)
+            b.set_field_by("List title", "Icebox")
+            b.click("Save")
+            b.assert_text("Icebox", "renamed")
+            b.set_field_by("Add a card to Icebox", "Think")
+            b.click_nth("+ Add Card", 3)
+            b.assert_text("4 lists, 8 cards", "a card on the new list")
+            b.click_nth("Delete list", 3)
+            b.assert_text("3 lists, 7 cards", "the list went, and its card")
+        }
+        spec.it("Clear All empties the board") callback {
+            b.click("Clear All")
+            b.assert_text("0 lists, 0 cards", "nothing")
+            b.assert_text("No lists yet. Add one to get started.", "the empty message")
+            spec.assert_contains(stored("board"), "\"lists\":[]", "kept empty")
+        }
+    }
+    return spec.run_summary(fw)
+}
