@@ -15,3 +15,4 @@ toolkit) are the apps only; none of Tsyne's framework code is used.
 | `pomatez` | Pomodoro timer with tasks | Pomatez (Electron/Tauri) | MIT |
 | `gitify` | GitHub notifications | Gitify (Electron) | MIT |
 | `calcudoku` | KenKen arithmetic puzzle | Tsyne `ported-apps/calcudoku` | MIT, Paul Hammant |
+| `tango-puzzle` | Sun and moon binary puzzle | Tsyne `ported-apps/tango-puzzle` | MIT, Paul Hammant |

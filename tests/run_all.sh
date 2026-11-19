@@ -147,6 +147,7 @@ spec_app_natives[absent]|SAE_TEST_APP=tests/apps/natives SAE_NATIVES_ABSENT=1|sp
 spec_gitify|SAE_TEST_APP=tests/apps/gitify SAE_STORAGE_DIR=$T/spec-storage SAE_SHELL_LOG=$T/spec-shell.log|spec spec_gitify
 spec_pomatez|SAE_TEST_APP=examples/pomatez SAE_TIME_SCALE=60 SAE_STORAGE_DIR=$T/spec-storage|spec spec_pomatez
 spec_calcudoku|SAE_TEST_APP=examples/calcudoku|spec spec_calcudoku
+spec_tango_puzzle|SAE_TEST_APP=examples/tango-puzzle|spec spec_tango_puzzle
 spec_http_grants||aerun spec_http_grants
 spec_page_grants||aerun spec_page_grants
 spec_origin_rules||aerun spec_origin_rules

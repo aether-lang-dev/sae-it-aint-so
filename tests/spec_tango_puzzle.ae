@@ -1,0 +1,93 @@
+// spec_tango_puzzle.ae -- the Tango Puzzle port (examples/tango-puzzle) as an
+// app: click a cell to cycle empty, sun, moon; a triple turns red; Undo; the
+// known answer to level 1 solves it; the next level is 6x6.
+//
+//   SAE_TEST_APP=examples/tango-puzzle tests/run_spec.sh spec_tango_puzzle
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// A point in a cell's corner (clear of the sun and moon), 4x4 board: 55 px
+// cells 3 px apart, viewBox 225.
+px(i: int, n: int) -> int { return b.vg_px_x((i % n) * 58.0 + 4.0, n * 58.0 - 3.0, n * 58.0 - 3.0) }
+py(i: int, n: int) -> int { return b.vg_px_y((i / n) * 58.0 + 4.0, n * 58.0 - 3.0, n * 58.0 - 3.0) }
+mx(i: int, n: int) -> int { return b.vg_px_x((i % n) * 58.0 + 27.0, n * 58.0 - 3.0, n * 58.0 - 3.0) }
+my(i: int, n: int) -> int { return b.vg_px_y((i / n) * 58.0 + 27.0, n * 58.0 - 3.0, n * 58.0 - 3.0) }
+
+click(i: int, times: int) {
+    k = 0
+    while k < times {
+        b.vg_click(mx(i, 4), my(i, 4))
+        k = k + 1
+    }
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Tango Puzzle on sae") {
+        spec.it("starts on level 1: four givens, twelve empty cells") callback {
+            b.assert_text("Level 1/5", "the level")
+            b.assert_text("4/16 cells filled", "the givens")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "the board is drawn")
+            spec.assert_true(b.wait_for_vg_pixel(px(0, 4), py(0, 4), 0xFFF3E0), "cell 1 is a given sun")
+            spec.assert_true(b.wait_for_vg_pixel(px(5, 4), py(5, 4), 0xE3F2FD), "cell 6 is a given moon")
+            spec.assert_true(b.wait_for_vg_pixel(px(1, 4), py(1, 4), 0xF5F5F0), "cell 2 is empty")
+            spec.assert_true(b.wait_for_vg_pixel(mx(0, 4), my(0, 4), 0xF5A623), "the given sun is drawn")
+        }
+        spec.it("a click puts a sun, a second a moon, a third clears") callback {
+            click(1, 1)
+            b.assert_text("5/16 cells filled", "a sun")
+            spec.assert_true(b.wait_for_vg_pixel(px(1, 4), py(1, 4), 0xFFFDE7), "sun cell")
+            spec.assert_true(b.wait_for_vg_pixel(mx(1, 4), my(1, 4), 0xF5A623), "sun drawn")
+            click(1, 1)
+            spec.assert_true(b.wait_for_vg_pixel(px(1, 4), py(1, 4), 0xF0F8FF), "moon cell")
+            click(1, 1)
+            b.assert_text("4/16 cells filled", "cleared")
+        }
+        spec.it("a given cannot be changed") callback {
+            click(0, 1)
+            b.assert_text("4/16 cells filled", "still four")
+            spec.assert_true(b.wait_for_vg_pixel(px(0, 4), py(0, 4), 0xFFF3E0), "still a given sun")
+        }
+        spec.it("three suns in a row is a rule violation, Undo takes it back") callback {
+            click(1, 1)
+            click(2, 1)
+            b.assert_text("Rule violation detected", "sun sun sun")
+            spec.assert_true(b.wait_for_vg_pixel(px(2, 4), py(2, 4), 0xFFCCCC), "the cells turn red")
+            b.click("Undo")
+            b.assert_text("5/16 cells filled", "the last click is undone")
+            click(2, 2)
+            b.click("Reset")
+            b.assert_text("4/16 cells filled", "reset to the givens")
+        }
+        spec.it("the known answer solves level 1") callback {
+            click(1, 1)
+            click(2, 2)
+            click(3, 2)
+            click(4, 1)
+            click(6, 2)
+            click(7, 1)
+            click(8, 2)
+            click(9, 2)
+            click(11, 1)
+            click(12, 2)
+            click(13, 1)
+            click(14, 1)
+            b.assert_text("Solved!", "sun sun moon moon / sun moon moon sun / moon moon sun sun / moon sun sun moon")
+            spec.assert_true(b.wait_for_console("tango: solved level 1"), "announced")
+        }
+        spec.it("level 5 is a 6x6 board") callback {
+            b.click(">")
+            b.click(">")
+            b.click(">")
+            b.click(">")
+            b.assert_text("Level 5/5", "the last level")
+            b.assert_text("6/36 cells filled", "six givens on a bigger board")
+            spec.assert_true(b.wait_for_vg_pixel(px(5, 6), py(5, 6), 0xE3F2FD), "cell 6 of row 1 is a given moon")
+        }
+    }
+    return spec.run_summary(fw)
+}
