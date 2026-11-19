@@ -98,7 +98,9 @@ if [ "$SITE_PORT" != 8091 ] || [ "$DRIVER_PORT" != 9222 ]; then
     }
     retarget_ "$SITE" "$RT/site"
     SITE="$RT/site"
-    if [ -n "${SAE_TEST_APP:-}" ]; then
+    # An app that names neither port (the backend and the scoped-storage apps,
+    # which specs find by their folder) runs where it is.
+    if [ -n "${SAE_TEST_APP:-}" ] && grep -qR -e 8091 -e 9222 "$SAE_TEST_APP"; then
         # (an app's storage is kept per app folder: one folder a name, so apps
         # that differ only by folder, as check_storage_scope.sh makes them, still do)
         retarget_ "$SAE_TEST_APP" "$RT/apps/$(basename "$SAE_TEST_APP")"
