@@ -157,6 +157,7 @@ spec_fractals|SAE_TEST_APP=examples/fractals|spec spec_fractals
 spec_tsello|SAE_TEST_APP=examples/tsello SAE_STORAGE_DIR=$T/spec-storage|spec spec_tsello
 spec_charts|SAE_TEST_APP=examples/charts|spec spec_charts
 spec_dashboards|SAE_TEST_APP=examples/dashboards|spec spec_dashboards
+spec_animations|SAE_TEST_APP=examples/animations|spec spec_animations
 spec_http_grants||aerun spec_http_grants
 spec_page_grants||aerun spec_page_grants
 spec_origin_rules||aerun spec_origin_rules

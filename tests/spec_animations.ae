@@ -1,0 +1,68 @@
+// spec_animations.ae -- the Animations port (examples/animations) as an app,
+// held with Pause and Restart and moved on with Step (31 steps of 16 ms, about
+// half a second): the spinner's lit wedge and a dim one, the grown tree and its
+// sky, grass and trunk, the particle count, a burst where it is clicked.
+//
+//   SAE_TEST_APP=examples/animations tests/run_spec.sh spec_animations
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Animations on sae") {
+        spec.it("the spinner, half a turn on: wedge 0 is fully lit, wedge 4 dim") callback {
+            b.assert_text("Loading...", "the spinner view")
+            b.click("Pause")
+            b.click("Restart")
+            b.click("Step")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "drawn")
+            // wedge 0 spans 0 to 45 degrees; 40 from the centre at 22.5 degrees
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(186.96, 300.0, 300.0), b.vg_px_y(165.31, 300.0, 300.0), 0xFF6B6B), "wedge 0 is its own colour, alpha 1")
+            // wedge 4 spans 180 to 225 degrees: 40 from the centre at 202.5 degrees, alpha 0.2 over white
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(113.04, 300.0, 300.0), b.vg_px_y(134.69, 300.0, 300.0), 0xEAF7F4), "wedge 4 is faint")
+        }
+        spec.it("the tree has grown after three seconds: sky, grass, a brown trunk") callback {
+            b.click("Tree")
+            b.assert_text("Fractal tree grows recursively", "the tree view")
+            b.click("Restart")
+            b.click("Step")
+            b.click("Step")
+            b.click("Step")
+            b.click("Step")
+            b.click("Step")
+            b.click("Step")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "drawn")
+            sleep(300)
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(20.0, 400.0, 500.0), b.vg_px_y(20.0, 400.0, 500.0), 0x87CEEB), "sky")
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(20.0, 400.0, 500.0), b.vg_px_y(470.0, 400.0, 500.0), 0x90EE90), "grass")
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(200.0, 400.0, 500.0), b.vg_px_y(375.0, 400.0, 500.0), 0x8B4513), "the trunk, 25 up from the root")
+            spec.assert_true(b.vg_pixel_near(b.vg_px_x(120.0, 400.0, 500.0), b.vg_px_y(375.0, 400.0, 500.0), 0x87CEEB, 6) == 1, "sky either side of it")
+        }
+        spec.it("restarted, the tree has not grown: no trunk above the root") callback {
+            b.click("Restart")
+            sleep(300)
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(200.0, 400.0, 500.0), b.vg_px_y(375.0, 400.0, 500.0), 0x87CEEB), "sky where the trunk was")
+        }
+        spec.it("the particles: twenty at the start, nine more after a step, thirty at a burst") callback {
+            b.click("Particles")
+            b.click("Restart")
+            b.assert_text("Particles: 20", "twenty")
+            b.click("Step")
+            b.assert_text("Particles: 29", "a particle every 0.05 s")
+            b.vg_click(b.vg_px_x(100.0, 400.0, 400.0), b.vg_px_y(100.0, 400.0, 400.0))
+            b.assert_text("Particles: 59", "thirty at the click")
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(200.0, 400.0, 400.0), b.vg_px_y(390.0, 400.0, 400.0), 0x1A1A2E), "the night sky below the emitter")
+        }
+        spec.it("the particles move on their own when not paused") callback {
+            b.click("Resume")
+            before = b.page_texts()
+            sleep(800)
+            spec.assert_true(string.equals(b.page_texts(), before) == 0, "the count has moved: new particles are born and old ones die")
+        }
+    }
+    return spec.run_summary(fw)
+}
