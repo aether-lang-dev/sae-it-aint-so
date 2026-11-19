@@ -1,0 +1,3 @@
+# The sibling checkouts this backend is built with, beside sae (one a line):
+# tests/run_all.sh says so plainly when one is missing.
+RexxAE

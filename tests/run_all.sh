@@ -217,10 +217,11 @@ for line in $TABLE; do
         # an app's own host built first (tools/saehost.sh, docs/natives.md), then its spec
         host)  set -- sh -c 'AETHER_UI_WITH_DRIVER=1 tools/saehost.sh "$1" && tests/run_spec.sh "$2"' host "$@" ;;
         # an app's backend program built first (sdk/saebackend, docs/app-backend.md), then its spec
-        # (../RexxAE on the module path too: apps/rexxconsole compiles its engine in)
-        backend) set -- sh -c '(cd "$1" && AETHER_LIB_DIR="$2/sdk:$2/../RexxAE" ae build backend/main.ae -o backend/main) && tests/run_spec.sh "$3"' backend "$1" "$ROOT" "$2" ;;
+        # (../RexxAE on the module path too: apps/rexxconsole compiles its engine in;
+        # a sibling a backend needs, named in its backend/needs, said plainly when missing)
+        backend) set -- sh -c 'sh tests/lib/needs.sh "$1" "$2" && (cd "$1" && AETHER_LIB_DIR="$2/sdk:$2/../RexxAE" ae build backend/main.ae -o backend/main) && tests/run_spec.sh "$3"' backend "$1" "$ROOT" "$2" ;;
         # the same, then a spec with no window (ae run)
-        backendrun) set -- sh -c '(cd "$1" && AETHER_LIB_DIR="$2/sdk" ae build backend/main.ae -o backend/main) && ae run "tests/$3.ae"' backendrun "$1" "$ROOT" "$2" ;;
+        backendrun) set -- sh -c 'sh tests/lib/needs.sh "$1" "$2" && (cd "$1" && AETHER_LIB_DIR="$2/sdk" ae build backend/main.ae -o backend/main) && ae run "tests/$3.ae"' backendrun "$1" "$ROOT" "$2" ;;
         # a backend in a WSL container: its image built first on Windows; elsewhere the spec checks the refusal
         wslc) case "$(uname -s)" in
                   MINGW*|MSYS*|CYGWIN*) set -- sh -c 'sh tests/apps/backend_wslc/build-image.sh && tests/run_spec.sh "$1"' wslc "$1" ;;

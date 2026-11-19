@@ -60,4 +60,27 @@ fi
 # The page standard library's hashes (lib/sae/MANIFEST) are the build's.
 sh "$ROOT/tools/hash-lib.sh"
 cd "$ROOT"
-exec aeb "${1:-.build.ae}"
+aeb "${1:-.build.ae}" || exit $?
+# A contained backend (docs/design/ipc-backends.md) is started with
+# sandbox.spawn_socket, which preloads Aether's libaether_sandbox.so into the
+# child and looks for it beside the running program first (then under
+# AETHER_HOME, which a login shell may set and a service or a plain `sh -c`
+# does not). So the one from the toolchain that built sae goes beside sae,
+# where it is found however sae is started. Linux and FreeBSD only: nowhere
+# else has the library, or contains a child.
+case "$(uname -s)" in
+    Linux|FreeBSD)
+        lib=""
+        for d in ${SAE_AETHER_HOME:+$SAE_AETHER_HOME/build} \
+                 $(ae cflags --libs 2>/dev/null | tr ' ' '\n' | sed -n 's/^-L//p'); do
+            for f in "$d/libaether_sandbox.so" "$d/aether/libaether_sandbox.so"; do
+                [ -z "$lib" ] && [ -f "$f" ] && lib=$f
+            done
+        done
+        if [ -n "$lib" ]; then
+            cp -f "$lib" "$ROOT/target/build/bin/libaether_sandbox.so"
+        else
+            echo "build.sh: no libaether_sandbox.so in the toolchain ($(command -v ae)): a contained backend will not start (docs/app-backend.md)" >&2
+        fi
+        ;;
+esac
