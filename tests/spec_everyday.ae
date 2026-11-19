@@ -1,0 +1,118 @@
+// spec_everyday.ae -- the Everyday port (examples/everyday), six tutorial
+// examples as six views: a tip worked out, a BMI moved from normal to obese
+// and shown in imperial, a password's refusal and length, dice in the history,
+// one round of rock paper scissors and a reset, the quiz answered right and
+// wrong to its final score. The random ones are checked by their shape; their
+// rules are tested headless with a chosen generator.
+//
+//   SAE_TEST_APP=examples/everyday tests/run_spec.sh spec_everyday
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Everyday on sae") {
+        spec.it("tip: $80 at 20% split two ways") callback {
+            b.assert_text("Tip Calculator", "the first view")
+            b.assert_text("Tip Amount: $0.00", "nothing yet")
+            b.set_field_by("Enter amount", "80")
+            b.assert_text("Tip Amount: $12.00", "15% by default")
+            b.click("20%")
+            b.assert_text("Tip Amount: $16.00", "20%")
+            b.assert_text("Total: $96.00", "total")
+            b.click("+")
+            b.assert_text("2 people", "two people")
+            b.assert_text("Per Person: $48.00", "split")
+            b.click("Clear")
+            b.assert_text("Tip Amount: $0.00", "cleared")
+            b.assert_text("1 person", "one person again")
+        }
+        spec.it("BMI: 170 cm and 70 kg is normal; heavier is obese; imperial units") callback {
+            b.click("BMI")
+            b.assert_text("BMI: 24.2", "the default")
+            b.assert_text("✅ Normal weight", "its category")
+            b.slide_nth(1, 100)
+            b.assert_text("Weight: 100 kg", "weight moved")
+            b.assert_text("BMI: 34.6", "100 kg at 170 cm")
+            b.assert_text("❗ Obese", "obese")
+            b.assert_text("(BMI ≥ 30)", "its range")
+            b.click("Imperial")
+            b.assert_text("Weight: 220 lbs", "in pounds")
+            b.assert_text("Height: 5' 7\"", "in feet and inches")
+        }
+        spec.it("Password: no character type is refused; with numbers only and length 8 a password is made") callback {
+            b.click("Password")
+            b.check("Uppercase (A-Z)")
+            b.check("Lowercase (a-z)")
+            b.check("Numbers (0-9)")
+            b.click("Generate Password")
+            b.assert_text("Select at least one character type", "nothing to draw from")
+            b.check("Numbers (0-9)")
+            b.slide_nth(0, 8)
+            b.assert_text("Length: 8 characters", "the length")
+            b.click("Generate Password")
+            sleep(300)
+            pt = b.page_texts()
+            spec.assert_true(string.contains(pt, "Select at least one") == 0, "a password now")
+            spec.assert_true(string.contains(pt, "Click Generate to create password") == 0, "not the prompt")
+        }
+        spec.it("Dice: a roll appears in the history in 2d6 form") callback {
+            b.click("Dice")
+            b.assert_text("Click Roll to start!", "before a roll")
+            b.click("ROLL DICE")
+            spec.assert_contains(b.page_texts(), "Total: ", "a total")
+            spec.assert_contains(b.page_texts(), "2d6: [", "the history line")
+        }
+        spec.it("Rock paper scissors: a round has one outcome, Reset zeroes the score") callback {
+            b.click("RPS")
+            b.click("✊ Rock")
+            pt = b.page_texts()
+            spec.assert_contains(pt, "You chose: ✊ Rock", "what was chosen")
+            spec.assert_contains(pt, "Computer chose: ", "the computer's")
+            n = 0
+            if string.contains(pt, "🎉 You win!") == 1 { n = n + 1 }
+            if string.contains(pt, "😞 Computer wins!") == 1 { n = n + 1 }
+            if string.contains(pt, "🤝 It's a tie!") == 1 { n = n + 1 }
+            spec.assert_eq(n, 1, "exactly one outcome")
+            b.click("Reset Score")
+            b.assert_text("You: 0 | Computer: 0 | Ties: 0", "zeroed")
+        }
+        spec.it("Quiz: four right and one wrong is 80%") callback {
+            b.click("Quiz")
+            b.assert_text("Question 1 of 5", "first")
+            b.assert_text("What does HTML stand for?", "the question")
+            b.click("Submit Answer")
+            b.assert_text("Question 1 of 5", "nothing selected: no move")
+            b.click("Hyper Text Markup Language")
+            b.assert_text("Selected: Hyper Text Markup Language", "marked")
+            b.click("Submit Answer")
+            b.assert_text("✅ Correct!", "right")
+            b.assert_text("Score: 1/1", "one of one")
+            b.click("Next Question")
+            b.click("JavaScript")
+            b.click("Submit Answer")
+            b.click("Next Question")
+            b.click("2010")
+            b.click("Submit Answer")
+            b.assert_text("❌ Incorrect", "wrong")
+            b.assert_text("The correct answer was: 2012", "told the answer")
+            b.click("Next Question")
+            b.click("Central Processing Unit")
+            b.click("Submit Answer")
+            b.click("Next Question")
+            b.click("Google")
+            b.click("Submit Answer")
+            b.click("See Final Score")
+            b.assert_text("Final Score: 4/5", "four")
+            b.assert_text("Percentage: 80%", "eighty")
+            b.assert_text("🌟 Excellent work!", "the message")
+            b.click("Play Again")
+            b.assert_text("Question 1 of 5", "again")
+        }
+    }
+    return spec.run_summary(fw)
+}
