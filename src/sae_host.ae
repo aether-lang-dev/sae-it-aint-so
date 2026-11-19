@@ -98,6 +98,7 @@ struct Browser {
     nav_timer: int
     page_mem: long
     app_data: string   // the app's data folder (app_data_dir_), worked out once at start: bus.serve starts the bus in an entry
+    entry_depth: int   // entries running now, all pages (entry_begin_); a kernel tick waits for 0
     page_time_ms: int  // a page's time limit for one entry (SAE_PAGE_TIME_MS), read once at start: no entry reads the environment
     last_ok: int     // did the last load fetch and run cleanly
     root: int        // the window's own stack (chrome and content): its size is the window's
@@ -263,6 +264,7 @@ struct Page {
     // page_new_: storage calls and the page's sandbox grant use it, and none
     // reads the environment or resolves a path again.
     storage_dir: string
+    entry_depth: int  // entries into this page's JS running now (entry_begin_): 0 outside any
 }
 
 // A JS function a widget holds for its callback (a click, a change, a
@@ -4478,6 +4480,10 @@ bus_silence_(b: *Browser) {
 // Each tick: what has arrived read, refusals logged, and the next request
 // handed to the page (one at a time).
 bus_tick_(b: *Browser) {
+    // Page JS is running (a nested event loop under a host call): the page's
+    // grants are in force, and this is the kernel's own work. Wait for the
+    // next tick.
+    if b.entry_depth > 0 { return }
     bus_ui_poll_(b)
     ch = b.control
     if ch != null {
@@ -5009,6 +5015,10 @@ backend_gone_(b: *Browser, why: string) {
 }
 
 backend_tick_(b: *Browser) {
+    // Page JS is running (a nested event loop under a host call): the page's
+    // grants are in force, and this is the kernel's own work. Wait for the
+    // next tick.
+    if b.entry_depth > 0 { return }
     if b.backend == null { return }
     k = 0
     while k < BACKEND_FRAMES_PER_TICK {
@@ -6150,6 +6160,10 @@ sqlite_flush_(b: *Browser, d: *SqliteDb) {
 
 // On the UI thread: take every finished job and settle its page's promise.
 sqlite_poll_(b: *Browser) {
+    // Page JS is running (a nested event loop under a host call): the page's
+    // grants are in force, and this is the kernel's own work. Wait for the
+    // next tick.
+    if b.entry_depth > 0 { return }
     sj = b.sqlite_jobs
     ib = sj.inbox
     while true {
@@ -8910,6 +8924,10 @@ http_fetcher_(hj: *HttpJobs) -> ptr {
 
 // On the UI thread: take every finished job and run its page's callback.
 http_poll_(b: *Browser) {
+    // Page JS is running (a nested event loop under a host call): the page's
+    // grants are in force, and this is the kernel's own work. Wait for the
+    // next tick.
+    if b.entry_depth > 0 { return }
     hj = b.http_jobs
     ib = http_inbox_(hj)
     while true {
@@ -9497,6 +9515,11 @@ page_time_ms_() -> int {
 // deadline outlives its entry: host code that reads a JS value later is not
 // stopped by a deadline long past, and is not left unbounded either.
 entry_begin_(p: *Page) -> long {
+    // Every begin is counted and every end or stop uncounts it, so the
+    // browser can say whether any page's JS is running (the kernel's ticks
+    // wait for it to be 0, "kernel_tick_ok_").
+    p.entry_depth = p.entry_depth + 1
+    browser_of_(p).entry_depth = browser_of_(p).entry_depth + 1
     prev = quickjs.deadline_ns(p.ctx)
     if prev != 0 { return prev }
     quickjs.clear_interrupted(p.ctx)
@@ -9505,6 +9528,8 @@ entry_begin_(p: *Page) -> long {
 }
 
 entry_end_(p: *Page, prev: long) {
+    p.entry_depth = p.entry_depth - 1
+    browser_of_(p).entry_depth = browser_of_(p).entry_depth - 1
     if prev == 0 { quickjs.set_deadline_ns(p.ctx, 0) }
 }
 
@@ -9513,6 +9538,8 @@ entry_end_(p: *Page, prev: long) {
 // host was reading. Inside another entry that entry reports (a handler's
 // exception, a promise job's).
 entry_stopped_(p: *Page, prev: long, what: string) {
+    p.entry_depth = p.entry_depth - 1
+    browser_of_(p).entry_depth = browser_of_(p).entry_depth - 1
     if prev != 0 { return }
     if quickjs.interrupted(p.ctx) != 0 {
         say_("sae: stopped: the page's code ran past its limit of ${browser_of_(p).page_time_ms} ms while sae was reading ${what}")
@@ -12104,6 +12131,7 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string, seeks: 
     p.esc_logged_storage = 0
     p.rasters = list.new()
     p.ae = null
+    p.entry_depth = 0
     esc_coarse_decide_(b)
     p.storage_dir = own_(storage_dir_(b, url))
     _sd = fs.mkdir_p(p.storage_dir)
@@ -12754,6 +12782,9 @@ request_nav_(b: *Browser, kind: int, url: string) {
     b.nav_typed = 0   // the Go button sets it again after this; a page never does
     if b.nav_timer == 0 {
         b.nav_timer = ui.timer(1, || {
+            // Not while page JS is running (a nested event loop under a host
+            // call): the timer stays armed and the next tick navigates.
+            if b.entry_depth > 0 { return }
             ui.timer_cancel(b.nav_timer)
             b.nav_timer = 0
             run_nav_(b)
@@ -12820,6 +12851,7 @@ browser_new_() -> *Browser {
     b.nav_timer = 0
     b.page_mem = PAGE_MEM_DEFAULT
     b.page_time_ms = page_time_ms_()
+    b.entry_depth = 0
     b.app_data = ""
     b.menu_h = 0
     b.body = 0

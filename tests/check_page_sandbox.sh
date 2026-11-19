@@ -44,4 +44,28 @@ expect esc_coarse_decide_ "page_new_"
 expect lib_dir_ "sae_main"
 [ $fail = 0 ] && echo "ok   no function an entry can reach reads the environment"
 
+# 2. A kernel tick does not run while page JS does. A nested event loop
+#    under a host call (a file chooser, a clipboard read, a modal) runs the
+#    kernel's timers on the page's stack, under the page's grants; each tick
+#    begins by returning while b.entry_depth is above 0, and so does the
+#    navigation timer's closure. A tick added without the guard fails here.
+for fn in bus_tick_ backend_tick_ sqlite_poll_ http_poll_; do
+    first=$(awk -v N="$fn" '
+        index($0, N "(") == 1 { inside = 1; next }
+        inside && /^[ \t]*\/\// { next }
+        inside && /^[ \t]*$/ { next }
+        inside { print; exit }
+    ' "$F")
+    case "$first" in
+        *"if b.entry_depth > 0 { return }"*) echo "ok   $fn begins with the entry guard" ;;
+        *) echo "FAIL $fn does not begin with 'if b.entry_depth > 0 { return }' (first line: $first)"; fail=1 ;;
+    esac
+done
+# every ui.timer / ui.on_frame the kernel arms: a tick function named above, or the
+# one listed here (the navigation timer's closure checks the guard inline)
+ticks=$(grep -n "ui\.timer(" "$F" | grep -v "^[0-9]*:[ \t]*//" | grep -v "bus_tick_(b)\|backend_tick_(b)\|sqlite_poll_(b)\|http_poll_(hb)\|b.nav_timer = ui.timer(1")
+if [ -n "$ticks" ]; then echo "FAIL a kernel timer that is not one of the guarded ticks:"; echo "$ticks"; fail=1
+else echo "ok   every kernel timer is a guarded tick"; fi
+nav=$(grep -A3 "b.nav_timer = ui.timer(1" "$F" | grep -c "if b.entry_depth > 0 { return }")
+[ "$nav" = 1 ] && echo "ok   the navigation timer waits for no entry to run" || { echo "FAIL the navigation timer does not check b.entry_depth"; fail=1; }
 exit $fail
