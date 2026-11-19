@@ -49,7 +49,7 @@ expect lib_dir_ "sae_main"
 #    kernel's timers on the page's stack, under the page's grants; each tick
 #    begins by returning while b.entry_depth is above 0, and so does the
 #    navigation timer's closure. A tick added without the guard fails here.
-for fn in bus_tick_ backend_tick_ sqlite_poll_ http_poll_; do
+for fn in bus_tick_ backend_tick_ sqlite_poll_ http_poll_ later_tick_; do
     first=$(awk -v N="$fn" '
         index($0, N "(") == 1 { inside = 1; next }
         inside && /^[ \t]*\/\// { next }
@@ -63,9 +63,16 @@ for fn in bus_tick_ backend_tick_ sqlite_poll_ http_poll_; do
 done
 # every ui.timer / ui.on_frame the kernel arms: a tick function named above, or the
 # one listed here (the navigation timer's closure checks the guard inline)
-ticks=$(grep -n "ui\.timer(" "$F" | grep -v "^[0-9]*:[ \t]*//" | grep -v "bus_tick_(b)\|backend_tick_(b)\|sqlite_poll_(b)\|http_poll_(hb)\|b.nav_timer = ui.timer(1")
+ticks=$(grep -n "ui\.timer(" "$F" | grep -v "^[0-9]*:[ \t]*//" | grep -v "bus_tick_(b)\|backend_tick_(b)\|sqlite_poll_(b)\|http_poll_(hb)\|later_tick_(b)\|b.nav_timer = ui.timer(1")
 if [ -n "$ticks" ]; then echo "FAIL a kernel timer that is not one of the guarded ticks:"; echo "$ticks"; fail=1
 else echo "ok   every kernel timer is a guarded tick"; fi
 nav=$(grep -A3 "b.nav_timer = ui.timer(1" "$F" | grep -c "if b.entry_depth > 0 { return }")
 [ "$nav" = 1 ] && echo "ok   the navigation timer waits for no entry to run" || { echo "FAIL the navigation timer does not check b.entry_depth"; fail=1; }
+
+# 3. What a page asks of the system is done after its entry, by a tick, not
+#    under its grants: the effect is called from later_tick_ alone, and the
+#    page-API functions only check (refusal) and queue (later_add_).
+expect shell.open "later_tick_"
+expect printing.pdf "later_tick_"
+
 exit $fail

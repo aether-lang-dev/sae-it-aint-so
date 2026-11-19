@@ -96,7 +96,15 @@ main() {
         spec.it("shell.open: a listed prefix opens, another is refused") callback {
             b.click("open allowed")
             b.assert_text("open allowed: opened", "opened")
-            lg, _e = fs.read(os_getenv("SAE_SHELL_LOG"))
+            // The URL is handed to the system after the click's entry (a kernel
+            // tick, docs/design/page-entry-sandbox.md): wait for the log.
+            lg = ""
+            polls = 0
+            while polls < 100 && string.contains(lg, "https://example.com/page") == 0 {
+                lg, _e = fs.read(os_getenv("SAE_SHELL_LOG"))
+                sleep(50)
+                polls = polls + 1
+            }
             spec.assert_contains(lg, "https://example.com/page", "handed to the system")
             b.click("open other")
             spec.assert_contains(b.page_texts(), "open other: refused: shell.open: this app may not open https://evil.example.net/", "refused")

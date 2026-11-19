@@ -98,6 +98,8 @@ struct Browser {
     pending_url: string
     nav_timer: int
     page_mem: long
+    later: ptr         // std.list of *LaterJob: effects a page asked for, done once no entry is running ("after the entry")
+    later_timer: int   // the UI timer taking them, or 0 while none wait
     app_data: string   // the app's data folder (app_data_dir_), worked out once at start: bus.serve starts the bus in an entry
     entry_depth: int   // entries running now, all pages (entry_begin_); a kernel tick waits for 0
     page_time_ms: int  // a page's time limit for one entry (SAE_PAGE_TIME_MS), read once at start: no entry reads the environment
@@ -4421,8 +4423,7 @@ sae_bus_serve(p: *Page, this_val: int, argv: int) -> int {
         }
         return 0
     }
-    why = bus_listen_(b)
-    if why != "" { return sae_throw_type_error(ctx, why) }
+    if bus.listening(b.bus) == 0 { later_add_(b, LATER_BUS_LISTEN, "", "") }   // the courier file and the socket, after the entry
     return 0
 }
 
@@ -4439,7 +4440,7 @@ sae_bus_stop(p: *Page, this_val: int, argv: int) -> int {
         p.bus_stopped_ref = 0
     }
     if b.bus_page == p as ptr { b.bus_page = null }
-    bus_silence_(b)
+    later_add_(b, LATER_BUS_SILENCE, "", "")   // the courier file and the socket, after the entry
     return 0
 }
 
@@ -5252,8 +5253,10 @@ sae_printing_pdf(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    why = printing.pdf(browser_of_(p).printing, own_(arg_str_(ctx, argv, argc, 0)), own_(arg_str_(ctx, argv, argc, 1)))
+    pdf = own_(arg_str_(ctx, argv, argc, 0))
+    why = printing.refusal(browser_of_(p).printing, pdf)
     if why != "" { return sae_throw_type_error(ctx, why) }
+    later_add_(browser_of_(p), LATER_PRINT_PDF, pdf, own_(arg_str_(ctx, argv, argc, 1)))   // the dialog and its file, after the entry
     return 0
 }
 
@@ -5263,8 +5266,10 @@ sae_shell_open(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    why = shell.open(browser_of_(p).shell, own_(arg_str_(ctx, argv, argc, 0)))
+    url = own_(arg_str_(ctx, argv, argc, 0))
+    why = shell.refusal(browser_of_(p).shell, url)
     if why != "" { return sae_throw_type_error(ctx, why) }
+    later_add_(browser_of_(p), LATER_SHELL_OPEN, url, "")   // handed to the system, after the entry
     return 0
 }
 
@@ -12793,6 +12798,55 @@ run_nav_(b: *Browser) {
     }
 }
 
+// --- after the entry ---
+//
+// An effect a page asks for that is not the page's to do under its grants (it
+// opens a URL in the system's browser, shows a print dialog, may run a nested
+// event loop) is checked at the call, queued, and done by a kernel tick once
+// no page JS is running: not under the page's list, which holds its own
+// storage and nothing else, and not on the page's stack. The checks stay
+// synchronous, so the page still gets its refusal as a throw; a failure after
+// them is reported on the console.
+const LATER_SHELL_OPEN = 1   // a: the URL
+const LATER_PRINT_PDF = 2    // a: the PDF as base64, b: the job's title
+const LATER_BUS_LISTEN = 3   // the control bus starts listening (its courier file, its socket)
+const LATER_BUS_SILENCE = 4  // it stops (its courier file is deleted, its socket closed)
+
+struct LaterJob {
+    kind: int
+    a: string
+    b: string
+}
+
+later_add_(b: *Browser, kind: int, a: string, arg_b: string) {
+    j = heap.new(LaterJob)
+    j.kind = kind
+    j.a = own_(a)
+    j.b = own_(arg_b)
+    list.add(b.later, j as ptr)
+    if b.later_timer == 0 { b.later_timer = ui.timer(1, || { later_tick_(b) }) }
+}
+
+// Each tick: the queued effects, in order, once no entry is running.
+later_tick_(b: *Browser) {
+    // Page JS is running (a nested event loop under a host call): wait.
+    if b.entry_depth > 0 { return }
+    while list.size(b.later) > 0 {
+        v, _ = list.get(b.later, 0)
+        list.list_remove(b.later, 0)
+        j = v as *LaterJob
+        why = ""
+        if j.kind == LATER_SHELL_OPEN { why = shell.open(b.shell, j.a) }
+        if j.kind == LATER_PRINT_PDF { why = printing.pdf(b.printing, j.a, j.b) }
+        if j.kind == LATER_BUS_LISTEN { why = bus_listen_(b) }
+        if j.kind == LATER_BUS_SILENCE { bus_silence_(b) }
+        if why != "" { say_("sae: ${why}") }
+        heap.free(j)
+    }
+    ui.timer_cancel(b.later_timer)
+    b.later_timer = 0
+}
+
 // Record a navigation and carry it out on the next turn of the event loop.
 // The latest request wins, as a second click on a link would.
 request_nav_(b: *Browser, kind: int, url: string) {
@@ -12872,6 +12926,8 @@ browser_new_() -> *Browser {
     b.page_time_ms = page_time_ms_()
     b.entry_depth = 0
     b.app_data = ""
+    b.later = list.new()
+    b.later_timer = 0
     b.menu_h = 0
     b.body = 0
     b.source = ""

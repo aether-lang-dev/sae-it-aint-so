@@ -10,7 +10,7 @@ import std.fs (write_atomic, mkdir_p)
 import std.string
 import std.encoding
 
-exports (new, configure, granted, pdf)
+exports (new, configure, granted, refusal, pdf)
 
 // One launch's printing: the kernel holds one (new()) and passes it to every
 // call; nothing here is module state.
@@ -41,14 +41,23 @@ granted(h: ptr) -> int {
     return r.enabled
 }
 
-// A PDF (its bytes as base64) to the system's print dialog, its job named
-// title: "" when the dialog was asked for, else why not.
-pdf(h: ptr, b64: string, title: string) -> string {
+// Why `b64` may not be printed, or "": printing granted, and a PDF.
+refusal(h: ptr, b64: string) -> string {
     r = h as *Printing
     if r.enabled == 0 { return "printing.pdf: this app may not print (app.json capabilities.print)" }
     raw, derr = encoding.base64_decode(b64)
     if derr != "" { return "printing.pdf: not base64" }
     if string.length(raw) < 5 || string.starts_with(raw, "%PDF-") == 0 { return "printing.pdf: not a PDF" }
+    return ""
+}
+
+// A PDF (its bytes as base64) to the system's print dialog, its job named
+// title: "" when the dialog was asked for, else why not.
+pdf(h: ptr, b64: string, title: string) -> string {
+    r = h as *Printing
+    why = refusal(h, b64)
+    if why != "" { return why }
+    raw, _derr = encoding.base64_decode(b64)
     // The app's data folder exists only once something wrote there.
     merr = mkdir_p(r.dir)
     if merr != "" { return "printing.pdf: ${merr} ${r.dir}" }
