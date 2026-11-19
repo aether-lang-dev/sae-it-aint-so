@@ -24,6 +24,14 @@
 #       passes on as a value (aether-ui's `reorderable(cb: fn)` crashed when
 #       the DSL had a `cb` setter; tests/check_gate_probes.sh has the shape).
 #
+# (v)   nothing registers a function a page can reach, or defines a global,
+#       outside the gate DSL: reg_, glob_fn_, host_fn_, js_set_global_,
+#       quickjs.set_global and quickjs.function are called only by the
+#       functions of the DSL (and the layer under it), and the JavaScript the
+#       kernel evaluates into a page (js_eval_, engine_eval_) only by the
+#       functions listed here. A page-visible name added by a stray call
+#       fails here; one added by JavaScript is caught by (ii).
+#
 # Needs target/build/bin/sae and target/saegate.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SAE="$ROOT/target/build/bin/sae"
@@ -94,4 +102,32 @@ if [ -n "$clash" ]; then
 else
     ok "no function-typed parameter or closure local is named like one of the $(echo "$dsl" | wc -l | tr -d ' ') DSL functions"
 fi
+
+# --- (v) registration only through the gate DSL ---
+# callers(N): the top-level functions (sorted, space separated) that call N( in
+# src/sae_host.ae, outside comments and definition lines.
+callers() {
+    awk -v N="$1" '
+        /^[a-z_A-Z0-9]+\(/ { split($0, a, "("); fn = a[1] }
+        /^[ \t]*\/\// { next }
+        /^[a-z_A-Z0-9]+\(/ { next }
+        index($0, N "(") { print fn }
+    ' "$ROOT/src/sae_host.ae" | sort -u | tr '\n' ' '
+}
+expect_callers() {   # expect_callers <name> <allowed callers, sorted, space separated>
+    got=$(callers "$1")
+    if [ "$got" = "$2 " ]; then
+        ok "$1( is called only from: $2"
+    else
+        bad "$1( is called from: ${got:-nowhere} -- the gate DSL's own functions are: $2"
+    fi
+}
+expect_callers reg_ "api patch"
+expect_callers glob_fn_ "global_fn"
+expect_callers host_fn_ "glob_fn_ held_fn loader_fn reg_"
+expect_callers js_set_global_ "gate_space_ glob_fn_"
+expect_callers quickjs.set_global "js_set_global_"
+expect_callers quickjs.function "host_fn_"
+expect_callers js_eval_ "ae_register_ engine_eval_ http_helpers_ js_wrapper sqlite_fns_for_"
+expect_callers engine_eval_ "mod_run_ modules_prepare_ page_run_"
 exit $fails
