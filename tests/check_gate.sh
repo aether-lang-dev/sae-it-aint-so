@@ -6,11 +6,13 @@
 # (i)   tools/gen-dts.sh regenerates sae.d.ts from `sae --gate-describe` and
 #       it is the checked-in file, byte for byte (as check_prelude.sh holds
 #       src/sae_prelude.c).
-# (ii)  tests/gate/dump.ts, run headless as a web page, as an app that seeks
-#       and is granted everything and as an app that seeks nothing, prints
-#       each global's own keys, typeof and .length; for every global and
-#       member the spec describes, that is what the spec says that mode has
-#       (a namespace not yet in the spec is compared with nothing).
+# (ii)  tests/gate/dump.ts, run headless in each mode of tests/gate/dump.sh (a
+#       web page seeking nothing or something; an app granted and seeking
+#       everything, something, nothing, or granted nothing and seeking
+#       everything as optional), prints each global's own keys, typeof and
+#       .length; for every global and member the spec describes, that is what
+#       the spec says that mode has (a namespace not yet in the spec is
+#       compared with nothing).
 # (iii) each entry's declared arity is its count of non-rest parameters.
 #
 # Needs target/build/bin/sae and target/saegate.
@@ -42,7 +44,7 @@ else
 fi
 
 # --- (ii) the live objects ---
-for mode in web all none; do
+for mode in web webseeks all some unsought optional none; do
     "$GATE" --expect "$mode" < "$WORK/describe.jsonl" | LC_ALL=C sort > "$WORK/expect-$mode.txt"
     sh "$ROOT/tests/gate/dump.sh" "$mode" 2>&1 | grep '^[GM] ' > "$WORK/dump-$mode.txt"
     # the dump's lines about the names the spec describes
