@@ -71,6 +71,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 ../aether/build/ae build tools/saejs.ae -o target/saejs
 ../aether/build/ae build tools/saebus.ae -o target/sae-bus
+../aether/build/ae build tools/saegate.ae -o target/saegate   # sae --gate-describe | saegate: sae.d.ts (tools/gen-dts.sh)
 lower/run-tests.sh                           # 70 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless; --mod DIR runs another repo's)
 tests/run_all.sh                             # every spec and check below, each with its environment (a label filter: tests/run_all.sh spec_app_)
 tests/run_spec.sh                            # spec_nav: 45 specs
@@ -113,6 +114,7 @@ tests/run_spec.sh spec_life                    # demo 14
 tests/run_spec.sh spec_algos                   # demo 17: sorting generators race on the frame clock
 tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
 tests/check_timed_entries.sh                  # every host read of a page's value (getter, toString, valueOf, toJSON) is a timed entry: no raw quickjs.get/to_string/... outside the js_* helpers
+tests/check_gate.sh                          # the gate spec, sae.d.ts and the objects a page really sees agree (tools/gen-dts.sh regenerates the d.ts)
 tests/check_listeners.sh                      # tests/lib/listeners.sh (what the app specs ask of lsof: /proc on Linux) sees a TCP and a Unix listener
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom

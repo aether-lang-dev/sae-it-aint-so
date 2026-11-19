@@ -9840,11 +9840,13 @@ glob_fn_(p: *Page, q: ptr, name: string, arity: int, f: @keep fn(*Page, int, int
 
 // ===== the gate: every name a page can reach, said once (docs/design/gate-dsl.md) =====
 //
-// gate_spec_ below is the spec; gate_register_ runs it for a page, and each
-// entry is installed through reg_/glob_fn_, the path every page-API function
-// took before. Nothing is generated: the blocks run. The shapes
-// (docs/design/gate-dsl.md, "Step 0 findings"; tests/check_gate_probes.sh has
-// each mechanic):
+// gate_spec_ below is the spec; gate_register_ runs it for a page (G_REGISTER:
+// each entry is installed through reg_/glob_fn_, the path every page-API
+// function took before), and `sae --gate-describe` runs it once (G_DESCRIBE:
+// one JSON line per entry on stdout, which tools/saegate turns into sae.d.ts
+// and tests/check_gate.sh compares with the objects a page really sees).
+// Nothing is generated: the blocks run. The shapes (docs/design/gate-dsl.md,
+// "Step 0 findings"; tests/check_gate_probes.sh has each mechanic):
 //
 //   - `space(g, ...) { ... }`: a namespace; its return is the _ctx of its block.
 //   - `api(name, host_fn, arity) { setters }`: one function in the namespace.
@@ -9853,21 +9855,21 @@ glob_fn_(p: *Page, q: ptr, name: string, arity: int, f: @keep fn(*Page, int, int
 //   - Every _ctx function that stores or returns its context takes `@keep ptr`.
 //   - A `return` inside a spec block returns from the enclosing function, so
 //     the spec never returns early.
-//   - There is no end-of-block hook: a space is finished when the next one
-//     begins, or at gate_end_.
-//   - The setters return at once while registering (a later step makes them
-//     describe the entry). A space's block holds only `reach`; an entry's
-//     holds the rest. Each context starts with a tag and a setter refuses the
-//     wrong one.
+//   - There is no end-of-block hook: a space or entry is finished when the next
+//     one begins, or at gate_end_.
+//   - The setters return at once unless the gate is describing. A space's
+//     block holds only `reach`; an entry's holds the rest. Each context starts
+//     with a tag and a setter refuses the wrong one.
 
 const G_REGISTER = 0
+const G_DESCRIBE = 1
 
 // When a namespace exists for a page (the conditions api_register_ used).
 const WHEN_ALWAYS = 0
 const WHEN_APP_OR_WEB_SEEKS = 1 // not in p.absent
 const WHEN_APP_SEEKS = 2 // not in p.absent, and an installed app
 
-// The types the spec speaks of.
+// The types the spec speaks of, named in the description for tools/saegate.
 const T_VOID = 0
 const T_STR = 1
 const T_STR_NULL = 2
@@ -9877,7 +9879,7 @@ const GATE_TAG_ENTRY = 72
 
 struct Gate {
     mode: int
-    p: ptr // the page being registered
+    p: ptr // the page being registered; null when describing
     sp: ptr // the one GateSpace, reused by every space
     en: ptr // the one GateEntry, reused by every entry
 }
@@ -9887,11 +9889,24 @@ struct GateSpace {
     g: ptr
     on: int // installed for this page
     obj: int // the JS object of an installed space
+    cond: int
+    name: string // describing only
+    seek: string
+    reach: string
 }
 
 struct GateEntry {
     tag: int
     s: ptr
+    open: int // describing: an entry begun and not yet printed
+    kind: string
+    name: string
+    arity: int
+    params: ptr // a strbuilder of the params' JSON
+    gives: int
+    promise: int
+    doc: string
+    internal: int
 }
 
 gate_new_(mode: int, p: @keep ptr) -> *Gate {
@@ -9909,14 +9924,67 @@ gate_new_(mode: int, p: @keep ptr) -> *Gate {
     return g
 }
 
-// Finish the space in hand: its object released (the page's global holds it).
+gate_type_name_(t: int) -> string {
+    if t == T_STR { return "str" }
+    if t == T_STR_NULL { return "str_or_null" }
+    return "void"
+}
+
+when_name_(w: int) -> string {
+    if w == WHEN_APP_OR_WEB_SEEKS { return "app_or_web_seeks" }
+    if w == WHEN_APP_SEEKS { return "app_seeks" }
+    return "always"
+}
+
+// A string as a JSON string literal (the spec's text has quotes and
+// backslashes at most).
+gate_json_(s: string) -> string {
+    out = string.string_replace_all(s, "\\", "\\\\")
+    out = string.string_replace_all(out, "\"", "\\\"")
+    out = string.string_replace_all(out, "\n", "\\n")
+    return "\"${out}\""
+}
+
+// The entry begun, as one JSON line, then forgotten.
+gate_flush_(g: *Gate) {
+    e = g.en as *GateEntry
+    if e.open == 0 { return }
+    s = g.sp as *GateSpace
+    pj = strbuilder.finish(e.params)
+    line = "{\"kind\":${gate_json_(e.kind)},\"space\":${gate_json_(s.name)},\"when\":${gate_json_(when_name_(s.cond))},\"seek\":${gate_json_(s.seek)},\"reach\":${gate_json_(s.reach)},\"name\":${gate_json_(e.name)},\"arity\":${e.arity},\"params\":[${pj}],\"gives\":${gate_json_(gate_type_name_(e.gives))},\"promise\":${e.promise},\"doc\":${gate_json_(e.doc)},\"internal\":${e.internal}}\n"
+    fputs(line, sae_stdout())
+    e.open = 0
+}
+
+gate_begin_(g: *Gate, kind: string, name: string, arity: int) -> *GateEntry {
+    e = g.en as *GateEntry
+    e.open = 1
+    e.kind = own_(kind)
+    e.name = own_(name)
+    e.arity = arity
+    e.params = strbuilder.new(64)
+    e.gives = T_VOID
+    e.promise = 0
+    e.doc = ""
+    e.internal = 0
+    return e
+}
+
+// Finish the space in hand: its entries are all printed, its object released.
 gate_close_space_(g: *Gate) {
+    gate_flush_(g)
     s = g.sp as *GateSpace
     if s.obj != 0 {
         quickjs.release((g.p as *Page).ctx, s.obj)
         s.obj = 0
     }
     s.on = 0
+    if g.mode == G_DESCRIBE {
+        s.name = ""
+        s.seek = ""
+        s.reach = ""
+        s.cond = WHEN_ALWAYS
+    }
 }
 
 gate_end_(g: *Gate) {
@@ -9926,18 +9994,25 @@ gate_end_(g: *Gate) {
     heap.free(g)
 }
 
-// A namespace: it decides whether this page has it (as api_register_ did)
-// and makes its object and global.
+// A namespace. Registering, it decides whether this page has it (as
+// api_register_ did) and makes its object and global; describing, it is on
+// for every page, whatever the page's grants.
 space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
     gate_close_space_(g)
     s = g.sp as *GateSpace
     s.on = 1
-    p = g.p as *Page
-    if cond != WHEN_ALWAYS && string.contains(p.absent, ",${seek},") == 1 { s.on = 0 }
-    if cond == WHEN_APP_SEEKS && browser_of_(p).app_dir == "" { s.on = 0 }
-    if s.on == 1 {
-        s.obj = quickjs.new_object(p.ctx)
-        js_set_global_(p.ctx, name, s.obj)
+    s.cond = cond
+    if g.mode == G_REGISTER {
+        p = g.p as *Page
+        if cond != WHEN_ALWAYS && string.contains(p.absent, ",${seek},") == 1 { s.on = 0 }
+        if cond == WHEN_APP_SEEKS && browser_of_(p).app_dir == "" { s.on = 0 }
+        if s.on == 1 {
+            s.obj = quickjs.new_object(p.ctx)
+            js_set_global_(p.ctx, name, s.obj)
+        }
+    } else {
+        s.name = own_(name)
+        s.seek = own_(seek)
     }
     return s
 }
@@ -9946,11 +10021,23 @@ space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
 api(_ctx: @keep ptr, name: string, f: @keep fn(*Page, int, int) -> int, arity: int) -> ptr {
     s = _ctx as *GateSpace
     g = s.g as *Gate
-    if s.on == 1 {
-        p = g.p as *Page
-        reg_(p, p.ctx, s.obj, name, arity, f)
+    gate_flush_(g)
+    if g.mode == G_REGISTER {
+        if s.on == 1 {
+            p = g.p as *Page
+            reg_(p, p.ctx, s.obj, name, arity, f)
+        }
+        return g.en
     }
-    return g.en
+    return gate_begin_(g, "fn", name, arity)
+}
+
+// What a space's functions may reach beyond the shared helpers (recorded
+// now; the seal check of a later step reads it).
+reach(_ctx: ptr, what: string) {
+    gate_check_(_ctx, GATE_TAG_SPACE, "reach")
+    s = _ctx as *GateSpace
+    if (s.g as *Gate).mode == G_DESCRIBE { s.reach = own_(what) }
 }
 
 gate_wrong_ctx_(setter: string) {
@@ -9965,42 +10052,63 @@ gate_check_(_ctx: ptr, tag: int, setter: string) {
     if t.tag != tag { gate_wrong_ctx_(setter) }
 }
 
-// What a space's functions may reach beyond the shared helpers (read by a
-// later step's seal check).
-reach(_ctx: ptr, what: string) {
-    gate_check_(_ctx, GATE_TAG_SPACE, "reach")
+gate_of_(e: *GateEntry) -> *Gate {
+    s = e.s as *GateSpace
+    return s.g as *Gate
+}
+
+gate_param_(e: *GateEntry, kind: string, name: string, t: string) {
+    if gate_of_(e).mode != G_DESCRIBE { return }
+    sep = ""
+    if strbuilder.length(e.params) > 0 { sep = "," }
+    _a = strbuilder.append(e.params, "${sep}{\"k\":${gate_json_(kind)},\"n\":${gate_json_(name)},\"t\":${gate_json_(t)}}")
 }
 
 // A required argument.
 arg(_ctx: ptr, name: string, t: int) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "arg")
+    e = _ctx as *GateEntry
+    gate_param_(e, "arg", name, gate_type_name_(t))
 }
 
 // An argument a page may leave out.
 opt(_ctx: ptr, name: string, t: int) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "opt")
+    e = _ctx as *GateEntry
+    gate_param_(e, "opt", name, gate_type_name_(t))
 }
 
 // The rest parameter: more arguments, past the arity.
 rest(_ctx: ptr, name: string) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "rest")
+    e = _ctx as *GateEntry
+    gate_param_(e, "rest", name, "any")
 }
 
 gives(_ctx: ptr, t: int) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "gives")
+    e = _ctx as *GateEntry
+    e.gives = t
 }
 
 gives_promise(_ctx: ptr, t: int) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "gives_promise")
+    e = _ctx as *GateEntry
+    e.gives = t
+    e.promise = 1
 }
 
 doc(_ctx: ptr, text: string) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "doc")
+    e = _ctx as *GateEntry
+    if gate_of_(e).mode == G_DESCRIBE { e.doc = own_(text) }
 }
 
 // Reachable from a page but not part of its documented surface.
 internal(_ctx: ptr) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "internal")
+    e = _ctx as *GateEntry
+    e.internal = 1
 }
 
 // ===== the spec =====
@@ -10029,6 +10137,14 @@ gate_register_(p: *Page) {
     g = gate_new_(G_REGISTER, p as ptr)
     gate_spec_(g)
     gate_end_(g)
+}
+
+// sae --gate-describe: the spec, one JSON line per entry, no UI.
+gate_describe_() {
+    g = gate_new_(G_DESCRIBE, null)
+    gate_spec_(g)
+    gate_end_(g)
+    fflush(sae_stdout())
 }
 
 // Install the page API in a page's runtime: everything a page can reach is
@@ -11310,6 +11426,11 @@ base_name_(d: string) -> string {
 // sae (in a packaged .app)     the app bundled beside the binary
 // sae (in an APK)              the app among the files it runs in
 main() {
+    // sae --gate-describe: the gate spec as JSON lines, no UI (tools/saegate).
+    if os.args_get(1) == "--gate-describe" {
+        gate_describe_()
+        return
+    }
     // sae --app <dir> --control-stdio: the program that started sae drives
     // the app over sae's stdin and stdout (docs/app-backend.md, "The control
     // channel"). Claimed before anything is printed: a byte written to

@@ -14,7 +14,7 @@
 # here with every new spec.
 #
 # Needs AETHER_UI_WITH_DRIVER=1 ./build.sh, ./build.sh, target/pageserver,
-# target/saelower and target/saejs (AGENTS.md "Build and test"). With no display it runs under xvfb-run (Linux) or
+# target/saelower, target/saejs and target/saegate (AGENTS.md "Build and test"). With no display it runs under xvfb-run (Linux) or
 # an Xvfb of its own (FreeBSD and the other BSDs, 1920x1200), stopped on exit.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 1
@@ -53,7 +53,7 @@ if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && [ -z "${SAE_RUN_ALL_XVFB:-}" ]; 
         DISPLAY=:$(head -n 1 "$XVFB_FILE"); export DISPLAY
     fi
 fi
-for f in target/build/bin/sae target/build/bin/sae-driver target/pageserver target/saelower target/saejs; do
+for f in target/build/bin/sae target/build/bin/sae-driver target/pageserver target/saelower target/saejs target/saegate; do
     [ -x "$f" ] || { echo "run_all.sh: no $f (AGENTS.md \"Build and test\")" >&2; exit 2; }
 done
 # A binary older than the sources it is built from tests old code, and passes
@@ -156,6 +156,7 @@ check_prelude||check check_prelude
 check_listeners||check check_listeners
 check_timed_entries||check check_timed_entries
 check_gate_probes||check check_gate_probes
+check_gate||check check_gate
 lower||lower
 "
 
