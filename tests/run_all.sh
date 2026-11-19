@@ -156,6 +156,7 @@ check_prelude||check check_prelude
 check_listeners||check check_listeners
 check_spec_lock||check check_spec_lock
 check_timed_entries||check check_timed_entries
+check_page_sandbox||check check_page_sandbox
 check_gate_probes||check check_gate_probes
 check_gate||check check_gate
 lower||lower

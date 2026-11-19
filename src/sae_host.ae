@@ -97,6 +97,8 @@ struct Browser {
     pending_url: string
     nav_timer: int
     page_mem: long
+    app_data: string   // the app's data folder (app_data_dir_), worked out once at start: bus.serve starts the bus in an entry
+    page_time_ms: int  // a page's time limit for one entry (SAE_PAGE_TIME_MS), read once at start: no entry reads the environment
     last_ok: int     // did the last load fetch and run cleanly
     root: int        // the window's own stack (chrome and content): its size is the window's
     menu_h: int      // the context menu (one aether-ui menu, built again each time it opens), or 0
@@ -257,6 +259,10 @@ struct Page {
     seeks: string
     optional: string
     imports: string
+    // The page's storage folder (storage_dir_), worked out and made once in
+    // page_new_: storage calls and the page's sandbox grant use it, and none
+    // reads the environment or resolves a path again.
+    storage_dir: string
 }
 
 // A JS function a widget holds for its callback (a click, a change, a
@@ -325,16 +331,19 @@ const SPACING = 4
 
 // SAE_TIME_SCALE=<n> runs the clocks pages see (Date.now, new Date(),
 // performance.now) n times fast, from the moment each is first read. Off
-// (1x) unless set.
-scaled_(c: *Clock, real: long, which: int) -> long {
-    if c.scale == 0 {
-        c.scale = 1
-        sv = env_("SAE_TIME_SCALE")
-        if sv != "" {
-            n, nerr = string.to_int(sv)
-            if nerr == "" && n > 1 { c.scale = n }
-        }
+// (1x) unless set. The variable is read once, by clock_start_ at the
+// browser's start: a clock read happens inside a page entry, which does not
+// read the environment.
+clock_start_(c: *Clock) {
+    c.scale = 1
+    sv = env_("SAE_TIME_SCALE")
+    if sv != "" {
+        n, nerr = string.to_int(sv)
+        if nerr == "" && n > 1 { c.scale = n }
     }
+}
+
+scaled_(c: *Clock, real: long, which: int) -> long {
     if c.scale == 1 { return real }
     if which == 0 {
         if c.base_mono == 0 { c.base_mono = real }
@@ -4445,7 +4454,7 @@ sae_bus_answer(p: *Page, this_val: int, argv: int) -> int {
 // Listen (the courier file written), the title marked, the poll timer on.
 bus_listen_(b: *Browser) -> string {
     if bus.listening(b.bus) == 1 { return "" }
-    why = bus.start(b.bus, app_data_dir_(b))
+    why = bus.start(b.bus, b.app_data)
     if why != "" { return why }
     ui.set_window_title(1, "${b.app_name} - control bus on")
     say_("sae: control bus: listening (other programs on this machine can control ${b.app_name})")
@@ -5252,7 +5261,7 @@ sae_storage_get(p: *Page, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.get(key): key must be letters, digits, '.', '_' or '-'") }
-    v, found = storage_read_(browser_of_(p), p.url, key)
+    v, found = storage_read_(p.storage_dir, key)
     if found == 0 { return quickjs.new_null(ctx) }
     return quickjs.new_string(ctx, v)
 }
@@ -5265,8 +5274,8 @@ sae_storage_set(p: *Page, this_val: int, argv: int) -> int {
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.set(key, value): key must be letters, digits, '.', '_' or '-'") }
     val = own_(arg_str_(ctx, argv, argc, 1))
     if string.length(val) > STORAGE_MAX { return sae_throw_type_error(ctx, "storage.set: value over 1 MB") }
-    if esc_storage_over_(browser_of_(p), p.url, key, string.length(val)) == 1 { return esc_storage_refuse_(ctx, p) }   // wave1/escape: the origin's cap
-    if storage_write_(browser_of_(p), p.url, key, val) == 0 { return sae_throw_type_error(ctx, "storage.set: could not save") }
+    if esc_storage_over_(p.storage_dir, key, string.length(val)) == 1 { return esc_storage_refuse_(ctx, p) }   // wave1/escape: the origin's cap
+    if storage_write_(p.storage_dir, key, val) == 0 { return sae_throw_type_error(ctx, "storage.set: could not save") }
     return 0
 }
 
@@ -5276,7 +5285,7 @@ sae_storage_remove(p: *Page, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
     if storage_key_ok_(key) == 0 { return sae_throw_type_error(ctx, "storage.remove(key): key must be letters, digits, '.', '_' or '-'") }
-    storage_remove_(browser_of_(p), p.url, key)
+    storage_remove_(p.storage_dir, key)
     return 0
 }
 
@@ -5644,10 +5653,10 @@ esc_storage_used_(dir: string, key: string) -> long {
 
 // 1 if writing `add` bytes under `key` would take the page's origin (or
 // app, or file folder) over its storage cap.
-esc_storage_over_(b: *Browser, url: string, key: string, add: int) -> int {
+esc_storage_over_(dir: string, key: string, add: int) -> int {
     long cap = ESC_STORAGE_ORIGIN_MAX
     long more = add
-    if esc_storage_used_(storage_dir_(b, url), key) + more > cap { return 1 }
+    if esc_storage_used_(dir, key) + more > cap { return 1 }
     return 0
 }
 
@@ -5665,15 +5674,18 @@ esc_storage_refuse_(ctx: ptr, p: *Page) -> int {
 
 // 1 when the clocks a page reads are coarse: in the browser unless
 // SAE_COARSE_CLOCKS=0, in an app only with SAE_COARSE_CLOCKS=1. Decided
-// once (b.esc_coarse).
+// once (b.esc_coarse), by esc_coarse_decide_ from page_new_, which is outside
+// any entry and after app_dir is known; a clock read is inside one.
+esc_coarse_decide_(b: *Browser) {
+    if b.esc_coarse != 0 { return }
+    b.esc_coarse = 1
+    if b.app_dir == "" { b.esc_coarse = 2 }
+    v = env_("SAE_COARSE_CLOCKS")
+    if v == "0" || v == "off" { b.esc_coarse = 1 }
+    if v == "1" || v == "on" { b.esc_coarse = 2 }
+}
+
 esc_coarse_on_(b: *Browser) -> int {
-    if b.esc_coarse == 0 {
-        b.esc_coarse = 1
-        if b.app_dir == "" { b.esc_coarse = 2 }
-        v = env_("SAE_COARSE_CLOCKS")
-        if v == "0" || v == "off" { b.esc_coarse = 1 }
-        if v == "1" || v == "on" { b.esc_coarse = 2 }
-    }
     if b.esc_coarse == 2 { return 1 }
     return 0
 }
@@ -9329,22 +9341,20 @@ storage_dir_(b: *Browser, url: string) -> string {
     return "${root}/${out}"
 }
 
-storage_read_(b: *Browser, url: string, key: string) -> (string, int) {
-    v, err = fs.read("${storage_dir_(b, url)}/${key}")
+storage_read_(dir: string, key: string) -> (string, int) {
+    v, err = fs.read("${dir}/${key}")
     if err != "" { return "", 0 }
     return v, 1
 }
 
-storage_write_(b: *Browser, url: string, key: string, val: string) -> int {
-    d = storage_dir_(b, url)
-    _m = fs.mkdir_p(d)
-    werr = fs.write_atomic("${d}/${key}", string.bytes(val))
+storage_write_(dir: string, key: string, val: string) -> int {
+    werr = fs.write_atomic("${dir}/${key}", string.bytes(val))
     if werr != "" { return 0 }
     return 1
 }
 
-storage_remove_(b: *Browser, url: string, key: string) {
-    _r = fs.remove_tree("${storage_dir_(b, url)}/${key}")
+storage_remove_(dir: string, key: string) {
+    _r = fs.remove_tree("${dir}/${key}")
 }
 
 is_app_(u: string) -> int {
@@ -9490,7 +9500,7 @@ entry_begin_(p: *Page) -> long {
     prev = quickjs.deadline_ns(p.ctx)
     if prev != 0 { return prev }
     quickjs.clear_interrupted(p.ctx)
-    quickjs.set_deadline_ns(p.ctx, quickjs.now_ns() + (page_time_ms_() as long) * 1000000)
+    quickjs.set_deadline_ns(p.ctx, quickjs.now_ns() + (browser_of_(p).page_time_ms as long) * 1000000)
     return 0
 }
 
@@ -9505,7 +9515,7 @@ entry_end_(p: *Page, prev: long) {
 entry_stopped_(p: *Page, prev: long, what: string) {
     if prev != 0 { return }
     if quickjs.interrupted(p.ctx) != 0 {
-        say_("sae: stopped: the page's code ran past its limit of ${page_time_ms_()} ms while sae was reading ${what}")
+        say_("sae: stopped: the page's code ran past its limit of ${browser_of_(p).page_time_ms} ms while sae was reading ${what}")
         quickjs.clear_interrupted(p.ctx)
     }
     quickjs.set_deadline_ns(p.ctx, 0)
@@ -12094,6 +12104,9 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string, seeks: 
     p.esc_logged_storage = 0
     p.rasters = list.new()
     p.ae = null
+    esc_coarse_decide_(b)
+    p.storage_dir = own_(storage_dir_(b, url))
+    _sd = fs.mkdir_p(p.storage_dir)
     b.page_seq = b.page_seq + 1
     p.seq = b.page_seq
     p.http_res = 0
@@ -12806,6 +12819,8 @@ browser_new_() -> *Browser {
     b.pending_kind = NAV_NONE
     b.nav_timer = 0
     b.page_mem = PAGE_MEM_DEFAULT
+    b.page_time_ms = page_time_ms_()
+    b.app_data = ""
     b.menu_h = 0
     b.body = 0
     b.source = ""
@@ -12844,7 +12859,8 @@ browser_new_() -> *Browser {
     b.pages = list.new()
     b.page_seq = 0
     clk = heap.new(Clock)
-    clk.scale = 0
+    clk.scale = 1
+    clock_start_(clk)
     clk.base_mono = 0
     clk.base_unix = 0
     b.clock = clk
@@ -12993,6 +13009,7 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int)
         }
         title = app_setting_(manifest, "name", base_name_(app))
         b.app_name = own_(title)
+        b.app_data = own_(app_data_dir_(b))
         bundled = 0
         if arg1 == "" { bundled = 1 }
         b.app_key = app_storage_key_(app, exe, bundled)
@@ -13017,6 +13034,7 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int)
         build_content_(b, mem.long_to_ptr(root))
     } else {
         build_chrome_(b, root)
+        b.app_data = own_(app_data_dir_(b))
     }
     if sqlite_why != "" { sqlite_refuse_app_(b, sqlite_why) } else { go_(b, start_url) }   // wave1/sqlite
 
