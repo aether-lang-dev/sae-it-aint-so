@@ -1,0 +1,59 @@
+// spec_clock.ae -- the Clock port (examples/clock) as an app: the dial's
+// hands at a set time (3:00 and 9:15), the digits and the date, a bad time
+// refused, Live going back to the system clock.
+//
+//   SAE_TEST_APP=examples/clock tests/run_spec.sh spec_clock
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+vx(x: float) -> int { return b.vg_px_x(x, 200.0, 200.0) }
+vy(y: float) -> int { return b.vg_px_y(y, 200.0, 200.0) }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Clock on sae") {
+        spec.it("shows a dial, digits, a date and a timezone") callback {
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "the dial is drawn")
+            spec.assert_contains(b.page_texts(), ":", "digits HH:MM:SS")
+            spec.assert_contains(b.page_texts(), "Timezone: UTC", "the timezone line")
+            spec.assert_true(b.wait_for_vg_pixel(vx(100.0), vy(100.0), 0x333333), "the centre dot")
+            spec.assert_true(b.wait_for_vg_pixel(vx(100.0), vy(100.0 - 80.0), 0x333333), "the 12 o'clock marker")
+        }
+        spec.it("set to 3:00, the hour hand points right and the minute hand up") callback {
+            b.set_field_by("HH:MM:SS", "03:00:00")
+            b.click("Set time")
+            spec.assert_contains(b.page_texts(), "03:00:", "the digits show the time set")
+            spec.assert_true(b.wait_for_vg_pixel(vx(140.0), vy(100.0), 0x333333), "the hour hand, to the right of the centre")
+            spec.assert_true(b.wait_for_vg_pixel(vx(100.0), vy(60.0), 0x333333), "the minute hand, above the centre")
+            spec.assert_true(b.vg_pixel_near(vx(60.0), vy(100.0), 0xF5F5F5, 8) == 1, "nothing to the left")
+        }
+        spec.it("the time ticks on from the time set") callback {
+            sleep(1300)
+            spec.assert_true(string.contains(b.page_texts(), "03:00:00") == 0, "a second has gone by")
+            spec.assert_contains(b.page_texts(), "03:00:", "still in the same minute")
+        }
+        spec.it("at 9:15 the hour hand is just past the left and the minute hand points right") callback {
+            b.set_field_by("HH:MM:SS", "09:15")
+            b.click("Set time")
+            spec.assert_contains(b.page_texts(), "09:15:", "the digits")
+            spec.assert_true(b.wait_for_vg_pixel(vx(60.0), vy(100.0 - 5.0), 0x333333), "the hour hand, left and a little above the centre")
+            spec.assert_true(b.wait_for_vg_pixel(vx(150.0), vy(100.0), 0x333333), "the minute hand, to the right")
+        }
+        spec.it("something that is not a time is refused and the clock is left as it was") callback {
+            b.set_field_by("HH:MM:SS", "25:99")
+            b.click("Set time")
+            spec.assert_contains(b.page_texts(), "That is not a time of day", "the refusal")
+            spec.assert_contains(b.page_texts(), "09:15:", "unchanged")
+        }
+        spec.it("Live follows the system clock again") callback {
+            b.click("Live")
+            spec.assert_true(string.contains(b.page_texts(), "09:15:") == 0, "the set time is gone")
+            spec.assert_true(string.contains(b.page_texts(), "That is not a time") == 0, "and the refusal")
+        }
+    }
+    return spec.run_summary(fw)
+}

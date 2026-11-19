@@ -148,6 +148,8 @@ spec_gitify|SAE_TEST_APP=tests/apps/gitify SAE_STORAGE_DIR=$T/spec-storage SAE_S
 spec_pomatez|SAE_TEST_APP=examples/pomatez SAE_TIME_SCALE=60 SAE_STORAGE_DIR=$T/spec-storage|spec spec_pomatez
 spec_calcudoku|SAE_TEST_APP=examples/calcudoku|spec spec_calcudoku
 spec_tango_puzzle|SAE_TEST_APP=examples/tango-puzzle|spec spec_tango_puzzle
+spec_zip_puzzle|SAE_TEST_APP=examples/zip-puzzle|spec spec_zip_puzzle
+spec_clock|SAE_TEST_APP=examples/clock|spec spec_clock
 spec_http_grants||aerun spec_http_grants
 spec_page_grants||aerun spec_page_grants
 spec_origin_rules||aerun spec_origin_rules
