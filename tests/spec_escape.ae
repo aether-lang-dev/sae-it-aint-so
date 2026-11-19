@@ -44,12 +44,15 @@ line_of(prefix: string) -> string {
     return "(no line ${prefix})"
 }
 
-// Wait for the page's report line: "<name>: " not ending in "trying".
+// Wait for the page's report line: "<name>: " not ending in "trying" (the
+// attempt has not run) or "leaving" (a two-page attempt, handle_across: page
+// one shows it before it navigates, and the report is page two's; a wait that
+// took it for the report read it before the navigation on a slow host, win11).
 wait_for_report(name: string) -> string {
     i = 0
     while i < 60 {
         l = line_of("${name}: ")
-        if string.starts_with(l, "(no line") == 0 && string.ends_with(l, "trying") == 0 { return l }
+        if string.starts_with(l, "(no line") == 0 && string.ends_with(l, "trying") == 0 && string.ends_with(l, "leaving") == 0 { return l }
         sleep(50)
         i = i + 1
     }
