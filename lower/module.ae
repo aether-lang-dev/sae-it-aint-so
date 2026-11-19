@@ -28,14 +28,14 @@ import std.strbuilder
 import std.strarr
 import std.mem
 
-exports (Lowered, lower_source, lower_module, lowered_free, LOWER_VERSION)
+exports (Lowered, lower_source, lower_module, lower_ts, lowered_free, LOWER_VERSION)
 
 extern malloc(n: long) -> ptr
 extern realloc(p: ptr, n: long) -> ptr
 extern free(p: ptr)
 
 // Part of sae's bytecode cache key: bump it whenever output changes.
-const LOWER_VERSION = "lower-4"
+const LOWER_VERSION = "lower-5"
 
 // ---------------------------------------------------------------------------
 // A growable int vector.
@@ -144,6 +144,8 @@ struct Lx {
     tla_off: int     // where the first one was
     imports: string  // what the unit imports: "spec\tline\tcol\n" per import
     wrapped: int     // 1: the output is a function expression (see wrap_)
+    // trailing blocks (docs/design/trailing-blocks.md)
+    ts_only: int     // 1: record only the trailing-block desugar (lower_ts)
 }
 
 ch_(x: *Lx, i: int) -> int {
@@ -471,6 +473,13 @@ match_brackets_(x: *Lx) {
 // Edits
 
 edit_(x: *Lx, s: int, e: int, text: string) {
+    // lower_ts keeps the TypeScript, the module syntax and the page as they
+    // are: only the trailing-block desugar (record_edit_) is applied.
+    if x.ts_only == 1 { return }
+    record_edit_(x, s, e, text)
+}
+
+record_edit_(x: *Lx, s: int, e: int, text: string) {
     iv_push_(x.es as *IVec, s)
     iv_push_(x.ee as *IVec, e)
     iv_push_(x.eq as *IVec, x.seq)
@@ -2145,7 +2154,8 @@ parse_class_(x: *Lx, is_decl: int) {
     }
     if at_(x, "extends") == 1 {
         advance_(x)
-        parse_call_member_(x)
+        // the class body's '{' follows: no trailing block here
+        parse_call_member_in_(x, 0)
         if at_(x, "<") == 1 {
             j = skip_type_args_(x, x.pos)
             if j > 0 { erase_tokens_(x, x.pos, j) }
@@ -2448,7 +2458,7 @@ parse_postfix_(x: *Lx) {
             // TS non-null assertion
             blank_(x, tk_start_(x, x.pos), tk_end_(x, x.pos))
             advance_(x)
-            parse_call_member_tail_(x)
+            parse_call_member_tail_(x, 0, 1)
         } else {
             return
         }
@@ -2456,13 +2466,19 @@ parse_postfix_(x: *Lx) {
 }
 
 parse_call_member_(x: *Lx) {
+    parse_call_member_in_(x, 1)
+}
+
+// A primary and its calls, members and trailing blocks; allow 0 reads a
+// class heritage clause, where a '{' after a call or a name is the body's.
+parse_call_member_in_(x: *Lx, allow: int) {
     if at_(x, "new") == 1 {
         advance_(x)
         if at_(x, ".") == 1 {
             // new.target
             advance_(x)
             advance_(x)
-            parse_call_member_tail_(x)
+            parse_call_member_tail_(x, 0, allow)
             return
         }
         // the constructor: a member expression without calls
@@ -2485,24 +2501,44 @@ parse_call_member_(x: *Lx) {
             if j > 0 && tk_is_(x, j, "(") == 1 { erase_tokens_(x, x.pos, j) }
         }
         if at_(x, "(") == 1 { parse_args_(x) }
-        parse_call_member_tail_(x)
+        // not after new: new C(a, () => {...}) hides a callback in a
+        // constructor call (docs/design/trailing-blocks.md, refusal 2)
+        parse_call_member_tail_(x, 0, allow)
         return
     }
+    first = x.pos
     parse_primary_(x)
-    parse_call_member_tail_(x)
+    last = 0
+    if x.pos == first + 1 && block_name_(x, first) == 1 { last = 2 }
+    parse_call_member_tail_(x, last, allow)
 }
 
-parse_call_member_tail_(x: *Lx) {
+// Can the primary at token i (one token) take a trailing block? A name
+// can; `this`, `super` and the literal words cannot.
+block_name_(x: *Lx, i: int) -> int {
+    if tk_kind_(x, i) != T_IDENT { return 0 }
+    if tk_is_(x, i, "this") == 1 || tk_is_(x, i, "super") == 1 || tk_is_(x, i, "null") == 1 { return 0 }
+    if tk_is_(x, i, "true") == 1 || tk_is_(x, i, "false") == 1 { return 0 }
+    return 1
+}
+
+// Calls, members, tagged templates and trailing blocks after a primary.
+// last says what the expression so far ends with: 1 a call's ')', 2 a
+// name (an identifier or a property), 3 a trailing block, 0 anything else.
+// allow 0: a '{' after it is not a trailing block (a class heritage).
+parse_call_member_tail_(x: *Lx, last: int, allow: int) {
     while x.err == "" {
         if at_(x, ".") == 1 || at_(x, "?.") == 1 {
             opt = at_(x, "?.")
             advance_(x)
             if opt == 1 && at_(x, "(") == 1 {
                 parse_args_(x)
+                last = 1
             } else if opt == 1 && at_(x, "[") == 1 {
                 advance_(x)
                 parse_expr_(x)
                 expect_(x, "]")
+                last = 0
             } else {
                 if at_(x, "#") == 1 { advance_(x) }
                 if tk_kind_(x, x.pos) != T_IDENT {
@@ -2510,13 +2546,35 @@ parse_call_member_tail_(x: *Lx) {
                     return
                 }
                 advance_(x)
+                last = 2
             }
         } else if at_(x, "[") == 1 {
             advance_(x)
             parse_expr_(x)
             expect_(x, "]")
+            last = 0
         } else if at_(x, "(") == 1 {
             parse_args_(x)
+            last = 1
+        } else if at_(x, "{") == 1 && allow == 1 {
+            if tk_nlb_(x, x.pos) == 1 {
+                // JavaScript would end the statement and start a block;
+                // a wrapped trailing block would then run at the wrong level
+                if last != 0 {
+                    fail_at_(x, tk_start_(x, x.pos), "a '{' on the line after a call or a name is ambiguous: put it on the call's line for a trailing block, or end the call with ';' for a plain block")
+                }
+                return
+            }
+            if last == 3 {
+                fail_at_(x, tk_start_(x, x.pos), "only one trailing block follows a call")
+                return
+            }
+            if last == 0 {
+                fail_at_(x, tk_start_(x, x.pos), "a trailing block follows a call's ')' or a name, not '${tk_text_(x, x.pos - 1)}'")
+                return
+            }
+            parse_trailing_block_(x, last)
+            last = 3
         } else if at_(x, "<") == 1 && tk_nlb_(x, x.pos) == 0 {
             // f<T>(...): type arguments, if what follows is a call
             j = skip_type_args_(x, x.pos)
@@ -2528,10 +2586,40 @@ parse_call_member_tail_(x: *Lx) {
         } else if tk_kind_(x, x.pos) == T_TPL_FULL || tk_kind_(x, x.pos) == T_TPL_HEAD {
             // a tagged template
             parse_template_(x)
+            last = 0
         } else {
             return
         }
     }
+}
+
+// A trailing block at its '{' (docs/design/trailing-blocks.md), after a
+// call's ')' (last 1) or a name (last 2): `f(a) { b }` becomes
+// `f(a, () => { b })` and `g { b }` becomes `g(() => { b })`, in place,
+// so every line stays where it was. The block is an arrow's body.
+parse_trailing_block_(x: *Lx, last: int) {
+    b = x.pos
+    close = tk_mate_(x, b)
+    if tk_is_(x, b + 1, "|") == 1 || tk_is_(x, b + 1, "||") == 1 {
+        fail_at_(x, tk_start_(x, b + 1), "a trailing block takes no parameters; write an arrow, (x) => { ... }")
+        return
+    }
+    p = b - 1
+    if last == 1 {
+        text = ", () =>"
+        if tk_is_(x, p - 1, "(") == 1 { text = "() =>" }
+        if tk_is_(x, p - 1, ",") == 1 { text = " () =>" }
+        record_edit_(x, tk_start_(x, p), tk_end_(x, p), text)
+    } else {
+        record_edit_(x, tk_end_(x, p), tk_end_(x, p), "(() =>")
+    }
+    record_edit_(x, tk_start_(x, close), tk_end_(x, close), "})")
+    fn_push_(x)
+    block_push_(x)
+    directive_(x, x.pos + 1, 0)
+    parse_block_body_(x)
+    block_pop_(x)
+    fn_pop_(x)
 }
 
 parse_args_(x: *Lx) {
@@ -2727,6 +2815,7 @@ lx_new_(src: string) -> *Lx {
     x.tla_off = 0
     x.imports = ""
     x.wrapped = 0
+    x.ts_only = 0
     return x
 }
 
@@ -2784,8 +2873,20 @@ lower_module(src: string, name: string, seeks: string) -> *Lowered {
     return lower_unit_(src, name, 1, seeks)
 }
 
+// The dialect as plain TypeScript, for tsc and editors: only the
+// trailing-block desugar is applied; types, import and export stay, and
+// nothing is wrapped (docs/design/trailing-blocks.md, "Type-checking").
+lower_ts(src: string, name: string, is_module: int) -> *Lowered {
+    return lower_unit_ts_(src, name, is_module, "", 1)
+}
+
 lower_unit_(src: string, name: string, is_module: int, seeks: string) -> *Lowered {
+    return lower_unit_ts_(src, name, is_module, seeks, 0)
+}
+
+lower_unit_ts_(src: string, name: string, is_module: int, seeks: string, ts_only: int) -> *Lowered {
     x = lx_new_(src)
+    x.ts_only = ts_only
     x.is_module = is_module
     if is_module == 1 {
         parts = string.split(seeks, ",")

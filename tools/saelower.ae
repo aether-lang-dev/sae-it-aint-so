@@ -6,6 +6,9 @@
 //   saelower --module m.ts > m.js      lower a module (exports allowed)
 //   saelower --imports page.ts         list what it imports: spec, line, col
 //   saelower --module-imports m.ts     the same for a module
+//   saelower --ts page.ts > page.tsc.ts the page as plain TypeScript for tsc:
+//                                       only the trailing-block desugar, types
+//                                       kept (--ts-module for a module)
 //
 // Or turn an SVG into a page: AeVG-TS in the house style (aevg/tsemit.ae),
 // run once and then edited. --size N makes the canvas N x N (the parity
@@ -59,12 +62,14 @@ from_svg_() {
 // The page or module at path, lowered as mode asks.
 lower_(mode: string, src: string, path: string) -> *Lowered {
     if mode == "--module" || mode == "--module-imports" { return lower.lower_module(src, path, "") }
+    if mode == "--ts" { return lower.lower_ts(src, path, 0) }
+    if mode == "--ts-module" { return lower.lower_ts(src, path, 1) }
     return lower.lower_source(src, path)
 }
 
 main() {
     if os.args_count() < 2 {
-        println("usage: saelower [--module | --imports | --module-imports] <page.ts> | saelower --from-svg <drawing.svg> [--size N] [--solid]")
+        println("usage: saelower [--module | --imports | --module-imports | --ts | --ts-module] <page.ts> | saelower --from-svg <drawing.svg> [--size N] [--solid]")
         exit(2)
     }
     if os.args_get(1) == "--from-svg" {
