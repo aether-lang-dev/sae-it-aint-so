@@ -14,6 +14,12 @@
 #       the spec says that mode has (a namespace not yet in the spec is
 #       compared with nothing).
 # (iii) each entry's declared arity is its count of non-rest parameters.
+# (iv)  no function-typed parameter, and no local bound to a closure, anywhere
+#       the build or the checkout beside it reaches, is named like a function
+#       of the gate DSL. Until the Aether compiler is fixed, a top-level
+#       function X takes the place of a parameter X that a closure captures and
+#       passes on as a value (aether-ui's `reorderable(cb: fn)` crashed when
+#       the DSL had a `cb` setter; tests/check_gate_probes.sh has the shape).
 #
 # Needs target/build/bin/sae and target/saegate.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -60,4 +66,21 @@ for mode in web webseeks all some unsought optional none; do
         diff "$WORK/expect-$mode.txt" "$WORK/seen-$mode.txt" | sed 's/^/       /'
     fi
 done
+
+# --- (iv) the DSL's names, against function-typed parameters ---
+# The DSL's functions: the top-level functions of sae_host.ae between the
+# "the gate" banner and gate_spec_.
+dsl=$(awk '/^\/\/ ===== the gate:/ { on = 1; next } /^gate_spec_\(/ { exit }
+           on && /^[a-z_0-9]+\(/ { n = $0; sub(/\(.*/, "", n); print n }' "$ROOT/src/sae_host.ae" | sort -u)
+pat=$(printf '%s\n' $dsl | paste -sd'|' -)
+roots="$ROOT/src $ROOT/services $ROOT/lower $ROOT/aevg $ROOT/sdk $ROOT/natives $ROOT/tools"
+for d in "$ROOT/aether-ui/" "$ROOT/../aether-ui/"; do [ -d "$d" ] && roots="$roots $d" && break; done
+[ -n "${AETHER_HOME:-}" ] && [ -d "$AETHER_HOME/share/aether/std" ] && roots="$roots $AETHER_HOME/share/aether/std $AETHER_HOME/share/aether/contrib"
+clash=$(grep -rnE --include='*.ae' "\b($pat)\b[[:space:]]*:[[:space:]]*(@keep[[:space:]]+)?fn\b|^[[:space:]]*($pat)[[:space:]]*=[[:space:]]*\|" $roots 2>/dev/null | grep -v '/target/')
+if [ -n "$clash" ]; then
+    bad "a function-typed parameter or closure local is named like a gate DSL function ($(echo "$dsl" | wc -l | tr -d ' ') names; rename one):"
+    echo "$clash" | sed 's/^/       /'
+else
+    ok "no function-typed parameter or closure local is named like one of the $(echo "$dsl" | wc -l | tr -d ' ') DSL functions"
+fi
 exit $fails
