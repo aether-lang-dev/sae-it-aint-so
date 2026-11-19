@@ -1,0 +1,50 @@
+// spec_timer.ae -- the Timer port (examples/timer) as an app. SAE_TIME_SCALE=60
+// makes a minute a second, so a one minute countdown runs out inside the spec.
+//
+//   SAE_TEST_APP=examples/timer SAE_TIME_SCALE=60 tests/run_spec.sh spec_timer
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Timer on sae") {
+        spec.it("starts at 00:00:00; Start with no time does nothing") callback {
+            b.assert_text("00:00:00", "empty")
+            b.click("Start")
+            sleep(300)
+            b.assert_no_text("Running", "nothing to run")
+        }
+        spec.it("+1m, +5m and +10m add up") callback {
+            b.click("+1m")
+            b.assert_text("00:01:00", "one minute")
+            b.click("+5m")
+            b.click("+10m")
+            b.assert_text("00:16:00", "sixteen")
+            b.click("Reset")
+            b.assert_text("00:00:00", "Reset clears it")
+        }
+        spec.it("a minute counts down and ends with the notice") callback {
+            b.click("+1m")
+            b.click("Start")
+            b.assert_text("Running", "running")
+            spec.assert_true(b.wait_for_console("notify: Timer: Time is up!"), "the notice")
+            b.assert_text("00:00:00", "at zero")
+            b.assert_text("Time is up!", "the status line")
+        }
+        spec.it("quick-add is refused while it runs; Stop keeps the time left") callback {
+            b.click("Reset")
+            b.click("+10m")
+            b.click("Start")
+            b.click("+5m")
+            b.click("Stop")
+            spec.assert_true(string.contains(b.page_texts(), "00:15:00") == 0, "the five minutes were refused, and it has run a little")
+            spec.assert_true(string.contains(b.page_texts(), "00:0") == 1 || string.contains(b.page_texts(), "00:10:00") == 1, "some of the ten are left")
+            b.assert_no_text("Running", "stopped")
+        }
+    }
+    return spec.run_summary(fw)
+}

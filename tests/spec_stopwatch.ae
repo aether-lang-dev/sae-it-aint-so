@@ -1,0 +1,50 @@
+// spec_stopwatch.ae -- the Stopwatch port (examples/stopwatch) as an app:
+// Start, a lap, Stop, the hand's pixels, Reset. SAE_TIME_SCALE=60 makes a
+// real second a minute, so the dial and the digits move far in a short wait.
+//
+//   SAE_TEST_APP=examples/stopwatch SAE_TIME_SCALE=60 tests/run_spec.sh spec_stopwatch
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Stopwatch on sae") {
+        spec.it("starts at 00:00.00 with the hand straight up") callback {
+            b.assert_text("00:00.00", "zero")
+            spec.assert_true(b.button_exists("Start"), "a Start button")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "the dial is drawn")
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(90.0, 180.0, 180.0), b.vg_px_y(60.0, 180.0, 180.0), 0xE74C3C), "the red hand is up")
+        }
+        spec.it("Lap does nothing while stopped") callback {
+            b.click("Lap")
+            sleep(200)
+            b.assert_no_text("Lap 1", "no lap")
+        }
+        spec.it("Start runs it, Start becomes Stop, a lap is listed") callback {
+            b.click("Start")
+            spec.assert_true(b.button_exists("Stop"), "Start became Stop")
+            sleep(400)
+            b.click("Lap")
+            b.assert_text("Lap 1", "the lap")
+            b.click("Stop")
+            spec.assert_true(b.button_exists("Start"), "and back")
+        }
+        spec.it("the time has moved on and holds still when stopped") callback {
+            before = b.page_texts()
+            spec.assert_true(string.contains(before, "00:00.00") == 0, "time passed: the display is no longer zero")
+            sleep(600)
+            spec.assert_str_eq(b.page_texts(), before, "nothing moves while it is stopped")
+        }
+        spec.it("Reset clears the time and the laps; the hand is up again") callback {
+            b.click("Reset")
+            b.assert_text("00:00.00", "zero")
+            b.assert_no_text("Lap 1", "no laps")
+            spec.assert_true(b.wait_for_vg_pixel(b.vg_px_x(90.0, 180.0, 180.0), b.vg_px_y(60.0, 180.0, 180.0), 0xE74C3C), "hand up")
+        }
+    }
+    return spec.run_summary(fw)
+}

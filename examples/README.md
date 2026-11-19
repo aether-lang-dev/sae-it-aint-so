@@ -18,3 +18,5 @@ toolkit) are the apps only; none of Tsyne's framework code is used.
 | `tango-puzzle` | Sun and moon binary puzzle | Tsyne `ported-apps/tango-puzzle` | MIT, Paul Hammant |
 | `zip-puzzle` | Draw one path through all cells, numbers in order | Tsyne `ported-apps/zip-puzzle` | MIT, Paul Hammant |
 | `clock` | Analog and digital clock | Tsyne `phone-apps/clock` | MIT, Paul Hammant |
+| `timer` | Countdown timer | Tsyne `phone-apps/timer` | MIT, Paul Hammant |
+| `stopwatch` | Stopwatch with dial and laps | Tsyne `phone-apps/stopwatch` | MIT, Paul Hammant |
