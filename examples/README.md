@@ -21,3 +21,4 @@ toolkit) are the apps only; none of Tsyne's framework code is used.
 | `timer` | Countdown timer | Tsyne `phone-apps/timer` | MIT, Paul Hammant |
 | `stopwatch` | Stopwatch with dial and laps | Tsyne `phone-apps/stopwatch` | MIT, Paul Hammant |
 | `eliza` | ELIZA chatbot | Tsyne `phone-apps/eliza` | BSD-3-Clause, Paul Hammant |
+| `fractals` | Mandelbrot, Julia, Newton, Tricorn and Burning Ship explorer | Tsyne `phone-apps/{mandelbrot,julia-set,newton-fractal,tricorn,burning-ship}` | BSD-3-Clause, Paul Hammant |

@@ -1,0 +1,67 @@
+// spec_fractals.ae -- the fractal explorer (examples/fractals) as an app:
+// the Mandelbrot set drawn, its pixels at known points, a palette change,
+// zoom, pan and tap, Reset, and the picker's other four fractals.
+//
+//   SAE_TEST_APP=examples/fractals tests/run_spec.sh spec_fractals
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// The raster is 200x200 in a 200x200 viewBox: one unit a pixel.
+px(x: int) -> int { return b.vg_px_x(x * 1.0 + 0.5, 200.0, 200.0) }
+py(y: int) -> int { return b.vg_px_y(y * 1.0 + 0.5, 200.0, 200.0) }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Fractals on sae") {
+        spec.it("draws the Mandelbrot set: black inside, blue just outside (classic palette)") callback {
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Mandelbrot Zoom: 1.0x | Center: (-0.5000, 0.0000) | Palette: classic", 20), "drawn")
+            b.assert_text("Zoom: 1.0x | Center: (-0.5000, 0.0000) | Palette: classic", "the status")
+            spec.assert_true(b.wait_for_vg_pixel(px(100), py(100), 0x000000), "the centre is in the set")
+            spec.assert_true(b.wait_for_vg_pixel(px(140), py(100), 0x000000), "so is 0.1 on the real axis")
+            spec.assert_true(b.wait_for_vg_pixel(px(153), py(100), 0x05085E), "0.295 escapes in 13 steps: the palette's dark blue")
+        }
+        spec.it("Next Palette recolours it: fire") callback {
+            b.click("Next Palette")
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Mandelbrot Zoom: 1.0x | Center: (-0.5000, 0.0000) | Palette: fire", 20), "redrawn")
+            spec.assert_true(b.wait_for_vg_pixel(px(153), py(100), 0x260000), "the same point, in fire's dark red")
+            spec.assert_true(b.wait_for_vg_pixel(px(100), py(100), 0x000000), "the inside is still black")
+        }
+        spec.it("Zoom In doubles the zoom, Right pans, Zoom Out comes back") callback {
+            b.click("Zoom In")
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Mandelbrot Zoom: 2.0x | Center: (-0.5000, 0.0000)", 20), "zoomed")
+            b.click("Right")
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Mandelbrot Zoom: 2.0x | Center: (-0.1250, 0.0000)", 20), "panned 50 pixels, 0.375 of the plane")
+            b.click("Left")
+            b.click("Zoom Out")
+            spec.assert_true(b.wait_for_console_n("fractals: drew Mandelbrot Zoom: 1.0x | Center: (-0.5000, 0.0000) | Palette: fire", 2) == 1, "back to where it was, drawn again")
+        }
+        spec.it("a click zooms in on the point clicked") callback {
+            b.vg_click(px(153), py(100))
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Mandelbrot Zoom: 2.0x | Center: (0.2935, 0.0000)", 20), "centred on the pixel clicked (153.5 is 0.2935)")
+        }
+        spec.it("Reset goes home") callback {
+            b.click("Reset")
+            spec.assert_true(b.wait_for_console_n("fractals: drew Mandelbrot Zoom: 1.0x | Center: (-0.5000, 0.0000) | Palette: fire", 3) == 1, "home, drawn a third time")
+        }
+        spec.it("the picker: Julia set, with presets") callback {
+            b.pick(1)
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Julia set c=(-0.400, 0.600) | Classic | fire", 30), "Julia, classic c")
+            spec.assert_true(b.button_exists("Next Preset"), "a preset button")
+            b.click("Next Preset")
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Julia set c=(0.000, 1.000) | Dendrite | fire", 30), "the dendrite")
+        }
+        spec.it("Newton, Tricorn and Burning Ship start where Tsyne's did") callback {
+            b.pick(2)
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Newton fractal Zoom: 2.0x | Center: (0.0000, 0.0000)", 30), "Newton")
+            b.pick(3)
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Tricorn Zoom: 1.0x | Center: (-0.3000, 0.0000)", 30), "Tricorn")
+            b.pick(4)
+            spec.assert_true(b.wait_for_console_secs("fractals: drew Burning Ship Zoom: 0.8x | Center: (-0.4000, -0.6000)", 30), "Burning Ship")
+        }
+    }
+    return spec.run_summary(fw)
+}
