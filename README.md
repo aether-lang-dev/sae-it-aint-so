@@ -907,7 +907,8 @@ apps are ported: `examples/pomatez`, a Pomodoro timer from Electron/Tauri
 (7.6 MB packaged), and `examples/gitify`, GitHub notifications from Electron
 (7.7 MB), which talks to the GitHub API over sae's actor-backed http and is
 specced against a mock GitHub Enterprise API in the page server. Each has a
-README saying what is ported and what is not yet.
+README saying what is ported and what is not yet. `examples/README.md`
+indexes the rest, ported from Tsyne's example apps with their licences kept.
 
 `tools/saepack-android.sh <dir>` packages the same folder as an Android APK
 (into `target/apps/`), through aether-ui's `tools/android-apk.sh`: sae built

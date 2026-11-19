@@ -1,0 +1,85 @@
+// spec_calcudoku.ae -- the Calcudoku port (examples/calcudoku) as an app,
+// played as a person would: select a cell, press a number, until the board
+// is solved; an error shows; the next level; Solve fills it in.
+//
+//   SAE_TEST_APP=examples/calcudoku tests/run_spec.sh spec_calcudoku
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// A point inside cell i of the 3x3 level (55 px cells, viewBox 165), away
+// from the cage label (top left) and the digit (centre).
+cx(i: int) -> int { return b.vg_px_x((i % 3) * 55.0 + 46.0, 165.0, 165.0) }
+cy(i: int) -> int { return b.vg_px_y((i / 3) * 55.0 + 46.0, 165.0, 165.0) }
+
+put(i: int, n: int) {
+    b.vg_click(cx(i), cy(i))
+    b.click("${n}")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Calcudoku on sae") {
+        spec.it("starts on level 1, an empty 3x3 board with its cage targets") callback {
+            b.assert_text("Level 1/5", "the level")
+            b.assert_text("0/9 cells", "nothing filled")
+            spec.assert_true(b.button_exists("Solve"), "a Solve button")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "the board is drawn")
+            nodes = b.vg_nodes()
+            spec.assert_contains(nodes, "4+", "the first cage: 1+3=4")
+            spec.assert_contains(nodes, "2=", "the single-cell cage")
+            spec.assert_true(b.button_exists("3"), "digits 1 to 3")
+            spec.assert_true(b.button_exists("4") == 0, "and no 4 on a 3x3")
+        }
+        spec.it("a selected cell is lit, a digit goes into it") callback {
+            b.vg_click(cx(0), cy(0))
+            spec.assert_true(b.wait_for_vg_pixel(cx(0), cy(0), 0xE3F2FD), "the selected cell is light blue")
+            b.click("1")
+            b.assert_text("1/9 cells", "one filled")
+            spec.assert_contains(b.vg_nodes(), "\"text\":\"1\"", "the digit is on the board")
+        }
+        spec.it("a repeated digit in a row turns both cells red") callback {
+            put(1, 1)
+            b.assert_text("2/9 cells", "two filled")
+            spec.assert_true(b.wait_for_vg_pixel(cx(0), cy(0), 0xFFEBEE), "cell 1 is an error")
+            spec.assert_true(b.wait_for_vg_pixel(cx(1), cy(1), 0xE3F2FD), "cell 2 is selected, which shows over an error")
+            b.vg_click(cx(8), cy(8))
+            spec.assert_true(b.wait_for_vg_pixel(cx(1), cy(1), 0xFFEBEE), "and an error once it is not")
+        }
+        spec.it("Reset clears the board") callback {
+            b.click("Reset")
+            b.assert_text("0/9 cells", "empty again")
+            spec.assert_true(b.wait_for_vg_pixel(cx(1), cy(1), 0xFFFFFF), "white again")
+        }
+        spec.it("playing the answer solves the puzzle") callback {
+            put(0, 1)
+            put(1, 3)
+            put(2, 2)
+            put(3, 3)
+            put(4, 2)
+            put(5, 1)
+            put(6, 2)
+            put(7, 1)
+            b.assert_text("8/9 cells", "one to go")
+            b.assert_no_text("Solved!", "not yet")
+            put(8, 3)
+            b.assert_text("Solved!", "solved")
+            spec.assert_true(b.wait_for_console("calcudoku: solved level 1"), "announced once")
+        }
+        spec.it("the next level is a 4x4 with a 4 button") callback {
+            b.click(">")
+            b.assert_text("Level 2/5", "level 2")
+            b.assert_text("0/16 cells", "a bigger board")
+            spec.assert_true(b.button_exists("4"), "a 4 button")
+        }
+        spec.it("Solve plays the answer in, a cell at a time") callback {
+            b.click("Solve")
+            spec.assert_true(b.wait_for_text_secs("Solved!", 12) == 1, "the solver finishes the puzzle")
+            spec.assert_true(b.wait_for_console("calcudoku: solved level 2"), "announced")
+        }
+    }
+    return spec.run_summary(fw)
+}
