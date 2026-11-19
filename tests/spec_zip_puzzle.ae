@@ -1,0 +1,86 @@
+// spec_zip_puzzle.ae -- the Zip Puzzle port (examples/zip-puzzle) as an app:
+// draw a path from waypoint 1 through every cell, taking the numbers in
+// order. Level 1 (5x5) is solved by a snake along its rows.
+//
+//   SAE_TEST_APP=examples/zip-puzzle tests/run_spec.sh spec_zip_puzzle
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+// 5x5 board: 50 px cells 2 px apart, viewBox 258. A point near a cell's
+// top left corner, clear of its number.
+cx(i: int) -> int { return b.vg_px_x((i % 5) * 52.0 + 6.0, 258.0, 258.0) }
+cy(i: int) -> int { return b.vg_px_y((i / 5) * 52.0 + 6.0, 258.0, 258.0) }
+
+step(i: int) { b.vg_click(cx(i), cy(i)) }
+
+// Row r of the snake, left to right on even rows and right to left on odd.
+snake_row(r: int) {
+    c = 0
+    while c < 5 {
+        i = r * 5 + c
+        if r % 2 == 1 { i = r * 5 + 4 - c }
+        if r > 0 || c > 0 { step(i) }
+        c = c + 1
+    }
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Zip Puzzle on sae") {
+        spec.it("starts on level 1 with the path on waypoint 1") callback {
+            b.assert_text("Level 1/5", "the level")
+            b.assert_text("1/25 cells", "just the start")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "the board is drawn")
+            spec.assert_true(b.wait_for_vg_pixel(cx(0), cy(0), 0x228B22), "waypoint 1 is visited, dark green")
+            spec.assert_true(b.wait_for_vg_pixel(cx(4), cy(4), 0x333333), "waypoint 2 is not, dark grey")
+            spec.assert_true(b.wait_for_vg_pixel(cx(7), cy(7), 0xF0F0F0), "other cells are plain")
+            spec.assert_contains(b.vg_nodes(), "\"text\":\"3\"", "the numbers are on the board")
+        }
+        spec.it("clicking a neighbour extends the path, the head is a brighter green") callback {
+            step(1)
+            b.assert_text("2/25 cells", "two cells")
+            spec.assert_true(b.wait_for_vg_pixel(cx(1), cy(1), 0x90EE90), "the head")
+            step(2)
+            spec.assert_true(b.wait_for_vg_pixel(cx(1), cy(1), 0x98FB98), "the old head is lighter")
+        }
+        spec.it("a cell that is not adjacent is ignored") callback {
+            step(12)
+            b.assert_text("3/25 cells", "still three")
+        }
+        spec.it("clicking the head, or an earlier cell, takes the path back") callback {
+            step(2)
+            b.assert_text("2/25 cells", "the head undone")
+            step(0)
+            b.assert_text("1/25 cells", "back to the start")
+            spec.assert_true(b.wait_for_vg_pixel(cx(1), cy(1), 0xF0F0F0), "cell 2 is plain again")
+        }
+        spec.it("a snake through every cell, 1 then 2 then 3, solves it") callback {
+            snake_row(0)
+            b.assert_text("5/25 cells", "waypoint 2 taken")
+            spec.assert_true(b.wait_for_vg_pixel(cx(4), cy(4), 0x228B22), "waypoint 2 turns green")
+            snake_row(1)
+            snake_row(2)
+            snake_row(3)
+            b.assert_text("20/25 cells", "four rows")
+            b.assert_no_text("Solved!", "not yet")
+            snake_row(4)
+            b.assert_text("Solved!", "the last cell is waypoint 3")
+            spec.assert_true(b.wait_for_console("zip: solved level 1"), "announced")
+        }
+        spec.it("Reset starts over, and the last level is 7x7") callback {
+            b.click("Reset")
+            b.assert_text("1/25 cells", "reset")
+            b.click(">")
+            b.click(">")
+            b.click(">")
+            b.click(">")
+            b.assert_text("Level 5/5", "level 5")
+            b.assert_text("1/49 cells", "a 7x7 board")
+        }
+    }
+    return spec.run_summary(fw)
+}
