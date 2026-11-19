@@ -1,0 +1,11 @@
+{
+  "name": "Sandbox test",
+  "capabilities": {
+    "sqlite": { "notes": { "migrations": ["db/001_init.sql"] } },
+    "backend": { "program": "backend/main", "deadlineMs": 1000 },
+    "controlBus": { "name": "sandbox", "maxRequestBytes": 4096 },
+    "documents": {},
+    "shell": { "open": ["https://example.com/"] },
+    "fs": { "read": ["$TEMP/sae-sandbox-read/"], "write": ["$APPDATA/"] }
+  }
+}

@@ -91,7 +91,7 @@ STARTED=$(mktemp "${TMPDIR:-/tmp}/sae-run_all.XXXXXX") || exit 2
 # a first launch (pomatez's tasks were left from the run before, so its
 # "2 to do" read 3 and failed on every run after the first).
 rm -rf "$T/spec-storage" "$T/caps-appdata" "$T/globals-appdata" \
-       "$T/spec-shell.log" "$T/caps-shell.log"
+       "$T/spec-shell.log" "$T/caps-shell.log" "$T/sandbox-appdata" "$T/sandbox-shell.log"
 # label | environment (space-separated NAME=value) | command
 TABLE="
 spec_nav||spec spec_nav
@@ -129,6 +129,7 @@ spec_app_menus|SAE_TEST_APP=tests/apps/menus|spec spec_app_menus
 spec_app_resize|SAE_TEST_APP=tests/apps/resize|spec spec_app_resize
 spec_app_bus|SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$T/bus-appdata SAE_TEST_APP=tests/apps/bus|spec spec_app_bus
 spec_app_bus_ui|SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$T/bus-ui-appdata SAE_TEST_APP=tests/apps/busui|spec spec_app_bus_ui
+spec_app_sandbox|SAE_SANDBOX_PROBE=$T/sandbox-canary SAE_TEST_FLAGS=--control-bus SAE_APPDATA_DIR=$T/sandbox-appdata SAE_SHELL_LOG=$T/sandbox-shell.log AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/sandbox|backend tests/apps/sandbox spec_app_sandbox
 spec_app_bus_off|SAE_APPDATA_DIR=$T/bus-off-appdata SAE_TEST_APP=tests/apps/bus|spec spec_app_bus_off
 spec_app_clipboard|AETHER_UI_HEADLESS=1 SAE_CLIP_READ=1 SAE_TEST_APP=tests/apps/clipboard|spec spec_app_clipboard
 spec_app_clipboard_write|AETHER_UI_HEADLESS=1 SAE_CLIP_READ=0 SAE_TEST_APP=tests/apps/clipboard_write|spec spec_app_clipboard

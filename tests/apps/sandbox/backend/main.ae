@@ -1,0 +1,23 @@
+// The backend of tests/apps/sandbox: it answers "echo" and nothing else, so
+// the page has a reply delivered by sae's backend tick to probe from.
+// Built by tests/run_all.sh ("backend" kind):
+//   AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main
+import std.io
+import saebackend
+
+main() {
+    sb, err = saebackend.open()
+    if err != "" {
+        _w = io.stderr_write("${err}\n")
+        exit(2)
+    }
+    while 1 == 1 {
+        id, name, arg, rerr = saebackend.next(sb)
+        if rerr != "" { break }
+        if name == "echo" {
+            _r = saebackend.answer(sb, id, arg)
+        } else {
+            _r = saebackend.fail(sb, id, "no call ${name}")
+        }
+    }
+}

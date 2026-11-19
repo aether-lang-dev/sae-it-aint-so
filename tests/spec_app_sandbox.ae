@@ -1,0 +1,104 @@
+// spec_app_sandbox.ae — the page-entry sandbox in app mode
+// (docs/design/page-entry-sandbox.md): sae's own code, asked by the probe to
+// read a file that is not the page's, write one, read the environment,
+// connect and exec, from the entries an app has that a browser page does not
+// (a control bus request, a backend answer, a SQLite reply, beside the first
+// run, a timer and a click), is refused each time, at a grant level above 0.
+// Then the capabilities the app was granted, working beside it: storage, fs
+// in its grants (and refused outside them by the service's own message), a
+// document the person picked, shell.open (handed over after the click).
+//   SAE_SANDBOX_PROBE=$PWD/target/sandbox-canary SAE_TEST_FLAGS=--control-bus \
+//   SAE_APPDATA_DIR=$PWD/target/sandbox-appdata SAE_SHELL_LOG=$PWD/target/sandbox-shell.log \
+//   AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/sandbox tests/run_spec.sh spec_app_sandbox
+// (the app's backend built first: tests/run_all.sh's "backend" kind).
+import std.spec
+import std.string
+import std.fs
+import std.os (os_getenv)
+import saedriver as b
+import uidriver
+import busclient (courier_, command_)
+
+// How many times sae-driver's console has printed `text`.
+console_count(text: string) -> int {
+    p = os_getenv("SAE_TEST_LOG")
+    if p == null { return 0 }
+    body, err = fs.read(p)
+    if string.length(err) > 0 { return 0 }
+    parts = string.split(body, text)
+    return string.string_array_size(parts) - 1
+}
+
+tmp_dir() -> string {
+    t = os_getenv("TMPDIR")
+    if t == null { return "/tmp" }
+    while string.ends_with(t, "/") == 1 { t = string.substring(t, 0, string.length(t) - 1) }
+    return t
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    canary = os_getenv("SAE_SANDBOX_PROBE")
+    _m = fs.mkdir_p(canary)
+    _w = fs.write_atomic("${canary}/secret", string.bytes("the kernel's file"))
+    _d = fs.delete("${canary}/planted")
+    dir = "${tmp_dir()}/sae-sandbox"
+    _m2 = fs.mkdir_p(dir)
+    _w2 = fs.write("${dir}/picked.txt", "a picked file")
+    spec.describe(fw, "an app's entries: the probe is refused in each") {
+        spec.it("the first run and a timer") callback {
+            spec.assert_true(b.wait_for_console("sandbox: run: refused at depth"), "the first run")
+            spec.assert_true(b.wait_for_console("sandbox: timeout: refused at depth"), "a timer")
+        }
+        spec.it("a click, a SQLite reply and a backend answer") callback {
+            b.click("probe click")
+            spec.assert_true(b.wait_for_console("sandbox: click: refused at depth"), "a click")
+            b.click("probe sqlite")
+            spec.assert_true(b.wait_for_console("sandbox: sqlite: refused at depth"), "a SQLite reply")
+            b.click("probe backend")
+            spec.assert_true(b.wait_for_console("sandbox: backend: refused at depth"), "a backend answer")
+        }
+        spec.it("a control bus request") callback {
+            spec.assert_true(b.wait_for_console("sae: control bus: listening"), "listening")
+            _u, key = courier_()
+            status, plain = command_(key, "probe")
+            spec.assert_str_eq(status, "HTTP/1.1 200 OK", "answered")
+            spec.assert_contains(plain, "refused at depth", "the handler's probe was refused")
+            spec.assert_eq(string.contains(plain, "ESCAPED"), 0, "none escaped: ${plain}")
+        }
+        spec.it("nothing escaped, nothing was written under the canary") callback {
+            spec.assert_eq(console_count("ESCAPED"), 0, "no ESCAPED line on the console")
+            spec.assert_eq(fs.exists("${canary}/planted"), 0, "nothing planted")
+        }
+    }
+    spec.describe(fw, "the app's own capabilities, working beside it") {
+        spec.it("storage") callback {
+            b.click("storage")
+            spec.assert_true(b.wait_for_console("sandbox: storage: ok"), "kept and read back")
+        }
+        spec.it("fs inside its grant, and outside it refused by the service's own message") callback {
+            b.click("fs")
+            spec.assert_true(b.wait_for_console("sandbox: fs: ok"), "written and read back in $APPDATA")
+            b.click("fs outside")
+            spec.assert_true(b.wait_for_console("sandbox: fs outside: refused: fs.read_text: outside this app's fs.read grant: /etc/hosts"), "outside every grant")
+        }
+        spec.it("a document the person picked") callback {
+            uidriver.answer_prompt("open", "${dir}/picked.txt")
+            b.click("document")
+            spec.assert_true(b.wait_for_console("sandbox: document: ok: a picked file"), "read what was picked")
+        }
+        spec.it("shell.open is handed to the system after the click") callback {
+            b.click("shell")
+            lg = ""
+            polls = 0
+            while polls < 100 && string.contains(lg, "https://example.com/sandbox") == 0 {
+                lg, _e = fs.read(os_getenv("SAE_SHELL_LOG"))
+                sleep(50)
+                polls = polls + 1
+            }
+            spec.assert_contains(lg, "https://example.com/sandbox", "handed to the system")
+        }
+    }
+    return spec.run_summary(fw)
+}
