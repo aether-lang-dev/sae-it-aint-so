@@ -141,6 +141,22 @@ main() {
             spec.assert_eq(console_count("sae: uncaught exception in ${ME}/cpu"), 1, "reported once")
             b.assert_no_text("cpu: ESCAPED", "nothing after the loop ran")
         }
+        spec.it("a getter that loops, read by the host after the page's entry returned (a context menu opened by a click)") callback {
+            b.navigate(b.test_url("/menu_getter"))
+            spec.assert_true(b.wait_for_text("menu_getter: armed"), "the page armed its getter")
+            id = uidriver.widget_id_by_text("right-click this line")
+            spec.assert_gt(id, 0, "the line to click")
+            // The host reads the label while it builds the menu: it must stop
+            // at the limit (SAE_PAGE_TIME_MS) and carry on, not hang.
+            uidriver.post_body("/widget/${id}/secondary_click")
+            stopped = "sae: stopped: the page's code ran past its limit of"
+            spec.assert_true(b.wait_for_console(stopped), "sae said it stopped the page's code")
+            spec.assert_eq(console_count(stopped), 1, "once")
+            b.assert_no_text("menu_getter: ESCAPED", "nothing after the loop ran")
+            // Alive: the next page loads and works.
+            b.navigate(b.test_url("/"))
+            b.assert_text("The escape corpus: every page here tries to get out", "a page loaded afterwards")
+        }
         spec.it("allocate past the heap cap") callback {
             attempt("heap", "")
         }

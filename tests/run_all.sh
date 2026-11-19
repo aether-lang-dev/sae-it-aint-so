@@ -153,6 +153,7 @@ check_sqlite_relaunch||check check_sqlite_relaunch
 check_natives||check check_natives
 check_module_rules||check check_module_rules
 check_prelude||check check_prelude
+check_timed_entries||check check_timed_entries
 lower||lower
 "
 

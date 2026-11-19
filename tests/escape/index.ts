@@ -18,6 +18,7 @@ const attempts: [string, string][] = [
   ["cap_storage", "more storage than the origin's cap"],
   ["cpu", "loop forever"],
   ["heap", "allocate past the heap cap"],
+  ["menu_getter", "a getter that loops, read by the host after the page's entry returned"],
   ["import_url", "import() a URL"],
   ["handle_across", "hold a widget handle across a navigation"],
   ["atomics_wait", "block the thread with Atomics.wait"],
