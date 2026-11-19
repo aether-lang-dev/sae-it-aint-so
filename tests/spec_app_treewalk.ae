@@ -1,0 +1,109 @@
+// spec_app_treewalk.ae — apps/treewalk (its README): a backend walks a
+// folder and pushes what it finds as events the page did not ask for. The
+// window answers the driver throughout a walk of ten thousand files, every
+// one of whose events arrives (the walk slows to what the page takes: back-
+// pressure, not loss); Cancel stops it; the walk goes on while another page
+// shows and the page coming back finds where it got to; a folder outside
+// the app's grants is refused; and a backend that dies is told and
+// restarted.
+//   (cd apps/treewalk && AETHER_LIB_DIR=../../sdk ae build backend/main.ae -o backend/main)
+//   AETHER_UI_HEADLESS=1 SAE_TEST_APP=apps/treewalk tests/run_spec.sh spec_app_treewalk
+import std.spec
+import std.string
+import std.fs
+import std.os
+import std.time (now_ms)
+import saedriver as b
+import uidriver
+
+tmp_dir() -> string {
+    t = os.getenv("TMPDIR")
+    if t == null || t == "" { return "/tmp" }
+    while string.length(t) > 1 && string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
+    return t
+}
+
+// The longest the window took to answer the driver, sampled until `text`
+// shows (or 60 s).
+slowest_until_(text: string) -> long {
+    worst = 0 as long
+    i = 0
+    while i < 600 && b.has_text(text) == 0 {
+        t0 = now_ms()
+        _w = uidriver.get_body("/widgets")
+        took = now_ms() - t0
+        if took > worst { worst = took }
+        sleep(100)
+        i = i + 1
+    }
+    return worst
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    // Ten thousand files of 10 bytes in four folders.
+    root = "${tmp_dir()}/sae-treewalk"
+    _m = fs.mkdir_p("${root}/a/b")
+    _m2 = fs.mkdir_p("${root}/c")
+    i = 0
+    while i < 10000 {
+        sub = "a"
+        if i % 3 == 1 { sub = "a/b" }
+        if i % 3 == 2 { sub = "c" }
+        _w = fs.write("${root}/${sub}/f${i}.txt", "0123456789")
+        i = i + 1
+    }
+    whole = "state: done: 10000 files, 4 folders, 100000 bytes"
+    spec.describe(fw, "treewalk: a long job on a live channel") {
+        spec.it("starts its backend, contained") callback {
+            spec.assert_true(b.wait_for_console("sae: backend: backend/main started on a socket, contained"), "started")
+            b.assert_text("state: idle: 0 files, 0 folders, 0 bytes", "idle, asked on load")
+        }
+        spec.it("walks, with every file an event, while the window keeps answering") callback {
+            b.set_field_by("a folder to walk", root)
+            b.click("Walk")
+            worst = slowest_until_("answer: done: 10000 files, 4 folders, 100000 bytes")
+            b.assert_text("answer: done: 10000 files, 4 folders, 100000 bytes", "the walk's answer")
+            b.assert_text(whole, "its last progress")
+            spec.assert_true(b.wait_for_text("found events: 10000"), "every file's event arrived")
+            spec.assert_true(worst < 1000, "the window answered the driver within a second throughout (slowest ${worst} ms)")
+        }
+        spec.it("Cancel stops a walk between entries") callback {
+            b.click("Walk")
+            spec.assert_true(b.wait_for_text_starting("state: walking: "), "walking")
+            b.click("Cancel")
+            spec.assert_true(b.wait_for_text_starting("answer: cancelled: "), "cancelled")
+            b.assert_no_text("answer: done: 10000 files, 4 folders, 100000 bytes", "before the end")
+        }
+        spec.it("the walk goes on while another page shows; coming back finds it") callback {
+            b.click("Walk")
+            spec.assert_true(b.wait_for_text_starting("state: walking: "), "walking")
+            b.click("Another page")
+            b.assert_text("The walk goes on while this page shows.", "another page")
+            sleep(500)
+            b.click("Back to the walk")
+            spec.assert_true(b.wait_for_text_secs(whole, 60), "the page coming back sees the walk's end")
+            b.assert_text("answer: (none)", "a new page: the answer went to the one that asked, and was dropped with it")
+        }
+        spec.it("a folder outside the app's grants is refused") callback {
+            b.set_field_by("a folder to walk", "/etc")
+            b.click("Walk")
+            b.assert_text("answer: failed: /etc: cannot list it (not there, or not granted)", "refused")
+        }
+        spec.it("a backend that dies is told, and Restart starts another") callback {
+            b.set_field_by("a folder to walk", root)
+            b.click("Walk")
+            spec.assert_true(b.wait_for_text_starting("state: walking: "), "walking")
+            b.click("Crash it")
+            b.assert_text("backend: gone: backend: it exited with status 3", "on_gone")
+            b.assert_text("answer: failed: backend: it exited with status 3", "the walk's call failed with why")
+            b.click("Restart")
+            b.assert_text("backend: running (restarted)", "restarted")
+            b.assert_text("state: idle: 0 files, 0 folders, 0 bytes", "a new backend, idle")
+            b.click("Walk")
+            spec.assert_true(b.wait_for_text_secs("answer: done: 10000 files, 4 folders, 100000 bytes", 60), "and it walks")
+        }
+    }
+    return spec.run_summary(fw)
+}

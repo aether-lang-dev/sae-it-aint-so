@@ -1,0 +1,15 @@
+{
+  "name": "Docstats",
+  "start": "/",
+  "width": 560,
+  "height": 520,
+  "capabilities": {
+    "documents": {},
+    "backend": {
+      "program": "backend/main",
+      "channel": "socket",
+      "sandbox": {},
+      "deadlineMs": 30000
+    }
+  }
+}

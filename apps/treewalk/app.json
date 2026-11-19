@@ -1,0 +1,14 @@
+{
+  "name": "Treewalk",
+  "start": "/",
+  "width": 620,
+  "height": 560,
+  "capabilities": {
+    "backend": {
+      "program": "backend/main",
+      "channel": "socket",
+      "sandbox": { "read": ["$HOME/", "$TEMP/"], "env": ["HOME"] },
+      "deadlineMs": 600000
+    }
+  }
+}

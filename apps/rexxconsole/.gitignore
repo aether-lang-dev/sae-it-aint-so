@@ -1,0 +1,4 @@
+# Built from backend/main.ae, with RexxAE's engine (README.md):
+#   AETHER_LIB_DIR=../../sdk:../../../RexxAE ae build backend/main.ae -o backend/main
+backend/main
+backend/main.exe

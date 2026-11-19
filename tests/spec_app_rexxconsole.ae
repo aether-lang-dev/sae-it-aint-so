@@ -1,0 +1,90 @@
+// spec_app_rexxconsole.ae — apps/rexxconsole (its README): Rexx typed into
+// the page runs in a contained backend with RexxAE's engine compiled in. Its
+// SAYs stream back as events; an error comes back with its line; a time
+// limit and Cancel stop a script from inside the engine; a flood of SAYs
+// arrives whole; ADDRESS reaches nothing; and Kill (backend.restart()) ends
+// a backend that nothing else can reach. Needs ../RexxAE.
+//   (cd apps/rexxconsole && AETHER_LIB_DIR=../../sdk:../../../RexxAE ae build backend/main.ae -o backend/main)
+//   AETHER_UI_HEADLESS=1 SAE_TEST_APP=apps/rexxconsole tests/run_spec.sh spec_app_rexxconsole
+import std.spec
+import std.string
+import std.os
+import std.list
+import saedriver as b
+import uidriver
+
+// How many processes run the console's backend (pgrep -f).
+backends_() -> int {
+    argv = list.new()
+    list.add(argv, "-f")
+    list.add(argv, "apps/rexxconsole/backend/main")
+    out, _st, _err = os.run_capture("pgrep", argv, null)
+    list.free(argv)
+    t = string.trim(out)
+    if t == "" { return 0 }
+    return string.string_array_size(string.split(t, "\n"))
+}
+
+run_(script: string, limit_ms: string) {
+    b.set_field_by("a Rexx script", script)
+    b.set_field_by("time limit, ms", limit_ms)
+    b.click("Run")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "rexxconsole: Rexx in a contained backend") {
+        spec.it("starts its backend, contained on a socket") callback {
+            spec.assert_true(b.wait_for_console("sae: backend: backend/main started on a socket"), "started")
+            b.assert_text("status: ready", "ready")
+        }
+        spec.it("runs a script: its SAYs stream back, then its exit code") callback {
+            run_("DO i = 1 TO 5\n  SAY 'line' i 'of 5'\nEND\nEXIT 7", "3000")
+            b.assert_text("status: done 7", "the exit code")
+            b.assert_text("lines said: 5", "every line")
+            b.assert_text("line 1 of 5", "the first")
+            b.assert_text("line 5 of 5", "the last")
+        }
+        spec.it("a host function the backend answers, and nothing else") callback {
+            run_("LET t = ELAPSED()\nIF t >= 0 THEN SAY 'elapsed counts'\nADDRESS SYSTEM\n'cat /etc/passwd'\nSAY 'rc' RC", "3000")
+            b.assert_text("status: done 0", "it ran")
+            b.assert_text("elapsed counts", "ELAPSED() answered by the backend")
+            b.assert_text("rc 1", "ADDRESS refused: no environment is mounted")
+        }
+        spec.it("an error comes back with its line") callback {
+            run_("SAY 'first'\nSAY nosuch(2)", "3000")
+            b.assert_text("status: error at line 2: unknown or unavailable function: NOSUCH", "the error")
+            b.assert_text("first", "and what it said before")
+        }
+        spec.it("a script past its time limit is cancelled from inside the engine") callback {
+            run_("DO FOREVER\nEND", "500")
+            b.assert_text("status: cancelled by host: its time limit of 500 ms passed", "the limit")
+        }
+        spec.it("Cancel stops a running script") callback {
+            run_("DO FOREVER\nEND", "60000")
+            b.assert_text("status: running", "running")
+            b.click("Cancel")
+            b.assert_text("status: cancelled by host: the page asked", "cancelled")
+        }
+        spec.it("a flood of SAYs arrives whole, in order") callback {
+            run_("DO i = 1 TO 20000\n  SAY i\nEND", "60000")
+            spec.assert_true(b.wait_for_text_secs("status: done 0", 30), "done")
+            b.assert_text("lines said: 20000", "all twenty thousand")
+            b.assert_text("20000", "the last one last")
+        }
+        spec.it("Kill ends a wedged backend, which Cancel cannot reach, and starts a new one") callback {
+            b.click("Wedge it")
+            b.assert_text("status: wedged (only Kill ends it)", "wedged")
+            spec.assert_true(backends_() == 1, "one backend")
+            b.click("Kill")
+            b.assert_text("status: ready (a new backend)", "a new backend")
+            spec.assert_true(b.wait_for_console("sae: backend: restarted by the page"), "said")
+            spec.assert_true(backends_() == 1, "the wedged one killed and reaped")
+            run_("SAY 'alive'", "3000")
+            b.assert_text("status: done 0", "the new one runs scripts")
+            b.assert_text("alive", "and says what they say")
+        }
+    }
+    return spec.run_summary(fw)
+}

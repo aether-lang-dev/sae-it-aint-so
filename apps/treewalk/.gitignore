@@ -1,0 +1,4 @@
+# Built from backend/main.ae (README.md):
+#   AETHER_LIB_DIR=../../sdk ae build backend/main.ae -o backend/main
+backend/main
+backend/main.exe

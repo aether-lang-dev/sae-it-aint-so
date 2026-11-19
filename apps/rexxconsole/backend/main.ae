@@ -1,0 +1,155 @@
+// rexxconsole's backend (apps/rexxconsole/README.md): runs the Rexx the
+// person types, on RexxAE's engine compiled in from source
+// (github.com/aether-lang-dev/RexxAE, a sibling checkout), an instruction
+// budget at a time.
+//
+//   run      arg: {"source": "...", "limitMs": n}. Each SAY goes to the page
+//            as a "say" event as it happens; the answer is "done <exit code>"
+//            when the script ends, or a failure: "error at line N: why", or
+//            "cancelled by host: why" (its time limit passed, or the page
+//            asked). One run at a time.
+//   cancel   the run going on stops before its next instruction.
+//   wedge    a stand-in for an engine stuck in native code: the backend stops
+//            reading and never answers. Nothing the backend does can end it;
+//            the page's Kill (backend.restart()) does.
+//
+// Between steps it looks for a call without waiting (saebackend.poll), so a
+// cancel reaches a script that loops forever. The engine mounts no ADDRESS
+// environment and one host function, ELAPSED() (the run's milliseconds so
+// far), so a script reaches nothing but what this backend answers. The
+// backend is started contained with no grants (app.json's sandbox {}) and
+// locks itself down too: its whole loop runs in sandbox.enforce with no
+// grants.
+//
+//   AETHER_LIB_DIR=../../sdk:../../../RexxAE ae build backend/main.ae -o backend/main
+import std.io
+import std.string
+import std.json
+import std.sandbox
+import std.time (now_ms)
+import src.engine
+import saebackend
+
+// Instructions per step: how often a running script looks for a call.
+const BUDGET = 500
+
+// A run's time limit when the page gives none, and the most it may ask.
+const LIMIT_MS = 5000
+const MOST_LIMIT_MS = 600000
+
+main() {
+    sb, err = saebackend.open()
+    if err != "" {
+        _w = io.stderr_write("${err}\n")
+        exit(2)
+    }
+    nothing = sandbox.new("rexxconsole: nothing") {}
+    sandbox.enforce(nothing) callback {
+        serve(sb)
+    }
+}
+
+serve(sb: ptr) {
+    while 1 == 1 {
+        id, name, arg, rerr = saebackend.next(sb)
+        if rerr != "" { return }        // sae closed the channel: it is stopping
+        if serve_one(sb, id, name, arg) == 0 { return }
+    }
+}
+
+// One call: 1 to go on, 0 when the channel has closed.
+serve_one(sb: ptr, id: int, name: string, arg: string) -> int {
+    if name == "run" {
+        return run(sb, id, arg)
+    }
+    if name == "cancel" {
+        _a = saebackend.answer(sb, id, "nothing is running")
+    } else if name == "wedge" {
+        while 1 == 1 { sleep(1000) }
+    } else {
+        _f = saebackend.fail(sb, id, "rexxconsole has no call ${name}")
+    }
+    return 1
+}
+
+// Run one script, answering call `id` when it ends: 1 to go on, 0 when the
+// channel closed under it.
+run(sb: ptr, id: int, arg: string) -> int {
+    v, perr = json.parse(arg)
+    if perr != "" || v == null {
+        _f = saebackend.fail(sb, id, "run: its argument is not JSON: ${perr}")
+        return 1
+    }
+    src, _se = json.get_string(json.json_object_get_raw(v, "source"))
+    source = string.copy(src)
+    limit = LIMIT_MS
+    lv = json.json_object_get_raw(v, "limitMs")
+    if lv != null { limit = json.json_get_int(lv) }
+    json.json_free(v)
+    if limit < 1 || limit > MOST_LIMIT_MS {
+        _f2 = saebackend.fail(sb, id, "run: limitMs from 1 to ${MOST_LIMIT_MS}")
+        return 1
+    }
+    ctx = engine.rexxae_create(source)
+    defer engine.rexxae_destroy(ctx)
+    if engine.rexxae_register_function(ctx, "ELAPSED", 0, 0) != 0 {
+        // A script that does not parse leaves the context in error, and
+        // nothing can be mounted on it: say the script's error.
+        if engine.rexxae_step(ctx, 1) == -1 {
+            _f4 = saebackend.fail(sb, id, "error at line ${engine.rexxae_line(ctx)}: ${string.from_cstr(engine.rexxae_error(ctx))}")
+        } else {
+            _f3 = saebackend.fail(sb, id, "run: cannot mount ELAPSED")
+        }
+        return 1
+    }
+    start = now_ms()
+    cancelled = 0
+    while true {
+        status = engine.rexxae_step(ctx, BUDGET)
+        if status == 0 {
+            _d = saebackend.answer(sb, id, "done ${engine.rexxae_exit_code(ctx)}")
+            return 1
+        }
+        if status == -1 {
+            why = string.from_cstr(engine.rexxae_error(ctx))
+            if string.string_starts_with(why, "cancelled by host") == 0 {
+                why = "error at line ${engine.rexxae_line(ctx)}: ${why}"
+            }
+            _e = saebackend.fail(sb, id, why)
+            return 1
+        }
+        if status == 1 {
+            _s = saebackend.emit(sb, "say", string.from_cstr(engine.rexxae_text(ctx)))
+        } else if status == 2 {
+            address = string.from_cstr(engine.rexxae_address(ctx))
+            _r = engine.rexxae_reply(ctx, 1, "", "ADDRESS ${address}: rexxconsole mounts no environment")
+        } else if status == 4 {
+            fname = string.from_cstr(engine.rexxae_function(ctx))
+            if fname == "ELAPSED" {
+                _v = engine.rexxae_reply_value(ctx, "${now_ms() - start}", "")
+            } else {
+                _v2 = engine.rexxae_reply_value(ctx, "null", "no function ${fname}")
+            }
+        }
+        if cancelled == 0 {
+            if now_ms() - start > (limit as long) {
+                _c = engine.rexxae_cancel(ctx, "its time limit of ${limit} ms passed")
+                cancelled = 1
+            } else {
+                // A call that came meanwhile: answered now, without waiting.
+                cid, cname, carg, cerr = saebackend.poll(sb)
+                if cerr != "" { return 0 }
+                if cname == "cancel" {
+                    _c2 = engine.rexxae_cancel(ctx, "the page asked")
+                    cancelled = 1
+                    _a = saebackend.answer(sb, cid, "cancelling")
+                } else if cname == "run" {
+                    _b = saebackend.fail(sb, cid, "a script is running: cancel it first")
+                } else if cname != "" {
+                    if serve_one(sb, cid, cname, carg) == 0 { return 0 }
+                }
+            }
+        }
+    }
+    return 1
+}

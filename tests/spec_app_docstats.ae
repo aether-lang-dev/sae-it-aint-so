@@ -1,0 +1,84 @@
+// spec_app_docstats.ae — apps/docstats (its README): the person picks a
+// file, sae hands the open file to a backend that may open nothing, and the
+// backend reads it and answers with what is in it, with progress. The
+// backend cannot open the same file by its path. Linux with Landlock (the
+// backend is contained); elsewhere run with SAE_TEST_FLAGS=--uncontained-backend,
+// where only the backend's own lockdown holds it.
+//   (cd apps/docstats && AETHER_LIB_DIR=../../sdk ae build backend/main.ae -o backend/main)
+//   AETHER_UI_HEADLESS=1 SAE_TEST_APP=apps/docstats tests/run_spec.sh spec_app_docstats
+import std.spec
+import std.string
+import std.fs
+import std.os
+import std.cryptography (sha256_hex)
+import saedriver as b
+import uidriver
+
+tmp_dir() -> string {
+    t = os.getenv("TMPDIR")
+    if t == null || t == "" { return "/tmp" }
+    while string.length(t) > 1 && string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
+    return t
+}
+
+sha_(s: string) -> string {
+    h, _e = sha256_hex(string.bytes(s)[0..string.length(s)])
+    return h
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    dir = "${tmp_dir()}/sae-docstats"
+    _m = fs.mkdir_p(dir)
+    csv = "item,qty,price\nnails,3,1.5\nscrews,7,2.5\nglue,,4\n"
+    _w1 = fs.write("${dir}/costs.csv", csv)
+    // A text larger than one piece the backend reads (64 KiB), so progress
+    // comes more than once: 4000 lines of 49 bytes, 10 words each.
+    big = ""
+    i = 0
+    while i < 4000 {
+        big = string.concat(big, "one two three four five six seven eight nine ten\n")
+        i = i + 1
+    }
+    _w2 = fs.write("${dir}/big.txt", big)
+    spec.describe(fw, "docstats: a picked file read by a backend that may open none") {
+        spec.it("starts its backend on a socket") callback {
+            spec.assert_true(b.wait_for_console("sae: backend: backend/main started on a socket"), "started")
+            b.assert_text("backend: running", "the page sees it")
+        }
+        spec.it("a CSV: counts, its SHA-256 and each column, read through the descriptor") callback {
+            uidriver.answer_prompt("open", "${dir}/costs.csv")
+            b.click("Pick a file...")
+            b.assert_text("progress: done, after 1 report", "answered, after one piece")
+            b.assert_text("file: costs.csv", "the name, never the path")
+            b.assert_text("bytes: ${string.length(csv)}", "bytes")
+            b.assert_text("lines: 4", "lines")
+            b.assert_text("words: 4", "words")
+            b.assert_text("sha256: ${sha_(csv)}", "the same SHA-256 as the file's")
+            b.assert_text("csv rows: 3", "rows")
+            b.assert_text("column item: no numbers", "a column of words")
+            b.assert_text("column qty: 2 numbers, 3 to 7, mean 5", "an empty cell left out")
+            b.assert_text("column price: 3 numbers, 1.5 to 4, mean 2.67", "a column of numbers")
+        }
+        spec.it("a larger file, with progress as it is read") callback {
+            uidriver.answer_prompt("open", "${dir}/big.txt")
+            b.click("Pick a file...")
+            b.assert_text("progress: done, after 3 reports", "answered, after a report for each of its three 64 KiB pieces")
+            b.assert_text("bytes: ${string.length(big)}", "every byte")
+            b.assert_text("lines: 4000", "lines")
+            b.assert_text("words: 40000", "words")
+            spec.assert_true(b.has_text("csv rows: 3") == 0, "not read as a CSV")
+        }
+        spec.it("the backend cannot open the file it read, or any other, by its path") callback {
+            b.set_field_by("a path for the backend to try", "${dir}/costs.csv")
+            b.click("Try it")
+            spec.assert_true(b.wait_for_text_starting("refused: "), "refused")
+            spec.assert_true(b.has_text("this backend is not contained") == 0, "nothing read")
+            b.set_field_by("a path for the backend to try", "/etc/hosts")
+            b.click("Try it")
+            spec.assert_true(b.wait_for_text_starting("refused: /etc/hosts"), "a system file refused too")
+        }
+    }
+    return spec.run_summary(fw)
+}

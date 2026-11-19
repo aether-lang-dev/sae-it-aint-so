@@ -1,0 +1,180 @@
+// docstats' backend (apps/docstats/README.md): reads a document the person
+// picked, handed over by sae as an open descriptor, and answers with what is
+// in it: bytes, lines, words, its SHA-256, and for a CSV file a summary of
+// each column. It sends a "progress" event after each piece it reads.
+//
+// It can open no file itself. sae starts it on a socket with app.json's
+// sandbox {} (sandbox.spawn_socket: no grants, on Linux held by Landlock and
+// seccomp as well as the sandbox preload), and it locks itself down too:
+// right after it opens the channel it runs everything inside
+// sandbox.enforce with no grants, so even where the process sandbox is not
+// built (macOS, run with --uncontained-backend) its own file, network and
+// process calls are refused. Reading a descriptor it was handed is not
+// opening a file, so that still works.
+//
+//   AETHER_LIB_DIR=../../sdk ae build backend/main.ae -o backend/main
+import std.io
+import std.fs
+import std.string
+import std.list
+import std.json
+import std.sandbox
+import std.cryptography (sha256_hex)
+import saebackend
+
+// The most it reads of one document, and how much at a time.
+const MOST_BYTES = 67108864
+const PIECE = 65536
+
+main() {
+    sb, err = saebackend.open()
+    if err != "" {
+        _w = io.stderr_write("${err}\n")
+        exit(2)
+    }
+    // Whatever a library reads once to set itself up is read now, before
+    // the lockdown: the SHA-256 is OpenSSL's where there is one, which reads
+    // its configuration file the first time it is used.
+    _warm, _we = sha256_hex(string.bytes("warm")[0..4])
+    nothing = sandbox.new("docstats: nothing") {}
+    sandbox.enforce(nothing) callback {
+        serve(sb)
+    }
+}
+
+serve(sb: ptr) {
+    while 1 == 1 {
+        id, name, arg, rerr = saebackend.next(sb)
+        if rerr != "" { return }        // sae closed the channel: it is stopping
+        if name == "stats" {
+            fd = saebackend.handed(sb)
+            if fd < 0 {
+                _f = saebackend.fail(sb, id, "stats needs a document handed with the call")
+            } else {
+                text, why = stats(sb, fd, arg)
+                _c = io.fd_close(fd)
+                if why != "" { _f2 = saebackend.fail(sb, id, why) } else { _a = saebackend.answer(sb, id, text) }
+            }
+        } else if name == "try_path" {
+            // The containment check the page offers: open a path by name.
+            body, ferr = fs.read(arg)
+            if ferr != "" {
+                _r = saebackend.answer(sb, id, "refused: ${ferr}")
+            } else {
+                _r = saebackend.answer(sb, id, "it read ${string.length(body)} bytes: this backend is not contained")
+            }
+        } else {
+            _u = saebackend.fail(sb, id, "docstats has no call ${name}")
+        }
+    }
+}
+
+// Read `fd` to its end and say what is in it, as JSON text: (text, "") or
+// ("", why). `name` is the file's name as the person sees it (the page
+// sends it), which says whether to read it as CSV.
+stats(sb: ptr, fd: int, name: string) -> (string, string) {
+    all = ""
+    while string.length(all) < MOST_BYTES {
+        piece, n, rerr = io.fd_read_n(fd, PIECE)
+        if rerr != "" { return "", "reading it: ${rerr}" }
+        if n == 0 { break }
+        all = string.concat(all, piece)
+        _e = saebackend.emit(sb, "progress", "${string.length(all)}")
+    }
+    if string.length(all) >= MOST_BYTES { return "", "it is larger than ${MOST_BYTES / 1048576} MB" }
+    size = string.length(all)
+    lines = 0
+    words = 0
+    in_word = 0
+    i = 0
+    while i < size {
+        c = string.string_char_at(all, i)
+        if c == 10 { lines = lines + 1 }
+        if c == 32 || c == 10 || c == 13 || c == 9 {
+            in_word = 0
+        } else if in_word == 0 {
+            in_word = 1
+            words = words + 1
+        }
+        i = i + 1
+    }
+    if size > 0 && string.string_char_at(all, size - 1) != 10 { lines = lines + 1 }
+    hash = ""
+    if size > 0 {
+        h, herr = sha256_hex(string.bytes(all)[0..size])
+        if herr == "" { hash = h }
+    }
+    o = json.obj()
+    _b = json.set(o, "bytes", json.from_int(size))
+    _l = json.set(o, "lines", json.from_int(lines))
+    _w = json.set(o, "words", json.from_int(words))
+    _h = json.set(o, "sha256", json.str(hash))
+    if string.string_ends_with(string.string_to_lower(name), ".csv") == 1 {
+        _c = json.set(o, "csv", csv_summary(all))
+    }
+    text, eerr = json.encode(o)
+    json.json_free(o)
+    if eerr != "" { return "", eerr }
+    return text, ""
+}
+
+// A CSV's rows and, for each column its header names, how many cells are
+// numbers and their least, greatest and mean. Plain CSV: commas, no quoted
+// commas.
+csv_summary(all: string) -> ptr {
+    rows = string.split(all, "\n")
+    nrows = string.string_array_size(rows)
+    out = json.obj()
+    cols = json.arr()
+    if nrows == 0 {
+        _r0 = json.set(out, "rows", json.from_int(0))
+        _c0 = json.set(out, "columns", cols)
+        return out
+    }
+    header = string.split(trim_cr(string.string_array_get(rows, 0)), ",")
+    ncols = string.string_array_size(header)
+    data_rows = 0
+    k = 0
+    while k < ncols {
+        count = 0
+        least = 0.0
+        most = 0.0
+        sum = 0.0
+        r = 1
+        while r < nrows {
+            line = trim_cr(string.string_array_get(rows, r))
+            if line != "" {
+                if k == 0 { data_rows = data_rows + 1 }
+                cells = string.split(line, ",")
+                if k < string.string_array_size(cells) {
+                    v, verr = string.to_float(string.trim(string.string_array_get(cells, k)))
+                    if verr == "" {
+                        if count == 0 || v < least { least = v }
+                        if count == 0 || v > most { most = v }
+                        sum = sum + v
+                        count = count + 1
+                    }
+                }
+            }
+            r = r + 1
+        }
+        c = json.obj()
+        _n = json.set(c, "name", json.str(string.trim(string.string_array_get(header, k))))
+        _k = json.set(c, "numbers", json.from_int(count))
+        if count > 0 {
+            _lo = json.set(c, "min", json.num(least))
+            _hi = json.set(c, "max", json.num(most))
+            _mn = json.set(c, "mean", json.num(sum / (count as float)))
+        }
+        _a = json.push(cols, c)
+        k = k + 1
+    }
+    _r = json.set(out, "rows", json.from_int(data_rows))
+    _cs = json.set(out, "columns", cols)
+    return out
+}
+
+trim_cr(s: string) -> string {
+    if string.string_ends_with(s, "\r") == 1 { return string.string_substring(s, 0, string.length(s) - 1) }
+    return s
+}

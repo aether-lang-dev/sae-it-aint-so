@@ -1,0 +1,14 @@
+{
+  "name": "Rexx console",
+  "start": "/",
+  "width": 600,
+  "height": 640,
+  "capabilities": {
+    "backend": {
+      "program": "backend/main",
+      "channel": "socket",
+      "sandbox": {},
+      "deadlineMs": 600000
+    }
+  }
+}

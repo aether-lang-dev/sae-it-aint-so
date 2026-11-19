@@ -1,0 +1,211 @@
+// treewalk's backend (apps/treewalk/README.md): walks a folder and pushes
+// what it finds to the page as it goes, a job that runs while the page does
+// other things, or is not even showing.
+//
+//   walk     arg: a folder ("~" at the front is $HOME). Answers when the walk
+//            ends: "done", "cancelled" or "stopped: why", with the counts.
+//            Meanwhile, events the page did not ask for: "found" for each
+//            file (its path and size: as many as the walk finds, written as
+//            fast as sae takes them) and "progress" (JSON counts, at most ten
+//            a second). One walk at a time.
+//   status   where the walk is, as JSON: {state, root, files, dirs, bytes,
+//            current}. A page that was not showing when the walk's answer
+//            came (the person went to another page and back) asks this.
+//   cancel   the walk going on stops before its next entry.
+//   crash    exits at once, mid-walk or not: what a backend that dies looks
+//            like to the page (on_gone, then the page's Restart).
+//
+// Between entries it looks for a call without waiting (saebackend.poll).
+// Its events are written with saebackend.emit, which waits while the socket
+// is full: when the page's side cannot keep up, the walk slows to its pace
+// (back-pressure), and the window, which reads the socket a tick at a time,
+// never waits on the walk.
+//
+// It reaches only what app.json's sandbox grants: reading under $HOME and
+// $TEMP, and the HOME variable (sandbox.spawn_socket).
+//
+//   AETHER_LIB_DIR=../../sdk ae build backend/main.ae -o backend/main
+import std.io
+import std.os
+import std.fs
+import std.dir
+import std.list
+import std.string
+import std.json
+import std.time (now_ms)
+import saebackend
+
+struct Walk {
+    state: string    // "idle", "walking", "done", "cancelled" or "stopped"
+    root: string
+    files: int
+    dirs: int
+    bytes: long
+    current: string  // the folder it is in
+    why: string      // why it stopped
+}
+
+main() {
+    sb, err = saebackend.open()
+    if err != "" {
+        _w = io.stderr_write("${err}\n")
+        exit(2)
+    }
+    w = heap.new(Walk)
+    w.state = "idle"
+    w.root = ""
+    w.current = ""
+    w.why = ""
+    while 1 == 1 {
+        id, name, arg, rerr = saebackend.next(sb)
+        if rerr != "" { return }        // sae closed the channel: it is stopping
+        if name == "walk" {
+            if walk(sb, w, id, arg) == 0 { return }
+        } else {
+            if other(sb, w, id, name) == 0 { return }
+        }
+    }
+}
+
+// A call that is not a walk, answered at once: 1 to go on, 0 to stop.
+other(sb: ptr, w: *Walk, id: int, name: string) -> int {
+    if name == "status" {
+        _s = saebackend.answer(sb, id, status(w))
+    } else if name == "cancel" {
+        _c = saebackend.answer(sb, id, "nothing to cancel")
+    } else if name == "crash" {
+        exit(3)
+    } else {
+        _f = saebackend.fail(sb, id, "treewalk has no call ${name}")
+    }
+    return 1
+}
+
+status(w: *Walk) -> string {
+    o = json.obj()
+    _a = json.set(o, "state", json.str(w.state))
+    _b = json.set(o, "root", json.str(w.root))
+    _c = json.set(o, "files", json.from_int(w.files))
+    _d = json.set(o, "dirs", json.from_int(w.dirs))
+    _e = json.set(o, "bytes", json.from_int(w.bytes))
+    _f = json.set(o, "current", json.str(w.current))
+    _g = json.set(o, "why", json.str(w.why))
+    text, _err = json.encode(o)
+    json.json_free(o)
+    return text
+}
+
+// Walk `arg`, answering call `id` when it ends: 1 to go on, 0 when the
+// channel closed under it.
+walk(sb: ptr, w: *Walk, id: int, arg: string) -> int {
+    if w.state == "walking" {
+        _b = saebackend.fail(sb, id, "a walk is going on: cancel it first")
+        return 1
+    }
+    root = arg
+    if string.string_starts_with(root, "~") == 1 {
+        home = os.getenv("HOME")
+        if home == null {
+            _h = saebackend.fail(sb, id, "no HOME to start from")
+            return 1
+        }
+        root = string.concat(home, string.string_substring(root, 1, string.length(root)))
+    }
+    w.state = "walking"
+    w.root = string.copy(root)
+    w.files = 0
+    w.dirs = 0
+    w.bytes = 0
+    w.current = ""
+    w.why = ""
+    todo = list.new()
+    list.add(todo, root)
+    last = now_ms()
+    while list.size(todo) > 0 && w.state == "walking" {
+        n = list.size(todo)
+        folder, _ge = list.get_string(todo, n - 1)
+        folder = string.copy(folder)
+        list.list_remove(todo, n - 1)
+        w.current = folder
+        l, lerr = list_(folder)
+        if lerr != "" {
+            if folder == root {
+                w.state = "stopped"
+                w.why = string.copy("${root}: cannot list it (not there, or not granted)")
+            }
+        } else {
+            w.dirs = w.dirs + 1
+            k = 0
+            cnt = dir.list_count(l)
+            while k < cnt && w.state == "walking" {
+                nm = dir.list_get(l, k)
+                kind = dir.list_kind(l, k)
+                if nm != "." && nm != ".." {
+                    p = "${folder}/${nm}"
+                    if kind == 0 {
+                        st, sk, _se = fs.stat(p, 0)
+                        if sk == fs.KIND_OK { kind = st.kind }
+                    }
+                    if kind == 2 {
+                        list.add(todo, p)
+                    } else if kind == 1 {
+                        st2, sk2, _se2 = fs.stat(p, 0)
+                        size = 0 as long
+                        if sk2 == fs.KIND_OK { size = st2.size }
+                        w.files = w.files + 1
+                        w.bytes = w.bytes + size
+                        if saebackend.emit(sb, "found", "${size} ${p}") != "" { return 0 }
+                    }
+                }
+                // A call that came meanwhile, and progress now and then.
+                if look(sb, w) == 0 { return 0 }
+                if now_ms() - last >= 100 {
+                    last = now_ms()
+                    if saebackend.emit(sb, "progress", status(w)) != "" { return 0 }
+                }
+                k = k + 1
+            }
+            dir.dir_list_free(l)
+        }
+    }
+    list.free(todo)
+    if w.state == "walking" { w.state = "done" }
+    w.current = ""
+    _p = saebackend.emit(sb, "progress", status(w))
+    if w.state == "stopped" {
+        _f = saebackend.fail(sb, id, w.why)
+    } else {
+        _a = saebackend.answer(sb, id, "${w.state}: ${w.files} files, ${w.dirs} folders, ${w.bytes} bytes")
+    }
+    return 1
+}
+
+// The folder's listing: (list, "") or (null, why). WORKAROUND (Aether
+// 0.923 to 0.925): dir.list gives an empty listing, not an error, when the
+// folder cannot be opened (std/fs/aether_fs.c: `if (!dir) return list;`),
+// so a folder the sandbox refuses would read as an empty one. Opening it
+// first says which: Landlock refuses the open of a folder it may not read.
+list_(folder: string) -> (ptr, string) {
+    fd, oerr = io.fd_open_read(folder)
+    if oerr != "" { return null, oerr }
+    _c = io.fd_close(fd)
+    return dir.list(folder)
+}
+
+// One call taken without waiting, if one is there: 1 to go on, 0 when the
+// channel closed.
+look(sb: ptr, w: *Walk) -> int {
+    cid, cname, _carg, cerr = saebackend.poll(sb)
+    if cerr != "" { return 0 }
+    if cname == "" { return 1 }
+    if cname == "cancel" {
+        w.state = "cancelled"
+        _a = saebackend.answer(sb, cid, "cancelling")
+        return 1
+    }
+    if cname == "walk" {
+        _b = saebackend.fail(sb, cid, "a walk is going on: cancel it first")
+        return 1
+    }
+    return other(sb, w, cid, cname)
+}

@@ -1,0 +1,127 @@
+// spec_backend_socket_service.ae — services/backend's socket transport
+// without a window (docs/design/ipc-backends.md), on any platform that has
+// one: tests/apps/backend_socket's backend started with start_socket, a call
+// answered, its own stdout kept out of the frames, an open file handed over
+// with a call and read through the descriptor, and kill. Then the contained
+// start: on Linux with Landlock the backend runs and is refused a path it was
+// not granted; everywhere else start_socket refuses and starts nothing.
+// spec_app_backend_socket is end to end, through a page (Linux).
+//
+//   (cd tests/apps/backend_socket && AETHER_LIB_DIR=../../../sdk ae build backend/main.ae -o backend/main)
+//   ae run tests/spec_backend_socket_service.ae          (from sae's root)
+import std.spec
+import std.string
+import std.fs
+import std.io
+import std.os
+import std.list
+import std.json
+import std.time (now_ms)
+import services.backend
+
+const PROG = "tests/apps/backend_socket/backend/main"
+
+// The next frame within 5 s: (frame, "") or ("", why).
+frame_(h: ptr) -> (string, string) {
+    start = now_ms()
+    while now_ms() - start < 5000 {
+        f, why = backend.poll(h)
+        if why != "" { return "", why }
+        if f != "" { return f, "" }
+        sleep(10)
+    }
+    return "", "no frame within 5 s"
+}
+
+// The result (or error) of the answer to call `id`, skipping events.
+answer_(h: ptr, id: int) -> string {
+    k = 0
+    while k < 10 {
+        f, why = frame_(h)
+        if why != "" { return "(gone: ${why})" }
+        v, _pe = json.parse(f)
+        if v != null && json.json_object_get_raw(v, "id") != null {
+            if json.json_get_int(json.json_object_get_raw(v, "id")) == id {
+                key = "result"
+                if json.json_get_bool(json.json_object_get_raw(v, "ok")) == 0 { key = "error" }
+                r, _re = json.get_string(json.json_object_get_raw(v, key))
+                out = string.copy(r)
+                json.json_free(v)
+                return out
+            }
+        }
+        if v != null { json.json_free(v) }
+        k = k + 1
+    }
+    return "(no answer to ${id})"
+}
+
+tmp_dir() -> string {
+    t = os.getenv("TMPDIR")
+    if t == null || t == "" { return "/tmp" }
+    while string.length(t) > 1 && string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
+    return t
+}
+
+main() {
+    fw = spec.init()
+    if fs.exists(PROG) == 0 {
+        println("spec_backend_socket_service: build ${PROG} first (see the comment at the top)")
+        exit(2)
+    }
+    dir = "${tmp_dir()}/sae-backend-socket-service"
+    _m = fs.mkdir_p(dir)
+    _w = fs.write("${dir}/handed.txt", "handed over open")
+    spec.describe(fw, "services/backend on a socket, no sandbox") {
+        spec.it("starts, answers, and its stdout stays out of the frames") callback {
+            h, err = backend.start_socket(PROG, null, null)
+            spec.assert_str_eq(err, "", "started")
+            spec.assert_true(backend.socket(h) == 1, "on a socket")
+            spec.assert_str_eq(backend.call(h, 1, "kind", "", 0 - 1), "", "called")
+            spec.assert_str_eq(answer_(h, 1), "socket", "the backend took the socket")
+            spec.assert_str_eq(backend.call(h, 2, "chatty", "x", 0 - 1), "", "called")
+            spec.assert_str_eq(answer_(h, 2), "chatted: x", "a println and a raw fd 1 write did not break a frame")
+            backend.kill(h, "done")
+        }
+        spec.it("an open file handed with a call is read through its descriptor") callback {
+            h, err = backend.start_socket(PROG, null, null)
+            spec.assert_str_eq(err, "", "started")
+            fd, ferr = io.fd_open_read("${dir}/handed.txt")
+            spec.assert_str_eq(ferr, "", "opened here")
+            spec.assert_str_eq(backend.call(h, 3, "read_handed", "", fd), "", "called with it")
+            spec.assert_str_eq(answer_(h, 3), "16 bytes: handed over open", "read there")
+            spec.assert_str_eq(backend.call(h, 4, "read_handed", "", 0 - 1), "", "called without one")
+            spec.assert_str_eq(answer_(h, 4), "no descriptor came with the call", "none taken from before")
+            backend.kill(h, "done")
+        }
+        spec.it("kill ends a backend that stopped reading") callback {
+            h, _err = backend.start_socket(PROG, null, null)
+            _c = backend.call(h, 5, "hang", "", 0 - 1)
+            sleep(200)
+            backend.kill(h, "killed by the spec")
+            spec.assert_true(backend.alive(h) == 0, "not alive")
+            spec.assert_str_eq(backend.why(h), "killed by the spec", "why")
+        }
+    }
+    spec.describe(fw, "services/backend on a socket, contained") {
+        spec.it("contained where Aether can contain it; refused, nothing started, elsewhere") callback {
+            grants = list.new()
+            list.add(grants, "read ${dir}/granted/")
+            _g = fs.mkdir_p("${dir}/granted")
+            h, err = backend.start_socket(PROG, null, grants)
+            list.free(grants)
+            if os.platform() == "linux" {
+                spec.assert_str_eq(err, "", "started contained")
+                if err == "" {
+                    _c = backend.call(h, 6, "read_path", "${dir}/handed.txt", 0 - 1)
+                    spec.assert_str_eq(answer_(h, 6), "refused: ${dir}/handed.txt: Permission denied", "an ungranted path refused")
+                    backend.kill(h, "done")
+                }
+            } else {
+                spec.assert_true(h == null, "nothing started")
+                spec.assert_contains(err, "cannot contain a child", "and why")
+            }
+        }
+    }
+    return spec.run_summary(fw)
+}
