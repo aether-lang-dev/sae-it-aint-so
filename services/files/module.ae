@@ -240,6 +240,10 @@ path(h: ptr, raw: string, write: int, what: string) -> (string, string) {
 // and made and removed in. fence_ makes one for each operation; the kernel
 // adds the same roots to a page's own list (services/pagegrants), so what a
 // page's entries may do and what each operation fences to cannot drift apart.
+// Each root is granted twice, as within_ reads it: "<root>/*" for what is in
+// it and "<root>" itself for the folder (a listing is a read of the folder
+// listed, and "/x/*" does not match "/x"). Not "<root>*", which would also
+// cover the sibling "<root>2".
 add_grants(h: ptr, gp: ptr) {
     f = h as *Files
     g = gp as sandbox.Grants
@@ -249,6 +253,7 @@ add_grants(h: ptr, gp: ptr) {
         i = 0
         while i < strarr.size(reads) {
             sandbox.grant_fs_read(g, "${strarr.get(reads, i)}*")
+            sandbox.grant_fs_read(g, root_of_(strarr.get(reads, i)))
             i = i + 1
         }
     }
@@ -256,9 +261,20 @@ add_grants(h: ptr, gp: ptr) {
         j = 0
         while j < strarr.size(writes) {
             sandbox.grant_fs(g, "${strarr.get(writes, j)}*")
+            sandbox.grant_fs(g, root_of_(strarr.get(writes, j)))
             j = j + 1
         }
     }
+}
+
+// A root as the list holds it ("/x/") without its closing "/": "/x", the
+// folder itself ("/" and "C:/" stay as they are: there is no parent to name).
+root_of_(r: string) -> string {
+    n = string.length(r)
+    if n > 1 && string.char_at(r, n - 1) == 47 && string.char_at(r, n - 2) != 58 {
+        return string.string_substring(r, 0, n - 1)
+    }
+    return r
 }
 
 // The app's grants as a std.sandbox grant list. Release with sandbox.free.

@@ -85,6 +85,8 @@ main() {
     _w5 = fs.write_atomic("${ROOT}/readwrite/w.txt", string.bytes("w"))
     _w6 = fs.write_atomic("${ROOT}/docs/picked.txt", string.bytes("picked"))
     _w7 = fs.write_atomic("${ROOT}/docs/unpicked.txt", string.bytes("not picked"))
+    _m6 = fs.mkdir_p("${ROOT}/readonly2")
+    _w8 = fs.write_atomic("${ROOT}/readonly2/s.txt", string.bytes("sibling"))
 
     fw = spec.init()
     spec.describe(fw, "a browser page's list: its own storage folder, nothing else") {
@@ -153,6 +155,33 @@ main() {
             spec.assert_eq(read_ok(g, "${other}/token"), 0, "not another storage folder")
             spec.assert_eq(env_seen(g, "PATH"), 0, "no environment")
             spec.assert_eq(exec_ok(g), 0, "no exec")
+            pagegrants.free(g)
+        }
+        spec.it("a grant root itself lists, through the service's fence, and the root's name does not grant a sibling") callback {
+            // "<root>/*" does not match "<root>" itself. Aether after 0.923.0
+            // checks a listing as a read of the folder listed, so listing a
+            // root was refused; on 0.923.0 the listing is not checked, but
+            // mkdir's fs.exists of the root already failed (a stat is a read
+            // of the path), as the spec's mkdir line shows there. The
+            // sibling read is checked on both.
+            f = files.new()
+            files.configure(f, 1, "${ROOT}/appdata", "${ROOT}", "${ROOT}", 0)
+            files.grant_read(f, "${ROOT}/readonly")
+            files.grant_write(f, "${ROOT}/readwrite")
+            rl, rwhy = files.list_json(f, "${ROOT}/readonly")
+            spec.assert_str_eq(rwhy, "", "listing a read root")
+            spec.assert_str_eq(rl, "[\"r.txt\"]", "the read root's names")
+            wl, wwhy = files.list_json(f, "${ROOT}/readwrite")
+            spec.assert_str_eq(wwhy, "", "listing a write root")
+            spec.assert_contains(wl, "w.txt", "the write root's names")
+            sl, swhy = files.list_json(f, "${ROOT}/readonly/")
+            spec.assert_str_eq(swhy, "", "a root spelt with its closing /")
+            _mk = files.mkdir(f, "${ROOT}/readwrite")
+            spec.assert_str_eq(_mk, "", "mkdir of a write root that is there")
+            g = pagegrants.new_page("app:/", store)
+            files.add_grants(f, g)
+            spec.assert_eq(read_ok(g, "${ROOT}/readonly2/s.txt"), 0, "a sibling named like a root is not granted")
+            spec.assert_eq(read_ok(g, "${ROOT}/readonly/r.txt"), 1, "the root's own files still are")
             pagegrants.free(g)
         }
         spec.it("without add_grants (fs absent) an app page has its storage only") callback {
