@@ -155,6 +155,7 @@ check_module_rules||check check_module_rules
 check_prelude||check check_prelude
 check_listeners||check check_listeners
 check_timed_entries||check check_timed_entries
+check_gate_probes||check check_gate_probes
 lower||lower
 "
 
