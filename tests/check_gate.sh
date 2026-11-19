@@ -8,8 +8,8 @@
 #       src/sae_prelude.c).
 # (ii)  tests/gate/dump.ts, run headless in each mode of tests/gate/dump.sh (a
 #       web page seeking nothing or something; an app granted and seeking
-#       everything, something, nothing, or granted nothing and seeking
-#       everything as optional), prints each global's own keys, typeof and
+#       everything, something, nothing, or one privilege at a time, or granted
+#       nothing and seeking everything as optional), prints each global's own keys, typeof and
 #       .length; for every global and member the spec describes, that is what
 #       the spec says that mode has (a namespace not yet in the spec is
 #       compared with nothing).
@@ -50,7 +50,8 @@ else
 fi
 
 # --- (ii) the live objects ---
-for mode in web webseeks all some unsought optional none; do
+for mode in web webseeks all some unsought optional none \
+    just-local-filesystem just-outgoing-http just-open-urls just-print just-documents just-clipboard just-clipboard-read just-control-bus; do
     "$GATE" --expect "$mode" < "$WORK/describe.jsonl" | LC_ALL=C sort > "$WORK/expect-$mode.txt"
     sh "$ROOT/tests/gate/dump.sh" "$mode" 2>&1 | grep '^[GM] ' > "$WORK/dump-$mode.txt"
     # the dump's lines about the names the spec describes

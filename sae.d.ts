@@ -22,6 +22,27 @@ declare namespace sae {
     update(fn: (v: T) => T): T;
     subscribe(fn: (v: T) => void): State<T>;
   }
+  /** What an http callback gets: ok is a 2xx answer; status is 0 when nothing came back; error is empty unless the request failed or was refused. */
+  interface HttpResponse {
+    ok: boolean;
+    status: number;
+    text: string;
+    error: string;
+    headers: Record<string, string>;
+    json(): any;
+  }
+  /** What http.get, post and request return. */
+  interface HttpRequest {
+    id: number;
+    cancel(): void;
+  }
+  interface HttpOptions {
+    method?: string;
+    url: string;
+    headers?: Record<string, string>;
+    body?: string;
+    contentType?: string;
+  }
   /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */
   type Timer = number;
   /** An id from requestAnimationFrame, for cancelAnimationFrame. */
@@ -380,6 +401,56 @@ declare const ui: {
   batch<T>(fn: () => T): T;
   /** A multi-line text field; bind binds it both ways to a string state. */
   textarea(placeholder?: string, onChange?: (text: string) => void): sae.Widget;
+};
+/** @seeks outgoing-http */
+declare const http: {
+  /** GETs url on an actor; fn(res) runs on the UI thread. Where a page may reach is the kernel's decision: refused, res.ok is false and res.error says why. */
+  get(url: string, fn: (res: sae.HttpResponse) => void): sae.HttpRequest;
+  /** POSTs body as contentType; fn(res) runs on the UI thread. */
+  post(url: string, body: string, contentType: string, fn: (res: sae.HttpResponse) => void): sae.HttpRequest;
+  /** The request's callback will not run (the request may still finish on its actor). */
+  cancel(id: number): void;
+  /** A request of any method, with headers; res.headers holds the answer's, with lowercased names. */
+  request(options: sae.HttpOptions, fn: (res: sae.HttpResponse) => void): sae.HttpRequest;
+  /** The same request as a promise of the same response object, refused the same way (res.ok false, never a rejection). */
+  fetch(urlOrOptions: string | sae.HttpOptions): Promise<sae.HttpResponse>;
+};
+/** @seeks local-filesystem @appOnly */
+declare const fs: {
+  /** The text of a file in a granted folder; a refusal throws, naming the grant. $APPDATA is the app's own folder. */
+  read_text(path: string): string;
+  /** Node's name for read_text; the encoding is ignored. */
+  readFileSync(path: string, encoding?: string): string;
+  /** Writes a file in a granted folder. */
+  write_text(path: string, text: string): void;
+  /** Node's name for write_text. */
+  writeFileSync(path: string, text: string): void;
+  /** A binary file's bytes as base64 text. */
+  read_base64(path: string): string;
+  /** Writes a binary file from base64 text. */
+  write_base64(path: string, b64: string): void;
+  /** Whether a path in a granted folder exists. */
+  exists(path: string): boolean;
+  /** Node's name for exists. */
+  existsSync(path: string): boolean;
+  /** The names in a folder. */
+  list(path: string): string[];
+  /** Node's name for list. */
+  readdirSync(path: string): string[];
+  /** Makes a folder in a granted folder. */
+  mkdir(path: string): void;
+  /** Removes a file or folder in a granted folder. */
+  remove(path: string): void;
+};
+/** @seeks print @appOnly */
+declare const printing: {
+  /** A PDF the page made (its bytes as base64) to the system's print dialog, the job named title. */
+  pdf(base64: string, title: string): void;
+};
+/** @seeks open-urls @appOnly */
+declare const shell: {
+  /** Hands a URL to the system (the default browser), for the granted prefixes. */
+  open(url: string): void;
 };
 declare const storage: {
   /** The value stored under key, or null; keys are letters, digits, '.', '_' and '-'. */

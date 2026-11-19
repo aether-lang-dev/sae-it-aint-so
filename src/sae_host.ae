@@ -9685,6 +9685,11 @@ const T_HANDLE = 24 // a widget, or a vg scene or shape (or 0, the whole page)
 // What `value` takes its string from, when a page is registered.
 const V_PAGE_URL = 1
 
+// http.fetch(url or options): the same request as a promise of the same
+// response object, for `await`. It runs on the same actors; the promise
+// resolves where a callback would have run.
+const HTTP_FETCH_JS = "http.fetch = function (o) { return new Promise(function (resolve) { if (typeof o === 'string') http.get(o, resolve); else http.request(o, resolve); }); };"
+
 const GATE_TAG_SPACE = 71
 const GATE_TAG_ENTRY = 72
 
@@ -9938,6 +9943,21 @@ provided_value(_ctx: @keep ptr, name: string, t: int) {
     e = gate_begin_(g, "provided_value", name, 0)
     e.gives = t
     gate_flush_(g)
+}
+
+// JavaScript the page's runtime evaluates over the space's functions, once they
+// are registered (a wrapper that puts promises over host callbacks): `source`
+// as unit `name`. Nothing when the space is not installed for this page, or
+// when describing. What the JavaScript adds is said with provided().
+js_wrapper(_ctx: @keep ptr, name: string, source: string) {
+    s = _ctx as *GateSpace
+    g = s.g as *Gate
+    gate_flush_(g)
+    if g.mode == G_REGISTER && s.on == 1 {
+        p = g.p as *Page
+        r, _e = js_eval_(p.ctx, source, name)
+        quickjs.release(p.ctx, r)
+    }
 }
 
 // What a space's functions may reach beyond the shared helpers (recorded
@@ -11122,6 +11142,118 @@ gate_spec_(g: *Gate) {
             doc("A multi-line text field; bind binds it both ways to a string state.")
         }
     }
+    // A privilege the page can do without and was not granted has no object at
+    // all, so `typeof http === "undefined"` tells the page.
+    space(g, "http", WHEN_APP_OR_WEB_SEEKS, "outgoing-http") {
+        api("get", sae_http_get, 2) {
+            arg("url", T_STR)
+            arg_ts("fn", "(res: sae.HttpResponse) => void")
+            gives_ts("sae.HttpRequest")
+            doc("GETs url on an actor; fn(res) runs on the UI thread. Where a page may reach is the kernel's decision: refused, res.ok is false and res.error says why.")
+        }
+        api("post", sae_http_post, 4) {
+            arg("url", T_STR)
+            arg("body", T_STR)
+            arg("contentType", T_STR)
+            arg_ts("fn", "(res: sae.HttpResponse) => void")
+            gives_ts("sae.HttpRequest")
+            doc("POSTs body as contentType; fn(res) runs on the UI thread.")
+        }
+        api("cancel", sae_http_cancel, 1) {
+            arg("id", T_INT)
+            doc("The request's callback will not run (the request may still finish on its actor).")
+        }
+        api("request", sae_http_request, 2) {
+            arg_ts("options", "sae.HttpOptions")
+            arg_ts("fn", "(res: sae.HttpResponse) => void")
+            gives_ts("sae.HttpRequest")
+            doc("A request of any method, with headers; res.headers holds the answer's, with lowercased names.")
+        }
+        provided("fetch", 1) {
+            arg_ts("urlOrOptions", "string | sae.HttpOptions")
+            gives_ts("Promise<sae.HttpResponse>")
+            doc("The same request as a promise of the same response object, refused the same way (res.ok false, never a rejection).")
+        }
+        js_wrapper("sae:http", HTTP_FETCH_JS)
+    }
+    // An installed app's files, within the folders app.json grants (README, "App mode").
+    space(g, "fs", WHEN_APP_SEEKS, "local-filesystem") {
+        reach("files")
+        api("read_text", sae_fs_read_text, 1) {
+            arg("path", T_STR)
+            gives(T_STR)
+            doc("The text of a file in a granted folder; a refusal throws, naming the grant. $APPDATA is the app's own folder.")
+        }
+        api("readFileSync", sae_fs_read_text, 2) {
+            arg("path", T_STR)
+            opt("encoding", T_STR)
+            gives(T_STR)
+            doc("Node's name for read_text; the encoding is ignored.")
+        }
+        api("write_text", sae_fs_write_text, 2) {
+            arg("path", T_STR)
+            arg("text", T_STR)
+            doc("Writes a file in a granted folder.")
+        }
+        api("writeFileSync", sae_fs_write_text, 2) {
+            arg("path", T_STR)
+            arg("text", T_STR)
+            doc("Node's name for write_text.")
+        }
+        api("read_base64", sae_fs_read_base64, 1) {
+            arg("path", T_STR)
+            gives(T_STR)
+            doc("A binary file's bytes as base64 text.")
+        }
+        api("write_base64", sae_fs_write_base64, 2) {
+            arg("path", T_STR)
+            arg("b64", T_STR)
+            doc("Writes a binary file from base64 text.")
+        }
+        api("exists", sae_fs_exists, 1) {
+            arg("path", T_STR)
+            gives(T_BOOL)
+            doc("Whether a path in a granted folder exists.")
+        }
+        api("existsSync", sae_fs_exists, 1) {
+            arg("path", T_STR)
+            gives(T_BOOL)
+            doc("Node's name for exists.")
+        }
+        api("list", sae_fs_list, 1) {
+            arg("path", T_STR)
+            gives_ts("string[]")
+            doc("The names in a folder.")
+        }
+        api("readdirSync", sae_fs_list, 1) {
+            arg("path", T_STR)
+            gives_ts("string[]")
+            doc("Node's name for list.")
+        }
+        api("mkdir", sae_fs_mkdir, 1) {
+            arg("path", T_STR)
+            doc("Makes a folder in a granted folder.")
+        }
+        api("remove", sae_fs_remove, 1) {
+            arg("path", T_STR)
+            doc("Removes a file or folder in a granted folder.")
+        }
+    }
+    space(g, "printing", WHEN_APP_SEEKS, "print") {
+        reach("printing")
+        api("pdf", sae_printing_pdf, 2) {
+            arg("base64", T_STR)
+            arg("title", T_STR)
+            doc("A PDF the page made (its bytes as base64) to the system's print dialog, the job named title.")
+        }
+    }
+    space(g, "shell", WHEN_APP_SEEKS, "open-urls") {
+        reach("shell")
+        api("open", sae_shell_open, 1) {
+            arg("url", T_STR)
+            doc("Hands a URL to the system (the default browser), for the granted prefixes.")
+        }
+    }
     space(g, "storage", WHEN_ALWAYS, "") {
         reach("storage_read_")
         api("get", sae_storage_get, 1) {
@@ -11622,40 +11754,6 @@ gate_describe_() {
 api_register_(p: *Page) {
     ab = p.browser as *Browser
     q = p.ctx
-    // A privilege the page can do without and was not granted has no
-    // object at all, so `typeof http === "undefined"` tells the page.
-    if string.contains(p.absent, ",outgoing-http,") == 0 {
-    ht = quickjs.new_object(q)
-    reg_(p, q, ht, "get", 2, sae_http_get)
-    reg_(p, q, ht, "post", 4, sae_http_post)
-    reg_(p, q, ht, "cancel", 1, sae_http_cancel)
-    reg_(p, q, ht, "request", 2, sae_http_request)
-    js_set_global_(q, "http", ht)
-    quickjs.release(q, ht)
-    // http.fetch(url or options): the same request as a promise of the same
-    // response object, for `await`. It runs on the same actors; the promise
-    // resolves where a callback would have run.
-    hf, _hfe = js_eval_(q, "http.fetch = function (o) { return new Promise(function (resolve) { if (typeof o === 'string') http.get(o, resolve); else http.request(o, resolve); }); };", "sae:http")
-    quickjs.release(q, hf)
-    }
-
-    if ab.app_dir != "" && string.contains(p.absent, ",local-filesystem,") == 0 {
-        fo = quickjs.new_object(q)
-        reg_(p, q, fo, "read_text", 1, sae_fs_read_text)
-        reg_(p, q, fo, "readFileSync", 2, sae_fs_read_text)
-        reg_(p, q, fo, "write_text", 2, sae_fs_write_text)
-        reg_(p, q, fo, "writeFileSync", 2, sae_fs_write_text)
-        reg_(p, q, fo, "read_base64", 1, sae_fs_read_base64)
-        reg_(p, q, fo, "write_base64", 2, sae_fs_write_base64)
-        reg_(p, q, fo, "exists", 1, sae_fs_exists)
-        reg_(p, q, fo, "existsSync", 1, sae_fs_exists)
-        reg_(p, q, fo, "list", 1, sae_fs_list)
-        reg_(p, q, fo, "readdirSync", 1, sae_fs_list)
-        reg_(p, q, fo, "mkdir", 1, sae_fs_mkdir)
-        reg_(p, q, fo, "remove", 1, sae_fs_remove)
-        js_set_global_(q, "fs", fo)
-        quickjs.release(q, fo)
-    }
     // documents: the person's files, picked; the page gets handles, never
     // paths. The raw gates go in a hidden global the wrapper takes and
     // deletes, so a page has only `documents`, all of it promises.
@@ -11712,18 +11810,6 @@ api_register_(p: *Page) {
         quickjs.release(q, bko)
         bkw, _bke = js_eval_(q, "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; raw.listen(function (kind, id, ok, name, payload) { if (kind === 0) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg): name must be a string'); var a = arg === undefined ? '' : String(arg); return new Promise(function (resolve, reject) { var id = raw.call(name, a); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;", "sae:backend")
         quickjs.release(q, bkw)
-    }
-    if ab.app_dir != "" && string.contains(p.absent, ",print,") == 0 {
-        pro = quickjs.new_object(q)
-        reg_(p, q, pro, "pdf", 2, sae_printing_pdf)
-        js_set_global_(q, "printing", pro)
-        quickjs.release(q, pro)
-    }
-    if ab.app_dir != "" && string.contains(p.absent, ",open-urls,") == 0 {
-        sho = quickjs.new_object(q)
-        reg_(p, q, sho, "open", 1, sae_shell_open)
-        js_set_global_(q, "shell", sho)
-        quickjs.release(q, sho)
     }
 
     // ===== wave1/sqlite: sqlite.<name> for each database the page seeks and app.json declares =====

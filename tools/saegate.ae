@@ -160,7 +160,9 @@ shape_of_(e: ptr) -> string {
 //   webseeks, some        outgoing-http, clipboard
 //   optional              clipboard (the one privilege an app has without a grant)
 //   all                   every privilege an app can seek and be granted
+//   just-<privilege>      that one (an app granted everything)
 mode_has_(mode: string) -> string {
+    if string.starts_with(mode, "just-") == 1 { return ",${string.substring(mode, 5, string.length(mode))}," }
     if mode == "webseeks" || mode == "some" { return ",outgoing-http,clipboard," }
     if mode == "optional" { return ",clipboard," }
     if mode == "all" { return ",local-filesystem,outgoing-http,open-urls,print,documents,clipboard,clipboard-read,control-bus," }
@@ -228,6 +230,11 @@ dts_header_(out: ptr) {
     _i8 = strbuilder.append(out, "    /** The raw cell handle, for ui.ui_set and ui.text_bound. */\n")
     _i9 = strbuilder.append(out, "    h: number;\n    value: T;\n    get(): T;\n    set(v: T): T;\n    update(fn: (v: T) => T): T;\n")
     _ia = strbuilder.append(out, "    subscribe(fn: (v: T) => void): State<T>;\n  }\n")
+    _ib = strbuilder.append(out, "  /** What an http callback gets: ok is a 2xx answer; status is 0 when nothing came back; error is empty unless the request failed or was refused. */\n")
+    _ic = strbuilder.append(out, "  interface HttpResponse {\n    ok: boolean;\n    status: number;\n    text: string;\n    error: string;\n    headers: Record<string, string>;\n    json(): any;\n  }\n")
+    _id = strbuilder.append(out, "  /** What http.get, post and request return. */\n")
+    _ie = strbuilder.append(out, "  interface HttpRequest {\n    id: number;\n    cancel(): void;\n  }\n")
+    _if = strbuilder.append(out, "  interface HttpOptions {\n    method?: string;\n    url: string;\n    headers?: Record<string, string>;\n    body?: string;\n    contentType?: string;\n  }\n")
     _i = strbuilder.append(out, "  /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */\n")
     _j = strbuilder.append(out, "  type Timer = number;\n")
     _j2 = strbuilder.append(out, "  /** An id from requestAnimationFrame, for cancelAnimationFrame. */\n")
@@ -240,7 +247,7 @@ main() {
     expect_mode = ""
     if arg1 == "--expect" {
         expect_mode = os.args_get(2)
-        if string.contains(",web,webseeks,all,some,unsought,optional,none,", ",${expect_mode},") == 0 { fail_("--expect takes web, webseeks, all, some, unsought, optional or none") }
+        if string.contains(",web,webseeks,all,some,unsought,optional,none,", ",${expect_mode},") == 0 && string.starts_with(expect_mode, "just-") == 0 { fail_("--expect takes web, webseeks, all, some, unsought, optional, none or just-<privilege>") }
     } else {
         if arg1 != "" && arg1 != "--check-arity" { fail_("usage: saegate [--expect MODE | --check-arity]") }
     }

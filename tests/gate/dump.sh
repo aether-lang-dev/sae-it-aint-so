@@ -9,6 +9,11 @@
 #   unsought    an app that grants everything and seeks nothing
 #   optional    an app that grants nothing and seeks everything, as optional
 #   none        an app that grants nothing and seeks nothing
+#   just-<priv> an app that grants everything and seeks only <priv>, one of
+#               local-filesystem outgoing-http open-urls print documents
+#               clipboard clipboard-read control-bus: which space each
+#               privilege unlocks, so a seek spelled wrong, or taken from the
+#               wrong line, shows
 # Used by tests/check_gate.sh.
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SAE=${SAE:-$ROOT/target/build/bin/sae}
@@ -74,5 +79,9 @@ none)
     cp "$ROOT/tests/gate/dump.ts" "$W/index.ts"
     echo '{ "name": "Gate dump (nothing)" }' > "$W/app.json"
     SAE_APPDATA_DIR="$W/appdata" exec "$SAE" --app "$W" ;;
-*) echo "dump.sh: mode web, webseeks, all, some, unsought, optional or none" >&2; exit 2 ;;
+just-*)
+    index_seeking "$W/index.ts" "" "${mode#just-}"
+    grant_all
+    SAE_APPDATA_DIR="$W/appdata" exec "$SAE" --app "$W" --control-bus ;;
+*) echo "dump.sh: mode web, webseeks, all, some, unsought, optional, none or just-<privilege>" >&2; exit 2 ;;
 esac
