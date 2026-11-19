@@ -144,6 +144,17 @@ expect_callers quickjs.set_global "js_set_global_"
 expect_callers quickjs.function "host_fn_"
 expect_callers js_eval_ "ae_register_ engine_eval_ http_helpers_ js_wrapper sqlite_fns_for_"
 expect_callers engine_eval_ "mod_run_ modules_prepare_ page_run_"
+# The app_dir half of WHEN_APP_SEEKS (an installed app has fs, shell and the
+# like; a page from a file never does) is not something a dump can see: a page
+# that runs has every app-only privilege it seeks as optional in p.absent
+# (available_ is 0 for them without an app), so the other half already keeps the
+# object out, and a mode where only this test stands cannot be made. It is held
+# by its text.
+if grep -q 'if cond == WHEN_APP_SEEKS && browser_of_(p).app_dir == "" { s.on = 0 }' "$ROOT/src/sae_host.ae"; then
+    ok "gate_space_ still keeps an app-only space out of a page from a file (held by its text: no dump can tell)"
+else
+    bad "gate_space_ no longer tests app_dir for WHEN_APP_SEEKS (held by its text: no dump can tell; docs/design/gate-dsl.md, Step 11)"
+fi
 
 # --- (vi) the other copies of the privilege and global tables ---
 LOWER="$ROOT/lower/module.ae"
