@@ -155,6 +155,7 @@ spec_stopwatch|SAE_TEST_APP=examples/stopwatch SAE_TIME_SCALE=60|spec spec_stopw
 spec_eliza|SAE_TEST_APP=examples/eliza|spec spec_eliza
 spec_fractals|SAE_TEST_APP=examples/fractals|spec spec_fractals
 spec_tsello|SAE_TEST_APP=examples/tsello SAE_STORAGE_DIR=$T/spec-storage|spec spec_tsello
+spec_charts|SAE_TEST_APP=examples/charts|spec spec_charts
 spec_http_grants||aerun spec_http_grants
 spec_page_grants||aerun spec_page_grants
 spec_origin_rules||aerun spec_origin_rules
