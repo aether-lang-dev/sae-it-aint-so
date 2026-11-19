@@ -120,6 +120,7 @@ spec_a11y||spec spec_a11y
 spec_aevg||spec spec_aevg
 spec_aevg_parity||spec spec_aevg_parity
 spec_camera||spec spec_camera
+spec_fib_clock||spec spec_fib_clock
 spec_local_nav|SAE_TEST_START=site/algos.ts|spec spec_local_nav
 spec_app|SAE_TEST_APP=apps/tasks|spec spec_app
 spec_app_caps|SAE_TEST_APP=tests/apps/caps SAE_APPDATA_DIR=$T/caps-appdata SAE_SHELL_LOG=$T/caps-shell.log|spec spec_app_caps

@@ -8499,7 +8499,8 @@ ae_eval_bind_(p: *Page, r: *AeRec, kind: int, fn_h: int) {
         if t != "undefined" { aevg.rec_set_fill(r, own_(js_str_(p, v))) }
     } else if kind == AB_STROKE {
         if t == "string" { aevg.rec_set_stroke(r, own_(js_str_(p, v)), 1.0) }
-        else if t == "object" { aevg.rec_set_stroke(r, ae_index_str_(p, v, 0), ae_index_num_(p, v, 1)) }
+        // [colour, width]: contrib.quickjs's type_of names an array "array"
+        else if t == "array" { aevg.rec_set_stroke(r, ae_index_str_(p, v, 0), ae_index_num_(p, v, 1)) }
     } else if kind == AB_OPACITY {
         aevg.rec_set_opacity(r, js_to_float_(p, v))
     } else if kind == AB_TEXT {

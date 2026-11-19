@@ -24,6 +24,7 @@ const links: Link[] = [
   { label: "AeVG alive", href: "/aevg_live" },
   { label: "Camera", href: "/camera" },
   { label: "Clock", href: "/clock" },
+  { label: "Fibonacci clock", href: "/fib_clock" },
   { label: "Vector graphics misuse", href: "/vgmisuse" },
   { label: "Rasters (pixels from a page)", href: "/raster" },
   { label: "Terrain", href: "/terrain" },

@@ -1,0 +1,105 @@
+// spec_fib_clock.ae -- the Fibonacci clock (site/fib_clock.ts), written with
+// trailing blocks: a pinned time held to known geometry. At 4:30 the readout
+// says 04:30, lane 4 is hot and lane 9 not, the hand points down and right,
+// and hour 4's spiral (grown by 1.247^0.5) crosses the axis straight up; at
+// 9:15 the hot lane, the hand and the spiral move, and hour 4's is gone.
+//
+//   tests/run_spec.sh spec_fib_clock
+import std.spec
+import std.string
+import std.math
+import saedriver as b
+import uidriver
+
+const CX: float = 300.0
+const CY: float = 540.0
+const PHI: float = 1.6180339887
+const HOT: int = 0xf26b5b
+const INK: int = 0x3a3a3a
+const SPIRAL: int = 0x4fb3d0
+const WHITE: int = 0xffffff
+
+// ViewBox points (600 x 1040) to canvas pixels.
+fx(v: float) -> int { return b.vg_px_x(v, 600.0, 1040.0) }
+fy(v: float) -> int { return b.vg_px_y(v, 600.0, 1040.0) }
+
+// 1 when a pixel within one of the point's (a stroke 2 to 3 px wide, drawn
+// antialiased) is near the colour; polled as wait_for_vg_pixel is.
+near_point_(x: float, y: float, rgb: int) -> int {
+    px = fx(x)
+    py = fy(y)
+    dy = -1
+    while dy <= 1 {
+        dx = -1
+        while dx <= 1 {
+            if b.vg_pixel_near(px + dx, py + dy, rgb, 40) == 1 { return 1 }
+            dx = dx + 1
+        }
+        dy = dy + 1
+    }
+    return 0
+}
+
+wait_near_(x: float, y: float, rgb: int) -> int {
+    i = 0
+    while i < 30 {
+        if near_point_(x, y, rgb) == 1 { return 1 }
+        sleep(100)
+        i = i + 1
+    }
+    return 0
+}
+
+// A point on hour k's lane, `delta` radians from its axis (the page's
+// spiral: r = R * phi^(-2 delta / pi), R = 118 * 1.247^(ring - 1)).
+lane_x_(k: int, delta: float) -> float { return CX + lane_r_(k, delta) * math.cos(lane_axis_(k) + delta) }
+lane_y_(k: int, delta: float) -> float { return CY + lane_r_(k, delta) * math.sin(lane_axis_(k) + delta) }
+lane_r_(k: int, delta: float) -> float {
+    ring = k
+    if k > 6 { ring = k - 6 }
+    return 118.0 * math.pow(1.247, ring - 1.0) * math.pow(PHI, -delta * 2.0 / math.pi())
+}
+lane_axis_(k: int) -> float {
+    if k > 6 { return math.pi() / 2.0 }
+    return 0.0 - math.pi() / 2.0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "the Fibonacci clock") {
+        spec.it("4:30: the readout, lane 4 hot, the hand down and right, hour 4's spiral") callback {
+            b.navigate(b.test_url("/fib_clock"))
+            b.assert_page("Fibonacci Clock", "200 ", "fib clock page")
+            spec.assert_true(b.wait_for_vg_canvas(), "the scene painted")
+            b.click("Set 4:30")
+            spec.assert_true(wait_near_(lane_x_(4, -0.35), lane_y_(4, -0.35), HOT), "lane 4 is hot")
+            spec.assert_contains(b.vg_nodes(), "\"04:30\"", "the readout")
+            spec.assert_true(near_point_(lane_x_(9, 0.35), lane_y_(9, 0.35), INK), "lane 9 is ink")
+            // the hand: 135 degrees clockwise from up, half its 68.8 length out
+            spec.assert_true(near_point_(CX + 34.4 * 0.7071, CY + 34.4 * 0.7071, WHITE), "the hand points down and right")
+            spec.assert_true(near_point_(CX - 34.4 * 0.7071, CY - 34.4 * 0.7071, WHITE) == 0, "and not up and left")
+            // one turn in from lane 4's axis, grown by 1.247^(30/60): straight up
+            r4 = 118.0 * math.pow(1.247, 3.0) * math.pow(PHI, -4.0) * math.pow(1.247, 0.5)
+            spec.assert_true(near_point_(CX, CY - r4, SPIRAL), "hour 4's spiral crosses straight up at r ${r4}")
+            spec.assert_str_eq(b.screenshot("../target/spec_fib_clock_0430.png"), "", "screenshot")
+        }
+        spec.it("9:15: lane 9 hot, the hand left, hour 9's spiral down, hour 4's gone") callback {
+            b.click("Set 9:15")
+            spec.assert_true(wait_near_(lane_x_(9, 0.35), lane_y_(9, 0.35), HOT), "lane 9 is hot")
+            spec.assert_contains(b.vg_nodes(), "\"09:15\"", "the readout")
+            spec.assert_true(near_point_(lane_x_(4, -0.35), lane_y_(4, -0.35), INK), "lane 4 is ink again")
+            // 277.5 degrees clockwise from up: left and a little up
+            a = 277.5 * math.pi() / 180.0
+            spec.assert_true(near_point_(CX + 34.4 * math.sin(a), CY - 34.4 * math.cos(a), WHITE), "the hand points left")
+            r9 = 118.0 * math.pow(1.247, 2.0) * math.pow(PHI, -4.0) * math.pow(1.247, 0.25)
+            spec.assert_true(near_point_(CX, CY + r9, SPIRAL), "hour 9's spiral crosses straight down at r ${r9}")
+            r4 = 118.0 * math.pow(1.247, 3.0) * math.pow(PHI, -4.0) * math.pow(1.247, 0.25)
+            spec.assert_true(near_point_(CX, CY - r4, SPIRAL) == 0, "hour 4's spiral is hidden")
+            spec.assert_str_eq(b.screenshot("../target/spec_fib_clock_0915.png"), "", "screenshot")
+            b.click("Home")
+            b.assert_page("Welcome to Sae it ain't so", "200 ", "home")
+        }
+    }
+    return spec.run_summary(fw)
+}
