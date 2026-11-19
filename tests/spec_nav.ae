@@ -444,6 +444,10 @@ main() {
             b.assert_text("slow: waiting", "and the request is still out")
             b.assert_text("slow: 200 slow done", "then it lands")
         }
+        spec.it("a request held open does not hold up the next ones (each on a thread of its own)") callback {
+            b.click("Slow beside quick")
+            b.assert_text("beside: 5 quick answers all under a second while the slow one was out", "a long-poll beside edits: no request waits behind it")
+        }
         spec.it("another origin without its consent is refused, through the callback") callback {
             b.click("Other origin")
             b.assert_text("refused: ok=false status=0 http://localhost:8091/api/echo?msg=other did not allow this page's origin http://127.0.0.1:8091: the response carries no Sae-Allow-Origin: http://127.0.0.1:8091 (or *)",

@@ -213,11 +213,14 @@ req.cancel();                              // its callback will not run
 `res` is `{ ok, status, text, error, json() }`: `ok` is a 2xx answer,
 `status` is 0 when nothing came back, `error` is `""` unless the request
 failed or was refused. `http.get` and `http.post` return `{ id, cancel() }`;
-a cancelled request may still finish on its actor, but its callback won't run.
+a cancelled request may still finish on its thread, but its callback won't run.
 
-A request runs on an Aether actor: a small pool of `HttpFetcher` actors does
-the blocking network call on the scheduler's threads, so the page's UI never
-waits on it (the spec clicks a button while a slow request is out). Each
+A request's blocking network call runs on a thread of its own (std.worker's
+`run_detached`), so the page's UI never waits on it (the spec clicks a button
+while a slow request is out), and a request held open (a long-poll, a slow
+answer) holds up nothing else. It ran on a small pool of fetcher actors until
+2026-11-19: a blocking call on an actor holds its scheduler core, and every
+actor sharing that core with it, other requests among them. Each
 finished job goes to an `HttpInbox` actor; while any are in flight, a UI
 timer asks the inbox for them and runs the callbacks on the UI thread, where
 the JS engine lives. A reply for a page that has since been left is
@@ -346,8 +349,8 @@ Tsyne's `examples/sandbox-breakout`) and its happy path in
   ticks wait while an entry runs. `fs` is the one capability that runs
   outside the list: `services/files` resolves a page's path by looking at
   every part of it, and fences the operation to app.json's grants itself.
-  This is not a process boundary: engine bugs, the HTTP fetchers and SQLite
-  workers (actors run with no grants), and the grants being ordinary data in
+  This is not a process boundary: engine bugs, the HTTP request threads and
+  SQLite workers (each runs with no grants), and the grants being ordinary data in
   sae's process are outside it (`docs/design/page-entry-sandbox.md`).
 - **No fingerprinting surface, no code from anywhere else.** No
   `navigator`, no device details, no module loader: `import()` of any URL

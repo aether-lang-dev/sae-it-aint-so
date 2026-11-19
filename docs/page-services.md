@@ -32,7 +32,7 @@ no file access to fall back on (section 2).
 
 | Scope | Services | Lives as long as |
 |---|---|---|
-| **App** (or browser process) | `http` (a pool of `HttpFetcher` actors and one `HttpInbox`, shared by every page), `storage` (one folder per installed app, origin or file folder), `fs` (`services/files`, configured from app.json), `shell` (`services/shell`), the network allowlist (`services/net`) | the process |
+| **App** (or browser process) | `http` (a thread of its own for each request's blocking call, and one `HttpInbox` actor, shared by every page), `storage` (one folder per installed app, origin or file folder), `fs` (`services/files`, configured from app.json), `shell` (`services/shell`), the network allowlist (`services/net`) | the process |
 | **Page** | the runtime itself, `ui` (the page's widget subtree and handle stack), `vg` (its scene nodes), timers and animation frames (`ui.timer`/`after`/`sleep`/`frame`, `setTimeout` and the other web names), `browserContext`, `print`, `performance`, its pending http callbacks | one page load: leaving the page disposes the runtime, cancels its timers and frames and drops replies still in flight (`page_free_`) |
 
 A page-scoped object never outlives its page, and a handle (a widget, vg

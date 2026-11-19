@@ -53,6 +53,7 @@ import vg.grammar.element
 import vg.grammar.element (SHAPE_CIRCLE, SHAPE_RECT, SHAPE_LINE)
 import vg.grammar.utils
 import std.strbuilder
+import std.worker
 
 extern malloc(n: long) -> ptr
 extern free(p: ptr)
@@ -4309,8 +4310,8 @@ raf_cancel_in_(l: ptr, id: int) {
 // 0 when nothing came back; error is "" unless the request failed or was
 // refused.
 //
-// The request runs on an Aether actor (an HttpFetcher, one of a small pool),
-// on the scheduler's threads, so the UI thread never waits on the network.
+// The request runs on a thread of its own (http_run_), off the scheduler's
+// threads, so neither the UI thread nor any actor waits on the network.
 // Each finished job goes to the HttpInbox actor; while any are in flight a
 // UI timer asks the inbox for them and runs the page's callback on the UI
 // thread, where the JS engine lives. A reply for a page that has since gone,
@@ -8769,19 +8770,27 @@ struct HttpWait {
     ref: int         // the page's callback (a handle of its runtime)
 }
 
-message HttpRun { job: ptr }
 message HttpDone { job: ptr }
 message HttpTake {}
 
-// Does the blocking request, on a scheduler thread, then hands the job to
-// the inbox. One job at a time per fetcher; the pool gives concurrency.
-actor HttpFetcher {
-    receive {
-        HttpRun(job) -> {
-            http_do_(job)
-            ib = (job as *HttpJob).inbox
-            ib ! HttpDone { job: job }
-        }
+// A request's blocking call runs on a thread of its own (std.worker's
+// run_detached), then hands the job to the inbox. It was a small pool of
+// HttpFetcher actors, handed requests in turn: a blocking call on an actor
+// holds its scheduler core, so a request held open (a long-poll, a slow
+// answer) held up every actor sharing that core, other requests among them,
+// for as long as it took (on a 4-core host one quick request in five waited
+// the whole 3 s of a slow one beside it).
+http_run_(jp: @keep ptr) {
+    started = worker.run_detached(|| {
+        http_do_(jp)
+        ib = (jp as *HttpJob).inbox
+        ib ! HttpDone { job: jp }
+    })
+    if started == false {
+        j = jp as *HttpJob
+        j.err = own_("could not start a thread for the request")
+        ib0 = j.inbox
+        ib0 ! HttpDone { job: jp }
     }
 }
 
@@ -8809,13 +8818,9 @@ actor HttpInbox {
     }
 }
 
-const HTTP_FETCHERS = 4
-
-// The browser's requests: the fetchers and the inbox (spawned on first
-// use), the requests pages are waiting on, and the timer that polls.
+// The browser's requests: the inbox (spawned on first use), the requests
+// pages are waiting on, and the timer that polls.
 struct HttpJobs {
-    pool: ptr      // std.list of the fetchers, or null before the first request
-    next: int      // the fetcher the next request goes to
     waits: ptr     // std.list of *HttpWait
     ids: int       // the last request id handed out
     timer: int     // the UI timer polling the inbox, or 0
@@ -8824,8 +8829,6 @@ struct HttpJobs {
 
 http_jobs_new_() -> *HttpJobs {
     hj = heap.new(HttpJobs)
-    hj.pool = null
-    hj.next = 0
     hj.waits = list.new()
     hj.ids = 0
     hj.timer = 0
@@ -9081,8 +9084,7 @@ http_start_(p: *Page, method: string, url_arg: string, body: string, ctype: stri
         ib0 = j.inbox
         ib0 ! HttpDone { job: j as ptr }
     } else {
-        f = http_fetcher_(hj)
-        f ! HttpRun { job: j as ptr }
+        http_run_(j as ptr)
     }
     if hj.timer == 0 { hj.timer = ui.timer(20, || { http_poll_(hb) }) }
     // The request object: { id, cancel() }.
@@ -9135,19 +9137,6 @@ http_inbox_(hj: *HttpJobs) -> ptr {
     return hj.inbox
 }
 
-http_fetcher_(hj: *HttpJobs) -> ptr {
-    if hj.pool == null {
-        hj.pool = list.new()
-        k = 0
-        while k < HTTP_FETCHERS {
-            list.add(hj.pool, spawn(HttpFetcher()))
-            k = k + 1
-        }
-    }
-    f, _ = list.get(hj.pool, hj.next % HTTP_FETCHERS)
-    hj.next = hj.next + 1
-    return f
-}
 
 // On the UI thread: take every finished job and run its page's callback.
 http_poll_(b: *Browser) {

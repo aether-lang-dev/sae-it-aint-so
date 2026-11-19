@@ -45,6 +45,22 @@ btn("Slow GET", () => {
   set_text(slow, "slow: waiting");
   http.get("/api/slow?ms=1500", (res: Res) => set_text(slow, `slow: ${res.status} ${res.text}`));
 });
+// A request held open (a long-poll, a slow answer) does not hold up the next
+// ones: each goes to a fetcher with nothing in hand.
+const beside = text("beside: (none)");
+btn("Slow beside quick", async () => {
+  set_text(beside, "beside: waiting");
+  const slowOne = http.fetch("/api/slow?ms=3000");
+  const quick: number[] = [];
+  await Promise.all([1, 2, 3, 4, 5].map(async (n) => {
+    const t0 = Date.now();
+    const res = await http.fetch(`/api/echo?msg=q${n}`);
+    if (res.ok) quick.push(Date.now() - t0);
+  }));
+  const worst = Math.max(...quick);
+  set_text(beside, `beside: ${quick.length} quick answers ${worst < 1000 ? "all under a second" : `one took ${worst} ms`} while the slow one was out`);
+  await slowOne;
+});
 // Proves the UI thread is free while a request is out.
 btn("Click me", () => { clicks++; set_text(counter, `clicks: ${clicks}`); });
 // http://localhost:8091 is the same page server as http://127.0.0.1:8091 and

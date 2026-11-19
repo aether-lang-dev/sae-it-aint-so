@@ -225,7 +225,7 @@ There is no kernel enforcement until the page host is its own process (roadmap 1
 Everything else moves out of the entry:
 - Kernel ticks (`bus_tick_` 4437/4550, `backend_tick_` 4843, `sqlite_poll_` 6408, `http_poll_` 9018, the navigation timer 10939) start with `if b.entry_depth > 0 { return }`.
 - `shell.open`, the print dialog, the document pickers and the clipboard read keep their checks synchronous but perform the effect in a one-shot kernel timer, like navigation already does.
-- HTTP fetchers and SQLite workers are actors, so they are unaffected and also not held. Holding them needs their own `enforce` in `http_do_` (step 12).
+- HTTP requests (each on a thread of its own since 2026-11-19, std.worker's `run_detached`; fetcher actors before) and SQLite workers (actors) start with no levels, so they are unaffected and also not held. Holding them needs their own `enforce` in `http_do_` (step 12).
 - Callbacks delivered later (timers, frames, HTTP and SQLite replies, bus, backend, menu getters) are themselves entries, so each gets the level.
 
 ## 3. Grant lists, and what each platform enforces
