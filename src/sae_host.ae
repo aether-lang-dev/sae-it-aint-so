@@ -5265,123 +5265,6 @@ sae_storage_remove(p: *Page, this_val: int, argv: int) -> int {
     return 0
 }
 
-// vg.scene(viewBox, w, h, block): a vector-graphics canvas w x h px under
-// the current ui container, drawing the viewBox.
-sae_vg_scene(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    vb = own_(arg_str_(ctx, argv, argc, 0))
-    long t = now_ns_()
-    root = live.vg(mem.long_to_ptr(top_(p)), vb, arg_int_(ctx, argv, argc, 1, 100), arg_int_(ctx, argv, argc, 2, 100))
-    ui_done_(p, t)
-    return vg_shape_done_(p, argv, argc, 3, root)
-}
-
-sae_vg_circle(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.circle() must be called inside vg.scene()") }
-    n = vg.circle(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0))
-    return vg_shape_done_(p, argv, argc, 3, n)
-}
-
-sae_vg_rect(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.rect() must be called inside vg.scene()") }
-    n = vg.rect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
-    return vg_shape_done_(p, argv, argc, 4, n)
-}
-
-sae_vg_rrect(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.rrect() must be called inside vg.scene()") }
-    n = vg.rrect(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0), arg_num_(ctx, argv, argc, 4, 0.0))
-    return vg_shape_done_(p, argv, argc, 5, n)
-}
-
-sae_vg_line(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.line() must be called inside vg.scene()") }
-    n = vg.line(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), arg_num_(ctx, argv, argc, 2, 0.0), arg_num_(ctx, argv, argc, 3, 0.0))
-    return vg_shape_done_(p, argv, argc, 4, n)
-}
-
-sae_vg_path(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.path() must be called inside vg.scene()") }
-    d = own_(arg_str_(ctx, argv, argc, 0))
-    n = vg.path(vg_top_(p), d)
-    return vg_shape_done_(p, argv, argc, 1, n)
-}
-
-sae_vg_text(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.text() must be called inside vg.scene()") }
-    s = own_(arg_str_(ctx, argv, argc, 2))
-    n = vg.text(vg_top_(p), arg_num_(ctx, argv, argc, 0, 0.0), arg_num_(ctx, argv, argc, 1, 0.0), s)
-    return vg_shape_done_(p, argv, argc, 3, n)
-}
-
-// vg.g(block): a group; its block's shapes nest under it.
-sae_vg_g(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.g() must be called inside vg.scene()") }
-    n = vg.g(vg_top_(p))
-    return vg_shape_done_(p, argv, argc, 0, n)
-}
-
-sae_vg_fill(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_shape_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.fill() must be called inside a shape's block") }
-    vg.fill(vg_top_(p), arg_str_(ctx, argv, argc, 0))
-    return 0
-}
-
-sae_vg_stroke(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_shape_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.stroke() must be called inside a shape's block") }
-    c = own_(arg_str_(ctx, argv, argc, 0))
-    vg.stroke(vg_top_(p), c, arg_num_(ctx, argv, argc, 1, 1.0))
-    return 0
-}
-
-sae_vg_opacity(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_shape_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.opacity() must be called inside a shape's block") }
-    vg.opacity(vg_top_(p), arg_num_(ctx, argv, argc, 0, 1.0))
-    return 0
-}
-
-sae_vg_transform(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_shape_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.transform() must be called inside a shape's block") }
-    t = own_(arg_str_(ctx, argv, argc, 0))
-    vg.transform(vg_top_(p), t)
-    return 0
-}
-
 // vg.resize(h, w, hh) -> h: the scene h is in (h a scene or any shape of
 // it) asks for a canvas of w x hh px from now on, in place of the size it
 // was made at: its shapes, handlers and bindings stay, and it is drawn
@@ -5403,29 +5286,6 @@ sae_vg_resize(p: *Page, this_val: int, argv: int) -> int {
     _w = ui.width(cw, w)
     _h = ui.height(cw, hh)
     return quickjs.new_int(ctx, h)
-}
-
-// vg.on_click(fn(x, y)): x and y are where the click landed, in the scene's
-// viewBox coordinates.
-sae_vg_on_click(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    if vg_shape_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.on_click() must be called inside a shape's block") }
-    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 {
-        return sae_throw_type_error(ctx, "vg.on_click(fn): fn must be a function")
-    }
-    ref = hold_arg_(ctx, argv, 0)
-    node = vg_top_(p)
-    scene = vg.node_scene(node)
-    // AeVG hands the handler canvas pixels; a page thinks in its viewBox.
-    // The mapping is read at click time, since a resize replaces it.
-    vg.on_click(node, |x: float, y: float| {
-        r = call_nums_(ctx, ref, vg.scene_px_to_vb_x(scene, x), vg.scene_px_to_vb_y(scene, y), 2)
-        if r < 0 { report_exception_(p, "a vg click handler") }
-        settle_(p)
-    })
-    return 0
 }
 
 sae_vg_set_fill(p: *Page, this_val: int, argv: int) -> int {
@@ -5508,13 +5368,6 @@ sae_bc_reload(p: *Page, this_val: int, argv: int) -> int {
     argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(p), NAV_RELOAD, "")
     return 0
-}
-
-sae_bc_current_url(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
-    ctx = p.ctx
-    argc = quickjs.arg_count(ctx, argv)
-    return quickjs.new_string(ctx, p.url)
 }
 
 // --- the page's globals beyond the page API: print, and the clocks ---
@@ -8589,7 +8442,8 @@ sae_ae_css(p: *Page, this_val: int, argv: int) -> int {
     return 0
 }
 
-// The registrations, in one block for api_register_ (called from there).
+// The ui registrations of the reactive layer, and the prelude, for
+// api_register_ (called from there, after the gate spec has made vg).
 ae_register_(p: *Page) {
     q = p.ctx
     u, _ue = js_get_global_(q, "ui")
@@ -8605,61 +8459,6 @@ ae_register_(p: *Page) {
     reg_(p, q, u, "set_enabled", 2, sae_ae_set_enabled)
     reg_(p, q, u, "tooltip", 2, sae_ui_tooltip)
     quickjs.release(q, u)
-    v, _ve = js_get_global_(q, "vg")
-    // These supersede the earlier registrations of the same names (see the
-    // banner above): the page sees the versions with the scene record.
-    reg_(p, q, v, "scene", 4, sae_ae_scene)
-    reg_(p, q, v, "circle", 4, sae_ae_circle)
-    reg_(p, q, v, "rect", 5, sae_ae_rect)
-    reg_(p, q, v, "rrect", 6, sae_ae_rrect)
-    reg_(p, q, v, "line", 5, sae_ae_line)
-    reg_(p, q, v, "path", 2, sae_ae_path)
-    reg_(p, q, v, "text", 4, sae_ae_text)
-    reg_(p, q, v, "g", 1, sae_ae_g)
-    reg_(p, q, v, "fill", 1, sae_ae_fill)
-    reg_(p, q, v, "stroke", 2, sae_ae_stroke)
-    reg_(p, q, v, "opacity", 1, sae_ae_opacity)
-    reg_(p, q, v, "transform", 1, sae_ae_transform)
-    reg_(p, q, v, "on_click", 1, sae_ae_on_click)
-    // New.
-    reg_(p, q, v, "polygon", 2, sae_ae_polygon)
-    reg_(p, q, v, "polyline", 2, sae_ae_polyline)
-    reg_(p, q, v, "ellipse", 5, sae_ae_ellipse)
-    reg_(p, q, v, "text_sized", 5, sae_ae_text_sized)
-    reg_(p, q, v, "text_anchored", 6, sae_ae_text_anchored)
-    reg_(p, q, v, "into", 2, sae_ae_into)
-    reg_(p, q, v, "linecap", 1, sae_ae_linecap)
-    reg_(p, q, v, "linejoin", 1, sae_ae_linejoin)
-    reg_(p, q, v, "tooltip", 1, sae_ae_tooltip)
-    reg_(p, q, v, "cursor", 1, sae_ae_cursor)
-    reg_(p, q, v, "on_hover", 1, sae_ae_on_hover)
-    reg_(p, q, v, "on_double_click", 1, sae_ae_on_double_click)
-    reg_(p, q, v, "on_right_click", 1, sae_ae_on_right_click)
-    reg_(p, q, v, "on_drag", 1, sae_ae_on_drag)
-    reg_(p, q, v, "on_drag_end", 1, sae_ae_on_drag_end)
-    reg_(p, q, v, "on_scroll", 1, sae_ae_on_scroll)
-    reg_(p, q, v, "set_transform", 2, sae_ae_set_transform)
-    reg_(p, q, v, "set_visible", 2, sae_ae_set_visible)
-    reg_(p, q, v, "remove", 1, sae_ae_remove)
-    reg_(p, q, v, "set", 2, sae_ae_set)
-    reg_(p, q, v, "get", 1, sae_ae_get)
-    reg_(p, q, v, "bind_fill", 2, sae_ae_bind_fill)
-    reg_(p, q, v, "bind_stroke", 2, sae_ae_bind_stroke)
-    reg_(p, q, v, "bind_opacity", 2, sae_ae_bind_opacity)
-    reg_(p, q, v, "bind_text", 2, sae_ae_bind_text)
-    reg_(p, q, v, "bind_pos", 2, sae_ae_bind_pos)
-    reg_(p, q, v, "bind_transform", 2, sae_ae_bind_transform)
-    reg_(p, q, v, "visible_when", 2, sae_ae_visible_when)
-    reg_(p, q, v, "view_box", 1, sae_ae_view_box)
-    reg_(p, q, v, "set_view_box", 2, sae_ae_set_view_box)
-    reg_(p, q, v, "refresh", 0, sae_ae_refresh)
-    reg_(p, q, v, "defs", 1, sae_ae_defs)
-    reg_(p, q, v, "linear_gradient", 7, sae_ae_linear_gradient)
-    reg_(p, q, v, "radial_gradient", 6, sae_ae_radial_gradient)
-    reg_(p, q, v, "clip_path", 3, sae_ae_clip_path)
-    reg_(p, q, v, "clip", 1, sae_ae_clip)
-    reg_(p, q, v, "css", 1, sae_ae_css)
-    quickjs.release(q, v)
     // The JS surface over these: state, computed, bind, each, batch, the
     // bind tagged template, vg.animate, vg.items (src/sae_prelude.js).
     pre, perr = js_eval_(q, sae_prelude(), "sae:prelude")
@@ -9880,6 +9679,19 @@ const T_TIMER = 6
 const T_FRAME = 7
 const T_FN = 8
 const T_FRAME_FN = 9
+const T_INT = 10 // a number the host reads as an int (ToInt32); as a result, a number
+const T_FLAG = 11 // a boolean or a number in; a number out (get_toggle)
+const T_WIDGET = 12 // a widget handle the page made
+const T_VGNODE = 13 // a vg scene, group or shape handle
+const T_GRID = 14 // a datagrid handle: not a widget
+const T_BLOCK = 15 // a function called now, with the new thing as the current parent
+const T_LEAD_NUM = 16 // a number that a function may stand in for (and so be left out)
+const T_LEAD_NODE = 17 // a vg handle that may be left out inside a shape's block
+const T_BYTES = 18 // a Uint8Array or Uint8ClampedArray
+const T_POINTS = 19 // "x,y x,y" or a flat array of numbers
+const T_STR_NUM = 20 // a string or a number, read as a string
+const T_OBJ = 21 // an object
+const T_RAW = 22 // a result whose TypeScript the entry gives (gives_ts)
 
 // What `value` takes its string from, when a page is registered.
 const V_PAGE_URL = 1
@@ -9914,6 +9726,7 @@ struct GateEntry {
     arity: int
     params: ptr // a strbuilder of the params' JSON
     gives: int
+    ts: string // the TypeScript of a T_RAW result
     promise: int
     doc: string
     internal: int
@@ -9944,6 +9757,19 @@ gate_type_name_(t: int) -> string {
     if t == T_FRAME { return "frame" }
     if t == T_FN { return "fn" }
     if t == T_FRAME_FN { return "frame_fn" }
+    if t == T_INT { return "int" }
+    if t == T_FLAG { return "flag" }
+    if t == T_WIDGET { return "widget" }
+    if t == T_VGNODE { return "vgnode" }
+    if t == T_GRID { return "grid" }
+    if t == T_BLOCK { return "block" }
+    if t == T_LEAD_NUM { return "lead_num" }
+    if t == T_LEAD_NODE { return "lead_node" }
+    if t == T_BYTES { return "bytes" }
+    if t == T_POINTS { return "points" }
+    if t == T_STR_NUM { return "str_num" }
+    if t == T_OBJ { return "obj" }
+    if t == T_RAW { return "raw" }
     return "void"
 }
 
@@ -9968,7 +9794,7 @@ gate_flush_(g: *Gate) {
     if e.open == 0 { return }
     s = g.sp as *GateSpace
     pj = strbuilder.finish(e.params)
-    line = "{\"kind\":${gate_json_(e.kind)},\"space\":${gate_json_(s.name)},\"when\":${gate_json_(when_name_(s.cond))},\"seek\":${gate_json_(s.seek)},\"reach\":${gate_json_(s.reach)},\"name\":${gate_json_(e.name)},\"arity\":${e.arity},\"params\":[${pj}],\"gives\":${gate_json_(gate_type_name_(e.gives))},\"promise\":${e.promise},\"doc\":${gate_json_(e.doc)},\"internal\":${e.internal}}\n"
+    line = "{\"kind\":${gate_json_(e.kind)},\"space\":${gate_json_(s.name)},\"when\":${gate_json_(when_name_(s.cond))},\"seek\":${gate_json_(s.seek)},\"reach\":${gate_json_(s.reach)},\"name\":${gate_json_(e.name)},\"arity\":${e.arity},\"params\":[${pj}],\"gives\":${gate_json_(gate_type_name_(e.gives))},\"ts\":${gate_json_(e.ts)},\"promise\":${e.promise},\"doc\":${gate_json_(e.doc)},\"internal\":${e.internal}}\n"
     fputs(line, sae_stdout())
     e.open = 0
 }
@@ -9981,6 +9807,7 @@ gate_begin_(g: *Gate, kind: string, name: string, arity: int) -> *GateEntry {
     e.arity = arity
     e.params = strbuilder.new(64)
     e.gives = T_VOID
+    e.ts = ""
     e.promise = 0
     e.doc = ""
     e.internal = 0
@@ -10097,6 +9924,29 @@ value(_ctx: @keep ptr, name: string, t: int, src: int) {
     gate_flush_(g)
 }
 
+// A function of the space that the page's JavaScript provides (src/sae_prelude.js,
+// a wrapper): no host function, nothing registered, but it is on the object a
+// page sees, so the spec says it, and tests/check_gate.sh holds the page to it.
+provided(_ctx: @keep ptr, name: string, arity: int) -> ptr {
+    s = _ctx as *GateSpace
+    g = s.g as *Gate
+    gate_flush_(g)
+    if g.mode == G_REGISTER { return g.en }
+    return gate_begin_(g, "provided", name, arity)
+}
+
+// A member of the space that the page's JavaScript provides and that is not a
+// function (vg.easings, an object): of type t (T_OBJ, T_STR, T_NUM).
+provided_value(_ctx: @keep ptr, name: string, t: int) {
+    s = _ctx as *GateSpace
+    g = s.g as *Gate
+    gate_flush_(g)
+    if g.mode == G_REGISTER { return }
+    e = gate_begin_(g, "provided_value", name, 0)
+    e.gives = t
+    gate_flush_(g)
+}
+
 // What a space's functions may reach beyond the shared helpers (recorded
 // now; the seal check of a later step reads it).
 reach(_ctx: ptr, what: string) {
@@ -10154,6 +10004,14 @@ gives(_ctx: ptr, t: int) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "gives")
     e = _ctx as *GateEntry
     e.gives = t
+}
+
+// A result no spec type says: its TypeScript, as text ("[number, number]").
+gives_ts(_ctx: ptr, ts: string) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "gives_ts")
+    e = _ctx as *GateEntry
+    e.gives = T_RAW
+    if gate_of_(e).mode == G_DESCRIBE { e.ts = own_(ts) }
 }
 
 gives_promise(_ctx: ptr, t: int) {
@@ -10268,6 +10126,390 @@ gate_spec_(g: *Gate) {
             gives(T_NUM)
             doc("How many values the host holds for the page now (the callbacks widgets and timers keep).")
         }
+    }
+    // vg: aether-ui's AeVG (README "Vector graphics"). A scene or shape takes
+    // its block last; modifiers inside the block apply to it.
+    space(g, "vg", WHEN_ALWAYS, "") {
+        api("scene", sae_ae_scene, 4) {
+            arg("viewBox", T_STR)
+            arg("w", T_INT)
+            arg("h", T_INT)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A w x h px canvas under the current container drawing the \"x y w h\" viewBox; body builds the scene. Returns the scene's handle.")
+        }
+        api("circle", sae_ae_circle, 4) {
+            arg("cx", T_NUM)
+            arg("cy", T_NUM)
+            arg("r", T_NUM)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A circle in the open scene or group; body holds its modifiers.")
+        }
+        api("rect", sae_ae_rect, 5) {
+            arg("x", T_NUM)
+            arg("y", T_NUM)
+            arg("w", T_NUM)
+            arg("h", T_NUM)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A rectangle in the open scene or group.")
+        }
+        api("rrect", sae_ae_rrect, 6) {
+            arg("x", T_NUM)
+            arg("y", T_NUM)
+            arg("w", T_NUM)
+            arg("h", T_NUM)
+            arg("r", T_NUM)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A rectangle with corners of radius r.")
+        }
+        api("ellipse", sae_ae_ellipse, 5) {
+            arg("cx", T_NUM)
+            arg("cy", T_NUM)
+            arg("rx", T_NUM)
+            arg("ry", T_NUM)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("An ellipse.")
+        }
+        api("line", sae_ae_line, 5) {
+            arg("x1", T_NUM)
+            arg("y1", T_NUM)
+            arg("x2", T_NUM)
+            arg("y2", T_NUM)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A line segment.")
+        }
+        api("path", sae_ae_path, 2) {
+            arg("d", T_STR)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A path from SVG path data.")
+        }
+        api("polygon", sae_ae_polygon, 2) {
+            arg("points", T_POINTS)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A closed polygon; points as SVG writes them (\"x,y x,y\") or a flat array of numbers.")
+        }
+        api("polyline", sae_ae_polyline, 2) {
+            arg("points", T_POINTS)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("An open polyline; points as for polygon.")
+        }
+        api("text", sae_ae_text, 4) {
+            arg("x", T_NUM)
+            arg("y", T_NUM)
+            arg("s", T_STR)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("Text with its baseline origin at (x, y).")
+        }
+        api("text_sized", sae_ae_text_sized, 5) {
+            arg("x", T_NUM)
+            arg("y", T_NUM)
+            arg("size", T_NUM)
+            arg("s", T_STR)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("Text at a font size, in viewBox units.")
+        }
+        api("text_anchored", sae_ae_text_anchored, 6) {
+            arg("x", T_NUM)
+            arg("y", T_NUM)
+            arg("size", T_NUM)
+            arg("anchor", T_STR)
+            arg("s", T_STR)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("Text anchored at (x, y): anchor is \"start\", \"middle\" or \"end\".")
+        }
+        api("g", sae_ae_g, 1) {
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A group: its block's fill, stroke, opacity and transform reach the shapes inside it.")
+        }
+        api("into", sae_ae_into, 2) {
+            arg("h", T_VGNODE)
+            arg("body", T_BLOCK)
+            doc("Builds into a group or scene this page made again.")
+        }
+        api("fill", sae_ae_fill, 1) {
+            arg("color", T_STR)
+            doc("In a shape's or group's block: its fill, a colour or \"url(#id)\".")
+        }
+        api("stroke", sae_ae_stroke, 2) {
+            arg("color", T_STR)
+            opt("width", T_NUM)
+            doc("In a block: the stroke colour and width (1 when left out).")
+        }
+        api("opacity", sae_ae_opacity, 1) {
+            arg("v", T_NUM)
+            doc("In a block: opacity from 0 to 1.")
+        }
+        api("transform", sae_ae_transform, 1) {
+            arg("t", T_STR)
+            doc("In a block: an SVG transform list.")
+        }
+        api("linecap", sae_ae_linecap, 1) {
+            arg("c", T_STR)
+            doc("In a block: the stroke's line cap (\"butt\", \"round\", \"square\").")
+        }
+        api("linejoin", sae_ae_linejoin, 1) {
+            arg("j", T_STR)
+            doc("In a block: the stroke's line join (\"miter\", \"round\", \"bevel\").")
+        }
+        api("tooltip", sae_ae_tooltip, 1) {
+            arg("s", T_STR)
+            doc("In a block: what shows when the pointer rests on the shape.")
+        }
+        api("cursor", sae_ae_cursor, 1) {
+            arg("c", T_STR)
+            doc("In a block: the pointer's shape over the shape.")
+        }
+        api("on_click", sae_ae_on_click, 1) {
+            arg("fn", T_FN)
+            doc("In a block: fn(x, y) on a click, in viewBox units.")
+        }
+        api("on_double_click", sae_ae_on_double_click, 1) {
+            arg("fn", T_FN)
+            doc("In a block: fn(x, y) on a double click.")
+        }
+        api("on_hover", sae_ae_on_hover, 1) {
+            arg("fn", T_FN)
+            doc("In a block: fn(inside) when the pointer enters or leaves.")
+        }
+        api("on_drag", sae_ae_on_drag, 1) {
+            arg("fn", T_FN)
+            doc("In a block: fn(x, y, dx, dy) while dragged.")
+        }
+        api("on_drag_end", sae_ae_on_drag_end, 1) {
+            arg("fn", T_FN)
+            doc("In a block: fn(x, y) when a drag ends.")
+        }
+        api("on_scroll", sae_ae_on_scroll, 1) {
+            arg("fn", T_FN)
+            doc("In a block: fn(dx, dy) on a scroll over the shape (dy < 0 is away from the user).")
+        }
+        api("on_right_click", sae_ae_on_right_click, 1) {
+            arg("fn", T_FN)
+            doc("In a block: fn(x, y) on a right click (kept; no canvas reports one yet).")
+        }
+        api("set_fill", sae_vg_set_fill, 2) {
+            arg("h", T_VGNODE)
+            arg("color", T_STR)
+            doc("Changes a shape's fill and repaints.")
+        }
+        api("set_text", sae_vg_set_text, 2) {
+            arg("h", T_VGNODE)
+            arg("s", T_STR)
+            doc("Changes a text shape's string and repaints.")
+        }
+        api("set_stroke", sae_vg_set_stroke, 3) {
+            arg("h", T_VGNODE)
+            arg("color", T_STR)
+            opt("width", T_NUM)
+            doc("Changes a shape's stroke and repaints.")
+        }
+        api("set_opacity", sae_vg_set_opacity, 2) {
+            arg("h", T_VGNODE)
+            arg("v", T_NUM)
+            doc("Changes a shape's opacity and repaints.")
+        }
+        api("set_transform", sae_ae_set_transform, 2) {
+            arg("h", T_VGNODE)
+            arg("t", T_STR)
+            doc("Changes a shape's or group's transform (a group's turns everything in it).")
+        }
+        api("set_visible", sae_ae_set_visible, 2) {
+            arg("h", T_VGNODE)
+            arg("on", T_FLAG)
+            doc("Shows or hides a shape or group.")
+        }
+        api("remove", sae_ae_remove, 1) {
+            arg("h", T_VGNODE)
+            doc("Takes a shape or group out of view.")
+        }
+        api("set", sae_ae_set, 2) {
+            arg("h", T_VGNODE)
+            arg("props", T_OBJ)
+            doc("Several changes at once, one repaint: fill, stroke, opacity, transform, text, geometry.")
+        }
+        api("get", sae_ae_get, 1) {
+            arg("h", T_VGNODE)
+            gives_ts("{ transform: string; opacity: number; visible: boolean; fill?: string; stroke?: string; stroke_width?: number; text?: string; x?: number; y?: number; w?: number; h?: number; cx?: number; cy?: number; r?: number; x1?: number; y1?: number; x2?: number; y2?: number }")
+            doc("What a shape or group is now: its paint, transform and geometry.")
+        }
+        api("bind_fill", sae_ae_bind_fill, 2) {
+            arg("h", T_LEAD_NODE)
+            arg("fn", T_FN)
+            doc("The fill follows fn(), re-evaluated on every state set (in a block, or from anywhere with h).")
+        }
+        api("bind_stroke", sae_ae_bind_stroke, 2) {
+            arg("h", T_LEAD_NODE)
+            arg("fn", T_FN)
+            doc("The stroke follows fn(): a colour or [colour, width].")
+        }
+        api("bind_opacity", sae_ae_bind_opacity, 2) {
+            arg("h", T_LEAD_NODE)
+            arg("fn", T_FN)
+            doc("The opacity follows fn().")
+        }
+        api("bind_text", sae_ae_bind_text, 2) {
+            arg("h", T_LEAD_NODE)
+            arg("fn", T_FN)
+            doc("The text follows fn().")
+        }
+        api("bind_pos", sae_ae_bind_pos, 2) {
+            arg("h", T_LEAD_NODE)
+            arg("fn", T_FN)
+            doc("The geometry follows fn(): an object of cx, cy, r, x, y, w, h, x1 and so on.")
+        }
+        api("bind_transform", sae_ae_bind_transform, 2) {
+            arg("h", T_LEAD_NODE)
+            arg("fn", T_FN)
+            doc("The transform follows fn().")
+        }
+        api("visible_when", sae_ae_visible_when, 2) {
+            arg("h", T_LEAD_NODE)
+            arg("fn", T_FN)
+            doc("Shown while fn() is true.")
+        }
+        api("view_box", sae_ae_view_box, 1) {
+            arg("source", T_ANY)
+            doc("In a scene's block: the viewBox follows a state or fn() (zoom and pan).")
+        }
+        api("set_view_box", sae_ae_set_view_box, 2) {
+            arg("scene", T_VGNODE)
+            arg("vb", T_STR)
+            doc("Sets a scene's viewBox, \"x y w h\".")
+        }
+        api("refresh", sae_ae_refresh, 0) {
+            doc("Re-evaluates every binding now.")
+        }
+        api("defs", sae_ae_defs, 1) {
+            arg("body", T_BLOCK)
+            doc("In a scene's block: its block holds linear_gradient, radial_gradient and clip_path.")
+        }
+        api("linear_gradient", sae_ae_linear_gradient, 7) {
+            arg("id", T_STR)
+            arg("x1", T_STR_NUM)
+            arg("y1", T_STR_NUM)
+            arg("x2", T_STR_NUM)
+            arg("y2", T_STR_NUM)
+            arg("stops", T_ANY)
+            opt("opts", T_OBJ)
+            doc("In defs: a linear gradient; stops [[offset, color, opacity?], ...], opts { units, transform, href, spread }.")
+        }
+        api("radial_gradient", sae_ae_radial_gradient, 6) {
+            arg("id", T_STR)
+            arg("cx", T_STR_NUM)
+            arg("cy", T_STR_NUM)
+            arg("r", T_STR_NUM)
+            arg("stops", T_ANY)
+            opt("opts", T_OBJ)
+            doc("In defs: a radial gradient; opts { units, transform, href, spread, fx, fy }.")
+        }
+        api("clip_path", sae_ae_clip_path, 3) {
+            arg("id", T_STR)
+            arg("shapes", T_ANY)
+            opt("opts", T_OBJ)
+            doc("In defs: a clip path of shapes as [[\"circle\", cx, cy, r], [\"rect\", x, y, w, h], [\"path\", d], ...].")
+        }
+        api("clip", sae_ae_clip, 1) {
+            arg("id", T_STR)
+            doc("In a block: only what lies inside the clip path id draws.")
+        }
+        api("css", sae_ae_css, 1) {
+            arg("text", T_STR)
+            doc("In a scene's block: CSS for the scene's shapes.")
+        }
+        api("resize", sae_vg_resize, 3) {
+            arg("scene", T_VGNODE)
+            arg("w", T_INT)
+            arg("h", T_INT)
+            gives(T_VGNODE)
+            doc("The scene's canvas asks for w x h px from now on (1 to 16384); its shapes and handlers stay.")
+        }
+        api("on_key", sae_vg_on_key, 2) {
+            arg("h", T_VGNODE)
+            arg("fn", T_FN)
+            gives(T_VGNODE)
+            doc("fn(key) for keys pressed while the scene's canvas has the keyboard focus; one function a canvas.")
+        }
+        api("raster", sae_vg_raster, 4) {
+            arg("w", T_INT)
+            arg("h", T_INT)
+            arg("rgba", T_BYTES)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A w x h image from RGBA8 bytes (w*h*4), at (0, 0), one viewBox unit a pixel.")
+        }
+        api("raster_update", sae_vg_raster_update, 2) {
+            arg("h", T_VGNODE)
+            arg("rgba", T_BYTES)
+            doc("New pixels for a raster, in place.")
+        }
+        api("raster_size", sae_vg_raster_size, 1) {
+            arg("h", T_VGNODE)
+            gives_ts("[number, number]")
+            doc("[w, h] in pixels of a raster or image.")
+        }
+        api("image", sae_vg_image, 2) {
+            arg("bytes", T_BYTES)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("A PNG, JPEG, GIF or BMP the toolkit decodes, at its own size.")
+        }
+        api("box", sae_vg_box, 4) {
+            arg("x", T_NUM)
+            arg("y", T_NUM)
+            arg("w", T_NUM)
+            arg("h", T_NUM)
+            doc("In a raster's or image's block: where it draws.")
+        }
+        api("fit", sae_vg_fit, 1) {
+            arg("mode", T_STR)
+            doc("In a raster's or image's block: \"stretch\", \"contain\", \"cover\" or \"original\".")
+        }
+        api("rendering", sae_vg_rendering, 1) {
+            arg("mode", T_STR)
+            doc("In a raster's or image's block: \"auto\" (smoothed) or \"pixelated\".")
+        }
+        api("measure", sae_vg_measure, 2) {
+            arg("text", T_STR)
+            arg("size", T_NUM)
+            gives_ts("{ width: number; height: number; ascent: number; descent: number }")
+            doc("The toolkit's metrics, in px, for text drawn at size.")
+        }
+        api("ellipsize", sae_vg_ellipsize, 3) {
+            arg("text", T_STR)
+            arg("size", T_NUM)
+            arg("maxWidth", T_NUM)
+            gives(T_STR)
+            doc("text cut to fit maxWidth px, ending in an ellipsis.")
+        }
+        // From the prelude (src/sae_prelude.js), not the host.
+        provided("animate", 3) {
+            arg("target", T_ANY)
+            arg("opts", T_OBJ)
+            opt("done", T_FN)
+            gives_ts("{ cancel(): void; done: Promise<void> }")
+            doc("Tweens a shape or group (or a numeric state) on the frame clock: opts { to, ms, easing, from, center }.")
+        }
+        provided("items", 4) {
+            arg("list", T_ANY)
+            arg("key", T_ANY)
+            arg("render", T_FN)
+            opt("update", T_FN)
+            gives(T_VGNODE)
+            doc("A data join into the open group: render(item, i) draws an item and returns its handle; update(item, h, i) refreshes a kept one.")
+        }
+        provided_value("easings", T_OBJ)
     }
 }
 
@@ -10459,45 +10701,9 @@ api_register_(p: *Page) {
     reg_(p, q, u, "set_width", 2, sae_ui_set_width)
     reg_(p, q, u, "fill_width", 1, sae_ui_fill_width)
     reg_(p, q, u, "height", 1, sae_ui_height)
+    reg_(p, q, u, "image", 2, sae_ui_image)
     js_set_global_(q, "ui", u)
     quickjs.release(q, u)
-
-    v = quickjs.new_object(q)
-    reg_(p, q, v, "scene", 4, sae_vg_scene)
-    reg_(p, q, v, "resize", 3, sae_vg_resize)
-    reg_(p, q, v, "on_key", 2, sae_vg_on_key)
-    reg_(p, q, v, "circle", 4, sae_vg_circle)
-    reg_(p, q, v, "rect", 5, sae_vg_rect)
-    reg_(p, q, v, "rrect", 6, sae_vg_rrect)
-    reg_(p, q, v, "line", 5, sae_vg_line)
-    reg_(p, q, v, "path", 2, sae_vg_path)
-    reg_(p, q, v, "text", 4, sae_vg_text)
-    reg_(p, q, v, "g", 1, sae_vg_g)
-    reg_(p, q, v, "fill", 1, sae_vg_fill)
-    reg_(p, q, v, "stroke", 2, sae_vg_stroke)
-    reg_(p, q, v, "opacity", 1, sae_vg_opacity)
-    reg_(p, q, v, "transform", 1, sae_vg_transform)
-    reg_(p, q, v, "on_click", 1, sae_vg_on_click)
-    reg_(p, q, v, "set_fill", 2, sae_vg_set_fill)
-    reg_(p, q, v, "set_text", 2, sae_vg_set_text)
-    reg_(p, q, v, "set_stroke", 3, sae_vg_set_stroke)
-    reg_(p, q, v, "set_opacity", 2, sae_vg_set_opacity)
-    // ===== wave1/raster: pixels from a page =====
-    reg_(p, q, v, "raster", 4, sae_vg_raster)
-    reg_(p, q, v, "raster_update", 2, sae_vg_raster_update)
-    reg_(p, q, v, "raster_size", 1, sae_vg_raster_size)
-    reg_(p, q, v, "image", 2, sae_vg_image)
-    reg_(p, q, v, "box", 4, sae_vg_box)
-    reg_(p, q, v, "fit", 1, sae_vg_fit)
-    reg_(p, q, v, "rendering", 1, sae_vg_rendering)
-    reg_(p, q, v, "measure", 2, sae_vg_measure)
-    reg_(p, q, v, "ellipsize", 3, sae_vg_ellipsize)
-    uimg, _ue = js_get_global_(q, "ui")
-    reg_(p, q, uimg, "image", 2, sae_ui_image)
-    quickjs.release(q, uimg)
-    // ===== end wave1/raster =====
-    js_set_global_(q, "vg", v)
-    quickjs.release(q, v)
 
     // A privilege the page can do without and was not granted has no
     // object at all, so `typeof http === "undefined"` tells the page.

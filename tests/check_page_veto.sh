@@ -1,11 +1,13 @@
 #!/bin/sh
 # tests/check_page_veto.sh — the page veto is in place and enforced.
 #
-# 1. Every function a page can reach (each one api_register_ in
-#    src/sae_host.ae installs with reg_, glob_fn_ or host_fn_, and each one
-#    the gate spec binds with api, global_fn or patch) opens with the
+# 1. Every function a page can reach (each one api_register_ or ae_register_
+#    in src/sae_host.ae installs with reg_, glob_fn_ or host_fn_, and each
+#    one the gate spec binds with api, global_fn or patch) opens with the
 #    page veto: one `hide` line, the same in all of them (see "The page
-#    veto" in src/sae_host.ae).
+#    veto" in src/sae_host.ae); and every function with the page-API
+#    signature is one of them (none left unbound, as dead code the check
+#    could not see).
 # 2. The compiler in use enforces that line where it matters: a hidden
 #    module named inside an `if` body, a nested block or a closure fails to
 #    compile. Aether before the fix for nested qualified names let all three
@@ -43,7 +45,7 @@ n=0
 # of each api(name, fn, arity), global_fn(g, name, fn, arity) and
 # patch(g, global, name, fn, arity) line (one per line, as the spec is
 # written).
-fns=$(awk '/^api_register_\(/ { on = 1; next } on && /^}/ { exit }
+fns=$(awk '/^(api_register_|ae_register_)\(/ { on = 1; next } on && /^}/ { on = 0 }
            on && /(reg_|glob_fn_|host_fn_)\(/ { line = $0; sub(/\)[[:space:]]*$/, "", line); n = split(line, a, ","); f = a[n]; gsub(/[[:space:]]/, "", f); print f }' "$HOST"
       awk '/^gate_spec_\(/ { on = 1; next } on && /^}/ { exit }
            on && /^[[:space:]]*(api|global_fn|patch)\(/ {
@@ -62,6 +64,17 @@ for fn in $fns; do
 done
 [ "$n" -gt 0 ] || bad "no page-API functions found in api_register_"
 [ "$fails" -eq 0 ] && ok "all $n page-API functions open with the page veto"
+# Every function with the page-API signature is bound by one of them.
+tmp_b=$(mktemp); tmp_d=$(mktemp)
+printf '%s\n' "$fns" | sort > "$tmp_b"
+grep -E '^[a-z_0-9]+\(p: \*Page, this_val: int, argv: int\)' "$HOST" | sed 's/(.*//' | sort > "$tmp_d"
+unbound=$(comm -23 "$tmp_d" "$tmp_b")
+rm -f "$tmp_b" "$tmp_d"
+if [ -n "$unbound" ]; then
+    bad "page-API functions that nothing binds (delete them, or bind them in the gate spec): $(echo $unbound)"
+else
+    ok "every function with the page-API signature is bound"
+fi
 
 # --- 2. the compiler enforces it, at depth ---
 

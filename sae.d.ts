@@ -6,6 +6,12 @@
 // here are sae's own. A namespace marked @seeks exists only for a page that
 // seeks that privilege and is granted it (@appOnly: in an installed app).
 declare namespace sae {
+  /** A widget handle: what a builder of ui returns, for the calls that take one. */
+  type Widget = number;
+  /** A vg scene, group or shape handle. */
+  type VgNode = number;
+  /** A datagrid handle (not a widget). */
+  type Grid = number;
   /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */
   type Timer = number;
   /** An id from requestAnimationFrame, for cancelAnimationFrame. */
@@ -51,4 +57,148 @@ declare const performance: {
   memoryUsed(): number;
   /** How many values the host holds for the page now (the callbacks widgets and timers keep). */
   handlesHeld(): number;
+};
+declare const vg: {
+  /** A w x h px canvas under the current container drawing the "x y w h" viewBox; body builds the scene. Returns the scene's handle. */
+  scene(viewBox: string, w: number, h: number, body?: () => void): sae.VgNode;
+  /** A circle in the open scene or group; body holds its modifiers. */
+  circle(cx: number, cy: number, r: number, body?: () => void): sae.VgNode;
+  /** A rectangle in the open scene or group. */
+  rect(x: number, y: number, w: number, h: number, body?: () => void): sae.VgNode;
+  /** A rectangle with corners of radius r. */
+  rrect(x: number, y: number, w: number, h: number, r: number, body?: () => void): sae.VgNode;
+  /** An ellipse. */
+  ellipse(cx: number, cy: number, rx: number, ry: number, body?: () => void): sae.VgNode;
+  /** A line segment. */
+  line(x1: number, y1: number, x2: number, y2: number, body?: () => void): sae.VgNode;
+  /** A path from SVG path data. */
+  path(d: string, body?: () => void): sae.VgNode;
+  /** A closed polygon; points as SVG writes them ("x,y x,y") or a flat array of numbers. */
+  polygon(points: string | number[], body?: () => void): sae.VgNode;
+  /** An open polyline; points as for polygon. */
+  polyline(points: string | number[], body?: () => void): sae.VgNode;
+  /** Text with its baseline origin at (x, y). */
+  text(x: number, y: number, s: string, body?: () => void): sae.VgNode;
+  /** Text at a font size, in viewBox units. */
+  text_sized(x: number, y: number, size: number, s: string, body?: () => void): sae.VgNode;
+  /** Text anchored at (x, y): anchor is "start", "middle" or "end". */
+  text_anchored(x: number, y: number, size: number, anchor: string, s: string, body?: () => void): sae.VgNode;
+  /** A group: its block's fill, stroke, opacity and transform reach the shapes inside it. */
+  g(body?: () => void): sae.VgNode;
+  /** Builds into a group or scene this page made again. */
+  into(h: sae.VgNode, body: () => void): void;
+  /** In a shape's or group's block: its fill, a colour or "url(#id)". */
+  fill(color: string): void;
+  /** In a block: the stroke colour and width (1 when left out). */
+  stroke(color: string, width?: number): void;
+  /** In a block: opacity from 0 to 1. */
+  opacity(v: number): void;
+  /** In a block: an SVG transform list. */
+  transform(t: string): void;
+  /** In a block: the stroke's line cap ("butt", "round", "square"). */
+  linecap(c: string): void;
+  /** In a block: the stroke's line join ("miter", "round", "bevel"). */
+  linejoin(j: string): void;
+  /** In a block: what shows when the pointer rests on the shape. */
+  tooltip(s: string): void;
+  /** In a block: the pointer's shape over the shape. */
+  cursor(c: string): void;
+  /** In a block: fn(x, y) on a click, in viewBox units. */
+  on_click(fn: (...args: any[]) => void): void;
+  /** In a block: fn(x, y) on a double click. */
+  on_double_click(fn: (...args: any[]) => void): void;
+  /** In a block: fn(inside) when the pointer enters or leaves. */
+  on_hover(fn: (...args: any[]) => void): void;
+  /** In a block: fn(x, y, dx, dy) while dragged. */
+  on_drag(fn: (...args: any[]) => void): void;
+  /** In a block: fn(x, y) when a drag ends. */
+  on_drag_end(fn: (...args: any[]) => void): void;
+  /** In a block: fn(dx, dy) on a scroll over the shape (dy < 0 is away from the user). */
+  on_scroll(fn: (...args: any[]) => void): void;
+  /** In a block: fn(x, y) on a right click (kept; no canvas reports one yet). */
+  on_right_click(fn: (...args: any[]) => void): void;
+  /** Changes a shape's fill and repaints. */
+  set_fill(h: sae.VgNode, color: string): void;
+  /** Changes a text shape's string and repaints. */
+  set_text(h: sae.VgNode, s: string): void;
+  /** Changes a shape's stroke and repaints. */
+  set_stroke(h: sae.VgNode, color: string, width?: number): void;
+  /** Changes a shape's opacity and repaints. */
+  set_opacity(h: sae.VgNode, v: number): void;
+  /** Changes a shape's or group's transform (a group's turns everything in it). */
+  set_transform(h: sae.VgNode, t: string): void;
+  /** Shows or hides a shape or group. */
+  set_visible(h: sae.VgNode, on: boolean | number): void;
+  /** Takes a shape or group out of view. */
+  remove(h: sae.VgNode): void;
+  /** Several changes at once, one repaint: fill, stroke, opacity, transform, text, geometry. */
+  set(h: sae.VgNode, props: Record<string, unknown>): void;
+  /** What a shape or group is now: its paint, transform and geometry. */
+  get(h: sae.VgNode): { transform: string; opacity: number; visible: boolean; fill?: string; stroke?: string; stroke_width?: number; text?: string; x?: number; y?: number; w?: number; h?: number; cx?: number; cy?: number; r?: number; x1?: number; y1?: number; x2?: number; y2?: number };
+  /** The fill follows fn(), re-evaluated on every state set (in a block, or from anywhere with h). */
+  bind_fill(h: sae.VgNode, fn: (...args: any[]) => void): void;
+  bind_fill(fn: (...args: any[]) => void): void;
+  /** The stroke follows fn(): a colour or [colour, width]. */
+  bind_stroke(h: sae.VgNode, fn: (...args: any[]) => void): void;
+  bind_stroke(fn: (...args: any[]) => void): void;
+  /** The opacity follows fn(). */
+  bind_opacity(h: sae.VgNode, fn: (...args: any[]) => void): void;
+  bind_opacity(fn: (...args: any[]) => void): void;
+  /** The text follows fn(). */
+  bind_text(h: sae.VgNode, fn: (...args: any[]) => void): void;
+  bind_text(fn: (...args: any[]) => void): void;
+  /** The geometry follows fn(): an object of cx, cy, r, x, y, w, h, x1 and so on. */
+  bind_pos(h: sae.VgNode, fn: (...args: any[]) => void): void;
+  bind_pos(fn: (...args: any[]) => void): void;
+  /** The transform follows fn(). */
+  bind_transform(h: sae.VgNode, fn: (...args: any[]) => void): void;
+  bind_transform(fn: (...args: any[]) => void): void;
+  /** Shown while fn() is true. */
+  visible_when(h: sae.VgNode, fn: (...args: any[]) => void): void;
+  visible_when(fn: (...args: any[]) => void): void;
+  /** In a scene's block: the viewBox follows a state or fn() (zoom and pan). */
+  view_box(source: unknown): void;
+  /** Sets a scene's viewBox, "x y w h". */
+  set_view_box(scene: sae.VgNode, vb: string): void;
+  /** Re-evaluates every binding now. */
+  refresh(): void;
+  /** In a scene's block: its block holds linear_gradient, radial_gradient and clip_path. */
+  defs(body: () => void): void;
+  /** In defs: a linear gradient; stops [[offset, color, opacity?], ...], opts { units, transform, href, spread }. */
+  linear_gradient(id: string, x1: string | number, y1: string | number, x2: string | number, y2: string | number, stops: unknown, opts?: Record<string, unknown>): void;
+  /** In defs: a radial gradient; opts { units, transform, href, spread, fx, fy }. */
+  radial_gradient(id: string, cx: string | number, cy: string | number, r: string | number, stops: unknown, opts?: Record<string, unknown>): void;
+  /** In defs: a clip path of shapes as [["circle", cx, cy, r], ["rect", x, y, w, h], ["path", d], ...]. */
+  clip_path(id: string, shapes: unknown, opts?: Record<string, unknown>): void;
+  /** In a block: only what lies inside the clip path id draws. */
+  clip(id: string): void;
+  /** In a scene's block: CSS for the scene's shapes. */
+  css(text: string): void;
+  /** The scene's canvas asks for w x h px from now on (1 to 16384); its shapes and handlers stay. */
+  resize(scene: sae.VgNode, w: number, h: number): sae.VgNode;
+  /** fn(key) for keys pressed while the scene's canvas has the keyboard focus; one function a canvas. */
+  on_key(h: sae.VgNode, fn: (...args: any[]) => void): sae.VgNode;
+  /** A w x h image from RGBA8 bytes (w*h*4), at (0, 0), one viewBox unit a pixel. */
+  raster(w: number, h: number, rgba: Uint8Array | Uint8ClampedArray, body?: () => void): sae.VgNode;
+  /** New pixels for a raster, in place. */
+  raster_update(h: sae.VgNode, rgba: Uint8Array | Uint8ClampedArray): void;
+  /** [w, h] in pixels of a raster or image. */
+  raster_size(h: sae.VgNode): [number, number];
+  /** A PNG, JPEG, GIF or BMP the toolkit decodes, at its own size. */
+  image(bytes: Uint8Array | Uint8ClampedArray, body?: () => void): sae.VgNode;
+  /** In a raster's or image's block: where it draws. */
+  box(x: number, y: number, w: number, h: number): void;
+  /** In a raster's or image's block: "stretch", "contain", "cover" or "original". */
+  fit(mode: string): void;
+  /** In a raster's or image's block: "auto" (smoothed) or "pixelated". */
+  rendering(mode: string): void;
+  /** The toolkit's metrics, in px, for text drawn at size. */
+  measure(text: string, size: number): { width: number; height: number; ascent: number; descent: number };
+  /** text cut to fit maxWidth px, ending in an ellipsis. */
+  ellipsize(text: string, size: number, maxWidth: number): string;
+  /** Tweens a shape or group (or a numeric state) on the frame clock: opts { to, ms, easing, from, center }. */
+  animate(target: unknown, opts: Record<string, unknown>, done?: (...args: any[]) => void): { cancel(): void; done: Promise<void> };
+  /** A data join into the open group: render(item, i) draws an item and returns its handle; update(item, h, i) refreshes a kept one. */
+  items(list: unknown, key: unknown, render: (...args: any[]) => void, update?: (...args: any[]) => void): sae.VgNode;
+  readonly easings: Record<string, unknown>;
 };

@@ -12,9 +12,10 @@
 //                                             each entry's arity equals its
 //                                             count of non-rest parameters
 //
-// The line's fields: kind (fn, global, patch, value), space, when (always,
-// app_or_web_seeks, app_seeks), seek, reach, name, arity, params (each
-// {k: arg|opt|rest, n, t}), gives, promise, doc, internal.
+// The line's fields: kind (fn, global, patch, value, provided,
+// provided_value), space, when (always, app_or_web_seeks, app_seeks), seek,
+// reach, name, arity, params (each {k: arg|opt|rest, n, t}), gives, ts (the
+// TypeScript of a "raw" result), promise, doc, internal.
 
 import std.io
 import std.json
@@ -53,11 +54,33 @@ ts_type_(t: string) -> string {
     if t == "fn" { return "(...args: any[]) => void" }
     if t == "frame_fn" { return "(timestamp: number) => void" }
     if t == "any" { return "unknown" }
+    if t == "int" { return "number" }
+    if t == "flag" { return "boolean | number" }
+    if t == "widget" { return "sae.Widget" }
+    if t == "vgnode" { return "sae.VgNode" }
+    if t == "grid" { return "sae.Grid" }
+    if t == "block" { return "() => void" }
+    if t == "lead_num" { return "number" }
+    if t == "lead_node" { return "sae.VgNode" }
+    if t == "bytes" { return "Uint8Array | Uint8ClampedArray" }
+    if t == "points" { return "string | number[]" }
+    if t == "str_num" { return "string | number" }
+    if t == "obj" { return "Record<string, unknown>" }
     return "void"
 }
 
-// A function's TypeScript parameter list, from its params array.
-ts_params_(params: ptr) -> string {
+// What `typeof` says of a non-function member of a spec type.
+typeof_(t: string) -> string {
+    if t == "str" || t == "str_or_null" { return "string" }
+    if t == "num" || t == "int" { return "number" }
+    if t == "obj" { return "object" }
+    return t
+}
+
+// A function's TypeScript parameter list, from its params array. A parameter
+// of a "lead_" type (a number or handle that may be left out) is dropped when
+// `lead` is 0: the entry is then written as two overloads.
+ts_params_(params: ptr, lead: int) -> string {
     out = ""
     n = json.json_array_size(params)
     i = 0
@@ -66,8 +89,12 @@ ts_params_(params: ptr) -> string {
         k = str_of_(pr, "k")
         nm = str_of_(pr, "n")
         t = str_of_(pr, "t")
+        if lead == 0 && string.starts_with(t, "lead_") == 1 {
+            i = i + 1
+            continue
+        }
         sep = ""
-        if i > 0 { sep = ", " }
+        if out != "" { sep = ", " }
         if k == "arg" { out = "${out}${sep}${nm}: ${ts_type_(t)}" }
         if k == "opt" { out = "${out}${sep}${nm}?: ${ts_type_(t)}" }
         if k == "rest" { out = "${out}${sep}...${nm}: unknown[]" }
@@ -88,9 +115,21 @@ nonrest_(params: ptr) -> int {
     return c
 }
 
+// Whether a parameter is of a "lead_" type.
+has_lead_(params: ptr) -> int {
+    n = json.json_array_size(params)
+    i = 0
+    while i < n {
+        if string.starts_with(str_of_(json.json_array_get_raw(params, i), "t"), "lead_") == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
 // The line of a function's result: T, or Promise<T>.
 ts_result_(e: ptr) -> string {
     r = ts_type_(str_of_(e, "gives"))
+    if str_of_(e, "gives") == "raw" { r = str_of_(e, "ts") }
     if int_of_(e, "promise") == 1 { return "Promise<${r}>" }
     return r
 }
@@ -138,11 +177,15 @@ present_(e: ptr, mode: string) -> int {
 member_(out: ptr, e: ptr) {
     kind = str_of_(e, "kind")
     doc_(out, "  ", e)
-    if kind == "value" {
+    if kind == "value" || kind == "provided_value" {
         _a = strbuilder.append(out, "  readonly ${str_of_(e, "name")}: ${ts_type_(str_of_(e, "gives"))};\n")
         return
     }
-    _b = strbuilder.append(out, "  ${str_of_(e, "name")}(${ts_params_(json.json_object_get_raw(e, "params"))}): ${ts_result_(e)};\n")
+    params = json.json_object_get_raw(e, "params")
+    _b = strbuilder.append(out, "  ${str_of_(e, "name")}(${ts_params_(params, 1)}): ${ts_result_(e)};\n")
+    if has_lead_(params) == 1 {
+        _c = strbuilder.append(out, "  ${str_of_(e, "name")}(${ts_params_(params, 0)}): ${ts_result_(e)};\n")
+    }
 }
 
 dts_header_(out: ptr) {
@@ -154,6 +197,12 @@ dts_header_(out: ptr) {
     _f = strbuilder.append(out, "// here are sae's own. A namespace marked @seeks exists only for a page that\n")
     _g = strbuilder.append(out, "// seeks that privilege and is granted it (@appOnly: in an installed app).\n")
     _h = strbuilder.append(out, "declare namespace sae {\n")
+    _i0 = strbuilder.append(out, "  /** A widget handle: what a builder of ui returns, for the calls that take one. */\n")
+    _i1 = strbuilder.append(out, "  type Widget = number;\n")
+    _i2 = strbuilder.append(out, "  /** A vg scene, group or shape handle. */\n")
+    _i3 = strbuilder.append(out, "  type VgNode = number;\n")
+    _i4 = strbuilder.append(out, "  /** A datagrid handle (not a widget). */\n")
+    _i5 = strbuilder.append(out, "  type Grid = number;\n")
     _i = strbuilder.append(out, "  /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */\n")
     _j = strbuilder.append(out, "  type Timer = number;\n")
     _j2 = strbuilder.append(out, "  /** An id from requestAnimationFrame, for cancelAnimationFrame. */\n")
@@ -187,7 +236,7 @@ main() {
             name = str_of_(e, "name")
             params = json.json_object_get_raw(e, "params")
             if arg1 == "--check-arity" {
-                if kind != "value" && nonrest_(params) != int_of_(e, "arity") {
+                if kind != "value" && kind != "provided_value" && nonrest_(params) != int_of_(e, "arity") {
                     _w = io.stderr_write("FAIL ${space}.${name}: arity ${int_of_(e, "arity")} but ${nonrest_(params)} non-rest parameters\n")
                     bad = bad + 1
                 }
@@ -207,8 +256,8 @@ main() {
                         }
                     }
                     if here == 1 {
-                        if kind == "value" {
-                            _e = strbuilder.append(out, "M ${space}.${name} ${ts_type_(str_of_(e, "gives"))}\n")
+                        if kind == "value" || kind == "provided_value" {
+                            _e = strbuilder.append(out, "M ${space}.${name} ${typeof_(str_of_(e, "gives"))}\n")
                         } else {
                             _f = strbuilder.append(out, "M ${space}.${name} ${shape_of_(e)}\n")
                         }
@@ -221,7 +270,7 @@ main() {
                         cur = ""
                     }
                     doc_(out, "", e)
-                    _h = strbuilder.append(out, "declare function ${name}(${ts_params_(params)}): ${ts_result_(e)};\n")
+                    _h = strbuilder.append(out, "declare function ${name}(${ts_params_(params, 1)}): ${ts_result_(e)};\n")
                 } else {
                     if space != cur {
                         if cur != "" { _i = strbuilder.append(out, "};\n") }
