@@ -83,6 +83,112 @@ to settle (write_atomic checking or covering its own temp file).
 no sandbox is active; write_atomic and its temp file; `sandbox.enter`/`leave`;
 a monotonic denial count; denials-only audit.
 
+## Build notes (2026-11-19, Aether 0.923.0): what was built, and where it differs
+
+Built: the in-process half, steps 1, 2, 3, 5, 6, 8 and the part of 9 that
+can move. Not built (they wait on the unreleased Aether batch): step 7's
+counting of refusals through the audit ring, the LD_PRELOAD lane (steps 10,
+11), `-rdynamic`, step 12. Where this section and the text below disagree,
+this section is right.
+
+**Order.** Step 2 went first: Aether's contrib.quickjs has no `set_host`, so
+the page is passed, not found (the entry helpers and every `js_*` helper take
+the `*Page`; 261 changed lines, `open_menu_` takes the page, `vg_key_fire_`
+finds it with `page_of_`). Step 1 follows, because the cached page time limit
+is read from the page's browser. Step 9's moves come before step 6's push, so
+every commit stays green. Aether's type checker accepts a `ptr` where a
+`*Page` is expected without a word, so a call left passing the runtime built
+and would have crashed; every call was checked by hand.
+
+**Step 1.** More was in entries than `getenv("SAE_PAGE_TIME_MS")`: the first
+clock read read `SAE_TIME_SCALE`, the first `performance.now`
+`SAE_COARSE_CLOCKS`, `storage_dir_` the environment and a `realpath` on every
+storage call, and `bus.serve` computed the app's data folder. All are read at
+start or in `page_new_` now. A page makes its storage folder when it loads,
+not at its first `storage.set`. `tests/check_page_sandbox.sh` lists who may
+read the environment and who may call those who do.
+
+**Step 3.** `p.entry_depth` and `b.entry_depth` are counted by every begin
+(not only the outermost); the guard is `if b.entry_depth > 0 { return }` at
+the top of `bus_tick_`, `backend_tick_`, `sqlite_poll_`, `http_poll_`,
+`later_tick_` and the navigation timer's closure (which stays armed).
+
+**Step 5.** `services/pagegrants` is `new_page`, `deny_all` and `free`, and
+holds lists as `ptr`. The list is not what the text says:
+- it holds the three environment switches aether-ui reads while it builds
+  widgets (`AETHER_UI_CHROME` for every `ui.btn`, `AETHER_UI_NO_ANIMATION`,
+  `AEVG_FONT`); a refused getenv reads as unset, so without them the switches
+  turned off silently (found by the audit: 2,667 refusals in one run);
+- it does not hold the app's fs roots. `services/files` resolves a page's path
+  by looking at every part of it (`is_symlink` on `/home`, `/home/paul`, ...),
+  which is how it refuses a path outside its grants, so it must look at paths
+  the page has no grant for. The `sae_fs_*` functions therefore leave the page's
+  level around their one `files` call (`leave_grants_`/`enter_grants_`, their
+  arguments read first, so no page JS runs outside the level); the service
+  checks every path against app.json and acts inside its own `enforce`.
+  `files.add_grants` exists, `fence_` is built from it, and a spec uses it, but
+  the page's list does not;
+- `deny_all` is not used by the kernel: a page's list is never null. It is
+  tested, as the thing a null list is not.
+Documents: `documents.grant_path` puts a pick on the live list (`docs_adopt_`)
+and `documents.add_grants` puts the earlier picks on a new page's.
+
+**Step 6.** `sandbox_push` at depth 0 to 1, `sandbox_pop` at 1 to 0, named in
+the entry helpers and in the `leave_grants_`/`enter_grants_` pair only
+(`check_page_sandbox.sh`). A note at the push says `sandbox.enter`/`leave`
+replace them when released.
+
+**Step 8.** `tests/spec_app_sandbox.ae`, `tests/apps/sandbox`: the probe from
+the first run, a timer, a click, a SQLite reply, a backend answer and a
+control bus request, and the app's storage, fs, a picked document and
+`shell.open` working beside it.
+
+**Step 9.** Moved out of the entry (`later_add_`, done by `later_tick_` once no
+entry runs; the check stays at the call, so the page still gets its refusal as
+a throw): `shell.open`, `printing.pdf`, and the control bus starting and
+stopping (`bus.serve` no longer throws when it cannot listen: it says so on the
+console). The document pickers and the clipboard read are not moved: they run a
+nested event loop but return their answer to the page, so there is nothing to
+defer, and with every tick guarded the loop does only the page's own work.
+The effect of `shell.open` and `printing.pdf` is a tick later than the click, so
+`spec_app_caps` waits for its log.
+
+**Tests that fail without the protection** (each tried on a copy of the tree
+with the protection removed, on cachyos):
+- no push: every probe of all eight entry kinds ESCAPED (`kernel_slip`), and
+  of the five `spec_app_sandbox` prints (run, timer, click, SQLite, backend; the copy's lift pair was left in, so its shell log was also refused, a mutation artefact);
+- no guard on `http_poll_`: `kernel_slip` reports "a kernel tick ran inside an
+  entry (the http reply was delivered under it)";
+- `storage_key_ok_` disabled: `storage.set("../victim/token")` and `get` of
+  `../victim/secret` are refused by the sandbox (`AETHER_DENIED fs_write`,
+  `fs_read`); with the push also off, `get` returns the other folder's secret
+  and `set` writes into it;
+- the moves, the fs leave, and the toolkit's environment switches were each
+  found by running the whole suite with the push on and none of them: 5 specs
+  failed (`spec_app_caps`, `spec_app_documents`, `spec_app_bus`,
+  `spec_app_bus_ui`, `spec_gitify`) with the refusals listed.
+
+**Not as the design assumed.**
+- Directory listing is not held: `fs.list_dir` and `fs.glob` do not ask the
+  sandbox in 0.923.0 (a read of the same directory's file is refused), so
+  `grant_fs_read(<folder>)` is harmless and the page's list does not stop a
+  listing. To be reported to Aether; repro in the lab's `repro/listdir.ae`.
+- Refusals are found by the audit sink, not counted: `tests/run_all.sh` sets
+  `AETHER_SANDBOX_AUDIT=stderr` and fails on any `AETHER_DENIED` line in a
+  driver log that a spec did not mean (the probe's, in `spec_escape` and
+  `spec_app_sandbox`). A refusal is not told once per page on the console
+  (step 7).
+- The probe lives in `services/sandboxprobe` (it runs `true`, which bends the
+  layer rule that only `services/backend` starts a program, in
+  `check_layers.sh`) and is installed only when `SAE_SANDBOX_PROBE` and
+  `AETHER_UI_TEST_PORT` are both set.
+- Cost (measured, trivial entry from the host, no page work): `js_call_` 74 to
+  30 ns and `js_get_` 97 to 50 ns on the Mac; 136 to 79 and 193 to 131 on
+  cachyos. The getenv hoisted out costs more than the push and pop add.
+  `page_new_` and `page_free_` 398 to 411 us on the Mac (the storage folder is
+  made and the list built) and 1,567 to 1,570 us on cachyos. A datagrid
+  refresh, a frame loop, 10,000 timers and HTTP throughput were not measured.
+
 ## 1. Threat model
 
 Today a page reaches only the host functions `api_register_` installs, and some services check their own inputs. Under both, sae's own Aether code on the UI thread during a page entry (gates, kernel helpers, services) is also held to that page's grants by std's own checks (std/fs, os, net, udp: 38+31+4+2 call sites). On the LD_PRELOAD lane, libc `open`/`fopen`/`openat`, `connect` (AF_INET/6), `getenv` and the exec family on that thread are held too (preload:101-135). So a slip in that code becomes a refusal that is logged instead of an effect: a path joined from page input, a missing scope check, a service acting for the wrong page, or toolkit C opening a file a page named.

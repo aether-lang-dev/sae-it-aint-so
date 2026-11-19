@@ -78,7 +78,10 @@ The page API is the first line (a page reaches only what `api_register_`
 hands it). `aether/docs/containment-sandbox.md` gives sae a second line
 underneath it, and `architecture.md` already lists it as stage 3. Concretely:
 
-1. **`sandbox.enforce` around every entry into page code**: the page's first
+1. **A grant list around every entry into page code** (built: the in-process
+   half, `docs/design/page-entry-sandbox.md`; the list is per page and pushed
+   once per outermost entry, not `sandbox.enforce` per call, and holds the
+   page's storage folder, not the outer list below): the page's first
    run, every handler, timer, frame and http callback. The browser's outer
    grant list is `grant_tcp("*")` plus `grant_fs_read` of sae's own cache
    folder and nothing else: no exec, no env, no native. Each page gets an

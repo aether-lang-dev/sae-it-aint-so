@@ -80,7 +80,7 @@ service too is stage 4.
 |---|---|---|
 | 1 | `services/files`, `services/shell` split out of the kernel; `tests/check_layers.sh` | **done** |
 | 2 | per-mode objects: **done** (a web page's runtime has no `fs` or `shell` object at all). Still to do: the gate generated from one spec (argument types, capability and service per call) instead of hand-written, retiring the 75 pasted `hide` lines for one compiler-checked module boundary | next |
-| 3 | `sandbox.enforce(page_grants)` around every entry into page code (page run, handlers, timers, http callbacks), as a runtime backstop in std | |
+| 3 | the page's grant list in force around every entry into page code (page run, handlers, timers, http callbacks, getters), as a runtime backstop in std: `services/pagegrants`, pushed with the runtime's `sandbox_push` at the outermost entry (`docs/design/page-entry-sandbox.md`) | **in-process half done** (std's fs, env, exec and tcp checks on the UI thread); the LD_PRELOAD lane and counting refusals wait on Aether |
 | 4 | `storage`, `ui` as services, and `net` sending as well as opening requests; the kernel stops importing what only a service needs | `net` started |
 | later | the page host and guest in a separate process, sandboxed by the OS (Linux `spawn_sandboxed` and seccomp; macOS has no equivalent yet), so a memory-safety bug in the engine is contained too | |
 
