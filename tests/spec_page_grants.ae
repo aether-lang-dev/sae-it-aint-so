@@ -111,6 +111,14 @@ main() {
             spec.assert_eq(tcp_ok(g, 9), 0, "tcp.connect")
             pagegrants.free(g)
         }
+        spec.it("the toolkit's switches read, an arbitrary name does not") callback {
+            _s = os.setenv("AETHER_UI_CHROME", "native")
+            _s2 = os.setenv("AETHER_UI_NOT_A_SWITCH", "x")
+            g = pagegrants.new_page("http://a.example", store)
+            spec.assert_eq(env_seen(g, "AETHER_UI_CHROME"), 1, "AETHER_UI_CHROME")
+            spec.assert_eq(env_seen(g, "AETHER_UI_NOT_A_SWITCH"), 0, "another name")
+            pagegrants.free(g)
+        }
         spec.it("the same operations work with no list in force (the checks above test the list)") callback {
             spec.assert_eq(env_seen(null, "PATH"), 1, "PATH is set")
             spec.assert_eq(exec_ok(null), 1, "true runs")
@@ -129,8 +137,8 @@ main() {
             pagegrants.free(g)
         }
     }
-    spec.describe(fw, "an app page's list: storage, plus what app.json grants") {
-        spec.it("holds the fs roots: read-only reads, read-write reads and writes, nothing else") callback {
+    spec.describe(fw, "an app page's list: storage, plus the documents; files' roots are on a list when asked") {
+        spec.it("files.add_grants puts the roots on a list: read-only reads, read-write reads and writes (fence_ is built from it)") callback {
             f = files.new()
             files.configure(f, 1, "${ROOT}/appdata", "${ROOT}", "${ROOT}", 0)
             files.grant_read(f, "${ROOT}/readonly")

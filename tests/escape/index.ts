@@ -24,5 +24,6 @@ const attempts: [string, string][] = [
   ["atomics_wait", "block the thread with Atomics.wait"],
   ["forge_allow_origin", "forge Sae-Allow-Origin and Origin from the page side"],
   ["second_window", "open a second window"],
+  ["kernel_slip", "sae's own code, asked to act outside the page's grants, from every kind of entry"],
 ];
 for (const [name, what] of attempts) btn(`${name}: ${what}`, () => browserContext.changePage(`/${name}`));

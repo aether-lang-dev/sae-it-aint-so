@@ -51,6 +51,8 @@ expect_imports services/secure_channel/module.ae \
     "import std.bytes|import std.string (string_length, string_char_at, string_index_of, string_substring, string_equals, string_from_char, string_from_long, to_long)|import std.cryptography.ascon_aead128 (aead_seal, aead_open)|import std.cryptography.hkdf (hkdf)|import std.cryptography (random_bytes)|import std.time (now_ms)"
 expect_imports services/pagegrants/module.ae \
     "import std.sandbox|import std.string"
+expect_imports services/sandboxprobe/module.ae \
+    "import std.fs|import std.os|import std.tcp|import std.string"
 expect_imports services/shell/module.ae \
     "import ui (open_url)|import std.fs (read, write_atomic)|import std.string|import std.strarr"
 expect_imports services/print/module.ae \
@@ -89,10 +91,12 @@ else
 fi
 
 # Starting a program only in services/backend: the app's own backend
-# (docs/app-backend.md) is the one process sae starts, under its rules.
+# (docs/app-backend.md) is the one process sae starts, under its rules. (The
+# one exception is services/sandboxprobe, a test's probe that runs `true`
+# to see exec refused; the kernel installs it only for a test.)
 hits=$(grep -rnE 'os\.(run|run_stdio|run_socket|run_pipe|run_capture|run_full|run_supervised|run_pipe_drain_and_wait|spawn_proc|spawn_proc_to|exec)[[:space:]]*\(' \
         --include='*.ae' src services lower 2>/dev/null \
-      | grep -v '^services/backend/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+      | grep -v '^services/backend/' | grep -v '^services/sandboxprobe/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
 if [ -n "$hits" ]; then
     echo "FAIL a program started outside services/backend:"
     echo "$hits" | sed 's/^/       /'

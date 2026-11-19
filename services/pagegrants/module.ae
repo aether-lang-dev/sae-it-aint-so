@@ -11,11 +11,13 @@
 //
 // A page's list holds its own storage folder and nothing else: no tcp (a
 // request goes through the HTTP fetcher actors, which run with no grants of
-// their own), no environment, no exec, no native library. An app page's list
-// grows by what its app.json grants and nothing more: the fs roots
-// (services/files add_grants) and each document the person picked
-// (services/documents grant_path, add_grants). Anything else a host function
-// does on a page's behalf is done after the entry, not under it.
+// their own), no environment but the toolkit's switches, no exec, no native
+// library. An app page's list
+// grows by each document the person picked (services/documents grant_path,
+// add_grants). Its fs roots are not here: services/files resolves the page's
+// paths itself and fences each operation to app.json's grants, and runs
+// outside this list (leave_grants_ in src/sae_host.ae). Anything else a host
+// function does on a page's behalf is done after the entry, not under it.
 //
 // Built once per page, in page_new_, and pushed by reference (the runtime's
 // sandbox_push lends the list: a grant added after the push is in force at
@@ -30,12 +32,20 @@ import std.string
 exports (new_page, free, deny_all)
 
 // A page's grants: its storage folder, listed, and every key in it read,
-// written and removed. `label` names the page for the reader and for denial
-// logs. The folder exists (page_new_ makes it) so its path resolves.
+// written and removed; and the three environment switches the toolkit reads
+// while it builds a page's widgets (aether-ui: ui.btn reads
+// AETHER_UI_CHROME for every button, transitions AETHER_UI_NO_ANIMATION, vg
+// AEVG_FONT). A refused getenv reads as unset, which would turn a switch off
+// without a word, so they are named here, and only these. `label` names the
+// page for the reader and for denial logs. The folder exists (page_new_
+// makes it) so its path resolves.
 new_page(label: string, storage_dir: string) -> ptr {
     g = sandbox.new("page ${label}") {
         grant_fs_read(storage_dir)
         grant_fs("${storage_dir}/*")
+        grant_env("AETHER_UI_CHROME")
+        grant_env("AETHER_UI_NO_ANIMATION")
+        grant_env("AEVG_FONT")
     }
     return g as ptr
 }

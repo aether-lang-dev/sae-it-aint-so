@@ -93,7 +93,7 @@ SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$PWD/target/globals-appdata test
 ../aether/build/ae run tests/spec_origin_rules.ae  # origins, mixed content, Sae-Allow-Origin: no window
 tests/run_spec.sh spec_webrules                # no ambient credentials, no Referer, the CORS-alike, coarse clocks
 SAE_TEST_APP=tests/apps/clocks tests/run_spec.sh spec_webrules   # app mode: full-resolution clocks
-tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 19 attempts, each refused and logged once
+tests/run_spec.sh spec_escape tests/escape     # the red-team corpus: 20 attempts, each refused and logged once (SAE_SANDBOX_PROBE=<dir>, as run_all.sh sets it, installs the probe kernel_slip uses)
 SAE_TEST_APP=tests/apps/climb tests/run_spec.sh spec_app_climb   # app mode: navigation cannot climb out of the bundle
 AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/documents tests/run_spec.sh spec_app_documents   # documents: picked files as handles (the driver answers the picker)
 (cd tests/apps/backend && AETHER_LIB_DIR=../../../sdk ae build backend/main.ae -o backend/main) && SAE_TEST_APP=tests/apps/backend tests/run_spec.sh spec_app_backend   # an app's backend process
@@ -115,6 +115,8 @@ tests/run_spec.sh spec_life                    # demo 14
 tests/run_spec.sh spec_algos                   # demo 17: sorting generators race on the frame clock
 tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
 tests/check_spec_lock.sh                      # run_spec.sh's one-spec-at-a-time lock: kept while its owner lives, however old; cleared when it died; its owner's exit status untouched
+tests/check_page_sandbox.sh                   # the sandbox's source rules: who may read the environment, every kernel tick guarded, sandbox_push/pop only in the entry helpers, effects after the entry
+../aether/build/ae run tests/spec_page_grants.ae   # the page's grant list, by doing each operation under it: no window
 tests/check_timed_entries.sh                  # every host read of a page's value (getter, toString, valueOf, toJSON) is a timed entry: no raw quickjs.get/to_string/... outside the js_* helpers
 tests/check_gate.sh                          # the gate spec, sae.d.ts and the objects a page really sees agree (tools/gen-dts.sh regenerates the d.ts)
 tests/check_listeners.sh                      # tests/lib/listeners.sh (what the app specs ask of lsof: /proc on Linux) sees a TCP and a Unix listener
@@ -186,3 +188,14 @@ imported module (such as `lower/module.ae`) changes, skip relinking
 - Navigation is deferred to a one-shot timer; never tear a page down from
   inside its own JS call.
 - macOS libc exports `cgetset`; generated C names can collide with libc.
+- A page-API function runs under the page's grant list (services/pagegrants:
+  its storage folder, the toolkit's env switches, picked documents): a
+  `getenv`, an `fs.*` outside those, exec or a connection made there is
+  refused and reads as "unset" or "Permission denied", with an
+  `AETHER_DENIED` line in the audit (`AETHER_SANDBOX_AUDIT=stderr`;
+  `tests/run_all.sh` fails on one). Read the environment and resolve paths at
+  start or in `page_new_`, not in an entry (`tests/check_page_sandbox.sh`);
+  an effect that is not the page's (a URL for the system, a dialog, listening
+  on a socket) is checked in the function and queued with `later_add_`, done by
+  `later_tick_` once no entry runs. A new kernel timer begins with
+  `if b.entry_depth > 0 { return }`.

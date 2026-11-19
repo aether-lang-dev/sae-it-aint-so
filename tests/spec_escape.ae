@@ -171,6 +171,26 @@ main() {
             b.assert_text("The escape corpus: every page here tries to get out", "a page loaded afterwards")
         }
     }
+    spec.describe(fw, "the escape corpus: sae's own code under a page's entry") {
+        spec.it("the probe, asked to read, write, connect, exec and read the environment from every kind of entry") callback {
+            // The canary the probe tries to read (run_all.sh sets SAE_SANDBOX_PROBE).
+            canary = os_getenv("SAE_SANDBOX_PROBE")
+            spec.assert_true(canary != null, "SAE_SANDBOX_PROBE names the canary folder")
+            _m = fs.mkdir_p(canary)
+            _w = fs.write_atomic("${canary}/secret", string.bytes("the kernel's file"))
+            _d = fs.delete("${canary}/planted")
+            b.navigate(b.test_url("/kernel_slip"))
+            spec.assert_true(b.wait_for_console("kernel_slip: armed"), "the page armed its getter")
+            b.click("kernel_slip: probe from a click")
+            id = uidriver.widget_id_by_text("kernel_slip: right-click this line")
+            spec.assert_gt(id, 0, "the line to right-click")
+            uidriver.post_body("/widget/${id}/secondary_click")
+            l = wait_for_report("kernel_slip")
+            spec.assert_true(string.starts_with(l, "kernel_slip: refused: "), "kernel_slip is refused: ${l}")
+            spec.assert_eq(console_count("kernel_slip: refused: "), 1, "the page said so once")
+            spec.assert_eq(fs.exists("${canary}/planted"), 0, "nothing was written under the canary")
+        }
+    }
     spec.describe(fw, "the escape corpus: the caps") {
         spec.it("more http requests in flight than the cap (8)") callback {
             l = attempt("cap_http", "sae: refused: http: this page has 8 requests in flight (the cap)")

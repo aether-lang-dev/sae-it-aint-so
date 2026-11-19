@@ -327,6 +327,28 @@ Tsyne's `examples/sandbox-breakout`) and its happy path in
   rounded down to 100 us in the browser; an app has full resolution.
   `SAE_COARSE_CLOCKS=0` turns it off, `=1` turns it on, in either mode.
   `Date.now()` stays whole milliseconds.
+- **sae's own code runs under the page's grants while the page's code
+  runs.** An entry into a page's JS (the first run, a handler, a timer, a
+  promise job, a reply, a getter the host reads) puts the page's grant list
+  in force on the UI thread until the entry ends (`services/pagegrants`;
+  Aether's `sandbox_push`, the list lent, not copied). The list is the
+  page's own storage folder, the toolkit's three environment switches, and
+  each document the person picked; there is no tcp, exec or other
+  environment. A slip in the kernel (a path joined from page input, a
+  missing scope check) is then refused, as a missing file or an unset
+  variable, instead of done: `tests/escape/kernel_slip.ts` asks the kernel
+  to read, write, connect, exec and read the environment from every kind of
+  entry, and a run with `AETHER_SANDBOX_AUDIT=stderr` (`tests/run_all.sh`
+  sets it) logs each refusal as `AETHER_DENIED`, which fails the run unless
+  a spec meant it. What a page asks of the system that is not its own to do
+  (`shell.open`, a print dialog, the control bus listening) is checked at the
+  call and done after the entry by a kernel tick (`later_tick_`); kernel
+  ticks wait while an entry runs. `fs` is the one capability that runs
+  outside the list: `services/files` resolves a page's path by looking at
+  every part of it, and fences the operation to app.json's grants itself.
+  This is not a process boundary: engine bugs, the HTTP fetchers and SQLite
+  workers (actors run with no grants), and the grants being ordinary data in
+  sae's process are outside it (`docs/design/page-entry-sandbox.md`).
 - **No fingerprinting surface, no code from anywhere else.** No
   `navigator`, no device details, no module loader: `import()` of any URL
   rejects (`tests/spec_globals.ae` pins the whole global surface).

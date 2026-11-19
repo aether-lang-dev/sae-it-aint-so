@@ -1,0 +1,64 @@
+// services/sandboxprobe — the operations tests/escape/kernel_slip.ts asks the
+// kernel to try from inside a page's entry (docs/design/page-entry-sandbox.md).
+//
+// Each is what a slip in sae's own code would be: a read of a file that is
+// not the page's, a write, the environment, a connection, exec. They take
+// nothing from the page (a canary folder and a port, both from the test's
+// environment at start), and each says what happened: "ESCAPED" if it
+// worked, "refused: <why>" if not. The kernel installs them as __sae_probe
+// only when SAE_SANDBOX_PROBE and AETHER_UI_TEST_PORT are both set, so a
+// browser a person runs has none of this. The one place a layer rule is
+// bent for it: tests/check_layers.sh lets this module, and no other outside
+// services/backend, run a program, and it runs `true`.
+//
+// What this module can reach is its imports: std.fs, std.os, std.tcp and
+// std.string. tests/check_layers.sh holds the list.
+
+import std.fs
+import std.os
+import std.tcp
+import std.string
+
+exports (read_canary, write_canary, read_path_var, connect, run_true, levels)
+
+extern aether_sandbox_levels_here() -> int
+
+result_(err: string) -> string {
+    if err == "" { return "ESCAPED" }
+    return "refused: ${err}"
+}
+
+read_canary(dir: string) -> string {
+    _t, err = fs.read("${dir}/secret")
+    return result_(err)
+}
+
+write_canary(dir: string) -> string {
+    return result_(fs.write_atomic("${dir}/planted", string.bytes("planted")))
+}
+
+// The environment: PATH is set wherever sae runs, so "unset" is a refusal.
+read_path_var() -> string {
+    v = os.getenv("PATH")
+    if v == null { return "refused: PATH reads as unset" }
+    return "ESCAPED"
+}
+
+connect(port: int) -> string {
+    c, err = tcp.connect("127.0.0.1", port)
+    if err == "" {
+        _x = tcp.tcp_close(c)
+        return "ESCAPED"
+    }
+    return "refused: ${err}"
+}
+
+run_true() -> string {
+    _o, err = os.exec("true")
+    return result_(err)
+}
+
+// The grant levels in force on this thread: 0 outside any entry.
+levels() -> int {
+    return aether_sandbox_levels_here()
+}

@@ -33,6 +33,7 @@ import std.json
 import services.files
 import services.documents
 import services.pagegrants
+import services.sandboxprobe
 import services.clipboard
 import services.bus
 import services.channel
@@ -98,6 +99,8 @@ struct Browser {
     pending_url: string
     nav_timer: int
     page_mem: long
+    probe_dir: string  // SAE_SANDBOX_PROBE: the canary folder of the sandbox probe (tests), "" when off
+    probe_port: int    // AETHER_UI_TEST_PORT, which the probe tries to connect to
     later: ptr         // std.list of *LaterJob: effects a page asked for, done once no entry is running ("after the entry")
     later_timer: int   // the UI timer taking them, or 0 while none wait
     app_data: string   // the app's data folder (app_data_dir_), worked out once at start: bus.serve starts the bus in an entry
@@ -4372,7 +4375,10 @@ sae_fs_read_text(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    text, err = files.read_text(browser_of_(p).files, own_(arg_str_(ctx, argv, argc, 0)))
+    path = own_(arg_str_(ctx, argv, argc, 0))
+    leave_grants_(p)
+    text, err = files.read_text(browser_of_(p).files, path)
+    enter_grants_(p)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return quickjs.new_string(ctx, text)
 }
@@ -5185,7 +5191,10 @@ sae_fs_write_text(p: *Page, this_val: int, argv: int) -> int {
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
-    err = files.write_text(browser_of_(p).files, path, own_(arg_str_(ctx, argv, argc, 1)))
+    data = own_(arg_str_(ctx, argv, argc, 1))
+    leave_grants_(p)
+    err = files.write_text(browser_of_(p).files, path, data)
+    enter_grants_(p)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return 0
 }
@@ -5194,7 +5203,10 @@ sae_fs_read_base64(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    b64, err = files.read_base64(browser_of_(p).files, own_(arg_str_(ctx, argv, argc, 0)))
+    path = own_(arg_str_(ctx, argv, argc, 0))
+    leave_grants_(p)
+    b64, err = files.read_base64(browser_of_(p).files, path)
+    enter_grants_(p)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return quickjs.new_string(ctx, b64)
 }
@@ -5204,7 +5216,10 @@ sae_fs_write_base64(p: *Page, this_val: int, argv: int) -> int {
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
-    err = files.write_base64(browser_of_(p).files, path, own_(arg_str_(ctx, argv, argc, 1)))
+    data = own_(arg_str_(ctx, argv, argc, 1))
+    leave_grants_(p)
+    err = files.write_base64(browser_of_(p).files, path, data)
+    enter_grants_(p)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return 0
 }
@@ -5213,7 +5228,10 @@ sae_fs_exists(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    yes, why = files.exists(browser_of_(p).files, own_(arg_str_(ctx, argv, argc, 0)))
+    path = own_(arg_str_(ctx, argv, argc, 0))
+    leave_grants_(p)
+    yes, why = files.exists(browser_of_(p).files, path)
+    enter_grants_(p)
     if why != "" { return sae_throw_type_error(ctx, why) }
     return quickjs.new_bool(ctx, yes)
 }
@@ -5222,7 +5240,10 @@ sae_fs_list(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    names, err = files.list_json(browser_of_(p).files, own_(arg_str_(ctx, argv, argc, 0)))
+    path = own_(arg_str_(ctx, argv, argc, 0))
+    leave_grants_(p)
+    names, err = files.list_json(browser_of_(p).files, path)
+    enter_grants_(p)
     if err != "" { return sae_throw_type_error(ctx, err) }
     // A JSON array, parsed back on the JS side: the names are strings only.
     return json_value_(ctx, names)
@@ -5232,7 +5253,10 @@ sae_fs_mkdir(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    err = files.mkdir(browser_of_(p).files, own_(arg_str_(ctx, argv, argc, 0)))
+    path = own_(arg_str_(ctx, argv, argc, 0))
+    leave_grants_(p)
+    err = files.mkdir(browser_of_(p).files, path)
+    enter_grants_(p)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return 0
 }
@@ -5241,7 +5265,10 @@ sae_fs_remove(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
-    err = files.remove(browser_of_(p).files, own_(arg_str_(ctx, argv, argc, 0)))
+    path = own_(arg_str_(ctx, argv, argc, 0))
+    leave_grants_(p)
+    err = files.remove(browser_of_(p).files, path)
+    enter_grants_(p)
     if err != "" { return sae_throw_type_error(ctx, err) }
     return 0
 }
@@ -9537,6 +9564,15 @@ entry_begin_(p: *Page) -> long {
     p.entry_depth = p.entry_depth + 1
     browser_of_(p).entry_depth = browser_of_(p).entry_depth + 1
     prev = quickjs.deadline_ns(p.ctx)
+    // The outermost entry into a page puts the page's grant list in force
+    // (services/pagegrants): sae's own std operations on this thread, until
+    // the entry ends, are held to it. A nested entry (a conversion inside a
+    // handler, a call from a host function) is under it already, and the
+    // runtime allows 64 levels, so only depth 0 to 1 pushes. The list is
+    // lent, not copied (sandbox.enforce copies; its grants are frozen):
+    // sandbox.enter/leave are not released, so the runtime's builtins stand
+    // in; they are named here and nowhere else (check_page_sandbox.sh).
+    if p.entry_depth == 1 { sandbox_push(p.grants) }
     if prev != 0 { return prev }
     quickjs.clear_interrupted(p.ctx)
     quickjs.set_deadline_ns(p.ctx, quickjs.now_ns() + (browser_of_(p).page_time_ms as long) * 1000000)
@@ -9546,6 +9582,7 @@ entry_begin_(p: *Page) -> long {
 entry_end_(p: *Page, prev: long) {
     p.entry_depth = p.entry_depth - 1
     browser_of_(p).entry_depth = browser_of_(p).entry_depth - 1
+    if p.entry_depth == 0 { sandbox_pop() }
     if prev == 0 { quickjs.set_deadline_ns(p.ctx, 0) }
 }
 
@@ -9556,12 +9593,30 @@ entry_end_(p: *Page, prev: long) {
 entry_stopped_(p: *Page, prev: long, what: string) {
     p.entry_depth = p.entry_depth - 1
     browser_of_(p).entry_depth = browser_of_(p).entry_depth - 1
+    if p.entry_depth == 0 { sandbox_pop() }
     if prev != 0 { return }
     if quickjs.interrupted(p.ctx) != 0 {
         say_("sae: stopped: the page's code ran past its limit of ${browser_of_(p).page_time_ms} ms while sae was reading ${what}")
         quickjs.clear_interrupted(p.ctx)
     }
     quickjs.set_deadline_ns(p.ctx, 0)
+}
+
+// Leave the page's grants for the one kind of work they cannot cover, and come
+// back: services/files resolves a path the page named by walking it
+// component by component (fs.is_symlink on each, so /home, /home/paul, ...),
+// which is the check that refuses an outside path, and needs to look at paths
+// the page has no grant for. That service checks every path against the app's
+// app.json grants and acts inside an enforce of exactly those (fence_), so
+// the page's list adds nothing to it. Every argument is read before the
+// leave: page JS (a toString) never runs outside the grants. Used only by the
+// sae_fs_* page-API functions (check_page_sandbox.sh).
+leave_grants_(p: *Page) {
+    if p.entry_depth > 0 { sandbox_pop() }
+}
+
+enter_grants_(p: *Page) {
+    if p.entry_depth > 0 { sandbox_push(p.grants) }
 }
 
 // quickjs.eval, call and run_jobs, each as one timed entry.
@@ -12036,6 +12091,43 @@ gate_describe_() {
     fflush(sae_stdout())
 }
 
+sae_probe_fs(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_string(p.ctx, sandboxprobe.read_canary(browser_of_(p).probe_dir))
+}
+
+sae_probe_write(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_string(p.ctx, sandboxprobe.write_canary(browser_of_(p).probe_dir))
+}
+
+sae_probe_env(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_string(p.ctx, sandboxprobe.read_path_var())
+}
+
+sae_probe_tcp(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_string(p.ctx, sandboxprobe.connect(browser_of_(p).probe_port))
+}
+
+sae_probe_exec(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_string(p.ctx, sandboxprobe.run_true())
+}
+
+// The grant levels in force on this thread: 0 outside any entry.
+sae_probe_depth(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return quickjs.new_int(p.ctx, sandboxprobe.levels())
+}
+
+sae_probe_tick(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    probe_tick_(browser_of_(p))
+    return 0
+}
+
 // Install the page API in a page's runtime: everything a page can reach is
 // registered here (or in the gate spec it runs, gate_spec_), so this function
 // is the sandbox boundary. fs and shell
@@ -12044,6 +12136,20 @@ gate_describe_() {
 api_register_(p: *Page) {
     ab = p.browser as *Browser
     q = p.ctx
+
+    // The sandbox probe (tests only: probe_* above).
+    if ab.probe_dir != "" {
+        po = quickjs.new_object(q)
+        reg_(p, q, po, "fs", 0, sae_probe_fs)
+        reg_(p, q, po, "write", 0, sae_probe_write)
+        reg_(p, q, po, "env", 0, sae_probe_env)
+        reg_(p, q, po, "tcp", 0, sae_probe_tcp)
+        reg_(p, q, po, "exec", 0, sae_probe_exec)
+        reg_(p, q, po, "depth", 0, sae_probe_depth)
+        reg_(p, q, po, "tick", 0, sae_probe_tick)
+        js_set_global_(p, "__sae_probe", po)
+        quickjs.release(q, po)
+    }
 
     // ===== wave1/sqlite: sqlite.<name> for each database the page seeks and app.json declares =====
     sdbs = sqlite_page_dbs_(p)
@@ -12152,12 +12258,10 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string, seeks: 
     p.storage_dir = own_(storage_dir_(b, url))
     _sd = fs.mkdir_p(p.storage_dir)
     p.grants = pagegrants.new_page(url, p.storage_dir)
-    // An app page: also what its app.json grants, and the documents picked so
-    // far (a page loaded after the pick holds them too).
-    if b.app_dir != "" {
-        if string.contains(absent, ",local-filesystem,") == 0 { files.add_grants(b.files, p.grants) }
-        documents.add_grants(b.documents, p.grants)
-    }
+    // An app page: also the documents picked so far (a page loaded after the
+    // pick holds them too). Its fs roots are not here: the sae_fs_* functions
+    // run services/files outside the list (leave_grants_).
+    if b.app_dir != "" { documents.add_grants(b.documents, p.grants) }
     b.page_seq = b.page_seq + 1
     p.seq = b.page_seq
     p.http_res = 0
@@ -12798,6 +12902,23 @@ run_nav_(b: *Browser) {
     }
 }
 
+// --- the sandbox probe (tests only) ---
+//
+// tests/escape/kernel_slip.ts asks sae's own code to do something the page's
+// grants do not allow, from every kind of entry. The probe is that code: each
+// operation is what a slip in the kernel would be (a read of a file that is
+// not the page's, the environment, a connection, exec, a write), taking
+// nothing from the page, and reports what happened. It is installed by
+// api_register_ only when SAE_SANDBOX_PROBE=<canary folder> and
+// AETHER_UI_TEST_PORT are both set (browser_new_ reads them), so a browser
+// run by a person has no __sae_probe.
+// The kernel's ticks, run from inside the entry that called this: what a
+// nested event loop would do. Each begins by returning while an entry runs.
+probe_tick_(b: *Browser) {
+    http_poll_(b)
+    later_tick_(b)
+}
+
 // --- after the entry ---
 //
 // An effect a page asks for that is not the page's to do under its grants (it
@@ -12927,6 +13048,15 @@ browser_new_() -> *Browser {
     b.entry_depth = 0
     b.app_data = ""
     b.later = list.new()
+    // The sandbox probe: a page-API object only a test build with both
+    // variables set installs (probe_* below).
+    b.probe_dir = ""
+    b.probe_port = 0
+    if env_("AETHER_UI_TEST_PORT") != "" {
+        b.probe_dir = own_(env_("SAE_SANDBOX_PROBE"))
+        pn, _perr = string.to_int(env_("AETHER_UI_TEST_PORT"))
+        b.probe_port = pn
+    }
     b.later_timer = 0
     b.menu_h = 0
     b.body = 0

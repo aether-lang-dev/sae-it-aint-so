@@ -75,4 +75,18 @@ nav=$(grep -A3 "b.nav_timer = ui.timer(1" "$F" | grep -c "if b.entry_depth > 0 {
 expect shell.open "later_tick_"
 expect printing.pdf "later_tick_"
 
+# 4. The runtime's sandbox_push and sandbox_pop (sandbox.enter and leave are
+#    not released; they replace the builtins when they are) are named in the
+#    entry helpers and in the one pair that leaves the page's grants, and
+#    nowhere else; and that pair is used only by the sae_fs_* page-API
+#    functions, each around its one services/files call.
+expect sandbox_push "enter_grants_ entry_begin_"
+expect sandbox_pop "entry_end_ entry_stopped_ leave_grants_"
+FSFNS="sae_fs_exists sae_fs_list sae_fs_mkdir sae_fs_read_base64 sae_fs_read_text sae_fs_remove sae_fs_write_base64 sae_fs_write_text"
+expect leave_grants_ "$FSFNS"
+expect enter_grants_ "$FSFNS"
+nfiles=$(grep -c "files\.\(read_text\|write_text\|read_base64\|write_base64\|exists\|list_json\|mkdir\|remove\)(" "$F")
+nleave=$(grep -c "^    leave_grants_(p)$" "$F")
+if [ "$nfiles" = "$nleave" ]; then echo "ok   each of the $nfiles services/files calls follows a leave_grants_"
+else echo "FAIL $nfiles services/files calls, $nleave leave_grants_ lines"; fail=1; fi
 exit $fail

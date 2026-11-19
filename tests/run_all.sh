@@ -80,6 +80,13 @@ fi
 LOGS=target/run_all
 rm -rf "$LOGS"; mkdir -p "$LOGS"
 T=$ROOT/target
+# The sandbox's audit sink: every refusal of the grants a page's entries run
+# under (docs/design/page-entry-sandbox.md) is a line "AETHER_DENIED: <category>
+# <resource>" in the driver's log. A refusal reads to the code that met it as
+# a missing file or an unset variable, so nothing else says it happened: the
+# end of this script fails the run on any that a spec did not mean to make.
+AETHER_SANDBOX_AUDIT=${AETHER_SANDBOX_AUDIT:-stderr}; export AETHER_SANDBOX_AUDIT
+STARTED=$(mktemp "${TMPDIR:-/tmp}/sae-run_all.XXXXXX") || exit 2
 # Fresh app storage and shell logs every run: the specs that use them expect
 # a first launch (pomatez's tasks were left from the run before, so its
 # "2 to do" read 3 and failed on every run after the first).
@@ -95,7 +102,7 @@ spec_globals[app]|SAE_TEST_APP=tests/apps/globals SAE_APPDATA_DIR=$T/globals-app
 spec_webrules||spec spec_webrules
 spec_webrules[fine]|SAE_COARSE_CLOCKS=0|spec spec_webrules
 spec_webrules[app]|SAE_TEST_APP=tests/apps/clocks|spec spec_webrules
-spec_escape||spec spec_escape tests/escape
+spec_escape|SAE_SANDBOX_PROBE=$T/sandbox-canary|spec spec_escape tests/escape
 spec_storage_scope||spec spec_storage_scope
 spec_imports||spec spec_imports
 spec_raster||spec spec_raster
@@ -201,5 +208,21 @@ for line in $TABLE; do
 '
 done
 IFS=$old_ifs
+# Refusals no spec meant to make. The only ones meant are the probe's, in
+# spec_escape's log (tests/escape/kernel_slip.ts: the canary folder, the
+# environment, exec, a connection to the driver's port).
+denied=$(find target -maxdepth 1 -name '*.log' -newer "$STARTED" 2>/dev/null | while read -r lg; do
+    if [ "$lg" = target/spec_escape.log ] || [ "$lg" = target/spec_app_sandbox.log ]; then
+        grep -H '^AETHER_DENIED' "$lg" | grep -v ':AETHER_DENIED: \(env PATH\|exec true\|tcp 127\.0\.0\.1:[0-9]*\|fs_[a-z]* [^ ]*sandbox-canary[^ ]*\)$' || true
+    else
+        grep -H '^AETHER_DENIED' "$lg" || true
+    fi
+done)
+rm -f "$STARTED"
+if [ -n "$denied" ]; then
+    echo "FAIL the sandbox refused something no spec meant it to:"
+    echo "$denied" | sed 's/^/       /' | head -20
+    fail=$((fail + 1)); failed="$failed sandbox-denials"
+fi
 echo "$pass passed, $fail failed${failed:+:$failed}"
 [ "$fail" -eq 0 ]
