@@ -9873,6 +9873,16 @@ const WHEN_APP_SEEKS = 2 // not in p.absent, and an installed app
 const T_VOID = 0
 const T_STR = 1
 const T_STR_NULL = 2
+const T_NUM = 3
+const T_ANY = 4
+const T_DELAY = 5
+const T_TIMER = 6
+const T_FRAME = 7
+const T_FN = 8
+const T_FRAME_FN = 9
+
+// What `value` takes its string from, when a page is registered.
+const V_PAGE_URL = 1
 
 const GATE_TAG_SPACE = 71
 const GATE_TAG_ENTRY = 72
@@ -9927,6 +9937,13 @@ gate_new_(mode: int, p: @keep ptr) -> *Gate {
 gate_type_name_(t: int) -> string {
     if t == T_STR { return "str" }
     if t == T_STR_NULL { return "str_or_null" }
+    if t == T_NUM { return "num" }
+    if t == T_ANY { return "any" }
+    if t == T_DELAY { return "delay" }
+    if t == T_TIMER { return "timer" }
+    if t == T_FRAME { return "frame" }
+    if t == T_FN { return "fn" }
+    if t == T_FRAME_FN { return "frame_fn" }
     return "void"
 }
 
@@ -10032,6 +10049,54 @@ api(_ctx: @keep ptr, name: string, f: @keep fn(*Page, int, int) -> int, arity: i
     return gate_begin_(g, "fn", name, arity)
 }
 
+// A bare global function: globalThis[name] calls f.
+global_fn(_ctx: @keep ptr, g: *Gate, name: string, f: @keep fn(*Page, int, int) -> int, arity: int) -> ptr {
+    gate_close_space_(g)
+    if g.mode == G_REGISTER {
+        p = g.p as *Page
+        glob_fn_(p, p.ctx, name, arity, f)
+        return g.en
+    }
+    return gate_begin_(g, "global", name, arity)
+}
+
+// A builtin's member the page API replaces: global[name] calls f (Date.now).
+patch(_ctx: @keep ptr, g: *Gate, global: string, name: string, f: @keep fn(*Page, int, int) -> int, arity: int) -> ptr {
+    gate_close_space_(g)
+    if g.mode == G_REGISTER {
+        p = g.p as *Page
+        d, _e = js_get_global_(p.ctx, global)
+        reg_(p, p.ctx, d, name, arity, f)
+        quickjs.release(p.ctx, d)
+        return g.en
+    }
+    s = g.sp as *GateSpace
+    s.name = own_(global)
+    return gate_begin_(g, "patch", name, arity)
+}
+
+// A readonly string property of the space, which is not a function: what
+// the page is told, as `src` names it (V_PAGE_URL).
+value(_ctx: @keep ptr, name: string, t: int, src: int) {
+    s = _ctx as *GateSpace
+    g = s.g as *Gate
+    gate_flush_(g)
+    if g.mode == G_REGISTER {
+        if s.on == 1 {
+            p = g.p as *Page
+            v = ""
+            if src == V_PAGE_URL { v = p.url }
+            h = quickjs.new_string(p.ctx, v)
+            _e = js_set_(p.ctx, s.obj, name, h)
+            quickjs.release(p.ctx, h)
+        }
+        return
+    }
+    e = gate_begin_(g, "value", name, 0)
+    e.gives = t
+    gate_flush_(g)
+}
+
 // What a space's functions may reach beyond the shared helpers (recorded
 // now; the seal check of a later step reads it).
 reach(_ctx: ptr, what: string) {
@@ -10128,6 +10193,80 @@ gate_spec_(g: *Gate) {
         api("remove", sae_storage_remove, 1) {
             arg("key", T_STR)
             doc("Forgets key.")
+        }
+    }
+    space(g, "browserContext", WHEN_ALWAYS, "") {
+        reach("request_nav_")
+        api("changePage", sae_bc_change_page, 1) {
+            arg("url", T_STR)
+            doc("Goes to url, resolved against this page's address; carried out after the current call returns.")
+        }
+        api("back", sae_bc_back, 0) {
+            doc("Goes back in the history.")
+        }
+        api("forward", sae_bc_forward, 0) {
+            doc("Goes forward in the history.")
+        }
+        api("reload", sae_bc_reload, 0) {
+            doc("Loads this page again.")
+        }
+        value("currentUrl", T_STR, V_PAGE_URL)
+    }
+    global_fn(g, "print", js_print, 1) {
+        opt("value", T_ANY)
+        rest("more")
+        doc("Writes its arguments, space-separated, and a newline, to the browser's standard output; objects as JSON.")
+    }
+    // The web's timer names, page-scoped like ui.timer: the same queue, so
+    // they need no grant and stop with the page ("the page API: timers").
+    global_fn(g, "setTimeout", sae_set_timeout, 2) {
+        arg("fn", T_FN)
+        opt("ms", T_DELAY)
+        rest("args")
+        gives(T_TIMER)
+        doc("Calls fn(...args) once, ms milliseconds from now, on the page's own timer queue.")
+    }
+    global_fn(g, "setInterval", sae_set_interval, 2) {
+        arg("fn", T_FN)
+        opt("ms", T_DELAY)
+        rest("args")
+        gives(T_TIMER)
+        doc("Calls fn(...args) every ms milliseconds until cleared.")
+    }
+    global_fn(g, "clearTimeout", sae_ui_timer_cancel, 1) {
+        opt("id", T_TIMER)
+        doc("Stops a timer from setTimeout; another id, or none, is ignored.")
+    }
+    global_fn(g, "clearInterval", sae_ui_timer_cancel, 1) {
+        opt("id", T_TIMER)
+        doc("Stops a timer from setInterval; another id, or none, is ignored.")
+    }
+    global_fn(g, "requestAnimationFrame", sae_request_frame, 1) {
+        arg("fn", T_FRAME_FN)
+        gives(T_FRAME)
+        doc("Calls fn(timestamp) on the next display frame.")
+    }
+    global_fn(g, "cancelAnimationFrame", sae_cancel_frame, 1) {
+        opt("id", T_FRAME)
+        doc("The callback will not run, even if its frame has begun; another id is ignored.")
+    }
+    patch(g, "Date", "now", js_date_now, 0) {
+        gives(T_NUM)
+        doc("Milliseconds since the epoch, on sae's clock.")
+    }
+    space(g, "performance", WHEN_ALWAYS, "") {
+        reach("esc_perf_now_")
+        api("now", js_performance_now, 0) {
+            gives(T_NUM)
+            doc("Milliseconds on sae's clock, with the fraction (rounded to 100 microseconds for a web page).")
+        }
+        api("memoryUsed", js_performance_memory_used, 0) {
+            gives(T_NUM)
+            doc("Bytes the page's runtime has allocated, garbage not yet collected included.")
+        }
+        api("handlesHeld", js_performance_handles_held, 0) {
+            gives(T_NUM)
+            doc("How many values the host holds for the page now (the callbacks widgets and timers keep).")
         }
     }
 }
@@ -10506,40 +10645,9 @@ api_register_(p: *Page) {
     }
     // ===== end wave1/natives =====
 
-    // storage: said in the gate spec (gate_spec_)
+    // storage, browserContext, print, the timers, Date.now and performance:
+    // said in the gate spec (gate_spec_)
     gate_register_(p)
-
-    bc = quickjs.new_object(q)
-    reg_(p, q, bc, "changePage", 1, sae_bc_change_page)
-    reg_(p, q, bc, "back", 0, sae_bc_back)
-    reg_(p, q, bc, "forward", 0, sae_bc_forward)
-    reg_(p, q, bc, "reload", 0, sae_bc_reload)
-    cu = quickjs.new_string(q, p.url)
-    _c = js_set_(q, bc, "currentUrl", cu)
-    quickjs.release(q, cu)
-    js_set_global_(q, "browserContext", bc)
-    quickjs.release(q, bc)
-
-    pr = host_fn_(p, q, "print", 1, js_print)
-    js_set_global_(q, "print", pr)
-    quickjs.release(q, pr)
-    // The web's timer names, page-scoped like ui.timer: the same queue, so
-    // they need no grant and stop with the page ("the page API: timers").
-    glob_fn_(p, q, "setTimeout", 2, sae_set_timeout)
-    glob_fn_(p, q, "setInterval", 2, sae_set_interval)
-    glob_fn_(p, q, "clearTimeout", 1, sae_ui_timer_cancel)
-    glob_fn_(p, q, "clearInterval", 1, sae_ui_timer_cancel)
-    glob_fn_(p, q, "requestAnimationFrame", 1, sae_request_frame)
-    glob_fn_(p, q, "cancelAnimationFrame", 1, sae_cancel_frame)
-    d, _e1 = js_get_global_(q, "Date")
-    reg_(p, q, d, "now", 0, js_date_now)
-    quickjs.release(q, d)
-    perf = quickjs.new_object(q)
-    reg_(p, q, perf, "now", 0, js_performance_now)
-    reg_(p, q, perf, "memoryUsed", 0, js_performance_memory_used)
-    reg_(p, q, perf, "handlesHeld", 0, js_performance_handles_held)
-    js_set_global_(q, "performance", perf)
-    quickjs.release(q, perf)
 
     // ===== wave1/imports: the loader's two functions. Not globals: each
     // unit meets them on the $sae object its wrapper takes (modules_prepare_).

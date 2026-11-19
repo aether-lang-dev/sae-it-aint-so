@@ -48,6 +48,9 @@ ts_type_(t: string) -> string {
     if t == "num" { return "number" }
     if t == "delay" { return "number" }
     if t == "timer" { return "sae.Timer" }
+    if t == "frame" { return "sae.Frame" }
+    if t == "fn" { return "(...args: any[]) => void" }
+    if t == "frame_fn" { return "(timestamp: number) => void" }
     if t == "any" { return "unknown" }
     return "void"
 }
@@ -132,6 +135,8 @@ dts_header_(out: ptr) {
     _h = strbuilder.append(out, "declare namespace sae {\n")
     _i = strbuilder.append(out, "  /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */\n")
     _j = strbuilder.append(out, "  type Timer = number;\n")
+    _j2 = strbuilder.append(out, "  /** An id from requestAnimationFrame, for cancelAnimationFrame. */\n")
+    _j3 = strbuilder.append(out, "  type Frame = number;\n")
     _k = strbuilder.append(out, "}\n")
 }
 

@@ -8,6 +8,8 @@
 declare namespace sae {
   /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */
   type Timer = number;
+  /** An id from requestAnimationFrame, for cancelAnimationFrame. */
+  type Frame = number;
 }
 declare const storage: {
   /** The value stored under key, or null; keys are letters, digits, '.', '_' and '-'. */
@@ -16,4 +18,37 @@ declare const storage: {
   set(key: string, value: string): void;
   /** Forgets key. */
   remove(key: string): void;
+};
+declare const browserContext: {
+  /** Goes to url, resolved against this page's address; carried out after the current call returns. */
+  changePage(url: string): void;
+  /** Goes back in the history. */
+  back(): void;
+  /** Goes forward in the history. */
+  forward(): void;
+  /** Loads this page again. */
+  reload(): void;
+  readonly currentUrl: string;
+};
+/** Writes its arguments, space-separated, and a newline, to the browser's standard output; objects as JSON. */
+declare function print(value?: unknown, ...more: unknown[]): void;
+/** Calls fn(...args) once, ms milliseconds from now, on the page's own timer queue. */
+declare function setTimeout(fn: (...args: any[]) => void, ms?: number, ...args: unknown[]): sae.Timer;
+/** Calls fn(...args) every ms milliseconds until cleared. */
+declare function setInterval(fn: (...args: any[]) => void, ms?: number, ...args: unknown[]): sae.Timer;
+/** Stops a timer from setTimeout; another id, or none, is ignored. */
+declare function clearTimeout(id?: sae.Timer): void;
+/** Stops a timer from setInterval; another id, or none, is ignored. */
+declare function clearInterval(id?: sae.Timer): void;
+/** Calls fn(timestamp) on the next display frame. */
+declare function requestAnimationFrame(fn: (timestamp: number) => void): sae.Frame;
+/** The callback will not run, even if its frame has begun; another id is ignored. */
+declare function cancelAnimationFrame(id?: sae.Frame): void;
+declare const performance: {
+  /** Milliseconds on sae's clock, with the fraction (rounded to 100 microseconds for a web page). */
+  now(): number;
+  /** Bytes the page's runtime has allocated, garbage not yet collected included. */
+  memoryUsed(): number;
+  /** How many values the host holds for the page now (the callbacks widgets and timers keep). */
+  handlesHeld(): number;
 };
