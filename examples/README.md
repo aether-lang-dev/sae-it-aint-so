@@ -29,3 +29,4 @@ toolkit) are the apps only; none of Tsyne's framework code is used.
 | `calendar` | Month calendar with events | Tsyne `phone-apps/calendar` | BSD-2-Clause terms, Paul Hammant |
 | `contacts` | Contacts with search and favourites | Tsyne `phone-apps/contacts` | BSD-2-Clause terms, Paul Hammant |
 | `everyday` | Tip, BMI, password, dice, rock paper scissors, quiz | Tsyne `examples/{15,16,18,19,20,21}-*` | MIT, Paul Hammant |
+| `playground` | Bouncing balls and draggable shapes | Tsyne `phone-apps/{bouncing-ball,interactive-shapes}` | MIT, Paul Hammant |

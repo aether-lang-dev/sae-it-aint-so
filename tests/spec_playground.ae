@@ -1,0 +1,63 @@
+// spec_playground.ae -- the Playground port (examples/playground): the three
+// balls after 30 ticks of gravity (positions from the same arithmetic, held
+// with Pause, Reset and Step), a ball dragged to a new place, then the shapes:
+// a click recolours one, a drag moves another.
+//
+//   SAE_TEST_APP=examples/playground tests/run_spec.sh spec_playground
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+vx(x: float) -> int { return b.vg_px_x(x, 500.0, 450.0) }
+vy(y: float) -> int { return b.vg_px_y(y, 500.0, 450.0) }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Playground on sae") {
+        spec.it("after 30 ticks the three balls are where the physics puts them") callback {
+            b.assert_text("Drag a ball and let go to flick it", "the balls view")
+            b.click("Pause")
+            b.click("Reset")
+            b.click("Step")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "drawn")
+            // (178.5, 140.5), (202.9, 140.5), (431.4, 140.5): all on the floor of their first fall
+            spec.assert_true(b.wait_for_vg_pixel(vx(178.5), vy(140.5), 0xFF6B6B), "the red ball")
+            spec.assert_true(b.wait_for_vg_pixel(vx(431.4), vy(140.5), 0x45B7D1), "the blue one")
+            spec.assert_true(b.wait_for_vg_pixel(vx(205.0), vy(140.5), 0x4ECDC4), "the teal one, on top of the red")
+            spec.assert_true(b.vg_pixel_near(vx(300.0), vy(300.0), 0xF0F0F0, 6) == 1, "grey elsewhere")
+        }
+        spec.it("a ball dragged somewhere stays there while paused") callback {
+            b.vg_click(vx(431.4), vy(140.5))
+            b.vg_move(vx(300.0), vy(300.0))
+            b.vg_release(vx(300.0), vy(300.0))
+            spec.assert_true(b.wait_for_vg_pixel(vx(300.0), vy(300.0), 0x45B7D1), "the blue ball is at the drop")
+            spec.assert_true(b.wait_for_vg_pixel(vx(431.4), vy(140.5), 0xF0F0F0), "and not where it was")
+        }
+        spec.it("shapes: three, in Tsyne's places") callback {
+            b.click("Shapes")
+            b.assert_text("Click to change colour, drag to move, hover to highlight", "the shapes view")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "drawn")
+            spec.assert_true(b.wait_for_vg_pixel(vx(100.0), vy(100.0), 0xFF6B6B), "circle 1")
+            spec.assert_true(b.wait_for_vg_pixel(vx(300.0), vy(150.0), 0x4ECDC4), "circle 2")
+            spec.assert_true(b.wait_for_vg_pixel(vx(190.0), vy(330.0), 0x45B7D1), "the rectangle")
+        }
+        spec.it("a click changes a shape's colour to another one") callback {
+            b.vg_click(vx(100.0), vy(100.0))
+            sleep(300)
+            spec.assert_true(b.vg_pixel_near(vx(100.0), vy(100.0), 0xFF6B6B, 6) == 0, "no longer red")
+            spec.assert_true(b.vg_pixel_near(vx(100.0), vy(100.0), 0xFFFFFF, 6) == 0, "and not the background")
+        }
+        spec.it("a drag moves the rectangle by what the pointer moved") callback {
+            b.vg_click(vx(190.0), vy(330.0))
+            b.vg_move(vx(290.0), vy(380.0))
+            b.vg_release(vx(290.0), vy(380.0))
+            sleep(300)
+            spec.assert_true(b.vg_pixel_near(vx(290.0), vy(380.0), 0xFFFFFF, 6) == 0, "the rectangle is at the drop")
+            spec.assert_true(b.vg_pixel_near(vx(160.0), vy(310.0), 0xFFFFFF, 6) == 1, "and its old place is empty")
+        }
+    }
+    return spec.run_summary(fw)
+}
