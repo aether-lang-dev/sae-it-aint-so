@@ -1,0 +1,12 @@
+{
+  "name": "Backend socket test",
+  "capabilities": {
+    "documents": {},
+    "backend": {
+      "program": "backend/main",
+      "channel": "socket",
+      "sandbox": { "read": ["data/"], "env": ["SAE_BACKEND_TEST_ENV"] },
+      "deadlineMs": 2000
+    }
+  }
+}

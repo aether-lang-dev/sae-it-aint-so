@@ -1,0 +1,4 @@
+# Built by tests/run_all.sh (backend kind) or by hand:
+#   AETHER_LIB_DIR=../../../sdk ae build backend/main.ae -o backend/main
+backend/main
+backend/main.exe

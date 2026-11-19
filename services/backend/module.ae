@@ -10,6 +10,16 @@
 // runtime that passes stdin and stdout through: start_wslc() runs a Linux
 // backend in a WSL container on Windows (`wslc run --rm -i`).
 //
+// start_socket() is the second transport (docs/design/ipc-backends.md): the
+// child gets one end of a socket pair at its fd 3 (std.ipc's socket
+// channel), which carries the same frames both ways and, down only, an open
+// descriptor (a document the person picked, call's `fd`); its stdout stays
+// its own. It is contained with sandbox.spawn_socket, held to the grants
+// app.json gave it, and fails closed where Aether cannot contain a child; or
+// started with spawn_socket_uncontained when app.json says "none" or the
+// person launched sae with --uncontained-backend. Not on Windows: std.ipc
+// has no socket channel there.
+//
 // Each Backend is an instance with its own state (the kernel holds one per
 // app); nothing here is shared between them. Frames are std.ipc's
 // (a 4-byte big-endian length, then the bytes), each one JSON:
@@ -38,9 +48,10 @@ import std.ipc
 import std.list
 import std.string
 import std.json
+import std.sandbox
 import services.frames
 
-exports (start, start_wslc, alive, why, call, poll, stop, excerpt, MAX_FRAME)
+exports (start, start_wslc, start_socket, socket, alive, why, call, poll, kill, stop, excerpt, MAX_FRAME)
 
 // The largest frame either side may send. A header announcing more is an
 // error, and the channel is closed.
@@ -61,6 +72,7 @@ struct Backend {
     why: string      // why it is no longer running, "" while it is
     frames: int      // frames read so far
     hint: string     // said after an exit status when it exits before its first frame
+    sock: int        // 1: the channel is a socket, rd the same descriptor the writer writes
 }
 
 // Start `program` (a path the kernel has already resolved inside the app)
@@ -128,6 +140,10 @@ start_wslc(image: string, command: ptr) -> (ptr, string) {
 spawn_(program: string, args: ptr, hint: string) -> (ptr, string) {
     wr, rd, pid, err = os.run_stdio(program, args, null)
     if err != "" { return null, err }
+    return new_(wr, rd, pid, hint, 0), ""
+}
+
+new_(wr: int, rd: int, pid: int, hint: string, sock: int) -> ptr {
     b = heap.new(Backend)
     b.out = frames.writer(wr)
     b.rd = rd
@@ -135,7 +151,85 @@ spawn_(program: string, args: ptr, hint: string) -> (ptr, string) {
     b.why = ""
     b.frames = 0
     b.hint = hint
-    return b as ptr, ""
+    b.sock = sock
+    return b as ptr
+}
+
+// Start `program` on a socket pair, its fd 3 the channel. `grants` is a
+// std.list of "kind value" strings (kind read, write or env; a read or
+// write value an absolute path, a folder ending in "/"), the whole of what
+// it may reach, or null to start it with no sandbox at all.
+// (backend, "") or (null, why); where the child cannot be contained, why,
+// and nothing was started.
+start_socket(program: string, argv: ptr, grants: ptr) -> (ptr, string) {
+    if os.platform() == "windows" {
+        return null, "backend: a socket backend does not run on Windows (std.ipc has no socket channel or descriptor passing there); app.json capabilities.backend.channel \"stdio\" does"
+    }
+    args = argv
+    own = 0
+    if args == null {
+        args = list.new()
+        own = 1
+    }
+    g = sandbox.new("sae backend") {}
+    ch = 0 - 1
+    pid = 0 - 1
+    err = ""
+    if grants == null {
+        ch, pid, err = sandbox.spawn_socket_uncontained(g, program, args, null)
+    } else {
+        n = list.size(grants)
+        i = 0
+        while i < n {
+            gv, _ge = list.get_string(grants, i)
+            grant_(g, gv)
+            i = i + 1
+        }
+        ch, pid, err = sandbox.spawn_socket(g, program, args, null)
+    }
+    if own == 1 { list.free(args) }
+    // The child has its own copy of the grants (a sealed memfd), so ours goes.
+    sandbox.free(g)
+    if err != "" { return null, "backend: could not start ${program}: ${err}" }
+    return new_(ch, ch, pid, "", 1), ""
+}
+
+// One "kind value" grant added to `g`. A folder ("/" at the end) is
+// granted with what is under it.
+grant_(g: sandbox.Grants, gv: string) {
+    sp = string.string_index_of(gv, " ")
+    if sp < 0 { return }
+    kind = string.string_substring(gv, 0, sp)
+    v = string.string_substring(gv, sp + 1, string.length(gv))
+    if kind == "env" {
+        sandbox.grant_env(g, v)
+        return
+    }
+    paths = list.new()
+    if string.string_ends_with(v, "/") == 1 && string.length(v) > 1 {
+        list.add(paths, string.string_substring(v, 0, string.length(v) - 1))
+        list.add(paths, "${v}*")
+    } else {
+        list.add(paths, v)
+    }
+    k = 0
+    while k < list.size(paths) {
+        pv, _pe = list.get_string(paths, k)
+        if kind == "read" { sandbox.grant_fs_read(g, pv) }
+        if kind == "write" {
+            sandbox.grant_fs_read(g, pv)
+            sandbox.grant_fs_write(g, pv)
+        }
+        k = k + 1
+    }
+    list.free(paths)
+}
+
+// 1 when its channel is a socket (a descriptor can cross it).
+socket(h: ptr) -> int {
+    if h == null { return 0 }
+    b = h as *Backend
+    return b.sock
 }
 
 // 1 while the channel is open.
@@ -153,19 +247,36 @@ why(h: ptr) -> string {
     return b.why
 }
 
-// Ask the backend to run `name` with `arg`, as request `id`. "" or why not.
-call(h: ptr, id: int, name: string, arg: string) -> string {
-    if alive(h) == 0 { return why(h) }
+// Ask the backend to run `name` with `arg`, as request `id`, handing it the
+// open descriptor `fd` with the call (-1 for none; a socket backend only).
+// This takes `fd`: it is closed once sent, or here when it cannot be.
+// "" or why not.
+call(h: ptr, id: int, name: string, arg: string, fd: int) -> string {
+    if alive(h) == 0 {
+        if fd >= 0 { _c0 = fd_close(fd) }
+        return why(h)
+    }
     b = h as *Backend
+    if fd >= 0 && b.sock == 0 {
+        _c1 = fd_close(fd)
+        return "backend: a document crosses only a socket channel (app.json capabilities.backend.channel \"socket\"); this backend's channel is its stdin and stdout, which carry bytes only"
+    }
     o = json.obj()
     _i = json.set(o, "id", json.from_int(id))
     _c = json.set(o, "call", json.str(name))
     _a = json.set(o, "arg", json.str(arg))
+    if fd >= 0 { _f = json.set(o, "fd", json.boolean(1)) }
     text, eerr = json.encode(o)
     json.json_free(o)
-    if eerr != "" { return "backend: ${eerr}" }
-    if string.length(text) > MAX_FRAME { return "backend: the request is larger than ${MAX_FRAME} bytes" }
-    werr = frames.put(b.out, text)
+    if eerr != "" {
+        if fd >= 0 { _c2 = fd_close(fd) }
+        return "backend: ${eerr}"
+    }
+    if string.length(text) > MAX_FRAME {
+        if fd >= 0 { _c3 = fd_close(fd) }
+        return "backend: the request is larger than ${MAX_FRAME} bytes"
+    }
+    werr = frames.put_fd(b.out, text, fd)
     if werr != "" {
         written_lost_(b)
         return b.why
@@ -244,6 +355,13 @@ stop(h: ptr) {
     lost_(b, "backend: stopped", 0)
 }
 
+// Kill it now, with no grace, and reap it: `reason` is why. Safe after stop.
+kill(h: ptr, reason: string) {
+    if h == null { return }
+    b = h as *Backend
+    lost_(b, reason, 1)
+}
+
 // Close the channel and reap the child, killing it if it has not exited
 // within STOP_GRACE_S, or at once with `kill_now` 1 (it stopped reading: a
 // grace would only hold the window up). The first reason is kept; "" means
@@ -254,7 +372,8 @@ lost_(b: *Backend, reason: string, kill_now: int) {
         b.out = null
     }
     if b.rd >= 0 {
-        _d = fd_close(b.rd)
+        // A socket's one descriptor was the writer's, closed with it.
+        if b.sock == 0 { _d = fd_close(b.rd) }
         b.rd = 0 - 1
     }
     how = ""

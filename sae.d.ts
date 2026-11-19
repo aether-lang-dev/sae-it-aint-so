@@ -475,14 +475,16 @@ declare const bus: {
 };
 /** @seeks backend @appOnly */
 declare const backend: {
-  /** Calls the app's backend process by name with a string; a promise of its answer, rejected with an Error when it fails or there is no backend. */
-  invoke(name: string, arg?: string): Promise<string>;
+  /** Calls the app's backend process by name with a string; a promise of its answer, rejected with an Error when it fails or there is no backend. With doc, a file the person picked, the backend is handed it open, read only (a socket backend). */
+  invoke(name: string, arg?: string, doc?: sae.Document): Promise<string>;
   /** fn(payload) when the backend sends an event called name. */
   on(name: string, fn: (payload: string) => void): void;
   /** fn(why) when the backend has stopped. */
   on_gone(fn: (why: string) => void): void;
   /** Whether the backend is running. */
   running(): boolean;
+  /** The kill switch: the backend is killed at once (every call waiting fails, on_gone hears it) and started again; a promise settled when it is running, rejected with why it is not. */
+  restart(): Promise<void>;
 };
 /** @seeks database @appOnly */
 declare const sqlite: {

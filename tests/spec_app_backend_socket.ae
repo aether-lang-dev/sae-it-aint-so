@@ -1,0 +1,143 @@
+// spec_app_backend_socket.ae — an app's backend on a socket
+// (docs/design/ipc-backends.md): app.json capabilities.backend.channel
+// "socket", started by sae with sandbox.spawn_socket and held to the grants
+// app.json's "sandbox" gives it (its fd 3 the channel, its stdout its own).
+// A document the person picked crosses as an open descriptor; the backend
+// reads it, and cannot open the same path itself. backend.restart() is the
+// kill switch. Linux with Landlock only: elsewhere a contained backend is
+// refused, which is what the spec checks there.
+//   (cd tests/apps/backend_socket && AETHER_LIB_DIR=../../../sdk ae build backend/main.ae -o backend/main)
+//   AETHER_UI_HEADLESS=1 SAE_TEST_APP=tests/apps/backend_socket tests/run_spec.sh spec_app_backend_socket
+// tests/run_all.sh builds the backend first (its "backend" kind).
+import std.spec
+import std.string
+import std.fs
+import std.os
+import std.list
+import saedriver as b
+import uidriver
+
+tmp_dir() -> string {
+    t = os.getenv("TMPDIR")
+    if t == null || t == "" { return "/tmp" }
+    while string.length(t) > 1 && string.string_ends_with(t, "/") == 1 { t = string.string_substring(t, 0, string.length(t) - 1) }
+    return t
+}
+
+// How many processes run the test backend (pgrep -f).
+backends_() -> int {
+    argv = list.new()
+    list.add(argv, "-f")
+    list.add(argv, "tests/apps/backend_socket/backend/main")
+    out, _st, _err = os.run_capture("pgrep", argv, null)
+    list.free(argv)
+    t = string.trim(out)
+    if t == "" { return 0 }
+    return string.string_array_size(string.split(t, "\n"))
+}
+
+// The listening sockets of sae-driver and of the backend (tests/lib/listeners.sh),
+// but the UI driver's own port: "" when there are none.
+listeners_() -> string {
+    // Run from tests/ (run_spec.sh's cd): a script not found here would
+    // print nothing, and "nothing listens" would pass however much did.
+    if fs.exists("lib/listeners.sh") == 0 { return "(no lib/listeners.sh in the spec's folder)" }
+    argv = list.new()
+    list.add(argv, "-c")
+    list.add(argv, "sh lib/listeners.sh $(pgrep -f 'sae-driver --app') $(pgrep -f 'tests/apps/backend_socket/backend/main')")
+    out, _st, _err = os.run_capture("sh", argv, null)
+    list.free(argv)
+    return string.trim(out)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    dir = "${tmp_dir()}/sae-backend-socket"
+    _m = fs.mkdir_p(dir)
+    _w1 = fs.write("${dir}/secret.txt", "the person's own words")
+    app = os.getenv("SAE_TEST_APP_DIR")   // where run_spec.sh runs the app from (a copy, when ports moved)
+    if os.platform() != "linux" {
+        spec.describe(fw, "a contained socket backend where Aether cannot contain one") {
+            spec.it("is not started, said once; the app runs and its calls fail with why") callback {
+                spec.assert_true(b.wait_for_console("sae: backend: could not start"), "said")
+                b.assert_text("running: false", "the page sees none")
+                b.click("Echo")
+                b.assert_text("failed: backend: could not start", "a call fails with why")
+                spec.assert_true(backends_() == 0, "nothing was started")
+            }
+        }
+        return spec.run_summary(fw)
+    }
+    spec.describe(fw, "an app's backend on a socket, contained") {
+        spec.it("starts on a socket, contained, and nothing listens") callback {
+            spec.assert_true(b.wait_for_console("sae: backend: backend/main started on a socket, contained"), "started contained")
+            b.assert_text("running: true", "the page sees it running")
+            b.click("Kind")
+            b.assert_text("result: socket", "saebackend.open() took the socket")
+            spec.assert_str_eq(listeners_(), "", "nothing listens, TCP or Unix, but the test's UI driver")
+        }
+        spec.it("calls, answers and events, as on stdin and stdout") callback {
+            b.set_field_by("arg", "a string, as given")
+            b.click("Echo")
+            b.assert_text("result: a string, as given", "echoed")
+            b.click("Tick")
+            b.assert_text("result: ticked", "answered")
+            b.assert_text("events: 1 of 2, 2 of 2", "both events, in order")
+        }
+        spec.it("its stdout is its own: printing cannot break a frame") callback {
+            b.set_field_by("arg", "intact")
+            b.click("Chatty")
+            b.assert_text("result: chatted: intact", "answered after a println and a raw fd 1 write")
+            spec.assert_true(b.wait_for_console("socket test backend: a raw write to fd 1"), "which went where sae's output goes")
+            b.set_field_by("arg", "still")
+            b.click("Echo")
+            b.assert_text("result: still", "and the channel still in step")
+        }
+        spec.it("a picked document crosses as an open descriptor, and the backend reads it") callback {
+            uidriver.answer_prompt("open", "${dir}/secret.txt")
+            b.click("Hand")
+            b.assert_text("result: 22 bytes: the person's own words", "read through the descriptor")
+        }
+        spec.it("the backend cannot open the same path itself") callback {
+            b.set_field_by("arg", "${dir}/secret.txt")
+            b.click("ReadPath")
+            b.assert_text("result: refused: ${dir}/secret.txt: Permission denied", "the process sandbox refused it")
+            b.assert_no_text("the person's own words", "and nothing of it came back")
+        }
+        spec.it("what app.json's sandbox grants it, it reaches; nothing else") callback {
+            b.set_field_by("arg", "${app}/data/note.txt")
+            b.click("ReadPath")
+            b.assert_text("result: read: a granted note", "a granted folder (app.json \"data/\", inside the app)")
+            b.set_field_by("arg", "/etc/passwd")
+            b.click("ReadPath")
+            b.assert_text("result: refused: /etc/passwd: Permission denied", "a system file")
+            b.set_field_by("arg", "SAE_BACKEND_TEST_ENV")
+            b.click("Env")
+            b.assert_text("result: from-the-spec", "a granted variable")
+            b.set_field_by("arg", "HOME")
+            b.click("Env")
+            b.assert_text("result: (unset)", "and not another")
+            b.click("Exec")
+            b.assert_text("result: refused: fork failed", "no program may be started")
+        }
+        spec.it("a handle documents did not give is refused") callback {
+            b.click("Forged")
+            b.assert_text("failed: backend.invoke: documents: no document 99 (a handle documents gave, from a file the person picked)", "refused by the kernel")
+        }
+        spec.it("backend.restart(): the kill switch ends a backend that stopped reading") callback {
+            b.click("Hang")
+            spec.assert_true(backends_() == 1, "one backend, hung")
+            b.click("Restart")
+            b.assert_text("gone: backend: restarted by the page", "on_gone told")
+            b.assert_text("failed: backend: restarted by the page", "the call waiting failed with why")
+            b.assert_text("restarted: running true", "a new one running")
+            spec.assert_true(b.wait_for_console("sae: backend: restarted by the page"), "said")
+            spec.assert_true(backends_() == 1, "the old one killed and reaped, one running")
+            b.set_field_by("arg", "after")
+            b.click("Echo")
+            b.assert_text("result: after", "the new one answers")
+        }
+    }
+    return spec.run_summary(fw)
+}

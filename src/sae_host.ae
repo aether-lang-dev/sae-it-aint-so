@@ -121,6 +121,8 @@ struct Browser {
     backend_calls: ptr   // std.list of *BackendCall: calls not yet answered
     backend_timer: int   // the UI timer reading its frames, or 0
     backend_deadline_ms: int  // a call not answered in this is failed (app.json deadlineMs)
+    backend_decl: ptr    // *BackendDecl: how to start it (again, for backend.restart), or null
+    backend_restarts: ptr  // std.list of *BackendRestart: pages waiting for a restart to settle
     // The control channel (--control-stdio, services/channel): the program
     // that started sae drives the app over sae's stdin and stdout.
     control: ptr     // services/channel's instance, or null (not started that way)
@@ -132,6 +134,7 @@ struct Browser {
     // the page whose handler serves and the request it has, for the bus or
     // the channel, whichever this launch has.
     bus_flag: int        // the person started the app with --control-bus
+    uncontained: int     // the person started the app with --uncontained-backend
     bus_ui_granted: int  // app.json capabilities.controlBus.ui: the UI driver's keys, pointer and screenshots, over the bus
     bus_page: ptr        // the *Page whose handler serves, or null
     bus_timer: int       // the UI timer reading the bus, or 0
@@ -190,6 +193,21 @@ struct BackendCall {
     id: int
     seq: int
     since: long
+}
+
+// What app.json capabilities.backend declares, kept to start it again.
+struct BackendDecl {
+    wslc: int        // 1: a Linux program in a WSL container (program is the image)
+    socket: int      // 1: channel "socket" (docs/design/ipc-backends.md)
+    program: string  // the program as app.json names it, inside the app; or the image
+    args: ptr        // std.list: its arguments, or the wslc command
+    grants: ptr      // std.list of "kind value" (services/backend.start_socket), or null: sandbox "none"
+}
+
+// A page waiting for backend.restart() to settle (its id, its page).
+struct BackendRestart {
+    id: int
+    seq: int
 }
 
 // One per loaded page: its QuickJS runtime (ctx), found again from the
@@ -4817,9 +4835,10 @@ backend_program_(b: *Browser, prog: string) -> (string, string) {
 }
 
 // Start the backend app.json declares, before the first page runs. A wrong
-// declaration refuses the app (returned); a program that does not start, or
-// a wslc backend anywhere but Windows, is said, and the app runs without it
-// (its pages' calls fail with why).
+// declaration refuses the app (returned); a program that does not start, a
+// wslc backend anywhere but Windows, or a contained one where Aether cannot
+// contain a child, is said, and the app runs without it (its pages' calls
+// fail with why).
 backend_start_(b: *Browser, manifest: ptr) -> string {
     if manifest == null { return "" }
     caps = json.json_object_get_raw(manifest, "capabilities")
@@ -4839,46 +4858,160 @@ backend_start_(b: *Browser, manifest: ptr) -> string {
     wv = json.json_object_get_raw(decl, "wslc")
     pv = json.json_object_get_raw(decl, "program")
     if wv != null && pv != null { return "app.json capabilities.backend: a \"program\" or a \"wslc\" container, not both" }
-    b.backend_why = "backend: not started"
-    h = null
-    serr = ""
-    what = ""
+    socket = 0
+    cv = json.json_object_get_raw(decl, "channel")
+    if cv != null {
+        cs, _ce = json.get_string(cv)
+        if cs == "socket" {
+            socket = 1
+        } else if cs != "stdio" {
+            return "app.json capabilities.backend.channel: \"stdio\" (its stdin and stdout, the default) or \"socket\" (docs/design/ipc-backends.md)"
+        }
+    }
+    sv = json.json_object_get_raw(decl, "sandbox")
+    if socket == 1 && sv == null { return "app.json capabilities.backend.sandbox: a socket backend says what it may reach ({ \"read\": [...], \"write\": [...], \"env\": [...] }, {} for nothing) or \"none\" for no sandbox" }
+    if socket == 0 && sv != null { return "app.json capabilities.backend.sandbox: only a socket backend is contained (\"channel\": \"socket\"); one on stdin and stdout is not" }
+    d = heap.new(BackendDecl)
+    d.wslc = 0
+    d.socket = socket
+    d.args = list.new()
+    d.grants = null
+    b.backend_decl = d as ptr
     if wv != null {
+        if socket == 1 { return "app.json capabilities.backend: a wslc backend's channel is its stdin and stdout (wslc passes no socket)" }
         image, command, werr = backend_wslc_(wv, decl)
         if werr != "" {
             list.free(command)
             return werr
         }
-        h, serr = backend.start_wslc(image, command)
-        list.free(command)
-        what = "wslc ${image}"
+        d.wslc = 1
+        d.program = image
+        list.free(d.args)
+        d.args = command
     } else {
         prog = ""
         if pv != null {
             ps, _pe = json.get_string(pv)
             prog = own_(ps)
         }
-        full, perr = backend_program_(b, prog)
+        _full, perr = backend_program_(b, prog)
         if perr != "" && string.string_starts_with(perr, "app.json") == 1 { return perr }
-        if perr != "" {
-            b.backend_why = own_(perr)
-            say_("sae: ${perr}")
-            return ""
+        d.program = prog
+        grants_from_(decl, "args", |a: string| { list.add(d.args, own_(a)) })
+        if socket == 1 {
+            gerr = backend_grants_(b, d, sv)
+            if gerr != "" { return gerr }
         }
-        args = list.new()
-        grants_from_(decl, "args", |a: string| { list.add(args, own_(a)) })
-        h, serr = backend.start(full, args)
-        list.free(args)
-        what = prog
+    }
+    b.backend_why = "backend: not started"
+    _w = backend_launch_(b)
+    return ""
+}
+
+// app.json capabilities.backend.sandbox: "none", or an object of grants
+// (read and write: paths, as app.json fs grants write them, a relative one
+// inside the app; env: variable names), kept in d.grants as
+// services/backend.start_socket takes them. "" or why the app is refused.
+backend_grants_(b: *Browser, d: *BackendDecl, sv: ptr) -> string {
+    if json.json_type(sv) != 5 {
+        ns, _ne = json.get_string(sv)
+        if ns == "none" { return "" }
+        return "app.json capabilities.backend.sandbox: an object of grants, or \"none\""
+    }
+    d.grants = list.new()
+    n = json.object_size(sv)
+    i = 0
+    while i < n {
+        k, _kv, _ke = json.object_entry(sv, i)
+        if k != "read" && k != "write" && k != "env" {
+            return "app.json capabilities.backend.sandbox.${k}: not a grant sae gives a backend (read, write, env)"
+        }
+        i = i + 1
+    }
+    raw = list.new()
+    grants_from_(sv, "env", |e: string| { list.add(raw, "env ${e}") })
+    grants_from_(sv, "read", |r: string| { list.add(raw, "read ${r}") })
+    grants_from_(sv, "write", |r: string| { list.add(raw, "write ${r}") })
+    // The paths, each made absolute where it leads.
+    j = 0
+    while j < list.size(raw) {
+        gv, _ge = list.get_string(raw, j)
+        g = own_(gv)
+        if string.string_starts_with(g, "env ") == 1 {
+            list.add(d.grants, g)
+        } else {
+            sp = string.string_index_of(g, " ")
+            kind = string.string_substring(g, 0, sp)
+            pth, perr = backend_grant_path_(b, string.string_substring(g, sp + 1, string.length(g)))
+            if perr != "" {
+                list.free(raw)
+                return perr
+            }
+            list.add(d.grants, "${kind} ${pth}")
+        }
+        j = j + 1
+    }
+    list.free(raw)
+    return ""
+}
+
+// A backend's read or write grant as an absolute path where it leads ("/" at
+// the end kept: a folder and what is under it). $APPDATA, $HOME, $TEMP and the
+// others as app.json fs grants have them; a relative path is inside the app.
+backend_grant_path_(b: *Browser, raw: string) -> (string, string) {
+    folder = string.string_ends_with(raw, "/")
+    p = raw
+    if string.string_starts_with(raw, "$") == 0 && string.string_starts_with(raw, "/") == 0 {
+        rel, climbed = norm_path_(raw)
+        if climbed == 1 || string.contains("/${rel}/", "/../") == 1 {
+            return "", "app.json capabilities.backend.sandbox: ${raw} climbs out of the app"
+        }
+        p = "${b.app_dir}/${rel}"
+    }
+    r = files.resolve(b.files, p)
+    if r == "" { return "", "app.json capabilities.backend.sandbox: ${raw} does not lead anywhere that can be granted" }
+    if folder == 1 && string.string_ends_with(r, "/") == 0 { r = string.concat(r, "/") }
+    return r, ""
+}
+
+// Start the backend b.backend_decl declares: "" when it runs, or why not
+// (said once; its pages' calls fail with it).
+backend_launch_(b: *Browser) -> string {
+    if b.backend_decl == null { return b.backend_why }
+    d = b.backend_decl as *BackendDecl
+    h = null
+    serr = ""
+    what = d.program
+    how = ""
+    if d.wslc == 1 {
+        h, serr = backend.start_wslc(d.program, d.args)
+        what = "wslc ${d.program}"
+    } else {
+        full, perr = backend_program_(b, d.program)
+        if perr != "" {
+            serr = perr
+        } else if d.socket == 1 {
+            grants = d.grants
+            how = " on a socket, contained"
+            if grants == null {
+                how = " on a socket, not contained (app.json sandbox \"none\")"
+            } else if b.uncontained == 1 {
+                grants = null
+                how = " on a socket, not contained (--uncontained-backend)"
+            }
+            h, serr = backend.start_socket(full, d.args, grants)
+        } else {
+            h, serr = backend.start(full, d.args)
+        }
     }
     if serr != "" {
         b.backend_why = own_(serr)
         say_("sae: ${serr}")
-        return ""
+        return b.backend_why
     }
     b.backend = h
     b.backend_why = ""
-    say_("sae: backend: ${what} started")
+    say_("sae: backend: ${what} started${how}")
     b.backend_timer = ui.timer(10, || { backend_tick_(b) })
     return ""
 }
@@ -4922,17 +5055,29 @@ sae_backend_listen(p: *Page, this_val: int, argv: int) -> int {
     return 0
 }
 
-// raw.call(name, arg): the call's id, or 0 when there is no backend to ask
-// (raw.why() says why).
+// raw.call(name, arg, doc): the call's id, or 0 when there is no backend to
+// ask (raw.why() says why). `doc`, when not 0, is a documents handle: the
+// picked file is opened (services/documents) and handed over with the call
+// as an open descriptor, on a socket backend only; a refusal throws.
 sae_backend_call(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     b = p.browser as *Browser
     if b.backend == null || backend.alive(b.backend) == 0 { return quickjs.new_int(ctx, 0) }
+    dh = arg_int_(ctx, argv, argc, 2, 0)
+    fd = 0 - 1
+    if dh != 0 {
+        if backend.socket(b.backend) == 0 {
+            return sae_throw_type_error(ctx, "backend.invoke: a document crosses only to a socket backend (app.json capabilities.backend.channel \"socket\"); this one's channel is its stdin and stdout, which carry bytes only")
+        }
+        f, ferr = documents.open_fd(b.documents, dh)
+        if ferr != "" { return sae_throw_type_error(ctx, "backend.invoke: ${ferr}") }
+        fd = f
+    }
     b.backend_ids = b.backend_ids + 1
     id = b.backend_ids
-    err = backend.call(b.backend, id, own_(arg_str_(ctx, argv, argc, 0)), own_(arg_str_(ctx, argv, argc, 1)))
+    err = backend.call(b.backend, id, own_(arg_str_(ctx, argv, argc, 0)), own_(arg_str_(ctx, argv, argc, 1)), fd)
     if err != "" {
         backend_gone_(b, err)
         return quickjs.new_int(ctx, 0)
@@ -4945,6 +5090,44 @@ sae_backend_call(p: *Page, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, id)
 }
 
+// raw.restart(): the kill switch. Its id; the backend is killed at once and
+// started again after the page's entry (an effect outside the page:
+// later_add_), and the dispatcher hears (3, id, ok, "", why) when it has.
+sae_backend_restart(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    ctx = p.ctx
+    b = p.browser as *Browser
+    if b.backend_decl == null { return sae_throw_type_error(ctx, "backend.restart: ${b.backend_why}") }
+    b.backend_ids = b.backend_ids + 1
+    r = heap.new(BackendRestart)
+    r.id = b.backend_ids
+    r.seq = p.seq
+    list.add(b.backend_restarts, r as ptr)
+    later_add_(b, LATER_BACKEND_RESTART, "", "")
+    return quickjs.new_int(ctx, r.id)
+}
+
+// The restart backend.restart() asked for, done once no entry runs: the
+// backend killed (no grace), its calls failed and on_gone told, then started
+// again from its declaration, and every page that asked told how it went.
+backend_restart_(b: *Browser) {
+    if list.size(b.backend_restarts) == 0 { return }
+    if b.backend != null {
+        backend.kill(b.backend, "backend: restarted by the page")
+        backend_gone_(b, "backend: restarted by the page")
+    }
+    why = backend_launch_(b)
+    ok = 1
+    if why != "" { ok = 0 }
+    while list.size(b.backend_restarts) > 0 {
+        rv, _ = list.get(b.backend_restarts, 0)
+        r = rv as *BackendRestart
+        list.list_remove(b.backend_restarts, 0)
+        backend_deliver_(b, r.seq, 3, r.id, ok, "", why)
+        heap.free(r)
+    }
+}
+
 sae_backend_why(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
@@ -4953,7 +5136,7 @@ sae_backend_why(p: *Page, this_val: int, argv: int) -> int {
 }
 
 // Hand the showing page (kind, id, ok, name, payload): 0 an answer, 1 an
-// event, 2 the backend has gone.
+// event, 2 the backend has gone, 3 a restart settled.
 backend_deliver_(b: *Browser, seq: int, kind: int, id: int, ok: int, name: string, payload: string) {
     if b.page == null { return }
     p = b.page as *Page
@@ -9837,10 +10020,10 @@ const HTTP_FETCH_JS = "http.fetch = function (o) { return new Promise(function (
 // makes the object the page sees out of it and deletes it, so a page has only
 // `documents`, `clipboard`, `bus` and `backend`, all of it promises or plain
 // functions of the page's own.
-const DOCUMENTS_JS = "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); }, read_base64: function () { return Promise.resolve().then(function () { return raw.read64(h); }); }, write_base64: function (t) { return Promise.resolve().then(function () { raw.write64(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;"
+const DOCUMENTS_JS = "globalThis.documents = (function (raw) { const handle = function (h) { if (!h) return null; const d = { name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); }, read_base64: function () { return Promise.resolve().then(function () { return raw.read64(h); }); }, write_base64: function (t) { return Promise.resolve().then(function () { raw.write64(h, String(t)); }); } }; Object.defineProperty(d, Symbol.for('sae.document'), { value: h }); return Object.freeze(d); }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;"
 const CLIPBOARD_JS = "globalThis.clipboard = (function (raw) { return Object.freeze({ write_text: function (t) { return Promise.resolve().then(function () { raw.write(String(t)); }); }, read_text: function () { return Promise.resolve().then(function () { return raw.read(); }); } }); })(globalThis.__sae_clipboard); delete globalThis.__sae_clipboard;"
 const BUS_JS = "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;"
-const BACKEND_JS = "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; raw.listen(function (kind, id, ok, name, payload) { if (kind === 0) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg): name must be a string'); var a = arg === undefined ? '' : String(arg); return new Promise(function (resolve, reject) { var id = raw.call(name, a); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;"
+const BACKEND_JS = "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; var doc_key = Symbol.for('sae.document'); raw.listen(function (kind, id, ok, name, payload) { if (kind === 0 || kind === 3) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(kind === 3 ? undefined : payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg, doc) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg, doc): name must be a string'); var a = arg === undefined ? '' : String(arg); var dh = 0; if (doc !== undefined && doc !== null) { dh = doc[doc_key]; if (typeof dh !== 'number' || dh < 1) throw new TypeError('backend.invoke(name, arg, doc): doc must be a document documents gave'); } return new Promise(function (resolve, reject) { var id = raw.call(name, a, dh); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; }, restart: function () { return new Promise(function (resolve, reject) { waiting[raw.restart()] = { resolve: resolve, reject: reject }; }); } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;"
 
 const GATE_TAG_SPACE = 71
 const GATE_TAG_ENTRY = 72
@@ -11673,19 +11856,22 @@ gate_spec_(g: *Gate) {
     raw_space(g, "__sae_backend", WHEN_APP_SEEKS, "backend") {
         reach("backend")
         api("listen", sae_backend_listen, 1) { arg("fn", T_FN) }
-        api("call", sae_backend_call, 2) {
+        api("call", sae_backend_call, 3) {
             arg("name", T_STR)
             arg("arg", T_STR)
+            arg("doc", T_INT)
         }
+        api("restart", sae_backend_restart, 0) { gives(T_INT) }
         api("why", sae_backend_why, 0) { gives(T_STR) }
         js_wrapper("sae:backend", BACKEND_JS)
     }
     provided_space(g, "backend", WHEN_APP_SEEKS, "backend") {
-        provided("invoke", 2) {
+        provided("invoke", 3) {
             arg("name", T_STR)
             opt("arg", T_STR)
+            opt_ts("doc", "sae.Document")
             gives_promise(T_STR)
-            doc("Calls the app's backend process by name with a string; a promise of its answer, rejected with an Error when it fails or there is no backend.")
+            doc("Calls the app's backend process by name with a string; a promise of its answer, rejected with an Error when it fails or there is no backend. With doc, a file the person picked, the backend is handed it open, read only (a socket backend).")
         }
         provided("on", 2) {
             arg("name", T_STR)
@@ -11699,6 +11885,10 @@ gate_spec_(g: *Gate) {
         provided("running", 0) {
             gives(T_BOOL)
             doc("Whether the backend is running.")
+        }
+        provided("restart", 0) {
+            gives_promise(T_VOID)
+            doc("The kill switch: the backend is killed at once (every call waiting fails, on_gone hears it) and started again; a promise settled when it is running, rejected with why it is not.")
         }
     }
     // sqlite: an object for each database the page seeks, the app declares and
@@ -13142,6 +13332,7 @@ const LATER_SHELL_OPEN = 1   // a: the URL
 const LATER_PRINT_PDF = 2    // a: the PDF as base64, b: the job's title
 const LATER_BUS_LISTEN = 3   // the control bus starts listening (its courier file, its socket)
 const LATER_BUS_SILENCE = 4  // it stops (its courier file is deleted, its socket closed)
+const LATER_BACKEND_RESTART = 5  // backend.restart(): the backend killed and started again
 
 struct LaterJob {
     kind: int
@@ -13171,6 +13362,7 @@ later_tick_(b: *Browser) {
         if j.kind == LATER_PRINT_PDF { why = printing.pdf(b.printing, j.a, j.b) }
         if j.kind == LATER_BUS_LISTEN { why = bus_listen_(b) }
         if j.kind == LATER_BUS_SILENCE { bus_silence_(b) }
+        if j.kind == LATER_BACKEND_RESTART { backend_restart_(b) }
         if why != "" { say_("sae: ${why}") }
         heap.free(j)
     }
@@ -13282,6 +13474,9 @@ browser_new_() -> *Browser {
     b.control_timer = 0
     b.bus = bus.new()
     b.bus_flag = 0
+    b.uncontained = 0
+    b.backend_decl = null
+    b.backend_restarts = list.new()
     b.bus_ui_granted = 0
     b.bus_page = null
     b.bus_timer = 0
@@ -13409,7 +13604,16 @@ main() {
     // bus on for this launch (docs/control-bus.md, decision 2).
     bus_flag = 0
     if os.args_get(3) == "--control-bus" { bus_flag = 1 }
-    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()), ctl, bus_flag)
+    // sae --app <dir> [...] --uncontained-backend: the person runs a socket
+    // backend with no process sandbox whatever app.json says, where Aether
+    // cannot contain one (docs/design/ipc-backends.md).
+    uncontained = 0
+    k = 3
+    while k < os.args_count() {
+        if os.args_get(k) == "--uncontained-backend" { uncontained = 1 }
+        k = k + 1
+    }
+    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()), ctl, bus_flag, uncontained)
     if code != 0 { exit(code) }
 }
 
@@ -13422,7 +13626,7 @@ slashes_(p: string) -> string {
     return p
 }
 
-sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int) -> int {
+sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int, uncontained: int) -> int {
     app = ""
     start_url = arg1
     if arg1 == "--app" { app = arg2 }
@@ -13437,6 +13641,7 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int)
     b = browser_new_()
     b.control = ctl
     b.bus_flag = bus_flag
+    b.uncontained = uncontained
     stdlib.configure(b.stdlib, lib_dir_(exe))   // wave1/imports: the sae: library
     root = aether_ui_vstack_create(6)
     b.root = root

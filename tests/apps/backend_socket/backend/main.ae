@@ -1,0 +1,83 @@
+// The backend of tests/apps/backend_socket (docs/design/ipc-backends.md):
+// sae starts it on a socket (its fd 3), contained by app.json's sandbox
+// grants. It answers calls, reads a document handed over as an open
+// descriptor, and tries to reach what it was not granted, so that
+// spec_app_backend_socket can see each refused. It does not lock itself
+// down in-process: what holds it is the process sandbox alone.
+//   AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main
+import std.os
+import std.io
+import std.fs
+import std.string
+import std.list
+import saebackend
+
+main() {
+    sb, err = saebackend.open()
+    if err != "" {
+        _w = io.stderr_write("${err}\n")
+        exit(2)
+    }
+    // Its stdout is its own on a socket: this goes where sae's output goes.
+    println("socket test backend: started on ${saebackend.channel_kind(sb)}")
+    while 1 == 1 {
+        id, name, arg, rerr = saebackend.next(sb)
+        if rerr != "" { break }        // sae closed the channel: it is stopping
+        if name == "echo" {
+            _r = saebackend.answer(sb, id, arg)
+        } else if name == "kind" {
+            _r = saebackend.answer(sb, id, saebackend.channel_kind(sb))
+        } else if name == "tick" {
+            _e1 = saebackend.emit(sb, "tick", "1 of 2")
+            _e2 = saebackend.emit(sb, "tick", "2 of 2")
+            _r = saebackend.answer(sb, id, "ticked")
+        } else if name == "chatty" {
+            // fd 1 is not the channel here: none of this can break a frame.
+            println("socket test backend: a println on its own stdout")
+            _w = io.stdout_write("socket test backend: a raw write to fd 1\n")
+            _r = saebackend.answer(sb, id, "chatted: ${arg}")
+        } else if name == "read_handed" {
+            // The document sae handed over with this call: read through the
+            // descriptor, never by its path.
+            fd = saebackend.handed(sb)
+            if fd < 0 {
+                _r = saebackend.fail(sb, id, "no descriptor came with the call")
+            } else {
+                data, n, ferr = io.fd_read_n(fd, 65536)
+                _c = io.fd_close(fd)
+                if ferr != "" {
+                    _r = saebackend.fail(sb, id, "reading the descriptor: ${ferr}")
+                } else {
+                    _r = saebackend.answer(sb, id, "${n} bytes: ${data}")
+                }
+            }
+        } else if name == "read_path" {
+            // A path, opened by the backend itself: only what app.json's
+            // sandbox grants it may be read.
+            body, ferr = fs.read(arg)
+            if ferr != "" {
+                _r = saebackend.answer(sb, id, "refused: ${ferr}")
+            } else {
+                _r = saebackend.answer(sb, id, "read: ${body}")
+            }
+        } else if name == "env" {
+            v = os.getenv(arg)
+            if v == null { v = "(unset)" }
+            _r = saebackend.answer(sb, id, v)
+        } else if name == "exec" {
+            argv = list.new()
+            out, st, xerr = os.run_capture("/bin/echo", argv, null)
+            list.free(argv)
+            if xerr != "" {
+                _r = saebackend.answer(sb, id, "refused: ${xerr}")
+            } else {
+                _r = saebackend.answer(sb, id, "ran: status ${st} ${string.trim(out)}")
+            }
+        } else if name == "hang" {
+            // Stops reading and never answers: only the kill switch ends it.
+            while 1 == 1 { sleep(1000) }
+        } else {
+            _r = saebackend.fail(sb, id, "no call ${name}")
+        }
+    }
+}

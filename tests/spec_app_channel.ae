@@ -53,6 +53,9 @@ launch_(headless: int) -> ptr {
 // test's): "" when there are none. "(no lsof)" where there is neither /proc
 // nor lsof. On Windows, the TCP ones.
 listeners_() -> string {
+    // Run from tests/ (run_spec.sh's cd): a script not found here would
+    // print nothing, and "nothing listens" would pass however much did.
+    if fs.exists("lib/listeners.sh") == 0 { return "(no lib/listeners.sh in the spec's folder)" }
     argv = list.new()
     defer list.free(argv)
     tool = "sh"
@@ -63,7 +66,7 @@ listeners_() -> string {
         list.add(argv, "$ids = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'sae-driver*' -and $_.CommandLine -like '*--control-stdio*' } | ForEach-Object { $_.ProcessId }); Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess -and $_.LocalPort -ne 9222 } | ForEach-Object { \"$($_.LocalAddress):$($_.LocalPort)\" }")
     } else {
         list.add(argv, "-c")
-        list.add(argv, "sh tests/lib/listeners.sh $(pgrep -f '[s]ae-driver --app .*--control-stdio')")
+        list.add(argv, "sh lib/listeners.sh $(pgrep -f '[s]ae-driver --app .*--control-stdio')")
     }
     out, _st, _err = os.run_capture(tool, argv, null)
     return string.trim(out)

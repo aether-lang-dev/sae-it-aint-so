@@ -14,7 +14,9 @@
 //
 // What this module can reach is its imports: std.fs for the work,
 // std.sandbox to fence it, std.string and std.strarr to keep the handles,
-// std.encoding for a binary file's base64.
+// std.encoding for a binary file's base64, std.io's fd_open_read to open a
+// picked file for an app's backend (open_fd: the open file crosses, not the
+// path; docs/design/ipc-backends.md).
 // tests/check_layers.sh holds the import list to that.
 
 import std.fs
@@ -22,8 +24,9 @@ import std.string
 import std.strarr
 import std.sandbox
 import std.encoding
+import std.io (fd_open_read)
 
-exports (new, configure, granted, adopt, grant_path, add_grants, name, read_text, write_text, read_base64, write_base64)
+exports (new, configure, granted, adopt, grant_path, add_grants, name, read_text, write_text, read_base64, write_base64, open_fd)
 
 // One launch's picked documents: the kernel holds one (new()) and passes it
 // to every call; nothing here is module state.
@@ -161,4 +164,24 @@ write_base64(dh: ptr, h: int, b64: string) -> string {
     sandbox.free(one)
     if err != "" { return "documents.write_base64 ${name(dh, h)}: ${err}" }
     return ""
+}
+
+// Picked document `h` opened read only, for the caller to hand on as an open
+// descriptor (an app's backend): (fd, "") or (-1, why). The caller closes it.
+open_fd(dh: ptr, h: int) -> (int, string) {
+    d = dh as *Documents
+    if d.enabled == 0 { return 0 - 1, "documents: this app is not granted documents (app.json capabilities.documents)" }
+    p = path_(dh, h)
+    if p == "" { return 0 - 1, "documents: no document ${h} (a handle documents gave, from a file the person picked)" }
+    fd = 0 - 1
+    err = ""
+    one = sandbox.new("documents: one file") {
+        grant_fs_read(p)
+    }
+    sandbox.enforce(one) callback {
+        fd, err = fd_open_read(p)
+    }
+    sandbox.free(one)
+    if err != "" { return 0 - 1, "documents: ${name(dh, h)}: ${err}" }
+    return fd, ""
 }

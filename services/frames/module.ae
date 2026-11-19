@@ -19,7 +19,9 @@
 // pump(), from the owner's UI tick, writes what the pipe takes now with
 // std.ipc's frame writer (ipc.frame_writer_flush with a wait of 0, aether
 // #3650, first released in 0.909.0), which keeps its place inside a frame
-// the pipe cut short. A frame not taken within WRITE_MS is the peer's fault:
+// the pipe cut short. On a socket a frame may carry an open descriptor
+// (put_fd): it is sent with ipc.send_fd on one byte right after the frame's
+// last byte, and this side's copy closed. A frame not taken within WRITE_MS is the peer's fault:
 // pump() says so, and the owner drops the channel; close_writer() closes the
 // descriptor then and there, as no thread is left writing to it.
 
@@ -29,7 +31,7 @@ import std.list
 import std.string
 import std.time (now_ms)
 
-exports (read, excerpt, writer, put, pump, stalled, close_writer, OK, EOF, BROKE, FAILED, WRITE_MS)
+exports (read, excerpt, writer, put, put_fd, pump, stalled, close_writer, OK, EOF, BROKE, FAILED, WRITE_MS)
 
 // read's outcomes.
 const OK = 0       // (data, OK, "")
@@ -153,6 +155,8 @@ struct Writer {
     fd: int          // the descriptor written, or -1 once closed
     fw: ptr          // std.ipc's frame writer on fd: the frame being written, or null once closed
     queue: ptr       // std.list of the frames behind it, in order
+    fds: ptr         // std.list, beside queue: each frame's descriptor to send after it, as text ("" for none)
+    fd_now: int      // the descriptor to send once fw's frame is written, or -1
     head: int        // the first of them not yet handed to fw
     queued: int      // their bytes
     since: long      // when fw was handed the frame it is writing
@@ -167,6 +171,8 @@ writer(fd: int) -> ptr {
     w.fd = fd
     w.fw = ipc.frame_writer(fd)
     w.queue = list.new()
+    w.fds = list.new()
+    w.fd_now = 0 - 1
     w.head = 0
     w.queued = 0
     w.since = 0
@@ -179,15 +185,29 @@ writer(fd: int) -> ptr {
 // Queue `data` as one frame and write what the peer takes of it now: "" or
 // why the writer has failed (pump's reasons).
 put(h: ptr, data: string) -> string {
+    return put_fd(h, data, 0 - 1)
+}
+
+// put, and then the open descriptor `fd` (a socket only: ipc.send_fd), sent
+// on one byte straight after the frame. The writer owns `fd` from here: it is
+// closed once sent, or when the writer fails or closes. -1 is put.
+put_fd(h: ptr, data: string, fd: int) -> string {
     w = h as *Writer
-    if w.why != "" { return w.why }
-    if w.fw == null { return "closed" }
+    if w.why != "" || w.fw == null {
+        if fd >= 0 { _c = fd_close(fd) }
+        if w.why != "" { return w.why }
+        return "closed"
+    }
     waiting = (w.queued as long) + ipc.frame_writer_pending(w.fw) + (string.length(data) as long)
     if waiting > (MOST_QUEUED as long) {
         fail_(w, "more than ${MOST_QUEUED / 1048576} MB waiting to be taken", 1)
+        if fd >= 0 { _c = fd_close(fd) }
         return w.why
     }
     list.add(w.queue, data)
+    fdtext = ""
+    if fd >= 0 { fdtext = "${fd}" }
+    list.add(w.fds, fdtext)
     w.queued = w.queued + string.length(data)
     return pump(h)
 }
@@ -210,17 +230,41 @@ pump(h: ptr) -> string {
             }
             if ipc.frame_writer_pending(w.fw) > 0 { break }
         }
+        // The frame is written: its descriptor, if it carries one, on one
+        // byte, once the socket has room (send_fd itself would wait).
+        if w.fd_now >= 0 {
+            room, rerr = ipc.wait_writable(w.fd, 0)
+            if rerr != "" {
+                fail_(w, rerr, 0)
+                return w.why
+            }
+            if room == 0 { break }
+            serr = ipc.send_fd(w.fd, w.fd_now, "F")
+            _c = fd_close(w.fd_now)
+            w.fd_now = 0 - 1
+            if serr != "" {
+                fail_(w, serr, 0)
+                return w.why
+            }
+        }
         // The frame is taken: the next one is handed over, its deadline
         // from now.
         if w.head >= list.size(w.queue) {
             if w.head > 0 {
                 list.free(w.queue)
                 w.queue = list.new()
+                list.free(w.fds)
+                w.fds = list.new()
                 w.head = 0
             }
             return ""
         }
         s, _ge = list.get_string(w.queue, w.head)
+        ft, _fe = list.get_string(w.fds, w.head)
+        if ft != "" {
+            fv, _ve = string.to_int(ft)
+            w.fd_now = fv
+        }
         w.head = w.head + 1
         w.queued = w.queued - string.length(s)
         perr = ipc.frame_writer_put(w.fw, s)
@@ -257,6 +301,24 @@ close_writer(h: ptr) {
     if w.fw != null {
         ipc.frame_writer_free(w.fw)
         w.fw = null
+    }
+    if w.fd_now >= 0 {
+        _n = fd_close(w.fd_now)
+        w.fd_now = 0 - 1
+    }
+    if w.fds != null {
+        // The descriptors of frames never handed over: closed.
+        i = w.head
+        while i < list.size(w.fds) {
+            ft, _fe = list.get_string(w.fds, i)
+            if ft != "" {
+                fv, _ve = string.to_int(ft)
+                _q = fd_close(fv)
+            }
+            i = i + 1
+        }
+        list.free(w.fds)
+        w.fds = null
     }
     if w.queue != null {
         list.free(w.queue)

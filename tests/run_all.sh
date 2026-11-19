@@ -157,6 +157,7 @@ spec_app_backend|SAE_TEST_APP=tests/apps/backend|backend tests/apps/backend spec
 spec_app_backend_stray|SAE_TEST_APP=tests/apps/backend_stray|backend tests/apps/backend_stray spec_app_backend_stray
 spec_app_backend_deaf|SAE_TEST_APP=tests/apps/backend_deaf|backend tests/apps/backend_deaf spec_app_backend_deaf
 spec_app_backend_wslc|SAE_TEST_APP=tests/apps/backend_wslc|wslc spec_app_backend_wslc
+spec_app_backend_socket|AETHER_UI_HEADLESS=1 SAE_BACKEND_TEST_ENV=from-the-spec SAE_TEST_APP=tests/apps/backend_socket|backend tests/apps/backend_socket spec_app_backend_socket
 spec_app_channel|SAE_TEST_PARENT=1 SAE_TEST_APP=tests/apps/bus|spec spec_app_channel
 check_sqlite_relaunch||check check_sqlite_relaunch
 check_natives||check check_natives

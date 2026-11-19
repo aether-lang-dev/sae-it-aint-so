@@ -34,13 +34,13 @@ expect_imports() {   # expect_imports FILE "line|line|..."
 expect_imports services/files/module.ae \
     "import std.fs|import std.dir|import std.string|import std.strarr|import std.sandbox|import std.encoding"
 expect_imports services/documents/module.ae \
-    "import std.fs|import std.string|import std.strarr|import std.sandbox|import std.encoding"
+    "import std.fs|import std.string|import std.strarr|import std.sandbox|import std.encoding|import std.io (fd_open_read)"
 expect_imports services/clipboard/module.ae \
     "import ui (clipboard_read, clipboard_write)|import std.string"
 expect_imports services/bus/module.ae \
     "import std.tcp|import std.fs|import std.list|import std.string|import std.strarr|import std.json|import std.time (now_ms)|import services.agent_auth|import services.secure_channel"
 expect_imports services/backend/module.ae \
-    "import std.os|import std.io (fd_close)|import std.ipc|import std.list|import std.string|import std.json|import services.frames"
+    "import std.os|import std.io (fd_close)|import std.ipc|import std.list|import std.string|import std.json|import std.sandbox|import services.frames"
 expect_imports services/channel/module.ae \
     "import std.ipc|import std.io (fd_close)|import std.list|import std.string|import std.json|import services.frames"
 expect_imports services/frames/module.ae \
@@ -94,7 +94,7 @@ fi
 # (docs/app-backend.md) is the one process sae starts, under its rules. (The
 # one exception is services/sandboxprobe, a test's probe that runs `true`
 # to see exec refused; the kernel installs it only for a test.)
-hits=$(grep -rnE 'os\.(run|run_stdio|run_socket|run_pipe|run_capture|run_full|run_supervised|run_pipe_drain_and_wait|spawn_proc|spawn_proc_to|exec)[[:space:]]*\(' \
+hits=$(grep -rnE '(os\.(run|run_stdio|run_socket|run_pipe|run_capture|run_full|run_supervised|run_pipe_drain_and_wait|spawn_proc|spawn_proc_to|exec)|sandbox\.(spawn_socket|spawn_socket_uncontained|spawn_sandboxed))[[:space:]]*\(' \
         --include='*.ae' src services lower 2>/dev/null \
       | grep -v '^services/backend/' | grep -v '^services/sandboxprobe/' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
 if [ -n "$hits" ]; then

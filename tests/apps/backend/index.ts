@@ -21,4 +21,11 @@ btn("Chatty", () => show(backend.invoke("chatty", "intact")));
 btn("Ignore", () => show(backend.invoke("ignore")));
 btn("Exit", () => show(backend.invoke("exit")));
 btn("After", () => show(backend.invoke("echo", "after")));
+// A document handed to a backend on stdin and stdout: refused, as no
+// descriptor crosses a pipe (the handle's number is all the kernel reads).
+btn("Doc", () => show((async () => {
+  const d: any = {};
+  d[Symbol.for("sae.document")] = 1;
+  return backend.invoke("echo", "", d);
+})()));
 text(`running: ${backend.running()}`);

@@ -155,6 +155,9 @@ else
         "${SAE_TEST_START:-http://127.0.0.1:$SITE_PORT/}" >"$LOG" 2>&1 &
 fi
 [ -n "${SAE_TEST_PARENT:-}" ] || SAE=$!
+# Where the app runs from (a copy under target/retarget when ports moved),
+# for a spec that names a file in it.
+[ -n "${SAE_TEST_APP:-}" ] && export SAE_TEST_APP_DIR="$(cd "$SAE_TEST_APP" && pwd)"
 trap 'kill $SAE $SERVER 2>/dev/null || true; spec_lock_release "$LOCK"' EXIT INT TERM
 
 cd "$SPEC_DIR"

@@ -26,6 +26,15 @@
 // Build it with this folder on the module path:
 //   AETHER_LIB_DIR=<sae>/sdk ae build backend/main.ae -o backend/main
 //
+// sae may instead start the backend on a socket (app.json
+// capabilities.backend.channel "socket", docs/design/ipc-backends.md): its
+// fd 3, std.ipc's socket channel, and open() takes that when it is there,
+// leaving stdin and stdout as they were. The program is the same either
+// way. A socket carries one thing the pipes cannot: an open descriptor, a
+// document the person picked, handed over with a call; handed() gives it.
+// poll() is next() without waiting, for a backend that looks for a call
+// (a cancel, say) between the steps of a long job.
+//
 // The frames are services/backend's (one JSON object each). Each SaeBackend
 // is an instance with its own channel; nothing here is shared.
 //
@@ -36,33 +45,83 @@
 // killed (docs/app-backend.md, "The write bound").
 
 import std.ipc
+import std.io (fd_close)
 import std.json
 import std.string
 
-exports (open, next, answer, fail, emit)
+exports (open, next, poll, handed, answer, fail, emit, channel_kind)
 
 const MAX_FRAME = 1048576
 
 struct SaeBackend {
-    rd: int     // the channel's read end (what was stdin)
-    wr: int     // its write end (what was stdout)
+    rd: int     // the channel's read end (what was stdin, or the socket)
+    wr: int     // its write end (what was stdout, or the same socket)
+    kind: string  // "socket" or "stdio"
+    fd: int     // the descriptor handed with the last call, not yet taken, or -1
 }
 
-// Claim stdin and stdout as the channel sae started this program with:
-// (backend, "") or (null, why). Call it first thing in main, once.
+// A descriptor's byte must follow its frame within this.
+const FD_MS = 2000
+
+// The channel sae started this program with: the socket at fd 3 when there
+// is one, else stdin and stdout, claimed. (backend, "") or (null, why). Call
+// it first thing in main, once.
 open() -> (ptr, string) {
-    rd, wr, err = ipc.stdio_channel()
-    if err != "" { return null, "saebackend: ${err}" }
+    rd = 0 - 1
+    wr = 0 - 1
+    kind = "stdio"
+    if ipc.parent_channel_kind() == "socket" {
+        rd = ipc.parent_channel()
+        wr = rd
+        kind = "socket"
+    } else {
+        r, w, err = ipc.stdio_channel()
+        if err != "" { return null, "saebackend: ${err}" }
+        rd = r
+        wr = w
+    }
     b = heap.new(SaeBackend)
     b.rd = rd
     b.wr = wr
+    b.kind = kind
+    b.fd = 0 - 1
     return b as ptr, ""
+}
+
+// "socket" or "stdio": the channel open() took.
+channel_kind(h: ptr) -> string {
+    b = h as *SaeBackend
+    return b.kind
+}
+
+// The open descriptor sae handed over with the call next() (or poll())
+// returned last, or -1. The caller owns it from here and closes it; one not
+// taken is closed by the next call to next().
+handed(h: ptr) -> int {
+    b = h as *SaeBackend
+    fd = b.fd
+    b.fd = 0 - 1
+    return fd
+}
+
+// The next call if one is waiting, without waiting for one:
+// (id, name, arg, "") with name "" when none is, or (0, "", "", why) as next.
+poll(h: ptr) -> (int, string, string, string) {
+    b = h as *SaeBackend
+    ready, err = ipc.wait_readable(b.rd, 0)
+    if err != "" { return 0, "", "", err }
+    if ready == 0 { return 0, "", "", "" }
+    return next(h)
 }
 
 // The next call: (id, name, arg, ""), or (0, "", "", why) when the channel
 // has closed (sae is stopping: the backend should exit) or broke.
 next(h: ptr) -> (int, string, string, string) {
     b = h as *SaeBackend
+    if b.fd >= 0 {
+        _c = fd_close(b.fd)
+        b.fd = 0 - 1
+    }
     data, err = ipc.read_frame(b.rd, MAX_FRAME)
     if err != "" { return 0, "", "", err }
     v, perr = json.parse(data)
@@ -74,7 +133,20 @@ next(h: ptr) -> (int, string, string, string) {
     arg, _ae = json.get_string(json.json_object_get_raw(v, "arg"))
     name = string.copy(name)
     arg = string.copy(arg)
+    fdv = json.json_object_get_raw(v, "fd")
+    with_fd = 0
+    if fdv != null { with_fd = json.json_get_bool(fdv) }
     json.json_free(v)
+    if with_fd == 1 {
+        // The descriptor rides on one byte straight after the frame.
+        ready, werr = ipc.wait_readable(b.rd, FD_MS)
+        if werr != "" { return 0, "", "", werr }
+        if ready == 0 { return 0, "", "", "saebackend: call ${id} said a descriptor was coming, and none came within ${FD_MS} ms" }
+        _byte, fd, rerr = ipc.recv(b.rd, 1)
+        if rerr != "" { return 0, "", "", "saebackend: ${rerr}" }
+        if fd < 0 { return 0, "", "", "saebackend: call ${id} said a descriptor was coming, and the byte after it carried none" }
+        b.fd = fd
+    }
     return id, name, arg, ""
 }
 

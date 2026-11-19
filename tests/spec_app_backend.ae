@@ -6,6 +6,7 @@
 //   SAE_TEST_APP=tests/apps/backend tests/run_spec.sh spec_app_backend
 // tests/run_all.sh builds the backend first (its "backend" kind).
 import std.spec
+import std.fs
 import std.string
 import std.os
 import std.list
@@ -40,6 +41,9 @@ running_(prog: string, args: string) -> int {
 // there is neither /proc nor lsof. On Windows, the
 // TCP ones (Get-NetTCPConnection); nothing in sae makes a Unix socket there.
 listeners_() -> string {
+    // Run from tests/ (run_spec.sh's cd): a script not found here would
+    // print nothing, and "nothing listens" would pass however much did.
+    if fs.exists("lib/listeners.sh") == 0 { return "(no lib/listeners.sh in the spec's folder)" }
     argv = list.new()
     defer list.free(argv)
     tool = "sh"
@@ -50,7 +54,7 @@ listeners_() -> string {
         list.add(argv, "$ids = @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and ($_.CommandLine -like '*sae-driver*--app*' -or $_.CommandLine -like '*tests/apps/backend/backend/main*') } | ForEach-Object { $_.ProcessId }); Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess -and $_.LocalPort -ne 9222 } | ForEach-Object { \"$($_.LocalAddress):$($_.LocalPort)\" }")
     } else {
         list.add(argv, "-c")
-        list.add(argv, "sh tests/lib/listeners.sh $(pgrep -f 'sae-driver --app') $(pgrep -f 'tests/apps/backend/backend/main')")
+        list.add(argv, "sh lib/listeners.sh $(pgrep -f 'sae-driver --app') $(pgrep -f 'tests/apps/backend/backend/main')")
     }
     out, _st, _err = os.run_capture(tool, argv, null)
     return string.trim(out)
@@ -90,6 +94,12 @@ main() {
             b.assert_text("result: chatted: intact", "answered, with println, print and a raw fd 1 write before it")
             b.click("Echo")
             b.assert_text("result: a string, as given", "and the stream still in step")
+        }
+        spec.it("a document is refused: no descriptor crosses its stdin and stdout") callback {
+            b.click("Doc")
+            b.assert_text("failed: backend.invoke: a document crosses only to a socket backend (app.json capabilities.backend.channel \"socket\"); this one's channel is its stdin and stdout, which carry bytes only", "refused, with why")
+            b.click("Echo")
+            b.assert_text("result: a string, as given", "and the backend still answering")
         }
         spec.it("a call it never answers fails at the deadline; the backend stays") callback {
             b.click("Ignore")
