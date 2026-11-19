@@ -32,6 +32,12 @@
 #       functions listed here. A page-visible name added by a stray call
 #       fails here; one added by JavaScript is caught by (ii).
 #
+# (vi)  the spec agrees with the other copies of what it says: the lowerer's
+#       SEEKABLE (lower/module.ae: which privilege unlocks which object, less
+#       clipboard-read, which gates a read in the clipboard's space), its
+#       PRIVILEGED (the objects it refuses unless sought), sae_host.ae's
+#       unsought_ list, and tests/spec_globals.ae's SAE_EVERY_PAGE.
+#
 # Needs target/build/bin/sae and target/saegate.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SAE="$ROOT/target/build/bin/sae"
@@ -130,4 +136,32 @@ expect_callers quickjs.set_global "js_set_global_"
 expect_callers quickjs.function "host_fn_"
 expect_callers js_eval_ "ae_register_ engine_eval_ http_helpers_ js_wrapper sqlite_fns_for_"
 expect_callers engine_eval_ "mod_run_ modules_prepare_ page_run_"
+
+# --- (vi) the other copies of the privilege and global tables ---
+LOWER="$ROOT/lower/module.ae"
+list_of() { tr ',' '\n' | grep -v '^$' | LC_ALL=C sort -u; }
+same() {   # same <label> <expected file> <seen file> <what the < and > are>
+    if cmp -s "$2" "$3"; then
+        ok "$1"
+    else
+        bad "$1 ($4):"
+        diff "$2" "$3" | sed 's/^/       /'
+    fi
+}
+"$GATE" --seeks < "$WORK/describe.jsonl" | LC_ALL=C sort -u > "$WORK/seeks.txt"
+sed -n 's/^const SEEKABLE = "\(.*\)"$/\1/p' "$LOWER" | list_of > "$WORK/seekable.txt"
+{ cat "$WORK/seeks.txt"; echo "clipboard-read:clipboard"; } | LC_ALL=C sort -u > "$WORK/seeks-plus.txt"
+same "lower/module.ae SEEKABLE is the spec's privilege:object pairs (and clipboard-read:clipboard)" "$WORK/seeks-plus.txt" "$WORK/seekable.txt" "< spec, > SEEKABLE"
+# PRIVILEGED: the objects the lowerer refuses unless sought: every sought object
+# of the spec but natives (natives.x is not refused at lowering: it is a ReferenceError at run time)
+sed 's/.*://' "$WORK/seeks.txt" | grep -v '^natives$' | LC_ALL=C sort -u > "$WORK/privileged-spec.txt"
+sed -n 's/^const PRIVILEGED = "\(.*\)"$/\1/p' "$LOWER" | list_of > "$WORK/privileged.txt"
+same "lower/module.ae PRIVILEGED is the spec's sought objects (less natives)" "$WORK/privileged-spec.txt" "$WORK/privileged.txt" "< spec, > PRIVILEGED"
+# unsought_: the privileges that are one name each; database and native take a name each
+sed 's/:.*//' "$WORK/seeks.txt" | grep -v -e '^database$' -e '^native$' | LC_ALL=C sort -u > "$WORK/unsought-spec.txt"
+sed -n '/^unsought_(/,/^}/p' "$ROOT/src/sae_host.ae" | sed -n 's/.*string.split("\([^"]*\)".*/\1/p' | list_of | grep -v '^clipboard-read$' > "$WORK/unsought.txt"
+same "sae_host.ae unsought_ lists the spec's seeks (less database and native, plus clipboard-read)" "$WORK/unsought-spec.txt" "$WORK/unsought.txt" "< spec, > unsought_"
+"$GATE" --always < "$WORK/describe.jsonl" | LC_ALL=C sort -u > "$WORK/always.txt"
+sed -n 's/^const SAE_EVERY_PAGE = "\(.*\)"$/\1/p' "$ROOT/tests/spec_globals.ae" | tr ' ' '\n' | grep -v '^$' | LC_ALL=C sort -u > "$WORK/every-page.txt"
+same "tests/spec_globals.ae SAE_EVERY_PAGE is what the spec has in every page" "$WORK/always.txt" "$WORK/every-page.txt" "< spec, > SAE_EVERY_PAGE"
 exit $fails

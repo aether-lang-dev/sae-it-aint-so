@@ -12,6 +12,12 @@
 //                                             the page's each spaces have
 //                                             (sqlite: notes; natives:
 //                                             calc=sum+upper)
+//   sae --gate-describe | saegate --seeks     one "<privilege>:<object>" a line: the
+//                                             spaces a page seeks to have, once each
+//                                             (the lowerer's SEEKABLE is held to it)
+//   sae --gate-describe | saegate --always    the names every page has: the spaces that
+//                                             are always there and the global functions
+//                                             (tests/spec_globals.ae's SAE_EVERY_PAGE)
 //   sae --gate-describe | saegate --check-arity
 //                                             each entry's arity equals its
 //                                             count of non-rest parameters
@@ -287,7 +293,7 @@ main() {
         if string.contains(",web,webseeks,all,some,unsought,optional,none,probe,module,", ",${expect_mode},") == 0 && string.starts_with(expect_mode, "just-") == 0 { fail_("--expect takes web, webseeks, all, some, unsought, optional, none, probe, module or just-<privilege>") }
         if os.args_get(3) == "--names" { each_names = os.args_get(4) }
     } else {
-        if arg1 != "" && arg1 != "--check-arity" { fail_("usage: saegate [--expect MODE | --check-arity]") }
+        if arg1 != "" && arg1 != "--check-arity" && arg1 != "--seeks" && arg1 != "--always" { fail_("usage: saegate [--expect MODE [--names N] | --check-arity | --seeks | --always]") }
     }
     out = strbuilder.new(4096)
     if arg1 == "" { dts_header_(out) }
@@ -310,6 +316,12 @@ main() {
                 if kind != "value" && kind != "provided_value" && kind != "dynamic" && nonrest_(params) != int_of_(e, "arity") {
                     _w = io.stderr_write("FAIL ${space}.${name}: arity ${int_of_(e, "arity")} but ${nonrest_(params)} non-rest parameters\n")
                     bad = bad + 1
+                }
+            } else if arg1 == "--seeks" {
+                if kind != "raw" && str_of_(e, "seek") != "" { io.stdout_write("${str_of_(e, "seek")}:${space}\n") }
+            } else if arg1 == "--always" {
+                if str_of_(e, "when") == "always" && kind != "patch" && kind != "held" {
+                    if kind == "global" || kind == "provided_global" { io.stdout_write("${name}\n") } else { io.stdout_write("${space}\n") }
                 }
             } else if kind == "raw" && expect_mode != "" {
                 // a hidden object a wrapper deletes: the page never sees it
@@ -441,6 +453,7 @@ main() {
         io.stdout_write("ok   ${count} entries: each arity is its count of non-rest parameters\n")
         return
     }
+    if arg1 == "--seeks" || arg1 == "--always" { return }
     if cur != "" && expect_mode == "" {
         if cur_each == 1 { _l2 = strbuilder.append(out, "  };\n") }
         _l = strbuilder.append(out, "};\n")
