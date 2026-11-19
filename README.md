@@ -317,7 +317,11 @@ Tsyne's `examples/sandbox-breakout`) and its happy path in
   `TypeError` naming it (`http: this page has 8 requests in flight (the
   cap); wait for one to finish`), logged once per page per cap. The numbers
   are `ESC_*` constants at the top of the "wave1/escape" section of
-  `src/sae_host.ae`.
+  `src/sae_host.ae`. The heap cap and the 5 s limit are not calls: running
+  past either ends the page's script with an `InternalError` that page
+  JavaScript cannot catch (quickjs-ng 0.18), reported once; `heap` and `cpu`
+  in the escape corpus hold the browser to staying alive and the next page
+  to working.
 - **Coarse clocks in the browser** (roadmap decision 1, implemented behind
   one switch). `performance.now()` and animation-frame timestamps are
   rounded down to 100 us in the browser; an app has full resolution.

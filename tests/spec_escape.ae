@@ -157,8 +157,15 @@ main() {
             b.navigate(b.test_url("/"))
             b.assert_text("The escape corpus: every page here tries to get out", "a page loaded afterwards")
         }
-        spec.it("allocate past the heap cap") callback {
-            attempt("heap", "")
+        spec.it("allocate past the heap cap: the script is ended, reported once, the browser lives") callback {
+            b.navigate(b.test_url("/heap"))
+            b.assert_text("This page failed: see the console.", "the cap ended the page's script")
+            spec.assert_true(b.wait_for_console("out of memory"), "the engine said why")
+            spec.assert_eq(console_count("sae: uncaught exception in ${ME}/heap"), 1, "reported once")
+            b.assert_no_text("heap: ESCAPED", "the page did not catch it, nor run on past the loop")
+            // The host is alive and the next page works.
+            b.navigate(b.test_url("/"))
+            b.assert_text("The escape corpus: every page here tries to get out", "a page loaded afterwards")
         }
     }
     spec.describe(fw, "the escape corpus: the caps") {
