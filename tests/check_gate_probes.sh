@@ -22,7 +22,10 @@
 #   struct name in `p as *T`                    yes      the struct (E0200 "'T' is not a struct type")
 #   struct name in heap.new(T) / T{...}         yes      the struct (E0200 / E0302)
 #   heap.new / heap.free themselves             no       -  (only T needs listing)
-#   local variable, parameter, closure, "${}"   no       -
+#   local variable, closure, "${}"              no       -
+#   parameter of the function itself            YES      its name  (E0304; a seal with no `p, n`
+#                                                        refuses the body's own parameters: this
+#                                                        corrects the first findings)
 #   `fs.member` with `seal except fs`           admitted: all of fs, not one member
 #   `hide fs.read` / `import fs hiding (read)`  still bite under `seal except fs`; other fs.* stay
 #   seal reaches through calls                  no: a listed helper may use anything (the
@@ -41,6 +44,8 @@
 #   `;` separates statements on one line                                        works
 #   fn value in a struct field, called later, via a list or a local           works
 #   cost: see the timing probe at the end (microseconds per page-load equivalent)
+#
+# Part g records three faults of seal except found at step 10 (tripwires).
 #
 # Exit status: the number of failed checks.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -105,6 +110,7 @@ sealed s_base        accept ''      'p, n, println' '    x = n + 1
 sealed s_local_param accept ''      'p, n' '    q = n + 1
     h = |x: int| { return x + q }
     _r = h(1)'
+sealed s_param_unlisted reject E0304 'helper' '    _x = n'
 sealed s_println     reject E0301   'p, n' '    println("hi")'
 sealed s_outerfn     reject E0301   'p, n' '    _x = helper(n)'
 sealed s_outerfn_ok  accept ''      'p, n, helper' '    _x = helper(n)'
@@ -355,5 +361,110 @@ if build f_timing; then
 else
     bad "f_timing did not build ($(head -c 300 "$work/f_timing.log" | tr '\n' ' '))"
 fi
+
+# --- g. step 10, what `seal except` does to sae's own kind of function ---
+# Three Aether 0.923.0 faults found converting the 300 page-API functions
+# (docs/design/gate-dsl.md, "Step 10"; minimal repros in the lab's
+# repro/seal-bugs). Each probe is a tripwire: it passes while the fault is
+# there and FAILS when Aether fixes it, which is the signal that step 10's
+# conversion can go on.
+mkdir -p "$work/mm"
+cat > "$work/mm/module.ae" <<'EOP'
+exports (run_it, K, bump)
+const K = 7
+run_it(f: @keep fn) { f() }
+bump(x: int) -> int { return x + K }
+EOP
+# A: a closure passed straight to a MODULE function cannot see the sealed
+# function's own locals; the same closure passed to a function of the file can.
+cat > "$work/g_closure_module.ae" <<'EOP'
+import mm
+helper(x: int) -> int { return x + 1 }
+f1(p: int, argv: int) -> int {
+    seal except p, argv, mm, helper
+    ctx = p + 1
+    seq = argv
+    mm.run_it(|| {
+        _x = helper(ctx + seq)
+    })
+    return 0
+}
+main() { println(f1(1, 2)) }
+EOP
+cat > "$work/g_closure_local.ae" <<'EOP'
+run_it(f: @keep fn) { f() }
+helper(x: int) -> int { return x + 1 }
+f1(p: int, argv: int) -> int {
+    seal except p, argv, run_it, helper
+    ctx = p + 1
+    seq = argv
+    run_it(|| {
+        _x = helper(ctx + seq)
+    })
+    return 0
+}
+main() { println(f1(1, 2)) }
+EOP
+cat > "$work/g_module_const.ae" <<'EOP'
+import mm
+f1(p: int) -> int {
+    seal except p, mm
+    a = mm.K
+    return a + mm.bump(p)
+}
+main() { println(f1(1)) }
+EOP
+cat > "$work/g_field_type.ae" <<'EOP'
+struct T { name: string }
+new_t() -> *T {
+    t = heap.new(T)
+    t.name = "abc"
+    return t
+}
+f1(p: int) -> int {
+    seal except p, new_t
+    t = new_t()
+    s = "ab"
+    if t.name == "${s}c" { return 1 }
+    return 0
+}
+f2(p: int) -> int {
+    seal except p, new_t, T
+    t = new_t()
+    s = "ab"
+    if t.name == "${s}c" { return 1 }
+    return 0
+}
+main() { println("${f1(0)}${f2(0)}") }
+EOP
+export AETHER_LIB_DIR="$work"
+if build g_closure_local; then ok "g_closure_local accepted: a closure to a function of the file sees the sealed function's locals"; else bad "g_closure_local rejected ($(head -c 300 "$work/g_closure_local.log" | tr '\n' ' '))"; fi
+if build g_closure_module; then
+    bad "Aether fixed bug A (a closure passed to a module function, under seal except, sees the function's locals): convert the 9 page-API functions that pass one (docs/design/gate-dsl.md, Step 10)"
+elif grep -q "E0300.*Undefined variable 'ctx'" "$work/g_closure_module.log"; then
+    ok "bug A stands (g_closure_module rejected: E0300 Undefined variable 'ctx')"
+else
+    bad "g_closure_module rejected, but not as bug A ($(head -c 300 "$work/g_closure_module.log" | tr '\n' ' '))"
+fi
+if build g_module_const; then
+    bad "Aether fixed bug B (a module's exported const under seal except): convert the 5 sqlite page-API functions (docs/design/gate-dsl.md, Step 10)"
+elif grep -q "E0200.*module 'mm' has no export 'K'" "$work/g_module_const.log"; then
+    ok "bug B stands (g_module_const rejected: module 'mm' has no export 'K')"
+else
+    bad "g_module_const rejected, but not as bug B ($(head -c 300 "$work/g_module_const.log" | tr '\n' ' '))"
+fi
+if build g_field_type; then
+    got=$("$work/g_field_type")
+    if [ "$got" = "01" ]; then
+        ok "bug C stands (g_field_type: a sealed function whose struct is not listed compares a string field by pointer: $got)"
+    elif [ "$got" = "11" ]; then
+        bad "Aether fixed bug C (an unlisted struct loses its field types under seal except, silently): the codegen check of docs/design/gate-dsl.md Step 10 is no longer needed"
+    else
+        bad "g_field_type printed '$got'"
+    fi
+else
+    bad "g_field_type did not build ($(head -c 300 "$work/g_field_type.log" | tr '\n' ' '))"
+fi
+unset AETHER_LIB_DIR
 
 exit $fails
