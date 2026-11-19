@@ -49,7 +49,7 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
    undefined, or `sae_throw_type_error(...)`. If it needs something the
    veto hides, add a narrow kernel helper (as `now_ns_` wraps the clock)
    rather than dropping the line.
-2. Its `reg_(...)` line in `api_register_`; or, in a namespace already moved to the gate DSL (docs/design/gate-dsl.md: `storage`, `browserContext`, `performance`, `vg`, `print`, the timer globals and `Date.now` so far; a member the prelude's JavaScript provides is a `provided(name, arity)` there, with no function), an `api("name", host_fn, arity) { ... }` entry in `gate_spec_` (one `api(` per line; the function comes before the arity).
+2. Its `reg_(...)` line in `api_register_`; or, in a namespace already moved to the gate DSL (docs/design/gate-dsl.md: `storage`, `browserContext`, `performance`, `ui`, `vg`, `print`, the timer globals and `Date.now` so far; a member the prelude's JavaScript provides is a `provided(name, arity)` there, with no function), an `api("name", host_fn, arity) { ... }` entry in `gate_spec_` (one `api(` per line; the function comes before the arity).
 3. If it reaches the file system, the system or the network, it goes
    through a service (`services/`), never `std.fs` or `client.request`
    directly; a network call in app mode is held to app.json `capabilities.http` there.

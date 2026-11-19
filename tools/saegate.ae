@@ -14,7 +14,7 @@
 //
 // The line's fields: kind (fn, global, patch, value, provided,
 // provided_value), space, when (always, app_or_web_seeks, app_seeks), seek,
-// reach, name, arity, params (each {k: arg|opt|rest, n, t}), gives, ts (the
+// reach, name, arity, params (each {k: arg|opt|rest|beyond, n, t}, t a spec type or "ts:..."), gives, ts (the
 // TypeScript of a "raw" result), promise, doc, internal.
 
 import std.io
@@ -66,7 +66,15 @@ ts_type_(t: string) -> string {
     if t == "points" { return "string | number[]" }
     if t == "str_num" { return "string | number" }
     if t == "obj" { return "Record<string, unknown>" }
+    if t == "bool" { return "boolean" }
+    if t == "handle" { return "sae.Widget | sae.VgNode" }
     return "void"
+}
+
+// The TypeScript of a parameter's type: a spec type, or "ts:..." (arg_ts) as written.
+param_type_(t: string) -> string {
+    if string.starts_with(t, "ts:") == 1 { return string.substring(t, 3, string.length(t)) }
+    return ts_type_(t)
 }
 
 // What `typeof` says of a non-function member of a spec type.
@@ -95,8 +103,8 @@ ts_params_(params: ptr, lead: int) -> string {
         }
         sep = ""
         if out != "" { sep = ", " }
-        if k == "arg" { out = "${out}${sep}${nm}: ${ts_type_(t)}" }
-        if k == "opt" { out = "${out}${sep}${nm}?: ${ts_type_(t)}" }
+        if k == "arg" { out = "${out}${sep}${nm}: ${param_type_(t)}" }
+        if k == "opt" || k == "beyond" { out = "${out}${sep}${nm}?: ${param_type_(t)}" }
         if k == "rest" { out = "${out}${sep}...${nm}: unknown[]" }
         i = i + 1
     }
@@ -109,7 +117,8 @@ nonrest_(params: ptr) -> int {
     n = json.json_array_size(params)
     i = 0
     while i < n {
-        if str_of_(json.json_array_get_raw(params, i), "k") != "rest" { c = c + 1 }
+        k = str_of_(json.json_array_get_raw(params, i), "k")
+        if k != "rest" && k != "beyond" { c = c + 1 }
         i = i + 1
     }
     return c
@@ -182,6 +191,17 @@ member_(out: ptr, e: ptr) {
         return
     }
     params = json.json_object_get_raw(e, "params")
+    sigs = str_of_(e, "sigs")
+    if sigs != "" {
+        parts = string.split(sigs, "\n")
+        np = string.string_array_size(parts)
+        pi = 0
+        while pi < np {
+            _s = strbuilder.append(out, "  ${str_of_(e, "name")}${string.string_array_get(parts, pi)};\n")
+            pi = pi + 1
+        }
+        return
+    }
     _b = strbuilder.append(out, "  ${str_of_(e, "name")}(${ts_params_(params, 1)}): ${ts_result_(e)};\n")
     if has_lead_(params) == 1 {
         _c = strbuilder.append(out, "  ${str_of_(e, "name")}(${ts_params_(params, 0)}): ${ts_result_(e)};\n")
@@ -203,6 +223,11 @@ dts_header_(out: ptr) {
     _i3 = strbuilder.append(out, "  type VgNode = number;\n")
     _i4 = strbuilder.append(out, "  /** A datagrid handle (not a widget). */\n")
     _i5 = strbuilder.append(out, "  type Grid = number;\n")
+    _i6 = strbuilder.append(out, "  /** A reactive value (state, computed): a number, string or boolean is held in one cell, any other value by the page. */\n")
+    _i7 = strbuilder.append(out, "  interface State<T> {\n")
+    _i8 = strbuilder.append(out, "    /** The raw cell handle, for ui.ui_set and ui.text_bound. */\n")
+    _i9 = strbuilder.append(out, "    h: number;\n    value: T;\n    get(): T;\n    set(v: T): T;\n    update(fn: (v: T) => T): T;\n")
+    _ia = strbuilder.append(out, "    subscribe(fn: (v: T) => void): State<T>;\n  }\n")
     _i = strbuilder.append(out, "  /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */\n")
     _j = strbuilder.append(out, "  type Timer = number;\n")
     _j2 = strbuilder.append(out, "  /** An id from requestAnimationFrame, for cancelAnimationFrame. */\n")

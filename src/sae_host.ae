@@ -8442,23 +8442,10 @@ sae_ae_css(p: *Page, this_val: int, argv: int) -> int {
     return 0
 }
 
-// The ui registrations of the reactive layer, and the prelude, for
-// api_register_ (called from there, after the gate spec has made vg).
+// The prelude: the reactive surface over ui's host primitives and vg's, for
+// api_register_ (called from there, after the gate spec has made ui and vg).
 ae_register_(p: *Page) {
     q = p.ctx
-    u, _ue = js_get_global_(q, "ui")
-    reg_(p, q, u, "_cell", 2, sae_ae_cell)
-    reg_(p, q, u, "_cell_get", 2, sae_ae_cell_get)
-    reg_(p, q, u, "_cell_set", 3, sae_ae_cell_set)
-    reg_(p, q, u, "_computed", 3, sae_ae_computed)
-    reg_(p, q, u, "_batch", 1, sae_ae_batch)
-    reg_(p, q, u, "_bind", 4, sae_ae_bind)
-    reg_(p, q, u, "_widget_kind", 1, sae_ae_widget_kind)
-    reg_(p, q, u, "_top", 0, sae_ae_top)
-    reg_(p, q, u, "_remove_child", 2, sae_ae_remove_child)
-    reg_(p, q, u, "set_enabled", 2, sae_ae_set_enabled)
-    reg_(p, q, u, "tooltip", 2, sae_ui_tooltip)
-    quickjs.release(q, u)
     // The JS surface over these: state, computed, bind, each, batch, the
     // bind tagged template, vg.animate, vg.items (src/sae_prelude.js).
     pre, perr = js_eval_(q, sae_prelude(), "sae:prelude")
@@ -9692,6 +9679,8 @@ const T_POINTS = 19 // "x,y x,y" or a flat array of numbers
 const T_STR_NUM = 20 // a string or a number, read as a string
 const T_OBJ = 21 // an object
 const T_RAW = 22 // a result whose TypeScript the entry gives (gives_ts)
+const T_BOOL = 23 // a boolean result
+const T_HANDLE = 24 // a widget, or a vg scene or shape (or 0, the whole page)
 
 // What `value` takes its string from, when a page is registered.
 const V_PAGE_URL = 1
@@ -9727,6 +9716,7 @@ struct GateEntry {
     params: ptr // a strbuilder of the params' JSON
     gives: int
     ts: string // the TypeScript of a T_RAW result
+    sigs: string // describing: TypeScript signatures that replace the generated one (signature)
     promise: int
     doc: string
     internal: int
@@ -9770,6 +9760,8 @@ gate_type_name_(t: int) -> string {
     if t == T_STR_NUM { return "str_num" }
     if t == T_OBJ { return "obj" }
     if t == T_RAW { return "raw" }
+    if t == T_BOOL { return "bool" }
+    if t == T_HANDLE { return "handle" }
     return "void"
 }
 
@@ -9794,7 +9786,7 @@ gate_flush_(g: *Gate) {
     if e.open == 0 { return }
     s = g.sp as *GateSpace
     pj = strbuilder.finish(e.params)
-    line = "{\"kind\":${gate_json_(e.kind)},\"space\":${gate_json_(s.name)},\"when\":${gate_json_(when_name_(s.cond))},\"seek\":${gate_json_(s.seek)},\"reach\":${gate_json_(s.reach)},\"name\":${gate_json_(e.name)},\"arity\":${e.arity},\"params\":[${pj}],\"gives\":${gate_json_(gate_type_name_(e.gives))},\"ts\":${gate_json_(e.ts)},\"promise\":${e.promise},\"doc\":${gate_json_(e.doc)},\"internal\":${e.internal}}\n"
+    line = "{\"kind\":${gate_json_(e.kind)},\"space\":${gate_json_(s.name)},\"when\":${gate_json_(when_name_(s.cond))},\"seek\":${gate_json_(s.seek)},\"reach\":${gate_json_(s.reach)},\"name\":${gate_json_(e.name)},\"arity\":${e.arity},\"params\":[${pj}],\"gives\":${gate_json_(gate_type_name_(e.gives))},\"ts\":${gate_json_(e.ts)},\"sigs\":${gate_json_(e.sigs)},\"promise\":${e.promise},\"doc\":${gate_json_(e.doc)},\"internal\":${e.internal}}\n"
     fputs(line, sae_stdout())
     e.open = 0
 }
@@ -9808,6 +9800,7 @@ gate_begin_(g: *Gate, kind: string, name: string, arity: int) -> *GateEntry {
     e.params = strbuilder.new(64)
     e.gives = T_VOID
     e.ts = ""
+    e.sigs = ""
     e.promise = 0
     e.doc = ""
     e.internal = 0
@@ -9993,6 +9986,33 @@ opt(_ctx: ptr, name: string, t: int) {
     gate_param_(e, "opt", name, gate_type_name_(t))
 }
 
+// An argument of a type the spec has no name for: its TypeScript, as text.
+arg_ts(_ctx: ptr, name: string, ts: string) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "arg_ts")
+    e = _ctx as *GateEntry
+    gate_param_(e, "arg", name, "ts:${ts}")
+}
+
+opt_ts(_ctx: ptr, name: string, ts: string) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "opt_ts")
+    e = _ctx as *GateEntry
+    gate_param_(e, "opt", name, "ts:${ts}")
+}
+
+// An argument the host reads past the arity (a block that text(label, block)
+// takes, with a .length of 1): optional, and not counted in the arity.
+beyond(_ctx: ptr, name: string, t: int) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "beyond")
+    e = _ctx as *GateEntry
+    gate_param_(e, "beyond", name, gate_type_name_(t))
+}
+
+beyond_ts(_ctx: ptr, name: string, ts: string) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "beyond_ts")
+    e = _ctx as *GateEntry
+    gate_param_(e, "beyond", name, "ts:${ts}")
+}
+
 // The rest parameter: more arguments, past the arity.
 rest(_ctx: ptr, name: string) {
     gate_check_(_ctx, GATE_TAG_ENTRY, "rest")
@@ -10012,6 +10032,16 @@ gives_ts(_ctx: ptr, ts: string) {
     e = _ctx as *GateEntry
     e.gives = T_RAW
     if gate_of_(e).mode == G_DESCRIBE { e.ts = own_(ts) }
+}
+
+// The TypeScript of the entry from its type parameters on, instead of the one
+// made from its params: "<T>(initial: T): State<T>". One call per overload.
+signature(_ctx: ptr, ts: string) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "signature")
+    e = _ctx as *GateEntry
+    if gate_of_(e).mode == G_DESCRIBE {
+        if e.sigs != "" { e.sigs = own_("${e.sigs}\n${ts}") } else { e.sigs = own_(ts) }
+    }
 }
 
 gives_promise(_ctx: ptr, t: int) {
@@ -10036,6 +10066,1062 @@ internal(_ctx: ptr) {
 
 // ===== the spec =====
 gate_spec_(g: *Gate) {
+    // ui: the widgets (README "The ui object"). A builder takes its block last
+    // and returns its widget's handle; a modifier works inside a block.
+    space(g, "ui", WHEN_ALWAYS, "") {
+        api("vstack", sae_ui_vstack, 2) {
+            arg("spacing", T_LEAD_NUM)
+            opt("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A column under the current parent; body runs with it as the parent.")
+        }
+        api("hstack", sae_ui_hstack, 2) {
+            arg("spacing", T_LEAD_NUM)
+            opt("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A row under the current parent; body runs with it as the parent.")
+        }
+        api("wrap", sae_ui_wrap, 1) {
+            opt("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A flow container: left to right, onto the next line when the width runs out.")
+        }
+        api("grid", sae_ui_grid, 3) {
+            arg("cols", T_INT)
+            arg("spacing", T_LEAD_NUM)
+            opt("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A grid of cols (1 to 64) columns, filled a row at a time by the block's widgets.")
+        }
+        api("equal_cells", sae_ui_equal_cells, 0) {
+            doc("In a grid's block: one width per column and one height per row, for all.")
+        }
+        api("text", sae_ui_text, 1) {
+            arg("s", T_STR)
+            beyond("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A label; text(s, body) takes a block that styles it.")
+        }
+        api("btn", sae_ui_btn, 2) {
+            arg("label", T_STR)
+            arg_ts("onPress", "() => void")
+            gives(T_WIDGET)
+            doc("A button that calls onPress when pressed.")
+        }
+        api("divider", sae_ui_divider, 0) {
+            gives(T_WIDGET)
+            doc("A thin dividing line.")
+        }
+        api("button", sae_ui_button, 2) {
+            arg("label", T_STR)
+            opt("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A button whose block styles it (onclick inside the block handles the press).")
+        }
+        api("scroll", sae_ui_scroll, 1) {
+            opt("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A scrolling area holding the block's widgets in a column.")
+        }
+        api("spacer", sae_ui_spacer, 0) {
+            gives(T_WIDGET)
+            doc("Flexible empty space.")
+        }
+        api("textfield", sae_ui_textfield, 2) {
+            arg("placeholder", T_STR)
+            opt_ts("onChange", "(text: string) => void")
+            beyond("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A one-line text field; onChange(text) on each edit; a block may follow.")
+        }
+        api("securefield", sae_ui_securefield, 2) {
+            arg("placeholder", T_STR)
+            opt_ts("onChange", "(text: string) => void")
+            gives(T_WIDGET)
+            doc("A text field that does not show its text (a password); get_text reads it.")
+        }
+        api("get_text", sae_ui_get_text, 1) {
+            arg("h", T_WIDGET)
+            gives(T_STR)
+            doc("The text of a label, field or button the page made.")
+        }
+        api("set_text", sae_ui_set_text, 2) {
+            arg("h", T_WIDGET)
+            arg("s", T_STR)
+            doc("Sets the text of a label, field or button the page made.")
+        }
+        api("clear", sae_ui_clear, 1) {
+            arg("h", T_WIDGET)
+            doc("Empties a vstack, hstack or grid the page made.")
+        }
+        api("into", sae_ui_into, 2) {
+            arg("h", T_WIDGET)
+            arg("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("Builds into a vstack, hstack or grid the page made again.")
+        }
+        api("toggle", sae_ui_toggle, 2) {
+            arg("label", T_STR)
+            arg_ts("onChange", "(on: number) => void")
+            gives(T_WIDGET)
+            doc("A labelled check box; onChange(on) with 1 or 0.")
+        }
+        api("slider", sae_ui_slider, 4) {
+            arg("min", T_NUM)
+            arg("max", T_NUM)
+            arg("initial", T_NUM)
+            arg_ts("onChange", "(v: number) => void")
+            gives(T_WIDGET)
+            doc("A slider from min to max; onChange(v) as it moves.")
+        }
+        api("scrollbar", sae_ui_scrollbar, 6) {
+            arg("vertical", T_FLAG)
+            arg("min", T_NUM)
+            arg("max", T_NUM)
+            arg("page", T_NUM)
+            arg("value", T_NUM)
+            arg_ts("onChange", "(v: number) => void")
+            gives(T_WIDGET)
+            doc("A windowing slider: the thumb is the window, page of max - min; value is the window's start.")
+        }
+        api("set_scrollbar", sae_ui_set_scrollbar, 5) {
+            arg("h", T_WIDGET)
+            arg("min", T_NUM)
+            arg("max", T_NUM)
+            arg("page", T_NUM)
+            arg("value", T_NUM)
+            doc("Reconfigures a scrollbar without calling its onChange.")
+        }
+        api("scrollbar_steps", sae_ui_scrollbar_steps, 3) {
+            arg("h", T_WIDGET)
+            arg("step", T_NUM)
+            opt("pageStep", T_NUM)
+            doc("The distances of a step and of a page step on a scrollbar.")
+        }
+        api("get_scrollbar", sae_ui_get_scrollbar, 1) {
+            arg("h", T_WIDGET)
+            gives(T_NUM)
+            doc("A scrollbar's value.")
+        }
+        api("scrollbar_range", sae_ui_scrollbar_range, 1) {
+            arg("h", T_WIDGET)
+            gives_ts("[number, number, number]")
+            doc("[min, max, page] of a scrollbar.")
+        }
+        api("context_menu", sae_ui_context_menu, 2) {
+            arg("target", T_HANDLE)
+            arg_ts("items", "Array<\"-\" | { label: string; accel?: string; enabled?: boolean; action?: () => void }>")
+            doc("What a right click (a long press) on a widget, a vg shape, or 0 (the page) offers; items are read again each time the menu opens.")
+        }
+        api("picker", sae_ui_picker, 1) {
+            arg_ts("onChange", "(i: number) => void")
+            gives(T_WIDGET)
+            doc("A drop-down; onChange(i) with the chosen index.")
+        }
+        api("picker_add", sae_ui_picker_add, 2) {
+            arg("h", T_WIDGET)
+            arg("item", T_STR)
+            doc("Adds an item to a picker.")
+        }
+        api("progressbar", sae_ui_progressbar, 1) {
+            arg("f", T_NUM)
+            gives(T_WIDGET)
+            doc("A progress bar at fraction f (0 to 1).")
+        }
+        api("set_progress", sae_ui_set_progress, 2) {
+            arg("h", T_WIDGET)
+            arg("f", T_NUM)
+            doc("Sets a progress bar's fraction.")
+        }
+        api("set_toggle", sae_ui_set_toggle, 2) {
+            arg("h", T_WIDGET)
+            arg("on", T_FLAG)
+            doc("Checks or unchecks a toggle.")
+        }
+        api("get_toggle", sae_ui_get_toggle, 1) {
+            arg("h", T_WIDGET)
+            gives(T_INT)
+            doc("1 when a toggle is checked, else 0.")
+        }
+        api("set_slider", sae_ui_set_slider, 2) {
+            arg("h", T_WIDGET)
+            arg("v", T_NUM)
+            doc("Moves a slider.")
+        }
+        api("get_slider", sae_ui_get_slider, 1) {
+            arg("h", T_WIDGET)
+            gives(T_NUM)
+            doc("A slider's value.")
+        }
+        api("styles", sae_ui_styles, 1) {
+            arg("sheet", T_OBJ)
+            doc("Applies a style sheet to the page's widgets (README, \"Styles\").")
+        }
+        api("add_class", sae_ui_add_class, 2) {
+            arg("h", T_WIDGET)
+            arg("name", T_STR)
+            doc("Gives a widget a style class.")
+        }
+        api("style_id", sae_ui_style_id, 2) {
+            arg("h", T_WIDGET)
+            arg("name", T_STR)
+            doc("Gives a widget a style id.")
+        }
+        api("timer", sae_ui_timer, 2) {
+            arg("ms", T_INT)
+            arg("fn", T_FN)
+            gives(T_TIMER)
+            doc("Calls fn every ms milliseconds (10 at least) until timer_cancel.")
+        }
+        api("set_visible", sae_ui_set_visible, 2) {
+            arg("h", T_WIDGET)
+            arg("on", T_FLAG)
+            doc("Shows or hides a widget, keeping it and its timers and scenes alive.")
+        }
+        api("timer_cancel", sae_ui_timer_cancel, 1) {
+            opt("id", T_TIMER)
+            doc("Stops a timer (or setTimeout, setInterval); another id, or none, is ignored.")
+        }
+        api("after", sae_ui_after, 2) {
+            arg("ms", T_DELAY)
+            arg("fn", T_FN)
+            gives(T_TIMER)
+            doc("Calls fn once, ms milliseconds from now.")
+        }
+        api("sleep", sae_ui_sleep, 1) {
+            arg("ms", T_DELAY)
+            gives_promise(T_VOID)
+            doc("A promise that settles after ms milliseconds.")
+        }
+        api("frame", sae_request_frame, 1) {
+            arg("fn", T_FRAME_FN)
+            gives(T_FRAME)
+            doc("Calls fn(timestamp) on the next display frame (requestAnimationFrame).")
+        }
+        api("frame_cancel", sae_cancel_frame, 1) {
+            opt("id", T_FRAME)
+            doc("Cancels a frame callback; another id is ignored.")
+        }
+        api("onclick", sae_ui_onclick, 1) {
+            arg("fn", T_FN)
+            doc("In a widget's block: fn() when it is clicked.")
+        }
+        api("on_double_click", sae_ui_on_double_click, 2) {
+            arg("h", T_WIDGET)
+            arg("fn", T_FN)
+            doc("fn() on a widget's double click (a double tap on touch).")
+        }
+        api("margin", sae_ui_margin, 4) {
+            arg("top", T_INT)
+            opt("right", T_INT)
+            opt("bottom", T_INT)
+            opt("left", T_INT)
+            doc("In a container's block: its margins in px; with one argument, on all sides.")
+        }
+        api("bg_color", sae_ui_bg_color, 4) {
+            arg("r", T_NUM)
+            arg("g", T_NUM)
+            arg("b", T_NUM)
+            opt("a", T_NUM)
+            doc("In a widget's block: its background colour, components from 0 to 1.")
+        }
+        api("ui_state", sae_ui_state, 1) {
+            arg("v", T_NUM)
+            gives(T_INT)
+            doc("A numeric cell for text_bound and ui_set; the reactive state() is the better way.")
+        }
+        api("ui_set", sae_ui_set, 2) {
+            arg("state", T_INT)
+            arg("v", T_NUM)
+            doc("Sets a numeric cell.")
+        }
+        api("text_bound", sae_ui_text_bound, 3) {
+            arg("state", T_INT)
+            arg("prefix", T_STR)
+            arg("suffix", T_STR)
+            gives(T_WIDGET)
+            doc("A label showing a numeric cell between prefix and suffix.")
+        }
+        api("on_key", sae_ui_on_key, 1) {
+            arg_ts("fn", "(key: string, mods: number) => void")
+            doc("fn(key, mods) for every key while the page has the focus; mods 1 shift, 2 ctrl, 4 alt, 8 super.")
+        }
+        api("a11y_label", sae_ui_a11y_label, 2) {
+            arg("h", T_HANDLE)
+            arg("text", T_STR)
+            gives(T_HANDLE)
+            doc("What a screen reader calls a widget or a vg scene.")
+        }
+        api("a11y_role", sae_ui_a11y_role, 2) {
+            arg("h", T_HANDLE)
+            arg("role", T_STR)
+            gives(T_HANDLE)
+            doc("What a widget or a vg scene is to a screen reader (button, heading, group, image, list, listitem, grid, ... none).")
+        }
+        api("a11y_description", sae_ui_a11y_description, 2) {
+            arg("h", T_HANDLE)
+            arg("text", T_STR)
+            gives(T_HANDLE)
+            doc("The longer account a screen reader reads after the name.")
+        }
+        api("a11y_announce", sae_ui_a11y_announce, 2) {
+            arg("h", T_HANDLE)
+            arg("text", T_STR)
+            gives(T_HANDLE)
+            doc("A line a screen reader says now, without moving the focus.")
+        }
+        api("click_through", sae_ui_click_through, 2) {
+            arg("h", T_HANDLE)
+            arg("on", T_FLAG)
+            gives(T_HANDLE)
+            doc("Lets the pointer pass through a widget or a vg scene to what lies under it.")
+        }
+        api("_textarea", sae_ui_textarea, 2) {
+            arg("placeholder", T_STR)
+            opt_ts("onChange", "(text: string) => void")
+            gives(T_WIDGET)
+            internal()
+            doc("The host primitive under ui.textarea.")
+        }
+        api("text_measure", sae_ui_text_measure, 2) {
+            arg("h", T_WIDGET)
+            arg("text", T_STR)
+            gives(T_INT)
+            doc("How wide text would be in label h's font, in px.")
+        }
+        api("cells", sae_ui_amb_cells, 1) {
+            arg_ts("fn", "(row: number, col: number) => string")
+            doc("In a datagrid's block: the cell function, giving a cell's text (a model column).")
+        }
+        api("headers", sae_ui_amb_headers, 1) {
+            arg_ts("fn", "(col: number) => string")
+            doc("In a datagrid's block: a column's header text.")
+        }
+        api("on_cell_click", sae_ui_amb_on_cell_click, 1) {
+            arg_ts("fn", "(row: number, col: number) => void")
+            doc("In a datagrid's block: a cell was clicked.")
+        }
+        api("on_cell_select", sae_ui_amb_on_cell_select, 1) {
+            arg_ts("fn", "(row: number, col: number) => void")
+            doc("In a datagrid's block: the selection moved to a cell.")
+        }
+        api("on_cell_activate", sae_ui_amb_on_cell_activate, 1) {
+            arg_ts("fn", "(row: number, col: number) => void")
+            doc("In a datagrid's block: Return on a cell.")
+        }
+        api("on_cell_edit", sae_ui_amb_on_cell_edit, 1) {
+            arg_ts("fn", "(row: number, col: number, text: string) => void")
+            doc("In a datagrid's block: makes it editable; fn gets a committed edit (a model column).")
+        }
+        api("on_col_resize", sae_ui_amb_on_col_resize, 1) {
+            arg_ts("fn", "(col: number, width: number) => void")
+            doc("In a datagrid's block: a column was resized.")
+        }
+        api("on_col_move", sae_ui_amb_on_col_move, 1) {
+            arg_ts("fn", "(from: number, to: number) => void")
+            doc("In a datagrid's block: a column was moved.")
+        }
+        api("on_header_click", sae_ui_amb_on_header_click, 1) {
+            arg_ts("fn", "(col: number) => void")
+            doc("In a datagrid's block: a header was pressed and let go without a drag.")
+        }
+        api("column_width", sae_ui_amb_column_width, 1) {
+            arg("w", T_INT)
+            doc("In a datagrid's block: every column's width in px.")
+        }
+        api("column_limits", sae_ui_amb_column_limits, 2) {
+            arg("min", T_INT)
+            arg("max", T_INT)
+            doc("In a datagrid's block: the least and greatest a column may be resized to.")
+        }
+        api("edit_text", sae_ui_amb_edit_text, 1) {
+            arg_ts("fn", "(row: number, col: number) => string")
+            doc("In a datagrid's block: what an editor starts with, when not what the cell shows.")
+        }
+        api("cell_style", sae_ui_amb_cell_style, 1) {
+            arg_ts("fn", "(row: number, col: number) => string")
+            doc("In a datagrid's block: a cell's style as AeCS properties (\"background: #ffe0e0; color: #b00000\").")
+        }
+        api("on_submit", sae_ui_on_submit, 2) {
+            arg("h", T_WIDGET)
+            arg_ts("fn", "(text: string) => void")
+            gives(T_WIDGET)
+            doc("fn(text) on Return in a text field.")
+        }
+        api("onsubmit", sae_ui_onsubmit, 1) {
+            arg_ts("fn", "(text: string) => void")
+            doc("In a field's block: fn(text) on Return.")
+        }
+        api("on_drag", sae_ui_on_drag, 2) {
+            arg("h", T_WIDGET)
+            arg_ts("fn", "(phase: number, x: number, y: number) => void")
+            gives(T_WIDGET)
+            doc("A press at (x, y) in the widget, then moves and the release, as offsets.")
+        }
+        api("reorderable", sae_ui_reorderable, 2) {
+            arg("h", T_WIDGET)
+            arg_ts("fn", "(from: number, to: number) => void")
+            gives(T_WIDGET)
+            doc("Lets the children of a vstack or hstack be dragged among themselves; fn(from, to) on a drop; the page moves the item.")
+        }
+        api("menu", sae_ui_menu, 2) {
+            arg("label", T_STR)
+            arg("body", T_BLOCK)
+            gives(T_INT)
+            doc("A menu on the app window's menu bar (an installed app only); its items come from the block's menu_item calls.")
+        }
+        api("menu_item", sae_ui_menu_item, 2) {
+            arg("label", T_STR)
+            arg("fn", T_FN)
+            doc("In a menu's block: an item that runs fn.")
+        }
+        api("menu_item_accel", sae_ui_menu_item_accel, 3) {
+            arg("label", T_STR)
+            arg("accel", T_STR)
+            arg("fn", T_FN)
+            doc("In a menu's block: an item with its accelerator (\"Primary+S\" is Command on macOS, Ctrl elsewhere).")
+        }
+        api("shortcut_chord", sae_ui_shortcut_chord, 3) {
+            arg("first", T_STR)
+            arg("second", T_STR)
+            arg("fn", T_FN)
+            doc("A two-key sequence that runs fn (an installed app only).")
+        }
+        api("menu_separator", sae_ui_menu_separator, 0) {
+            doc("In a menu's block: a separator.")
+        }
+        api("ondrag", sae_ui_ondrag, 1) {
+            arg_ts("fn", "(phase: number, x: number, y: number) => void")
+            doc("In a widget's block: the same as on_drag.")
+        }
+        api("pointer_cursor", sae_ui_pointer_cursor, 2) {
+            arg("h", T_WIDGET)
+            arg("name", T_STR)
+            gives(T_WIDGET)
+            doc("The mouse pointer over a widget (\"col-resize\", \"row-resize\", \"move\", \"grab\", \"pointer\", \"text\", \"crosshair\", \"not-allowed\", \"wait\", \"default\").")
+        }
+        api("pointer_shape", sae_ui_pointer_shape, 1) {
+            arg("name", T_STR)
+            doc("In a widget's block: the same as pointer_cursor.")
+        }
+        api("on_focus_change", sae_ui_on_focus_change, 2) {
+            arg("h", T_HANDLE)
+            arg_ts("fn", "(inside: number) => void")
+            gives(T_HANDLE)
+            doc("fn(inside) when the focus comes into a widget or a vg scene, or leaves.")
+        }
+        api("on_layout", sae_ui_on_layout, 2) {
+            arg("h", T_WIDGET)
+            arg_ts("fn", "(w: number, h: number) => void")
+            gives(T_WIDGET)
+            doc("A stack was laid out at a new size (after its allocation settles).")
+        }
+        api("on_resize", sae_ui_on_resize, 1) {
+            arg_ts("fn", "(w: number, h: number) => void")
+            doc("The window's content size, told once soon after and on every change; one handler a page.")
+        }
+        api("dark_mode", sae_ui_dark_mode, 0) {
+            gives(T_BOOL)
+            doc("Whether the system shows dark.")
+        }
+        api("on_appearance", sae_ui_on_appearance, 1) {
+            arg_ts("fn", "(dark: boolean) => void")
+            doc("Told when the system's appearance flips; one handler a page.")
+        }
+        api("on_interrupted", sae_ui_on_interrupted, 1) {
+            arg("fn", T_FN)
+            doc("Told when the page's time limit stopped an entry into its JavaScript; one handler a page.")
+        }
+        api("onfocuschange", sae_ui_onfocuschange, 1) {
+            arg_ts("fn", "(inside: number) => void")
+            doc("In a widget's block: the same as on_focus_change.")
+        }
+        api("key_text", sae_ui_key_text, 1) {
+            arg("name", T_STR)
+            gives(T_STR)
+            doc("The text a key name types (\"comma\" gives \",\").")
+        }
+        api("focus", sae_ui_focus, 1) {
+            arg("h", T_HANDLE)
+            doc("Gives the keyboard focus to a widget or a vg scene.")
+        }
+        api("set_focusable", sae_ui_set_focusable, 2) {
+            arg("h", T_HANDLE)
+            arg("on", T_FLAG)
+            gives(T_HANDLE)
+            doc("Lets a stack or a scene's canvas take the keyboard focus, and so be a stop of Tab.")
+        }
+        api("text_wrapped", sae_ui_text_wrapped, 2) {
+            arg("s", T_STR)
+            arg("px", T_INT)
+            gives(T_WIDGET)
+            doc("A label that wraps its words at px.")
+        }
+        api("width", sae_ui_width, 1) {
+            arg("h", T_WIDGET)
+            gives(T_INT)
+            doc("A widget's laid-out width in px.")
+        }
+        api("set_width", sae_ui_set_width, 2) {
+            arg("h", T_HANDLE)
+            arg("px", T_INT)
+            gives(T_HANDLE)
+            doc("Holds a widget or a scene's canvas at px wide (0 to 8000).")
+        }
+        api("fill_width", sae_ui_fill_width, 1) {
+            arg("h", T_HANDLE)
+            gives(T_HANDLE)
+            doc("The widget takes its row's spare width.")
+        }
+        api("height", sae_ui_height, 1) {
+            arg("h", T_WIDGET)
+            gives(T_INT)
+            doc("A widget's laid-out height in px.")
+        }
+        api("image", sae_ui_image, 2) {
+            arg("bytes", T_BYTES)
+            opt("body", T_BLOCK)
+            gives(T_WIDGET)
+            doc("A picture from PNG, JPEG, GIF or BMP bytes the toolkit decodes.")
+        }
+        api("_cell", sae_ae_cell, 2) {
+            arg("kind", T_STR)
+            arg("v", T_ANY)
+            gives(T_INT)
+            internal()
+            doc("The host primitive under state(): a typed cell (\"s\", \"b\", \"i\" or a number).")
+        }
+        api("_cell_get", sae_ae_cell_get, 2) {
+            arg("kind", T_STR)
+            arg("h", T_INT)
+            gives(T_ANY)
+            internal()
+            doc("The host primitive under State.value.")
+        }
+        api("_cell_set", sae_ae_cell_set, 3) {
+            arg("kind", T_STR)
+            arg("h", T_INT)
+            arg("v", T_ANY)
+            internal()
+            doc("The host primitive under State.set.")
+        }
+        api("_computed", sae_ae_computed, 3) {
+            arg("fn", T_FN)
+            arg("a", T_INT)
+            arg("b", T_INT)
+            internal()
+            doc("The host primitive under computed(): fn runs when either cell changes.")
+        }
+        api("_batch", sae_ae_batch, 1) {
+            arg("fn", T_FN)
+            gives(T_ANY)
+            internal()
+            doc("The host primitive under batch().")
+        }
+        api("_bind", sae_ae_bind, 4) {
+            arg("what", T_STR)
+            arg("widget", T_WIDGET)
+            arg("cell", T_INT)
+            arg("invert", T_INT)
+            internal()
+            doc("The host primitive under bind(), bind_enabled and bind_hidden.")
+        }
+        api("_widget_kind", sae_ae_widget_kind, 1) {
+            arg("h", T_WIDGET)
+            gives(T_STR)
+            internal()
+            doc("The kind of a widget the page made (\"textfield\", \"hstack\", ...), or \"\".")
+        }
+        api("_top", sae_ae_top, 0) {
+            gives(T_INT)
+            internal()
+            doc("The widget under construction, or 0.")
+        }
+        api("_remove_child", sae_ae_remove_child, 2) {
+            arg("parent", T_WIDGET)
+            arg("child", T_WIDGET)
+            internal()
+            doc("Takes a child widget out of its parent.")
+        }
+        api("set_enabled", sae_ae_set_enabled, 2) {
+            arg("h", T_WIDGET)
+            arg("on", T_FLAG)
+            doc("Greys a widget out, or gives it back.")
+        }
+        api("tooltip", sae_ui_tooltip, 2) {
+            arg("h", T_WIDGET)
+            arg("text", T_STR)
+            gives(T_WIDGET)
+            doc("What shows when the pointer rests on a widget (an empty string takes it off).")
+        }
+        api("datagrid", sae_ui_datagrid, 6) {
+            arg("rows", T_INT)
+            arg("cols", T_INT)
+            arg("visRows", T_INT)
+            arg("visCols", T_INT)
+            arg("frozen", T_INT)
+            opt_ts("body", "(() => void) | ((row: number, col: number) => string)")
+            gives(T_GRID)
+            doc("A virtualised grid; the block is its receiver (cells, headers, on_cell_click ...), or a function of (row, col) is the cell function.")
+        }
+        api("datagrid_cells", sae_ui_datagrid_cells, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => string")
+            gives(T_GRID)
+            doc("The cell function of a grid, by handle.")
+        }
+        api("datagrid_header", sae_ui_datagrid_header, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(col: number) => string")
+            gives(T_GRID)
+            doc("The header text function of a grid, by handle.")
+        }
+        api("datagrid_on_click", sae_ui_datagrid_on_click, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => void")
+            gives(T_GRID)
+            doc("fn(row, col) when a cell is clicked.")
+        }
+        api("datagrid_on_select", sae_ui_datagrid_on_select, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => void")
+            gives(T_GRID)
+            doc("fn(row, col) when the selection moves.")
+        }
+        api("datagrid_on_activate", sae_ui_datagrid_on_activate, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => void")
+            gives(T_GRID)
+            doc("fn(row, col) on Return in a cell.")
+        }
+        api("datagrid_on_col_resize", sae_ui_datagrid_on_col_resize, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(col: number, width: number) => void")
+            gives(T_GRID)
+            doc("fn(col, width) when a column is resized.")
+        }
+        api("datagrid_on_col_move", sae_ui_datagrid_on_col_move, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(from: number, to: number) => void")
+            gives(T_GRID)
+            doc("fn(from, to) when a column is moved.")
+        }
+        api("datagrid_on_header_click", sae_ui_datagrid_on_header_click, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(col: number) => void")
+            gives(T_GRID)
+            doc("fn(col) when a header is pressed and let go without a drag.")
+        }
+        api("datagrid_on_edit", sae_ui_datagrid_on_edit, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number, text: string) => void")
+            gives(T_GRID)
+            doc("Makes the grid editable; fn gets a committed edit.")
+        }
+        api("datagrid_on_edit_cancel", sae_ui_datagrid_on_edit_cancel, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => void")
+            gives(T_GRID)
+            doc("fn(row, col) when an editor closes with nothing stored.")
+        }
+        api("datagrid_on_edit_change", sae_ui_datagrid_on_edit_change, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(text: string, caret: number) => void")
+            gives(T_GRID)
+            doc("fn(text, caret) as the open editor's text is typed.")
+        }
+        api("datagrid_scroll_to", sae_ui_datagrid_scroll_to, 3) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            gives(T_GRID)
+            doc("Scrolls a cell into view.")
+        }
+        api("datagrid_refresh", sae_ui_datagrid_refresh, 1) {
+            arg("g", T_GRID)
+            gives(T_GRID)
+            doc("Draws the shown cells again.")
+        }
+        api("datagrid_first", sae_ui_datagrid_first, 1) {
+            arg("g", T_GRID)
+            gives_ts("[number, number]")
+            doc("[row, col] of the first shown cell.")
+        }
+        api("datagrid_select", sae_ui_datagrid_select, 3) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            gives(T_GRID)
+            doc("Selects one cell.")
+        }
+        api("datagrid_select_range", sae_ui_datagrid_select_range, 5) {
+            arg("g", T_GRID)
+            arg("anchorRow", T_INT)
+            arg("anchorCol", T_INT)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            gives(T_GRID)
+            doc("Selects the rectangle from the anchor to a cell.")
+        }
+        api("datagrid_add_area", sae_ui_datagrid_add_area, 5) {
+            arg("g", T_GRID)
+            arg("anchorRow", T_INT)
+            arg("anchorCol", T_INT)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            gives(T_GRID)
+            doc("Adds a selected area (as Ctrl or Cmd with a click does).")
+        }
+        api("datagrid_set_height", sae_ui_datagrid_set_height, 2) {
+            arg("g", T_GRID)
+            arg("px", T_INT)
+            gives(T_GRID)
+            doc("The rows that fit in px, at most visRows (0 for all of them).")
+        }
+        api("datagrid_freeze_cols", sae_ui_datagrid_freeze_cols, 2) {
+            arg("g", T_GRID)
+            arg("n", T_INT)
+            gives(T_GRID)
+            doc("n columns after the grid's own frozen ones stay put; 0 frees them.")
+        }
+        api("datagrid_frozen_cols", sae_ui_datagrid_frozen_cols, 1) {
+            arg("g", T_GRID)
+            gives(T_INT)
+            doc("How many columns are frozen.")
+        }
+        api("datagrid_widget", sae_ui_datagrid_widget, 1) {
+            arg("g", T_GRID)
+            gives(T_WIDGET)
+            doc("The grid's own widget, for a11y_*, tooltip or a width (a grid's handle is not a widget).")
+        }
+        api("datagrid_selection_glide", sae_ui_datagrid_selection_glide, 2) {
+            arg("g", T_GRID)
+            arg("ms", T_INT)
+            gives(T_GRID)
+            doc("The cursor's box glides to a new cell over ms (0 jumps).")
+        }
+        api("datagrid_gliding", sae_ui_datagrid_gliding, 1) {
+            arg("g", T_GRID)
+            gives(T_BOOL)
+            doc("Whether the cursor's box is gliding now.")
+        }
+        api("datagrid_glide_box", sae_ui_datagrid_glide_box, 1) {
+            arg("g", T_GRID)
+            gives(T_STR)
+            doc("The cursor box's position, \"r,c\".")
+        }
+        api("datagrid_show_header", sae_ui_datagrid_show_header, 2) {
+            arg("g", T_GRID)
+            arg("on", T_FLAG)
+            gives(T_GRID)
+            doc("Shows or hides the column headers.")
+        }
+        api("datagrid_header_shown", sae_ui_datagrid_header_shown, 1) {
+            arg("g", T_GRID)
+            gives(T_BOOL)
+            doc("Whether the column headers are shown.")
+        }
+        api("datagrid_set_view_only", sae_ui_datagrid_set_view_only, 2) {
+            arg("g", T_GRID)
+            arg("on", T_FLAG)
+            gives(T_GRID)
+            doc("A read view: no editor, no cursor box or selection colour drawn; the selection still moves and is heard.")
+        }
+        api("datagrid_view_only", sae_ui_datagrid_view_only, 1) {
+            arg("g", T_GRID)
+            gives(T_BOOL)
+            doc("Whether the grid is a read view.")
+        }
+        api("datagrid_set_row_heights", sae_ui_datagrid_set_row_heights, 2) {
+            arg("g", T_GRID)
+            arg("h", T_INT)
+            gives(T_GRID)
+            doc("Every row the grid's own height h; rows given their own keep theirs.")
+        }
+        api("datagrid_row_heights", sae_ui_datagrid_row_heights, 1) {
+            arg("g", T_GRID)
+            gives(T_INT)
+            doc("The grid's own row height.")
+        }
+        api("datagrid_height", sae_ui_datagrid_height, 1) {
+            arg("g", T_GRID)
+            gives(T_INT)
+            doc("The height the grid takes, in px.")
+        }
+        api("datagrid_clear_areas", sae_ui_datagrid_clear_areas, 1) {
+            arg("g", T_GRID)
+            gives(T_GRID)
+            doc("Forgets the extra selected areas.")
+        }
+        api("datagrid_areas", sae_ui_datagrid_areas, 1) {
+            arg("g", T_GRID)
+            gives(T_STR)
+            doc("The extra selected areas as \"ar,ac,r,c;...\", before the current one.")
+        }
+        api("datagrid_selection", sae_ui_datagrid_selection, 1) {
+            arg("g", T_GRID)
+            gives_ts("[number, number, number, number]")
+            doc("[anchorRow, anchorCol, row, col].")
+        }
+        api("datagrid_col_width", sae_ui_datagrid_col_width, 2) {
+            arg("g", T_GRID)
+            arg("col", T_INT)
+            gives(T_INT)
+            doc("A column's width in px.")
+        }
+        api("datagrid_set_col_width", sae_ui_datagrid_set_col_width, 3) {
+            arg("g", T_GRID)
+            arg("col", T_INT)
+            arg("w", T_INT)
+            gives(T_GRID)
+            doc("Sets one column's width.")
+        }
+        api("datagrid_set_col_widths", sae_ui_datagrid_set_col_widths, 2) {
+            arg("g", T_GRID)
+            arg("w", T_INT)
+            gives(T_GRID)
+            doc("Sets every column's width.")
+        }
+        api("datagrid_col_limits", sae_ui_datagrid_col_limits, 3) {
+            arg("g", T_GRID)
+            arg("min", T_INT)
+            arg("max", T_INT)
+            gives(T_GRID)
+            doc("The least and greatest width a column may be resized to.")
+        }
+        api("datagrid_move_col", sae_ui_datagrid_move_col, 3) {
+            arg("g", T_GRID)
+            arg("from", T_INT)
+            arg("to", T_INT)
+            gives(T_GRID)
+            doc("Moves a column.")
+        }
+        api("datagrid_col_model", sae_ui_datagrid_col_model, 2) {
+            arg("g", T_GRID)
+            arg("col", T_INT)
+            gives(T_INT)
+            doc("The model column shown as an on-screen column.")
+        }
+        api("datagrid_edit", sae_ui_datagrid_edit, 3) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            gives(T_GRID)
+            doc("Opens an editor on a cell.")
+        }
+        api("datagrid_edit_commit", sae_ui_datagrid_edit_commit, 1) {
+            arg("g", T_GRID)
+            gives(T_GRID)
+            doc("Commits the open editor.")
+        }
+        api("datagrid_edit_cancel", sae_ui_datagrid_edit_cancel, 1) {
+            arg("g", T_GRID)
+            gives(T_GRID)
+            doc("Closes the open editor, storing nothing.")
+        }
+        api("datagrid_editor", sae_ui_datagrid_editor, 1) {
+            arg("g", T_GRID)
+            gives(T_INT)
+            doc("The open editor's handle, or 0.")
+        }
+        api("datagrid_has_focus", sae_ui_datagrid_has_focus, 1) {
+            arg("g", T_GRID)
+            gives(T_BOOL)
+            doc("Whether the keyboard focus is in the grid, so a key on_key hears is the grid's, not a field's.")
+        }
+        api("datagrid_edit_text", sae_ui_datagrid_edit_text, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => string")
+            gives(T_GRID)
+            doc("What an editor starts with, when not what the cell shows.")
+        }
+        api("datagrid_cell_style", sae_ui_datagrid_cell_style, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => string")
+            gives(T_GRID)
+            doc("A cell's style as AeCS properties.")
+        }
+        api("datagrid_fit_col", sae_ui_datagrid_fit_col, 2) {
+            arg("g", T_GRID)
+            arg("col", T_INT)
+            gives(T_GRID)
+            doc("Fits a column to its text.")
+        }
+        api("datagrid_hide_row", sae_ui_datagrid_hide_row, 3) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            opt("hidden", T_FLAG)
+            gives(T_GRID)
+            doc("Hides (or shows) a model row; a hidden row takes no height.")
+        }
+        api("datagrid_hide_col", sae_ui_datagrid_hide_col, 3) {
+            arg("g", T_GRID)
+            arg("col", T_INT)
+            opt("hidden", T_FLAG)
+            gives(T_GRID)
+            doc("Hides (or shows) a column.")
+        }
+        api("datagrid_row_model", sae_ui_datagrid_row_model, 2) {
+            arg("g", T_GRID)
+            arg("v", T_INT)
+            gives(T_INT)
+            doc("The model row shown as the v-th.")
+        }
+        api("datagrid_freeze_rows", sae_ui_datagrid_freeze_rows, 2) {
+            arg("g", T_GRID)
+            arg("n", T_INT)
+            gives(T_GRID)
+            doc("n leading rows stay put.")
+        }
+        api("datagrid_merge", sae_ui_datagrid_merge, 5) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            opt("rows", T_INT)
+            opt("cols", T_INT)
+            gives(T_GRID)
+            doc("One cell drawn over a rectangle; a click anywhere selects it.")
+        }
+        api("datagrid_unmerge", sae_ui_datagrid_unmerge, 3) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            gives(T_GRID)
+            doc("Undoes a merge.")
+        }
+        api("datagrid_merge_of", sae_ui_datagrid_merge_of, 3) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            gives(T_STR)
+            doc("The merge a cell is in, \"r,c,rows,cols\", or \"\".")
+        }
+        api("datagrid_set_row_height", sae_ui_datagrid_set_row_height, 3) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            arg("h", T_INT)
+            gives(T_GRID)
+            doc("Gives one row its own height.")
+        }
+        api("datagrid_fit_row", sae_ui_datagrid_fit_row, 2) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            gives(T_GRID)
+            doc("Fits a row to its text.")
+        }
+        api("datagrid_cell_tooltip", sae_ui_datagrid_cell_tooltip, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => string")
+            gives(T_GRID)
+            doc("A cell's tooltip.")
+        }
+        api("datagrid_cell_picture", sae_ui_datagrid_cell_picture, 2) {
+            arg("g", T_GRID)
+            arg_ts("fn", "(row: number, col: number) => string")
+            gives(T_GRID)
+            doc("A cell's picture, its bytes as base64, drawn over it fitted to it.")
+        }
+        api("datagrid_float", sae_ui_datagrid_float, 7) {
+            arg("g", T_GRID)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            arg("dx", T_INT)
+            arg("dy", T_INT)
+            arg("w", T_INT)
+            arg("h", T_INT)
+            gives(T_WIDGET)
+            doc("A container floating over the grid from a cell (model row and column), scrolled and clipped with it; into fills it.")
+        }
+        api("datagrid_float_move", sae_ui_datagrid_float_move, 8) {
+            arg("g", T_GRID)
+            arg("f", T_WIDGET)
+            arg("row", T_INT)
+            arg("col", T_INT)
+            arg("dx", T_INT)
+            arg("dy", T_INT)
+            arg("w", T_INT)
+            arg("h", T_INT)
+            gives(T_INT)
+            doc("Moves and resizes a float.")
+        }
+        api("datagrid_float_remove", sae_ui_datagrid_float_remove, 2) {
+            arg("g", T_GRID)
+            arg("f", T_WIDGET)
+            gives(T_INT)
+            doc("Takes a float away.")
+        }
+        api("datagrid_float_takes_clicks", sae_ui_datagrid_float_takes_clicks, 3) {
+            arg("g", T_GRID)
+            arg("f", T_WIDGET)
+            opt("on", T_FLAG)
+            gives(T_INT)
+            doc("Makes a float take clicks, not pass them through.")
+        }
+        api("datagrid_floats", sae_ui_datagrid_floats, 1) {
+            arg("g", T_GRID)
+            gives(T_INT)
+            doc("How many floats the grid has.")
+        }
+        api("datagrid_edit_insert", sae_ui_datagrid_edit_insert, 2) {
+            arg("g", T_GRID)
+            arg("text", T_STR)
+            gives(T_GRID)
+            doc("Inserts text at the open editor's caret.")
+        }
+        // From the prelude (src/sae_prelude.js), not the host: the reactive
+        // surface, which is also a set of globals.
+        provided("state", 1) {
+            arg("initial", T_ANY)
+            signature("<T>(initial: T): sae.State<T>")
+            doc("A reactive value: a number, string or boolean is one aether-ui cell; any other value is kept by the page and the cell counts its versions.")
+        }
+        provided("computed", 1) {
+            arg("fn", T_FN)
+            rest("states")
+            signature("<T>(fn: () => T, ...states: sae.State<any>[]): sae.State<T>")
+            doc("A state that follows fn(), evaluated again whenever one of states changes.")
+        }
+        provided("bind", 1) {
+            arg("widget", T_ANY)
+            rest("rest")
+            signature("<W extends sae.Widget>(widget: W, state: sae.State<any> | number): W")
+            signature("(strings: TemplateStringsArray, ...values: unknown[]): sae.Widget")
+            doc("The widget's text follows the state (a text field and a string state both ways); the tagged template bind`` is a label following several states.")
+        }
+        provided("bind_enabled", 3) {
+            arg("widget", T_WIDGET)
+            arg("state", T_ANY)
+            opt("invert", T_FLAG)
+            gives(T_WIDGET)
+            doc("The widget is enabled while the state is true (while false with invert).")
+        }
+        provided("bind_hidden", 3) {
+            arg("widget", T_WIDGET)
+            arg("state", T_ANY)
+            opt("invert", T_FLAG)
+            gives(T_WIDGET)
+            doc("The widget is hidden while the state is true (while false with invert).")
+        }
+        provided("each", 3) {
+            arg("list", T_ANY)
+            arg("key", T_ANY)
+            arg("render", T_FN)
+            gives(T_WIDGET)
+            signature("<T>(list: sae.State<T[]>, key: keyof T | ((item: T) => unknown), render: (item: T, i: number) => unknown): sae.Widget")
+            doc("A column of rows (a row of them inside an hstack), one per item of the list, keyed: a row whose key stays is kept.")
+        }
+        provided("batch", 1) {
+            arg("fn", T_FN)
+            signature("<T>(fn: () => T): T")
+            doc("Runs fn; the observers of every state it sets run once, at the end.")
+        }
+        provided("textarea", 0) {
+            beyond("placeholder", T_STR)
+            beyond_ts("onChange", "(text: string) => void")
+            gives(T_WIDGET)
+            doc("A multi-line text field; bind binds it both ways to a string state.")
+        }
+    }
     space(g, "storage", WHEN_ALWAYS, "") {
         reach("storage_read_")
         api("get", sae_storage_get, 1) {
@@ -10536,175 +11622,6 @@ gate_describe_() {
 api_register_(p: *Page) {
     ab = p.browser as *Browser
     q = p.ctx
-    u = quickjs.new_object(q)
-    reg_(p, q, u, "vstack", 2, sae_ui_vstack)
-    reg_(p, q, u, "hstack", 2, sae_ui_hstack)
-    reg_(p, q, u, "wrap", 1, sae_ui_wrap)
-    reg_(p, q, u, "grid", 3, sae_ui_grid)
-    reg_(p, q, u, "equal_cells", 0, sae_ui_equal_cells)
-    reg_(p, q, u, "text", 1, sae_ui_text)
-    reg_(p, q, u, "btn", 2, sae_ui_btn)
-    reg_(p, q, u, "divider", 0, sae_ui_divider)
-    reg_(p, q, u, "button", 2, sae_ui_button)
-    reg_(p, q, u, "scroll", 1, sae_ui_scroll)
-    reg_(p, q, u, "spacer", 0, sae_ui_spacer)
-    reg_(p, q, u, "textfield", 2, sae_ui_textfield)
-    reg_(p, q, u, "securefield", 2, sae_ui_securefield)
-    reg_(p, q, u, "get_text", 1, sae_ui_get_text)
-    reg_(p, q, u, "set_text", 2, sae_ui_set_text)
-    reg_(p, q, u, "clear", 1, sae_ui_clear)
-    reg_(p, q, u, "into", 2, sae_ui_into)
-    reg_(p, q, u, "toggle", 2, sae_ui_toggle)
-    reg_(p, q, u, "slider", 4, sae_ui_slider)
-    reg_(p, q, u, "scrollbar", 6, sae_ui_scrollbar)
-    reg_(p, q, u, "set_scrollbar", 5, sae_ui_set_scrollbar)
-    reg_(p, q, u, "scrollbar_steps", 3, sae_ui_scrollbar_steps)
-    reg_(p, q, u, "get_scrollbar", 1, sae_ui_get_scrollbar)
-    reg_(p, q, u, "scrollbar_range", 1, sae_ui_scrollbar_range)
-    reg_(p, q, u, "context_menu", 2, sae_ui_context_menu)
-    reg_(p, q, u, "picker", 1, sae_ui_picker)
-    reg_(p, q, u, "picker_add", 2, sae_ui_picker_add)
-    reg_(p, q, u, "progressbar", 1, sae_ui_progressbar)
-    reg_(p, q, u, "set_progress", 2, sae_ui_set_progress)
-    reg_(p, q, u, "set_toggle", 2, sae_ui_set_toggle)
-    reg_(p, q, u, "get_toggle", 1, sae_ui_get_toggle)
-    reg_(p, q, u, "set_slider", 2, sae_ui_set_slider)
-    reg_(p, q, u, "get_slider", 1, sae_ui_get_slider)
-    reg_(p, q, u, "styles", 1, sae_ui_styles)
-    reg_(p, q, u, "add_class", 2, sae_ui_add_class)
-    reg_(p, q, u, "style_id", 2, sae_ui_style_id)
-    reg_(p, q, u, "timer", 2, sae_ui_timer)
-    reg_(p, q, u, "set_visible", 2, sae_ui_set_visible)
-    reg_(p, q, u, "timer_cancel", 1, sae_ui_timer_cancel)
-    reg_(p, q, u, "after", 2, sae_ui_after)
-    reg_(p, q, u, "sleep", 1, sae_ui_sleep)
-    reg_(p, q, u, "frame", 1, sae_request_frame)
-    reg_(p, q, u, "frame_cancel", 1, sae_cancel_frame)
-    reg_(p, q, u, "onclick", 1, sae_ui_onclick)
-    reg_(p, q, u, "on_double_click", 2, sae_ui_on_double_click)
-    reg_(p, q, u, "margin", 4, sae_ui_margin)
-    reg_(p, q, u, "bg_color", 4, sae_ui_bg_color)
-    reg_(p, q, u, "ui_state", 1, sae_ui_state)
-    reg_(p, q, u, "ui_set", 2, sae_ui_set)
-    reg_(p, q, u, "text_bound", 3, sae_ui_text_bound)
-    reg_(p, q, u, "on_key", 1, sae_ui_on_key)
-    reg_(p, q, u, "a11y_label", 2, sae_ui_a11y_label)
-    reg_(p, q, u, "a11y_role", 2, sae_ui_a11y_role)
-    reg_(p, q, u, "a11y_description", 2, sae_ui_a11y_description)
-    reg_(p, q, u, "a11y_announce", 2, sae_ui_a11y_announce)
-    reg_(p, q, u, "datagrid", 6, sae_ui_datagrid)
-    reg_(p, q, u, "datagrid_cells", 2, sae_ui_datagrid_cells)
-    reg_(p, q, u, "datagrid_header", 2, sae_ui_datagrid_header)
-    reg_(p, q, u, "datagrid_on_click", 2, sae_ui_datagrid_on_click)
-    reg_(p, q, u, "datagrid_on_select", 2, sae_ui_datagrid_on_select)
-    reg_(p, q, u, "datagrid_on_activate", 2, sae_ui_datagrid_on_activate)
-    reg_(p, q, u, "datagrid_on_col_resize", 2, sae_ui_datagrid_on_col_resize)
-    reg_(p, q, u, "datagrid_on_col_move", 2, sae_ui_datagrid_on_col_move)
-    reg_(p, q, u, "datagrid_on_header_click", 2, sae_ui_datagrid_on_header_click)
-    reg_(p, q, u, "datagrid_on_edit", 2, sae_ui_datagrid_on_edit)
-    reg_(p, q, u, "datagrid_scroll_to", 3, sae_ui_datagrid_scroll_to)
-    reg_(p, q, u, "datagrid_refresh", 1, sae_ui_datagrid_refresh)
-    reg_(p, q, u, "datagrid_first", 1, sae_ui_datagrid_first)
-    reg_(p, q, u, "datagrid_select", 3, sae_ui_datagrid_select)
-    reg_(p, q, u, "datagrid_select_range", 5, sae_ui_datagrid_select_range)
-    reg_(p, q, u, "datagrid_add_area", 5, sae_ui_datagrid_add_area)
-    reg_(p, q, u, "datagrid_set_height", 2, sae_ui_datagrid_set_height)
-    reg_(p, q, u, "datagrid_freeze_cols", 2, sae_ui_datagrid_freeze_cols)
-    reg_(p, q, u, "datagrid_frozen_cols", 1, sae_ui_datagrid_frozen_cols)
-    reg_(p, q, u, "datagrid_widget", 1, sae_ui_datagrid_widget)
-    reg_(p, q, u, "datagrid_selection_glide", 2, sae_ui_datagrid_selection_glide)
-    reg_(p, q, u, "datagrid_gliding", 1, sae_ui_datagrid_gliding)
-    reg_(p, q, u, "datagrid_glide_box", 1, sae_ui_datagrid_glide_box)
-    reg_(p, q, u, "datagrid_show_header", 2, sae_ui_datagrid_show_header)
-    reg_(p, q, u, "datagrid_header_shown", 1, sae_ui_datagrid_header_shown)
-    reg_(p, q, u, "datagrid_set_view_only", 2, sae_ui_datagrid_set_view_only)
-    reg_(p, q, u, "datagrid_view_only", 1, sae_ui_datagrid_view_only)
-    reg_(p, q, u, "datagrid_set_row_heights", 2, sae_ui_datagrid_set_row_heights)
-    reg_(p, q, u, "datagrid_row_heights", 1, sae_ui_datagrid_row_heights)
-    reg_(p, q, u, "datagrid_height", 1, sae_ui_datagrid_height)
-    reg_(p, q, u, "datagrid_clear_areas", 1, sae_ui_datagrid_clear_areas)
-    reg_(p, q, u, "datagrid_areas", 1, sae_ui_datagrid_areas)
-    reg_(p, q, u, "datagrid_selection", 1, sae_ui_datagrid_selection)
-    reg_(p, q, u, "datagrid_col_width", 2, sae_ui_datagrid_col_width)
-    reg_(p, q, u, "datagrid_set_col_width", 3, sae_ui_datagrid_set_col_width)
-    reg_(p, q, u, "datagrid_set_col_widths", 2, sae_ui_datagrid_set_col_widths)
-    reg_(p, q, u, "datagrid_col_limits", 3, sae_ui_datagrid_col_limits)
-    reg_(p, q, u, "datagrid_move_col", 3, sae_ui_datagrid_move_col)
-    reg_(p, q, u, "datagrid_col_model", 2, sae_ui_datagrid_col_model)
-    reg_(p, q, u, "datagrid_edit", 3, sae_ui_datagrid_edit)
-    reg_(p, q, u, "datagrid_edit_commit", 1, sae_ui_datagrid_edit_commit)
-    reg_(p, q, u, "datagrid_edit_cancel", 1, sae_ui_datagrid_edit_cancel)
-    reg_(p, q, u, "datagrid_editor", 1, sae_ui_datagrid_editor)
-    reg_(p, q, u, "datagrid_has_focus", 1, sae_ui_datagrid_has_focus)
-    reg_(p, q, u, "datagrid_edit_text", 2, sae_ui_datagrid_edit_text)
-    reg_(p, q, u, "datagrid_cell_style", 2, sae_ui_datagrid_cell_style)
-    reg_(p, q, u, "datagrid_fit_col", 2, sae_ui_datagrid_fit_col)
-    reg_(p, q, u, "datagrid_hide_row", 3, sae_ui_datagrid_hide_row)
-    reg_(p, q, u, "datagrid_hide_col", 3, sae_ui_datagrid_hide_col)
-    reg_(p, q, u, "datagrid_row_model", 2, sae_ui_datagrid_row_model)
-    reg_(p, q, u, "datagrid_freeze_rows", 2, sae_ui_datagrid_freeze_rows)
-    reg_(p, q, u, "datagrid_merge", 5, sae_ui_datagrid_merge)
-    reg_(p, q, u, "datagrid_unmerge", 3, sae_ui_datagrid_unmerge)
-    reg_(p, q, u, "datagrid_merge_of", 3, sae_ui_datagrid_merge_of)
-    reg_(p, q, u, "datagrid_set_row_height", 3, sae_ui_datagrid_set_row_height)
-    reg_(p, q, u, "datagrid_fit_row", 2, sae_ui_datagrid_fit_row)
-    reg_(p, q, u, "datagrid_cell_tooltip", 2, sae_ui_datagrid_cell_tooltip)
-    reg_(p, q, u, "datagrid_cell_picture", 2, sae_ui_datagrid_cell_picture)
-    reg_(p, q, u, "datagrid_float", 7, sae_ui_datagrid_float)
-    reg_(p, q, u, "datagrid_float_move", 8, sae_ui_datagrid_float_move)
-    reg_(p, q, u, "datagrid_float_remove", 2, sae_ui_datagrid_float_remove)
-    reg_(p, q, u, "datagrid_float_takes_clicks", 3, sae_ui_datagrid_float_takes_clicks)
-    reg_(p, q, u, "datagrid_floats", 1, sae_ui_datagrid_floats)
-    reg_(p, q, u, "click_through", 2, sae_ui_click_through)
-    reg_(p, q, u, "datagrid_on_edit_change", 2, sae_ui_datagrid_on_edit_change)
-    reg_(p, q, u, "datagrid_on_edit_cancel", 2, sae_ui_datagrid_on_edit_cancel)
-    reg_(p, q, u, "datagrid_edit_insert", 2, sae_ui_datagrid_edit_insert)
-    reg_(p, q, u, "_textarea", 2, sae_ui_textarea)
-    reg_(p, q, u, "text_measure", 2, sae_ui_text_measure)
-    reg_(p, q, u, "cells", 1, sae_ui_amb_cells)
-    reg_(p, q, u, "headers", 1, sae_ui_amb_headers)
-    reg_(p, q, u, "on_cell_click", 1, sae_ui_amb_on_cell_click)
-    reg_(p, q, u, "on_cell_select", 1, sae_ui_amb_on_cell_select)
-    reg_(p, q, u, "on_cell_activate", 1, sae_ui_amb_on_cell_activate)
-    reg_(p, q, u, "on_cell_edit", 1, sae_ui_amb_on_cell_edit)
-    reg_(p, q, u, "on_col_resize", 1, sae_ui_amb_on_col_resize)
-    reg_(p, q, u, "on_col_move", 1, sae_ui_amb_on_col_move)
-    reg_(p, q, u, "on_header_click", 1, sae_ui_amb_on_header_click)
-    reg_(p, q, u, "column_width", 1, sae_ui_amb_column_width)
-    reg_(p, q, u, "column_limits", 2, sae_ui_amb_column_limits)
-    reg_(p, q, u, "edit_text", 1, sae_ui_amb_edit_text)
-    reg_(p, q, u, "cell_style", 1, sae_ui_amb_cell_style)
-    reg_(p, q, u, "on_submit", 2, sae_ui_on_submit)
-    reg_(p, q, u, "onsubmit", 1, sae_ui_onsubmit)
-    reg_(p, q, u, "on_drag", 2, sae_ui_on_drag)
-    reg_(p, q, u, "reorderable", 2, sae_ui_reorderable)
-    reg_(p, q, u, "menu", 2, sae_ui_menu)
-    reg_(p, q, u, "menu_item", 2, sae_ui_menu_item)
-    reg_(p, q, u, "menu_item_accel", 3, sae_ui_menu_item_accel)
-    reg_(p, q, u, "shortcut_chord", 3, sae_ui_shortcut_chord)
-    reg_(p, q, u, "menu_separator", 0, sae_ui_menu_separator)
-    reg_(p, q, u, "ondrag", 1, sae_ui_ondrag)
-    reg_(p, q, u, "pointer_cursor", 2, sae_ui_pointer_cursor)
-    reg_(p, q, u, "pointer_shape", 1, sae_ui_pointer_shape)
-    reg_(p, q, u, "on_focus_change", 2, sae_ui_on_focus_change)
-    reg_(p, q, u, "on_layout", 2, sae_ui_on_layout)
-    reg_(p, q, u, "on_resize", 1, sae_ui_on_resize)
-    reg_(p, q, u, "dark_mode", 0, sae_ui_dark_mode)
-    reg_(p, q, u, "on_appearance", 1, sae_ui_on_appearance)
-    reg_(p, q, u, "on_interrupted", 1, sae_ui_on_interrupted)
-    reg_(p, q, u, "onfocuschange", 1, sae_ui_onfocuschange)
-    reg_(p, q, u, "key_text", 1, sae_ui_key_text)
-    reg_(p, q, u, "focus", 1, sae_ui_focus)
-    reg_(p, q, u, "set_focusable", 2, sae_ui_set_focusable)
-    reg_(p, q, u, "text_wrapped", 2, sae_ui_text_wrapped)
-    reg_(p, q, u, "width", 1, sae_ui_width)
-    reg_(p, q, u, "set_width", 2, sae_ui_set_width)
-    reg_(p, q, u, "fill_width", 1, sae_ui_fill_width)
-    reg_(p, q, u, "height", 1, sae_ui_height)
-    reg_(p, q, u, "image", 2, sae_ui_image)
-    js_set_global_(q, "ui", u)
-    quickjs.release(q, u)
-
     // A privilege the page can do without and was not granted has no
     // object at all, so `typeof http === "undefined"` tells the page.
     if string.contains(p.absent, ",outgoing-http,") == 0 {

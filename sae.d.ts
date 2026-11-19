@@ -12,11 +12,375 @@ declare namespace sae {
   type VgNode = number;
   /** A datagrid handle (not a widget). */
   type Grid = number;
+  /** A reactive value (state, computed): a number, string or boolean is held in one cell, any other value by the page. */
+  interface State<T> {
+    /** The raw cell handle, for ui.ui_set and ui.text_bound. */
+    h: number;
+    value: T;
+    get(): T;
+    set(v: T): T;
+    update(fn: (v: T) => T): T;
+    subscribe(fn: (v: T) => void): State<T>;
+  }
   /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */
   type Timer = number;
   /** An id from requestAnimationFrame, for cancelAnimationFrame. */
   type Frame = number;
 }
+declare const ui: {
+  /** A column under the current parent; body runs with it as the parent. */
+  vstack(spacing: number, body?: () => void): sae.Widget;
+  vstack(body?: () => void): sae.Widget;
+  /** A row under the current parent; body runs with it as the parent. */
+  hstack(spacing: number, body?: () => void): sae.Widget;
+  hstack(body?: () => void): sae.Widget;
+  /** A flow container: left to right, onto the next line when the width runs out. */
+  wrap(body?: () => void): sae.Widget;
+  /** A grid of cols (1 to 64) columns, filled a row at a time by the block's widgets. */
+  grid(cols: number, spacing: number, body?: () => void): sae.Widget;
+  grid(cols: number, body?: () => void): sae.Widget;
+  /** In a grid's block: one width per column and one height per row, for all. */
+  equal_cells(): void;
+  /** A label; text(s, body) takes a block that styles it. */
+  text(s: string, body?: () => void): sae.Widget;
+  /** A button that calls onPress when pressed. */
+  btn(label: string, onPress: () => void): sae.Widget;
+  /** A thin dividing line. */
+  divider(): sae.Widget;
+  /** A button whose block styles it (onclick inside the block handles the press). */
+  button(label: string, body?: () => void): sae.Widget;
+  /** A scrolling area holding the block's widgets in a column. */
+  scroll(body?: () => void): sae.Widget;
+  /** Flexible empty space. */
+  spacer(): sae.Widget;
+  /** A one-line text field; onChange(text) on each edit; a block may follow. */
+  textfield(placeholder: string, onChange?: (text: string) => void, body?: () => void): sae.Widget;
+  /** A text field that does not show its text (a password); get_text reads it. */
+  securefield(placeholder: string, onChange?: (text: string) => void): sae.Widget;
+  /** The text of a label, field or button the page made. */
+  get_text(h: sae.Widget): string;
+  /** Sets the text of a label, field or button the page made. */
+  set_text(h: sae.Widget, s: string): void;
+  /** Empties a vstack, hstack or grid the page made. */
+  clear(h: sae.Widget): void;
+  /** Builds into a vstack, hstack or grid the page made again. */
+  into(h: sae.Widget, body: () => void): sae.Widget;
+  /** A labelled check box; onChange(on) with 1 or 0. */
+  toggle(label: string, onChange: (on: number) => void): sae.Widget;
+  /** A slider from min to max; onChange(v) as it moves. */
+  slider(min: number, max: number, initial: number, onChange: (v: number) => void): sae.Widget;
+  /** A windowing slider: the thumb is the window, page of max - min; value is the window's start. */
+  scrollbar(vertical: boolean | number, min: number, max: number, page: number, value: number, onChange: (v: number) => void): sae.Widget;
+  /** Reconfigures a scrollbar without calling its onChange. */
+  set_scrollbar(h: sae.Widget, min: number, max: number, page: number, value: number): void;
+  /** The distances of a step and of a page step on a scrollbar. */
+  scrollbar_steps(h: sae.Widget, step: number, pageStep?: number): void;
+  /** A scrollbar's value. */
+  get_scrollbar(h: sae.Widget): number;
+  /** [min, max, page] of a scrollbar. */
+  scrollbar_range(h: sae.Widget): [number, number, number];
+  /** What a right click (a long press) on a widget, a vg shape, or 0 (the page) offers; items are read again each time the menu opens. */
+  context_menu(target: sae.Widget | sae.VgNode, items: Array<"-" | { label: string; accel?: string; enabled?: boolean; action?: () => void }>): void;
+  /** A drop-down; onChange(i) with the chosen index. */
+  picker(onChange: (i: number) => void): sae.Widget;
+  /** Adds an item to a picker. */
+  picker_add(h: sae.Widget, item: string): void;
+  /** A progress bar at fraction f (0 to 1). */
+  progressbar(f: number): sae.Widget;
+  /** Sets a progress bar's fraction. */
+  set_progress(h: sae.Widget, f: number): void;
+  /** Checks or unchecks a toggle. */
+  set_toggle(h: sae.Widget, on: boolean | number): void;
+  /** 1 when a toggle is checked, else 0. */
+  get_toggle(h: sae.Widget): number;
+  /** Moves a slider. */
+  set_slider(h: sae.Widget, v: number): void;
+  /** A slider's value. */
+  get_slider(h: sae.Widget): number;
+  /** Applies a style sheet to the page's widgets (README, "Styles"). */
+  styles(sheet: Record<string, unknown>): void;
+  /** Gives a widget a style class. */
+  add_class(h: sae.Widget, name: string): void;
+  /** Gives a widget a style id. */
+  style_id(h: sae.Widget, name: string): void;
+  /** Calls fn every ms milliseconds (10 at least) until timer_cancel. */
+  timer(ms: number, fn: (...args: any[]) => void): sae.Timer;
+  /** Shows or hides a widget, keeping it and its timers and scenes alive. */
+  set_visible(h: sae.Widget, on: boolean | number): void;
+  /** Stops a timer (or setTimeout, setInterval); another id, or none, is ignored. */
+  timer_cancel(id?: sae.Timer): void;
+  /** Calls fn once, ms milliseconds from now. */
+  after(ms: number, fn: (...args: any[]) => void): sae.Timer;
+  /** A promise that settles after ms milliseconds. */
+  sleep(ms: number): Promise<void>;
+  /** Calls fn(timestamp) on the next display frame (requestAnimationFrame). */
+  frame(fn: (timestamp: number) => void): sae.Frame;
+  /** Cancels a frame callback; another id is ignored. */
+  frame_cancel(id?: sae.Frame): void;
+  /** In a widget's block: fn() when it is clicked. */
+  onclick(fn: (...args: any[]) => void): void;
+  /** fn() on a widget's double click (a double tap on touch). */
+  on_double_click(h: sae.Widget, fn: (...args: any[]) => void): void;
+  /** In a container's block: its margins in px; with one argument, on all sides. */
+  margin(top: number, right?: number, bottom?: number, left?: number): void;
+  /** In a widget's block: its background colour, components from 0 to 1. */
+  bg_color(r: number, g: number, b: number, a?: number): void;
+  /** A numeric cell for text_bound and ui_set; the reactive state() is the better way. */
+  ui_state(v: number): number;
+  /** Sets a numeric cell. */
+  ui_set(state: number, v: number): void;
+  /** A label showing a numeric cell between prefix and suffix. */
+  text_bound(state: number, prefix: string, suffix: string): sae.Widget;
+  /** fn(key, mods) for every key while the page has the focus; mods 1 shift, 2 ctrl, 4 alt, 8 super. */
+  on_key(fn: (key: string, mods: number) => void): void;
+  /** What a screen reader calls a widget or a vg scene. */
+  a11y_label(h: sae.Widget | sae.VgNode, text: string): sae.Widget | sae.VgNode;
+  /** What a widget or a vg scene is to a screen reader (button, heading, group, image, list, listitem, grid, ... none). */
+  a11y_role(h: sae.Widget | sae.VgNode, role: string): sae.Widget | sae.VgNode;
+  /** The longer account a screen reader reads after the name. */
+  a11y_description(h: sae.Widget | sae.VgNode, text: string): sae.Widget | sae.VgNode;
+  /** A line a screen reader says now, without moving the focus. */
+  a11y_announce(h: sae.Widget | sae.VgNode, text: string): sae.Widget | sae.VgNode;
+  /** Lets the pointer pass through a widget or a vg scene to what lies under it. */
+  click_through(h: sae.Widget | sae.VgNode, on: boolean | number): sae.Widget | sae.VgNode;
+  /** How wide text would be in label h's font, in px. */
+  text_measure(h: sae.Widget, text: string): number;
+  /** In a datagrid's block: the cell function, giving a cell's text (a model column). */
+  cells(fn: (row: number, col: number) => string): void;
+  /** In a datagrid's block: a column's header text. */
+  headers(fn: (col: number) => string): void;
+  /** In a datagrid's block: a cell was clicked. */
+  on_cell_click(fn: (row: number, col: number) => void): void;
+  /** In a datagrid's block: the selection moved to a cell. */
+  on_cell_select(fn: (row: number, col: number) => void): void;
+  /** In a datagrid's block: Return on a cell. */
+  on_cell_activate(fn: (row: number, col: number) => void): void;
+  /** In a datagrid's block: makes it editable; fn gets a committed edit (a model column). */
+  on_cell_edit(fn: (row: number, col: number, text: string) => void): void;
+  /** In a datagrid's block: a column was resized. */
+  on_col_resize(fn: (col: number, width: number) => void): void;
+  /** In a datagrid's block: a column was moved. */
+  on_col_move(fn: (from: number, to: number) => void): void;
+  /** In a datagrid's block: a header was pressed and let go without a drag. */
+  on_header_click(fn: (col: number) => void): void;
+  /** In a datagrid's block: every column's width in px. */
+  column_width(w: number): void;
+  /** In a datagrid's block: the least and greatest a column may be resized to. */
+  column_limits(min: number, max: number): void;
+  /** In a datagrid's block: what an editor starts with, when not what the cell shows. */
+  edit_text(fn: (row: number, col: number) => string): void;
+  /** In a datagrid's block: a cell's style as AeCS properties ("background: #ffe0e0; color: #b00000"). */
+  cell_style(fn: (row: number, col: number) => string): void;
+  /** fn(text) on Return in a text field. */
+  on_submit(h: sae.Widget, fn: (text: string) => void): sae.Widget;
+  /** In a field's block: fn(text) on Return. */
+  onsubmit(fn: (text: string) => void): void;
+  /** A press at (x, y) in the widget, then moves and the release, as offsets. */
+  on_drag(h: sae.Widget, fn: (phase: number, x: number, y: number) => void): sae.Widget;
+  /** Lets the children of a vstack or hstack be dragged among themselves; fn(from, to) on a drop; the page moves the item. */
+  reorderable(h: sae.Widget, fn: (from: number, to: number) => void): sae.Widget;
+  /** A menu on the app window's menu bar (an installed app only); its items come from the block's menu_item calls. */
+  menu(label: string, body: () => void): number;
+  /** In a menu's block: an item that runs fn. */
+  menu_item(label: string, fn: (...args: any[]) => void): void;
+  /** In a menu's block: an item with its accelerator ("Primary+S" is Command on macOS, Ctrl elsewhere). */
+  menu_item_accel(label: string, accel: string, fn: (...args: any[]) => void): void;
+  /** A two-key sequence that runs fn (an installed app only). */
+  shortcut_chord(first: string, second: string, fn: (...args: any[]) => void): void;
+  /** In a menu's block: a separator. */
+  menu_separator(): void;
+  /** In a widget's block: the same as on_drag. */
+  ondrag(fn: (phase: number, x: number, y: number) => void): void;
+  /** The mouse pointer over a widget ("col-resize", "row-resize", "move", "grab", "pointer", "text", "crosshair", "not-allowed", "wait", "default"). */
+  pointer_cursor(h: sae.Widget, name: string): sae.Widget;
+  /** In a widget's block: the same as pointer_cursor. */
+  pointer_shape(name: string): void;
+  /** fn(inside) when the focus comes into a widget or a vg scene, or leaves. */
+  on_focus_change(h: sae.Widget | sae.VgNode, fn: (inside: number) => void): sae.Widget | sae.VgNode;
+  /** A stack was laid out at a new size (after its allocation settles). */
+  on_layout(h: sae.Widget, fn: (w: number, h: number) => void): sae.Widget;
+  /** The window's content size, told once soon after and on every change; one handler a page. */
+  on_resize(fn: (w: number, h: number) => void): void;
+  /** Whether the system shows dark. */
+  dark_mode(): boolean;
+  /** Told when the system's appearance flips; one handler a page. */
+  on_appearance(fn: (dark: boolean) => void): void;
+  /** Told when the page's time limit stopped an entry into its JavaScript; one handler a page. */
+  on_interrupted(fn: (...args: any[]) => void): void;
+  /** In a widget's block: the same as on_focus_change. */
+  onfocuschange(fn: (inside: number) => void): void;
+  /** The text a key name types ("comma" gives ","). */
+  key_text(name: string): string;
+  /** Gives the keyboard focus to a widget or a vg scene. */
+  focus(h: sae.Widget | sae.VgNode): void;
+  /** Lets a stack or a scene's canvas take the keyboard focus, and so be a stop of Tab. */
+  set_focusable(h: sae.Widget | sae.VgNode, on: boolean | number): sae.Widget | sae.VgNode;
+  /** A label that wraps its words at px. */
+  text_wrapped(s: string, px: number): sae.Widget;
+  /** A widget's laid-out width in px. */
+  width(h: sae.Widget): number;
+  /** Holds a widget or a scene's canvas at px wide (0 to 8000). */
+  set_width(h: sae.Widget | sae.VgNode, px: number): sae.Widget | sae.VgNode;
+  /** The widget takes its row's spare width. */
+  fill_width(h: sae.Widget | sae.VgNode): sae.Widget | sae.VgNode;
+  /** A widget's laid-out height in px. */
+  height(h: sae.Widget): number;
+  /** A picture from PNG, JPEG, GIF or BMP bytes the toolkit decodes. */
+  image(bytes: Uint8Array | Uint8ClampedArray, body?: () => void): sae.Widget;
+  /** Greys a widget out, or gives it back. */
+  set_enabled(h: sae.Widget, on: boolean | number): void;
+  /** What shows when the pointer rests on a widget (an empty string takes it off). */
+  tooltip(h: sae.Widget, text: string): sae.Widget;
+  /** A virtualised grid; the block is its receiver (cells, headers, on_cell_click ...), or a function of (row, col) is the cell function. */
+  datagrid(rows: number, cols: number, visRows: number, visCols: number, frozen: number, body?: (() => void) | ((row: number, col: number) => string)): sae.Grid;
+  /** The cell function of a grid, by handle. */
+  datagrid_cells(g: sae.Grid, fn: (row: number, col: number) => string): sae.Grid;
+  /** The header text function of a grid, by handle. */
+  datagrid_header(g: sae.Grid, fn: (col: number) => string): sae.Grid;
+  /** fn(row, col) when a cell is clicked. */
+  datagrid_on_click(g: sae.Grid, fn: (row: number, col: number) => void): sae.Grid;
+  /** fn(row, col) when the selection moves. */
+  datagrid_on_select(g: sae.Grid, fn: (row: number, col: number) => void): sae.Grid;
+  /** fn(row, col) on Return in a cell. */
+  datagrid_on_activate(g: sae.Grid, fn: (row: number, col: number) => void): sae.Grid;
+  /** fn(col, width) when a column is resized. */
+  datagrid_on_col_resize(g: sae.Grid, fn: (col: number, width: number) => void): sae.Grid;
+  /** fn(from, to) when a column is moved. */
+  datagrid_on_col_move(g: sae.Grid, fn: (from: number, to: number) => void): sae.Grid;
+  /** fn(col) when a header is pressed and let go without a drag. */
+  datagrid_on_header_click(g: sae.Grid, fn: (col: number) => void): sae.Grid;
+  /** Makes the grid editable; fn gets a committed edit. */
+  datagrid_on_edit(g: sae.Grid, fn: (row: number, col: number, text: string) => void): sae.Grid;
+  /** fn(row, col) when an editor closes with nothing stored. */
+  datagrid_on_edit_cancel(g: sae.Grid, fn: (row: number, col: number) => void): sae.Grid;
+  /** fn(text, caret) as the open editor's text is typed. */
+  datagrid_on_edit_change(g: sae.Grid, fn: (text: string, caret: number) => void): sae.Grid;
+  /** Scrolls a cell into view. */
+  datagrid_scroll_to(g: sae.Grid, row: number, col: number): sae.Grid;
+  /** Draws the shown cells again. */
+  datagrid_refresh(g: sae.Grid): sae.Grid;
+  /** [row, col] of the first shown cell. */
+  datagrid_first(g: sae.Grid): [number, number];
+  /** Selects one cell. */
+  datagrid_select(g: sae.Grid, row: number, col: number): sae.Grid;
+  /** Selects the rectangle from the anchor to a cell. */
+  datagrid_select_range(g: sae.Grid, anchorRow: number, anchorCol: number, row: number, col: number): sae.Grid;
+  /** Adds a selected area (as Ctrl or Cmd with a click does). */
+  datagrid_add_area(g: sae.Grid, anchorRow: number, anchorCol: number, row: number, col: number): sae.Grid;
+  /** The rows that fit in px, at most visRows (0 for all of them). */
+  datagrid_set_height(g: sae.Grid, px: number): sae.Grid;
+  /** n columns after the grid's own frozen ones stay put; 0 frees them. */
+  datagrid_freeze_cols(g: sae.Grid, n: number): sae.Grid;
+  /** How many columns are frozen. */
+  datagrid_frozen_cols(g: sae.Grid): number;
+  /** The grid's own widget, for a11y_*, tooltip or a width (a grid's handle is not a widget). */
+  datagrid_widget(g: sae.Grid): sae.Widget;
+  /** The cursor's box glides to a new cell over ms (0 jumps). */
+  datagrid_selection_glide(g: sae.Grid, ms: number): sae.Grid;
+  /** Whether the cursor's box is gliding now. */
+  datagrid_gliding(g: sae.Grid): boolean;
+  /** The cursor box's position, "r,c". */
+  datagrid_glide_box(g: sae.Grid): string;
+  /** Shows or hides the column headers. */
+  datagrid_show_header(g: sae.Grid, on: boolean | number): sae.Grid;
+  /** Whether the column headers are shown. */
+  datagrid_header_shown(g: sae.Grid): boolean;
+  /** A read view: no editor, no cursor box or selection colour drawn; the selection still moves and is heard. */
+  datagrid_set_view_only(g: sae.Grid, on: boolean | number): sae.Grid;
+  /** Whether the grid is a read view. */
+  datagrid_view_only(g: sae.Grid): boolean;
+  /** Every row the grid's own height h; rows given their own keep theirs. */
+  datagrid_set_row_heights(g: sae.Grid, h: number): sae.Grid;
+  /** The grid's own row height. */
+  datagrid_row_heights(g: sae.Grid): number;
+  /** The height the grid takes, in px. */
+  datagrid_height(g: sae.Grid): number;
+  /** Forgets the extra selected areas. */
+  datagrid_clear_areas(g: sae.Grid): sae.Grid;
+  /** The extra selected areas as "ar,ac,r,c;...", before the current one. */
+  datagrid_areas(g: sae.Grid): string;
+  /** [anchorRow, anchorCol, row, col]. */
+  datagrid_selection(g: sae.Grid): [number, number, number, number];
+  /** A column's width in px. */
+  datagrid_col_width(g: sae.Grid, col: number): number;
+  /** Sets one column's width. */
+  datagrid_set_col_width(g: sae.Grid, col: number, w: number): sae.Grid;
+  /** Sets every column's width. */
+  datagrid_set_col_widths(g: sae.Grid, w: number): sae.Grid;
+  /** The least and greatest width a column may be resized to. */
+  datagrid_col_limits(g: sae.Grid, min: number, max: number): sae.Grid;
+  /** Moves a column. */
+  datagrid_move_col(g: sae.Grid, from: number, to: number): sae.Grid;
+  /** The model column shown as an on-screen column. */
+  datagrid_col_model(g: sae.Grid, col: number): number;
+  /** Opens an editor on a cell. */
+  datagrid_edit(g: sae.Grid, row: number, col: number): sae.Grid;
+  /** Commits the open editor. */
+  datagrid_edit_commit(g: sae.Grid): sae.Grid;
+  /** Closes the open editor, storing nothing. */
+  datagrid_edit_cancel(g: sae.Grid): sae.Grid;
+  /** The open editor's handle, or 0. */
+  datagrid_editor(g: sae.Grid): number;
+  /** Whether the keyboard focus is in the grid, so a key on_key hears is the grid's, not a field's. */
+  datagrid_has_focus(g: sae.Grid): boolean;
+  /** What an editor starts with, when not what the cell shows. */
+  datagrid_edit_text(g: sae.Grid, fn: (row: number, col: number) => string): sae.Grid;
+  /** A cell's style as AeCS properties. */
+  datagrid_cell_style(g: sae.Grid, fn: (row: number, col: number) => string): sae.Grid;
+  /** Fits a column to its text. */
+  datagrid_fit_col(g: sae.Grid, col: number): sae.Grid;
+  /** Hides (or shows) a model row; a hidden row takes no height. */
+  datagrid_hide_row(g: sae.Grid, row: number, hidden?: boolean | number): sae.Grid;
+  /** Hides (or shows) a column. */
+  datagrid_hide_col(g: sae.Grid, col: number, hidden?: boolean | number): sae.Grid;
+  /** The model row shown as the v-th. */
+  datagrid_row_model(g: sae.Grid, v: number): number;
+  /** n leading rows stay put. */
+  datagrid_freeze_rows(g: sae.Grid, n: number): sae.Grid;
+  /** One cell drawn over a rectangle; a click anywhere selects it. */
+  datagrid_merge(g: sae.Grid, row: number, col: number, rows?: number, cols?: number): sae.Grid;
+  /** Undoes a merge. */
+  datagrid_unmerge(g: sae.Grid, row: number, col: number): sae.Grid;
+  /** The merge a cell is in, "r,c,rows,cols", or "". */
+  datagrid_merge_of(g: sae.Grid, row: number, col: number): string;
+  /** Gives one row its own height. */
+  datagrid_set_row_height(g: sae.Grid, row: number, h: number): sae.Grid;
+  /** Fits a row to its text. */
+  datagrid_fit_row(g: sae.Grid, row: number): sae.Grid;
+  /** A cell's tooltip. */
+  datagrid_cell_tooltip(g: sae.Grid, fn: (row: number, col: number) => string): sae.Grid;
+  /** A cell's picture, its bytes as base64, drawn over it fitted to it. */
+  datagrid_cell_picture(g: sae.Grid, fn: (row: number, col: number) => string): sae.Grid;
+  /** A container floating over the grid from a cell (model row and column), scrolled and clipped with it; into fills it. */
+  datagrid_float(g: sae.Grid, row: number, col: number, dx: number, dy: number, w: number, h: number): sae.Widget;
+  /** Moves and resizes a float. */
+  datagrid_float_move(g: sae.Grid, f: sae.Widget, row: number, col: number, dx: number, dy: number, w: number, h: number): number;
+  /** Takes a float away. */
+  datagrid_float_remove(g: sae.Grid, f: sae.Widget): number;
+  /** Makes a float take clicks, not pass them through. */
+  datagrid_float_takes_clicks(g: sae.Grid, f: sae.Widget, on?: boolean | number): number;
+  /** How many floats the grid has. */
+  datagrid_floats(g: sae.Grid): number;
+  /** Inserts text at the open editor's caret. */
+  datagrid_edit_insert(g: sae.Grid, text: string): sae.Grid;
+  /** A reactive value: a number, string or boolean is one aether-ui cell; any other value is kept by the page and the cell counts its versions. */
+  state<T>(initial: T): sae.State<T>;
+  /** A state that follows fn(), evaluated again whenever one of states changes. */
+  computed<T>(fn: () => T, ...states: sae.State<any>[]): sae.State<T>;
+  /** The widget's text follows the state (a text field and a string state both ways); the tagged template bind`` is a label following several states. */
+  bind<W extends sae.Widget>(widget: W, state: sae.State<any> | number): W;
+  bind(strings: TemplateStringsArray, ...values: unknown[]): sae.Widget;
+  /** The widget is enabled while the state is true (while false with invert). */
+  bind_enabled(widget: sae.Widget, state: unknown, invert?: boolean | number): sae.Widget;
+  /** The widget is hidden while the state is true (while false with invert). */
+  bind_hidden(widget: sae.Widget, state: unknown, invert?: boolean | number): sae.Widget;
+  /** A column of rows (a row of them inside an hstack), one per item of the list, keyed: a row whose key stays is kept. */
+  each<T>(list: sae.State<T[]>, key: keyof T | ((item: T) => unknown), render: (item: T, i: number) => unknown): sae.Widget;
+  /** Runs fn; the observers of every state it sets run once, at the end. */
+  batch<T>(fn: () => T): T;
+  /** A multi-line text field; bind binds it both ways to a string state. */
+  textarea(placeholder?: string, onChange?: (text: string) => void): sae.Widget;
+};
 declare const storage: {
   /** The value stored under key, or null; keys are letters, digits, '.', '_' and '-'. */
   get(key: string): string | null;
