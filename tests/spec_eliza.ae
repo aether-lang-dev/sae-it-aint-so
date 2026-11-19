@@ -1,0 +1,57 @@
+// spec_eliza.ae -- the ELIZA port (examples/eliza) as an app: the greeting,
+// a line typed and answered, Debug showing the rule that fired, Enter
+// sending, "bye" ending the session, Clear.
+//
+//   SAE_TEST_APP=examples/eliza tests/run_spec.sh spec_eliza
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "ELIZA on sae") {
+        spec.it("greets, ready") callback {
+            b.assert_text("ELIZA: Hello. I am ELIZA. What is your problem?", "the greeting")
+            b.assert_text("Ready", "the status")
+        }
+        spec.it("answers a line typed, reflecting the pronouns") callback {
+            b.set_field_by("Type a message", "I am feeling sad")
+            b.click("Send")
+            b.assert_text("You: I am feeling sad", "what was said")
+            pt = b.page_texts()
+            spec.assert_true(string.contains(pt, "ELIZA: ") == 1, "ELIZA answered")
+            spec.assert_true(string.contains(pt, "I am feeling sad\nELIZA") == 1 || string.contains(pt, "You: I am feeling sad") == 1, "in order")
+        }
+        spec.it("Debug shows the rule that answered") callback {
+            b.click("Debug")
+            b.assert_text("Debug mode: ON", "debug on")
+            b.set_field_by("Type a message", "I remember my childhood")
+            b.click("Send")
+            b.assert_text("ELIZA: [Pattern: \"* remember *\" | Rank: 5 | Matches: i, my childhood]", "the rule, its rank and its captures")
+            spec.assert_true(b.wait_for_text_secs("You: I remember my childhood", 3) == 1, "said")
+        }
+        spec.it("the captures come back reflected in the answer, or the rule's one capture-free answer") callback {
+            pt = b.page_texts()
+            ok = string.contains(pt, "your childhood") == 1 || string.contains(pt, "What else do you remember?") == 1
+            spec.assert_true(ok, "answered from the remember rule")
+            spec.assert_true(string.contains(pt, "my childhood?") == 0, "my became your")
+        }
+        spec.it("bye ends the session") callback {
+            b.click("Debug")
+            b.set_field_by("Type a message", "bye")
+            b.click("Send")
+            b.assert_text("ELIZA: Goodbye. It was nice talking to you.", "goodbye")
+            b.assert_text("Session ended", "status")
+        }
+        spec.it("Clear starts over with the greeting alone") callback {
+            b.click("Clear")
+            b.assert_text("Conversation cleared", "status")
+            b.assert_no_text("You: bye", "the conversation is gone")
+            b.assert_text("ELIZA: Hello. I am ELIZA. What is your problem?", "the greeting")
+        }
+    }
+    return spec.run_summary(fw)
+}

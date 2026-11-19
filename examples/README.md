@@ -20,3 +20,4 @@ toolkit) are the apps only; none of Tsyne's framework code is used.
 | `clock` | Analog and digital clock | Tsyne `phone-apps/clock` | MIT, Paul Hammant |
 | `timer` | Countdown timer | Tsyne `phone-apps/timer` | MIT, Paul Hammant |
 | `stopwatch` | Stopwatch with dial and laps | Tsyne `phone-apps/stopwatch` | MIT, Paul Hammant |
+| `eliza` | ELIZA chatbot | Tsyne `phone-apps/eliza` | BSD-3-Clause, Paul Hammant |
