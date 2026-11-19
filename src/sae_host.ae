@@ -395,7 +395,7 @@ call0_(ctx: ptr, f: int) -> int {
     // The call holds a reference of its own: a handler may destroy its own
     // widget, which lets go of f (drop_held_), while it is still running.
     g = quickjs.dup(ctx, f)
-    r, err = quickjs.call(ctx, g, 0, 0)
+    r, err = js_call_(ctx, g, 0, 0)
     quickjs.release(ctx, g)
     if err != "" { return 0 - 1 }
     quickjs.release(ctx, r)
@@ -413,7 +413,7 @@ call_arg_(ctx: ptr, argv: int, i: int) -> int {
 // Call a held function with the elements of an args array: as call0_.
 calln_(ctx: ptr, f: int, args: int) -> int {
     g = quickjs.dup(ctx, f)
-    r, err = quickjs.call(ctx, g, 0, args)
+    r, err = js_call_(ctx, g, 0, args)
     quickjs.release(ctx, g)
     if err != "" { return 0 - 1 }
     quickjs.release(ctx, r)
@@ -431,7 +431,7 @@ rethrow_(ctx: ptr) -> int {
 // page stopped that request: the bus tick answers it and tells the page.
 settle_(p: *Page) {
     ctx = p.ctx
-    n, err = quickjs.run_jobs(ctx)
+    n, err = js_run_jobs_(ctx)
     if n < 0 {
         say_("sae: uncaught exception in a promise job:\n${err}")
         if p != null {
@@ -1726,7 +1726,7 @@ call_ii_str_(p: *Page, ref: int, a: int, b: int, what: string) -> string {
     _b = quickjs.set_index(ctx, args, 1, vb)
     quickjs.release(ctx, vb)
     g = quickjs.dup(ctx, ref)
-    r, err = quickjs.call(ctx, g, 0, args)
+    r, err = js_call_(ctx, g, 0, args)
     quickjs.release(ctx, g)
     quickjs.release(ctx, args)
     if err != "" {
@@ -1734,7 +1734,7 @@ call_ii_str_(p: *Page, ref: int, a: int, b: int, what: string) -> string {
         return ""
     }
     out = ""
-    if js_nothing_(ctx, r) == 0 { out = quickjs.to_string(ctx, r) }
+    if js_nothing_(ctx, r) == 0 { out = js_str_(ctx, r) }
     quickjs.release(ctx, r)
     return out
 }
@@ -3594,7 +3594,10 @@ sae_ui_get_slider(p: *Page, this_val: int, argv: int) -> int {
 // browser's chrome; it is dropped when the page is left.
 
 // An owned copy of a JS value as a string.
-js_str_(ctx: ptr, v: int) -> string { return quickjs.to_string(ctx, v) }
+js_str_(ctx: ptr, v: int) -> string {
+    s, _e = quickjs.to_string(ctx, v)
+    return s
+}
 
 js_num_(ctx: ptr, v: int) -> float { return quickjs.to_float(ctx, v) }
 
@@ -3610,7 +3613,7 @@ js_prop_str_(ctx: ptr, obj: int, name: string, dflt: string) -> string {
     v, err = quickjs.get(ctx, obj, name)
     if err != "" { return dflt }
     out = dflt
-    if js_nothing_(ctx, v) == 0 { out = quickjs.to_string(ctx, v) }
+    if js_nothing_(ctx, v) == 0 { out = js_str_(ctx, v) }
     quickjs.release(ctx, v)
     return out
 }
@@ -3618,7 +3621,7 @@ js_prop_str_(ctx: ptr, obj: int, name: string, dflt: string) -> string {
 // Key i of a keys array, as a string.
 js_key_(ctx: ptr, keys: int, i: int) -> string {
     k, _e = quickjs.get_index(ctx, keys, i)
-    s = quickjs.to_string(ctx, k)
+    s = js_str_(ctx, k)
     quickjs.release(ctx, k)
     return s
 }
@@ -5523,7 +5526,7 @@ js_print(p: *Page, this_val: int, argv: int) -> int {
         if t == "object" || t == "array" {
             fputs(quickjs.to_json(ctx, v), out)
         } else {
-            fputs(quickjs.to_string(ctx, v), out)
+            fputs(js_str_(ctx, v), out)
         }
         quickjs.release(ctx, v)
         i = i + 1
@@ -6169,9 +6172,9 @@ sqlite_fns_for_(ctx: ptr, p: *Page) -> *SqlitePageFns {
     if p.sqlite_fns != null { return p.sqlite_fns as *SqlitePageFns }
     es = "(function (m) { return new Error(m); })"
     ts = "(function (db, fn, id) { return db.__begin(id).then(function () { var tx = { __db: db.__db, __tx: id, all: db.all, get: db.get, run: db.run }; var r; try { r = Promise.resolve(fn(tx)); } catch (e) { r = Promise.reject(e); } return r.then(function (v) { return db.__end(id, true).then(function () { return v; }); }, function (e) { return db.__end(id, false).then(function () { throw e; }, function () { throw e; }); }); }); })"
-    ef, e1 = quickjs.eval(ctx, es, "sae:sqlite")
+    ef, e1 = js_eval_(ctx, es, "sae:sqlite")
     if e1 != "" { return null }
-    tf, e2 = quickjs.eval(ctx, ts, "sae:sqlite")
+    tf, e2 = js_eval_(ctx, ts, "sae:sqlite")
     if e2 != "" { return null }
     f = heap.new(SqlitePageFns)
     f.err_fn = ef
@@ -6306,7 +6309,7 @@ sqlite_deliver_(b: *Browser, j: *SqliteJob) {
                     } else {
                         _s = quickjs.set_index(ctx, args, 0, vh)
                         quickjs.release(ctx, vh)
-                        r, e = quickjs.call(ctx, w.resolve, 0, args)
+                        r, e = js_call_(ctx, w.resolve, 0, args)
                     }
                 }
                 if j.err != "" {
@@ -6317,13 +6320,13 @@ sqlite_deliver_(b: *Browser, j: *SqliteJob) {
                         ms = quickjs.new_string(ctx, j.err)
                         _s1 = quickjs.set_index(ctx, margs, 0, ms)
                         quickjs.release(ctx, ms)
-                        eh, _ee = quickjs.call(ctx, f.err_fn, 0, margs)
+                        eh, _ee = js_call_(ctx, f.err_fn, 0, margs)
                         quickjs.release(ctx, margs)
                     }
                     if eh == 0 { eh = quickjs.new_string(ctx, j.err) }
                     _s2 = quickjs.set_index(ctx, args, 0, eh)
                     quickjs.release(ctx, eh)
-                    r, e = quickjs.call(ctx, w.reject, 0, args)
+                    r, e = js_call_(ctx, w.reject, 0, args)
                 }
                 quickjs.release(ctx, args)
                 if e != "" { report_exception_(p, "a sqlite promise") }
@@ -6463,7 +6466,7 @@ sae_sqlite_transaction(p: *Page, this_val: int, argv: int) -> int {
     _s2 = quickjs.set_index(ctx, args, 2, idh)
     quickjs.release(ctx, fh)
     quickjs.release(ctx, idh)
-    r, err = quickjs.call(ctx, f.tx_fn, 0, args)
+    r, err = js_call_(ctx, f.tx_fn, 0, args)
     quickjs.release(ctx, args)
     if err != "" { return rethrow_(ctx) }
     return r
@@ -6740,7 +6743,7 @@ natives_deliver_(b: *Browser, j: *NativeJob) {
                     vh = quickjs.new_string(ctx, j.result)
                     _s = quickjs.set_index(ctx, args, 0, vh)
                     quickjs.release(ctx, vh)
-                    r, e = quickjs.call(ctx, w.resolve, 0, args)
+                    r, e = js_call_(ctx, w.resolve, 0, args)
                 } else {
                     f = sqlite_fns_for_(ctx, p)
                     eh = 0
@@ -6749,13 +6752,13 @@ natives_deliver_(b: *Browser, j: *NativeJob) {
                         ms = quickjs.new_string(ctx, "native ${j.unit}.${j.fn}: ${j.err}")
                         _s1 = quickjs.set_index(ctx, margs, 0, ms)
                         quickjs.release(ctx, ms)
-                        eh, _ee = quickjs.call(ctx, f.err_fn, 0, margs)
+                        eh, _ee = js_call_(ctx, f.err_fn, 0, margs)
                         quickjs.release(ctx, margs)
                     }
                     if eh == 0 { eh = quickjs.new_string(ctx, j.err) }
                     _s2 = quickjs.set_index(ctx, args, 0, eh)
                     quickjs.release(ctx, eh)
-                    r, e = quickjs.call(ctx, w.reject, 0, args)
+                    r, e = js_call_(ctx, w.reject, 0, args)
                 }
                 quickjs.release(ctx, args)
                 if e != "" { report_exception_(p, "a native promise") }
@@ -7220,7 +7223,7 @@ ae_prop_str_(ctx: ptr, obj: int, name: string) -> string {
         quickjs.release(ctx, h)
         return ""
     }
-    s = own_(quickjs.to_string(ctx, h))
+    s = own_(js_str_(ctx, h))
     quickjs.release(ctx, h)
     return s
 }
@@ -7257,7 +7260,7 @@ ae_index_str_(ctx: ptr, arr: int, i: int) -> string {
         quickjs.release(ctx, h)
         return ""
     }
-    s = own_(quickjs.to_string(ctx, h))
+    s = own_(js_str_(ctx, h))
     quickjs.release(ctx, h)
     return s
 }
@@ -7304,7 +7307,7 @@ ae_call_bool_(ctx: ptr, ref: int, b: int) -> int {
 ae_call_value_(p: *Page, ref: int, what: string) -> int {
     ctx = p.ctx
     g = quickjs.dup(ctx, ref)
-    r, err = quickjs.call(ctx, g, 0, 0)
+    r, err = js_call_(ctx, g, 0, 0)
     quickjs.release(ctx, g)
     if err != "" {
         report_exception_(p, what)
@@ -8088,7 +8091,7 @@ ae_apply_prop_(ctx: ptr, r: *AeRec, key: string, obj: int) -> int {
     if key == "stroke" {
         h2, _e2 = quickjs.get(ctx, obj, key)
         if quickjs.type_of(ctx, h2) == "string" {
-            aevg.rec_set_stroke(r, own_(quickjs.to_string(ctx, h2)), 1.0)
+            aevg.rec_set_stroke(r, own_(js_str_(ctx, h2)), 1.0)
         } else {
             aevg.rec_set_stroke(r, ae_index_str_(ctx, h2, 0), ae_index_num_(ctx, h2, 1))
         }
@@ -8352,26 +8355,26 @@ ae_eval_bind_(p: *Page, r: *AeRec, kind: int, fn_h: int) {
     if v == 0 { return }
     t = quickjs.type_of(ctx, v)
     if kind == AB_FILL {
-        if t != "undefined" { aevg.rec_set_fill(r, own_(quickjs.to_string(ctx, v))) }
+        if t != "undefined" { aevg.rec_set_fill(r, own_(js_str_(ctx, v))) }
     } else if kind == AB_STROKE {
-        if t == "string" { aevg.rec_set_stroke(r, own_(quickjs.to_string(ctx, v)), 1.0) }
+        if t == "string" { aevg.rec_set_stroke(r, own_(js_str_(ctx, v)), 1.0) }
         else if t == "object" { aevg.rec_set_stroke(r, ae_index_str_(ctx, v, 0), ae_index_num_(ctx, v, 1)) }
     } else if kind == AB_OPACITY {
         aevg.rec_set_opacity(r, quickjs.to_float(ctx, v))
     } else if kind == AB_TEXT {
         if r.el != null {
-            vg.element_set_text(r.el, own_(quickjs.to_string(ctx, v)))
+            vg.element_set_text(r.el, own_(js_str_(ctx, v)))
             aevg.scene_mark_dirty(r.scene as *AeScene)
         }
     } else if kind == AB_POS {
         if t == "object" { ae_apply_obj_(ctx, r, v) }
     } else if kind == AB_TRANSFORM {
-        aevg.rec_set_transform(r, own_(quickjs.to_string(ctx, v)))
+        aevg.rec_set_transform(r, own_(js_str_(ctx, v)))
     } else if kind == AB_WHEN {
         aevg.rec_set_visible(r, quickjs.to_bool(ctx, v))
     } else if kind == AB_VIEWBOX {
         sc = r.scene as *AeScene
-        nv = own_(quickjs.to_string(ctx, v))
+        nv = own_(js_str_(ctx, v))
         if nv != sc.vb { aevg.scene_set_view_box(ae_model_(p), sc, nv) }
     }
     quickjs.release(ctx, v)
@@ -8651,7 +8654,7 @@ ae_register_(p: *Page) {
     quickjs.release(q, v)
     // The JS surface over these: state, computed, bind, each, batch, the
     // bind tagged template, vg.animate, vg.items (src/sae_prelude.js).
-    pre, perr = quickjs.eval(q, sae_prelude(), "sae:prelude")
+    pre, perr = js_eval_(q, sae_prelude(), "sae:prelude")
     if perr != "" { say_("sae: the prelude failed:\n${perr}") }
     quickjs.release(q, pre)
 }
@@ -9011,7 +9014,7 @@ http_start_(p: *Page, method: string, url_arg: string, body: string, ctype: stri
     idh = quickjs.new_int(ctx, j.id)
     _s = quickjs.set_index(ctx, args, 0, idh)
     quickjs.release(ctx, idh)
-    r, err = quickjs.call(ctx, p.http_req, 0, args)
+    r, err = js_call_(ctx, p.http_req, 0, args)
     quickjs.release(ctx, args)
     if err != "" { return rethrow_(ctx) }
     return r
@@ -9025,10 +9028,10 @@ http_helpers_(ctx: ptr, p: *Page) -> int {
     if p.http_res != 0 { return 1 }
     rs = "(function (ok, status, text, error, raw) { var h = {}; var ls = raw.split(/\\r?\\n/); for (var i = 1; i < ls.length; i++) { var c = ls[i].indexOf(':'); if (c > 0) h[ls[i].slice(0, c).trim().toLowerCase()] = ls[i].slice(c + 1).trim(); } return { ok: ok, status: status, text: text, error: error, headers: h, json: function () { return JSON.parse(this.text); } }; })"
     qs = "(function (id) { return { id: id, cancel: function () { http.cancel(id); } }; })"
-    rf, e1 = quickjs.eval(ctx, rs, "sae:http")
+    rf, e1 = js_eval_(ctx, rs, "sae:http")
     if e1 != "" { return 0 }
     p.http_res = rf
-    qf, e2 = quickjs.eval(ctx, qs, "sae:http")
+    qf, e2 = js_eval_(ctx, qs, "sae:http")
     if e2 != "" { return 0 }
     p.http_req = qf
     return 1
@@ -9132,7 +9135,7 @@ call_http_(p: *Page, ref: int, status: int, text: string, err: string, raw_heade
     quickjs.release(ctx, a2)
     quickjs.release(ctx, a3)
     quickjs.release(ctx, a4)
-    res, e1 = quickjs.call(ctx, p.http_res, 0, args)
+    res, e1 = js_call_(ctx, p.http_res, 0, args)
     quickjs.release(ctx, args)
     if e1 != "" { return 0 - 1 }
     args2 = quickjs.new_array(ctx)
@@ -9633,22 +9636,60 @@ fetch_(b: *Browser, url: string) -> (int, string, string, string) {
 
 engine_new_(mem_bytes: long) -> ptr {
     kb = (mem_bytes / 1024) as int
-    q = quickjs.runtime(kb, 0)
-    if q != null {
-        // SAE_PAGE_TIME_MS overrides the limit (specs use a short one).
-        ms = PAGE_TIME_MS
-        tv = env_("SAE_PAGE_TIME_MS")
-        if tv != "" {
-            n, nerr = string.to_int(tv)
-            if nerr == "" && n > 0 { ms = n }
-        }
-        quickjs.set_time_limit(q, ms)
+    return quickjs.runtime(kb, 0)
+}
+
+// The page's time limit for one entry into its JS, in ms: PAGE_TIME_MS, or
+// SAE_PAGE_TIME_MS (specs use a short one).
+page_time_ms_() -> int {
+    tv = env_("SAE_PAGE_TIME_MS")
+    if tv != "" {
+        n, nerr = string.to_int(tv)
+        if nerr == "" && n > 0 { return n }
     }
-    return q
+    return PAGE_TIME_MS
+}
+
+// An entry into the page's JS runs under a deadline of its own, now plus the
+// page's limit (contrib.quickjs's deadline is absolute and no entry resets
+// it, as the old set_time_limit did). An entry made while another is running
+// keeps the earlier of the two deadlines, and each puts back what it found
+// when it ends, so no deadline outlives its entry: host code that reads a
+// JS value later is not stopped by a deadline long past.
+entry_begin_(q: ptr) -> long {
+    prev = quickjs.deadline_ns(q)
+    d = quickjs.now_ns() + (page_time_ms_() as long) * 1000000
+    if prev != 0 && prev < d { d = prev }
+    quickjs.set_deadline_ns(q, d)
+    return prev
+}
+
+entry_end_(q: ptr, prev: long) { quickjs.set_deadline_ns(q, prev) }
+
+// quickjs.eval, call and run_jobs, each as one timed entry.
+js_eval_(q: ptr, code: string, filename: string) -> (int, string) {
+    prev = entry_begin_(q)
+    h, err = quickjs.eval(q, code, filename)
+    entry_end_(q, prev)
+    return h, err
+}
+
+js_call_(q: ptr, f: int, this_h: int, args: int) -> (int, string) {
+    prev = entry_begin_(q)
+    h, err = quickjs.call(q, f, this_h, args)
+    entry_end_(q, prev)
+    return h, err
+}
+
+js_run_jobs_(q: ptr) -> (int, string) {
+    prev = entry_begin_(q)
+    n, err = quickjs.run_jobs(q)
+    entry_end_(q, prev)
+    return n, err
 }
 
 engine_eval_(q: ptr, src: string, url: string) -> (int, string) {
-    return quickjs.eval(q, src, url)
+    return js_eval_(q, src, url)
 }
 
 engine_dispose_(q: ptr) { quickjs.dispose(q) }
@@ -9901,7 +9942,7 @@ api_register_(p: *Page) {
     // http.fetch(url or options): the same request as a promise of the same
     // response object, for `await`. It runs on the same actors; the promise
     // resolves where a callback would have run.
-    hf, _hfe = quickjs.eval(q, "http.fetch = function (o) { return new Promise(function (resolve) { if (typeof o === 'string') http.get(o, resolve); else http.request(o, resolve); }); };", "sae:http")
+    hf, _hfe = js_eval_(q, "http.fetch = function (o) { return new Promise(function (resolve) { if (typeof o === 'string') http.get(o, resolve); else http.request(o, resolve); }); };", "sae:http")
     quickjs.release(q, hf)
     }
 
@@ -9936,7 +9977,7 @@ api_register_(p: *Page) {
         reg_(p, q, dr, "write64", 2, sae_docs_write_base64)
         quickjs.set_global(q, "__sae_documents", dr)
         quickjs.release(q, dr)
-        dw, _dwe = quickjs.eval(q, "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); }, read_base64: function () { return Promise.resolve().then(function () { return raw.read64(h); }); }, write_base64: function (t) { return Promise.resolve().then(function () { raw.write64(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;", "sae:documents")
+        dw, _dwe = js_eval_(q, "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); }, read_base64: function () { return Promise.resolve().then(function () { return raw.read64(h); }); }, write_base64: function (t) { return Promise.resolve().then(function () { raw.write64(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;", "sae:documents")
         quickjs.release(q, dw)
     }
     // clipboard: writes while the person clicks or types, reads only their
@@ -9947,7 +9988,7 @@ api_register_(p: *Page) {
         reg_(p, q, cr, "read", 0, sae_clip_read)
         quickjs.set_global(q, "__sae_clipboard", cr)
         quickjs.release(q, cr)
-        cw, _cwe = quickjs.eval(q, "globalThis.clipboard = (function (raw) { return Object.freeze({ write_text: function (t) { return Promise.resolve().then(function () { raw.write(String(t)); }); }, read_text: function () { return Promise.resolve().then(function () { return raw.read(); }); } }); })(globalThis.__sae_clipboard); delete globalThis.__sae_clipboard;", "sae:clipboard")
+        cw, _cwe = js_eval_(q, "globalThis.clipboard = (function (raw) { return Object.freeze({ write_text: function (t) { return Promise.resolve().then(function () { raw.write(String(t)); }); }, read_text: function () { return Promise.resolve().then(function () { return raw.read(); }); } }); })(globalThis.__sae_clipboard); delete globalThis.__sae_clipboard;", "sae:clipboard")
         quickjs.release(q, cw)
     }
     // bus: the control bus (app mode, capabilities.controlBus, --control-bus).
@@ -9963,7 +10004,7 @@ api_register_(p: *Page) {
         reg_(p, q, br, "answer", 4, sae_bus_answer)
         quickjs.set_global(q, "__sae_bus", br)
         quickjs.release(q, br)
-        bw, _bwe = quickjs.eval(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
+        bw, _bwe = js_eval_(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
         quickjs.release(q, bw)
     }
     // backend: the app's own process (capabilities.backend, docs/app-backend.md).
@@ -9976,7 +10017,7 @@ api_register_(p: *Page) {
         reg_(p, q, bko, "why", 0, sae_backend_why)
         quickjs.set_global(q, "__sae_backend", bko)
         quickjs.release(q, bko)
-        bkw, _bke = quickjs.eval(q, "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; raw.listen(function (kind, id, ok, name, payload) { if (kind === 0) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg): name must be a string'); var a = arg === undefined ? '' : String(arg); return new Promise(function (resolve, reject) { var id = raw.call(name, a); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;", "sae:backend")
+        bkw, _bke = js_eval_(q, "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; raw.listen(function (kind, id, ok, name, payload) { if (kind === 0) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg): name must be a string'); var a = arg === undefined ? '' : String(arg); return new Promise(function (resolve, reject) { var id = raw.call(name, a); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;", "sae:backend")
         quickjs.release(q, bkw)
     }
     if ab.app_dir != "" && string.contains(p.absent, ",print,") == 0 {
@@ -10029,7 +10070,7 @@ api_register_(p: *Page) {
         reg_(p, q, nr, "call", 3, sae_natives_call)
         quickjs.set_global(q, "__sae_natives", nr)
         quickjs.release(q, nr)
-        nw, _nwe = quickjs.eval(q, natives_js_((p.browser as *Browser).native_jobs, nmods), "sae:natives")
+        nw, _nwe = js_eval_(q, natives_js_((p.browser as *Browser).native_jobs, nmods), "sae:natives")
         quickjs.release(q, nw)
     }
     // ===== end wave1/natives =====
@@ -10371,7 +10412,7 @@ args1_(ctx: ptr, h: int) -> int {
 mod_loader_(p: *Page, url: string) -> (int, string) {
     us = quickjs.new_string(p.ctx, url)
     a = args1_(p.ctx, us)
-    lo, err = quickjs.call(p.ctx, p.mod_factory, 0, a)
+    lo, err = js_call_(p.ctx, p.mod_factory, 0, a)
     quickjs.release(p.ctx, a)
     quickjs.release(p.ctx, us)
     return lo, err
@@ -10467,7 +10508,7 @@ mod_run_(p: *Page, url: string, text: string) -> string {
     a = quickjs.new_array(p.ctx)
     _e1 = quickjs.set_index(p.ctx, a, 0, lo)
     _e2 = quickjs.set_index(p.ctx, a, 1, ns)
-    r, cerr = quickjs.call(p.ctx, fn, 0, a)
+    r, cerr = js_call_(p.ctx, fn, 0, a)
     quickjs.release(p.ctx, a)
     quickjs.release(p.ctx, lo)
     quickjs.release(p.ctx, fn)
@@ -10496,7 +10537,7 @@ modules_prepare_(p: *Page) -> string {
     f, ferr = engine_eval_(p.ctx, MOD_FACTORY_JS, "sae:loader")
     if ferr != "" { return "the module loader could not start: ${ferr}" }
     a = args1_(p.ctx, p.mod_get)
-    fac, cerr = quickjs.call(p.ctx, f, 0, a)
+    fac, cerr = js_call_(p.ctx, f, 0, a)
     quickjs.release(p.ctx, a)
     quickjs.release(p.ctx, f)
     if cerr != "" { return "the module loader could not start: ${cerr}" }
@@ -10519,7 +10560,7 @@ modules_run_page_(p: *Page, fn: int) -> (int, string) {
         return 0, lerr
     }
     a = args1_(p.ctx, lo)
-    r, err = quickjs.call(p.ctx, fn, 0, a)
+    r, err = js_call_(p.ctx, fn, 0, a)
     quickjs.release(p.ctx, a)
     quickjs.release(p.ctx, lo)
     quickjs.release(p.ctx, fn)
@@ -10531,7 +10572,7 @@ modules_run_page_(p: *Page, fn: int) -> (int, string) {
             und = quickjs.new_undefined(p.ctx)
             _t1 = quickjs.set_index(p.ctx, ta, 0, und)
             _t2 = quickjs.set_index(p.ctx, ta, 1, p.mod_fail)
-            r2, _e = quickjs.call(p.ctx, then, r, ta)
+            r2, _e = js_call_(p.ctx, then, r, ta)
             quickjs.release(p.ctx, r2)
             quickjs.release(p.ctx, und)
             quickjs.release(p.ctx, ta)

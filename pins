@@ -113,7 +113,23 @@
 # `hiding` clause. The release also carries #3655 (optional-return string
 # ownership, loop sole-read copied not moved, http client skipping interim
 # 1xx). aeb and aether-ui refs unchanged: nothing needs a newer one.
-AE_PIN=0.912.0
+# 0.923.0 (2026-11-19): a real floor move, evidence-based: contrib.quickjs from
+# 0.915 (quickjs-ng 0.18) has no set_time_limit and a `to_string` that returns
+# (string, error). src/sae_host.ae and tools/saejs.ae use the absolute
+# per-runtime deadline (`set_deadline_ns`): each entry into page JS gets its
+# own (entry_begin_/entry_end_, js_eval_/js_call_/js_run_jobs_), and so does
+# every host read of a page's value, which can run a getter, toString or
+# valueOf outside any entry (the js_* helpers; tests/check_timed_entries.sh,
+# tests/escape/menu_getter.ts). Running out of memory is now an InternalError a
+# page cannot catch: tests/escape/heap.ts asserts the script is ended and the
+# host lives. Verified (the lab hosts on the installed 0.923.0 release,
+# SAE_AETHER_HOME=none): macOS lower/run-tests.sh 70/70, the headless checks
+# and tests/run_all.sh's aerun specs; tests/run_all.sh 69/69 on cachyos (CachyOS, GTK 4.24) and on ae-x64
+# (Ubuntu 22.04, SAE_TEST_WAIT_SCALE=6 alone: SAE_PAGE_TIME_MS=60000 fails
+# spec_app_bus, which asserts the 5 s limit); on win11 (a private toolchain,
+# fresh clones) 68/69, spec_app_sqlite losing a race for driver port 9222 with
+# the spec before it and passing alone, spec_escape 8 of 8 runs.
+AE_PIN=0.923.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
@@ -139,7 +155,10 @@ AE_PIN=0.912.0
 # 0.841.0 (AE_PIN). Verified: sae's builds (sae, sae-driver) under v0.333.
 # v0.344 (2026-11-09): a tracking move with Aether 0.905.0 (AE_PIN), no new
 # primitive needed. Verified: sae's builds (sae, sae-driver) under v0.344.
-AEB_REF=v0.344
+# v0.347 (2026-11-19): a tracking move with Aether 0.923.0 (AE_PIN) and
+# aether-ui's own CI pin, no new primitive needed. Verified: sae's builds (sae,
+# sae-driver) under v0.347 on macOS, cachyos, ae-x64 and win11.
+AEB_REF=v0.347
 
 # Sibling checkouts, reached through the aether-ui symlink. c4858fbe adds
 # ui.timer_once and the frame clock (ui.on_frame), which sae's timers use.
@@ -294,4 +313,8 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # FreeBSD). No new primitive. Verified: tests/run_all.sh natively on win11
 # (spec_keys, spec_grid, spec_app_menus, spec_aevg_parity now pass; 63 of 66
 # there), spec_pomatez on ghostbsd (10 passing; 8 passing and a SIGBUS before).
-AETHER_UI_REF=93d1b24e4227887331945aeaea32bc24462be542
+# b1b14a3f (2026-11-15): aether-ui main on Aether 0.923.0 (it compiles on
+# 0.914's E0202 for a ptr from map.get; CI on aeb v0.347). A tracking move, no
+# new primitive needed. Verified: tests/run_all.sh on cachyos, ae-x64 and win11,
+# the counts under AE_PIN.
+AETHER_UI_REF=b1b14a3f6fdb3278fa013940111f6b3754b3f6c0

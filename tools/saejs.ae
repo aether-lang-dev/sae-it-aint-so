@@ -51,10 +51,11 @@ main() {
         ln, lerr = string.to_int(lv)
         if lerr == "" && ln >= 1000 { limit = ln }
     }
-    quickjs.set_time_limit(q, limit)
     pf = quickjs.function(q, "print", 1, print_)
     quickjs.set_global(q, "print", pf)
     quickjs.release(q, pf)
+    // One deadline per entry, as the page host has (contrib.quickjs's is absolute).
+    quickjs.set_deadline_ns(q, quickjs.now_ns() + (limit as long) * 1000000)
     v, e = quickjs.eval(q, src, path)
     if e != "" {
         println(e)
@@ -62,6 +63,7 @@ main() {
         exit(1)
     }
     quickjs.release(q, v)
+    quickjs.set_deadline_ns(q, quickjs.now_ns() + (limit as long) * 1000000)
     _n, je = quickjs.run_jobs(q)
     quickjs.dispose(q)
     if je != "" {
