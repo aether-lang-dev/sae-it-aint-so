@@ -74,6 +74,17 @@ Aether's `hide` (`aether/docs/hide-and-seal.md`):
   can control this app, while you have it switched on"; and, with `fs`,
   `documents` or `shell` too: "Other programs you run could then read and
   write your files (or open links) through this app".
+- **`backend`** (`{ "program": ..., "args": [...], "deadlineMs": ... }`):
+  the app's own process, which sae starts with the app and its pages reach
+  with `backend.invoke` (docs/app-backend.md). On its stdin and stdout by
+  default; with `"channel": "socket"` on a socket, where `"sandbox"` must
+  say what it may reach (`read`, `write` and `env` grants, or `"none"`):
+  sae starts it with `sandbox.spawn_socket`, which holds it to them on Linux
+  and refuses to start it where it cannot, and a file the person picked
+  reaches it as an open descriptor (`backend.invoke(name, arg, doc)`), never
+  as a path (docs/design/ipc-backends.md). Held in `services/backend`. An
+  installer would say: "This app runs a program of its own, which may read
+  <the grants>"; or, for `"none"`: "... which may do anything you can".
 - **Both file services are fenced by Aether too.** `services/files` runs
   each operation inside `std.sandbox`'s `enforce`, with the app's
   `fs.read`/`fs.write` roots as the sandbox's grants; `services/documents`

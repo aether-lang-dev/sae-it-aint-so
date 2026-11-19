@@ -93,10 +93,16 @@ backend in a WSL container on Windows. The socket pair it began on is gone.
   elsewhere the refusal); `tests/escape/computed_fs.ts` tries `backend` by
   a computed name.
 
-Not yet: a picked document for the backend (no descriptor crosses a pipe),
-containment and plugins. The other direction, a program that starts sae
-and drives the app over sae's own stdin and stdout, is built: "The
-control channel", below.
+**Built (2026-11-19), a second transport: a socket**
+(`docs/design/ipc-backends.md`). `"channel": "socket"` starts the backend
+on a socket pair, its fd 3 (std.ipc's socket channel), which carries what
+the pipes cannot: a document the person picked, handed over as an open
+descriptor, and containment, with `sandbox.spawn_socket`. Its stdout stays
+its own. Not on Windows. "A backend on a socket", below.
+
+Not yet: plugins, and containment for a backend on stdin and stdout. The
+other direction, a program that starts sae and drives the app over sae's
+own stdin and stdout, is built: "The control channel", below.
 
 ## The shape
 
@@ -177,10 +183,10 @@ JSON text.
 - Bounded like everything else: a frame size limit, a queue limit, a
   deadline on each `invoke`, and the page told when one is missed; and a
   bound on each write the other way (the write bound, below).
-- A document the person picks could be opened by sae and handed over, so a
-  backend without `fs` still reads exactly that file and no other. Not
-  over the pipes (no descriptor crosses one): its bytes in frames, or a
-  second channel; open.
+- A document the person picks is opened by sae and handed over, so a
+  backend without `fs` still reads exactly that file and no other: on a
+  socket backend, as an open descriptor ("A backend on a socket", below).
+  Not over the pipes: no descriptor crosses one.
 - At exit: the channel closed, a grace period, then the child killed and
   reaped (`os.wait_pid`). A backend that dies is reported to the page; it
   does not take the window with it.
@@ -377,13 +383,15 @@ starting `sae-driver.exe` itself). Not run there yet: the full
 
 ## Transports
 
-One: the backend's stdin and stdout, two pipes, on every platform. What
-differs is only what sae starts.
+Two: the backend's stdin and stdout, two pipes, on every platform (the
+default, `"channel": "stdio"`); and a socket pair, on every platform but
+Windows (`"channel": "socket"`).
 
-| Backend | Where | sae starts | Descriptors |
-|---|---|---|---|
-| a program in the app | macOS, Linux, the BSDs, Windows | the program, `os.run_stdio` | no |
-| a Linux program in a WSL container | Windows | `wslc run --rm -i --pull never <image> <command...>`, `os.run_stdio` | no (nothing crosses the VM) |
+| Backend | Where | sae starts | Descriptors | Contained |
+|---|---|---|---|---|
+| a program in the app, on stdin and stdout | macOS, Linux, the BSDs, Windows | the program, `os.run_stdio` | no | no |
+| a Linux program in a WSL container | Windows | `wslc run --rm -i --pull never <image> <command...>`, `os.run_stdio` | no (nothing crosses the VM) | by the container |
+| a program in the app, on a socket | macOS, Linux, the BSDs | `sandbox.spawn_socket` (`"sandbox"` an object), or `spawn_socket_uncontained` (`"none"`, or the person's `--uncontained-backend`) | yes, down only: a picked document | on Linux with Landlock; refused elsewhere |
 
 wslc, checked on win11 (2026-11-10/11, wslc 3.0.5): the container's stdin
 and stdout are the program's, byte for byte, and a warm start takes about
@@ -395,23 +403,114 @@ holds, so the Alice/Bob/Eve table above holds for it too.
 
 The socket pair the first slice used (`os.run_socket`, fd 3, descriptor
 passing) was removed on 2026-11-11 rather than kept beside the pipes: it
-did not run on Windows and nothing yet passed a descriptor.
+did not run on Windows and nothing yet passed a descriptor. It came back on
+2026-11-19 beside them, when something did ("A backend on a socket").
+
+## A backend on a socket
+
+**Built 2026-11-19**; the design and why it is a second transport, not a
+replacement, is `docs/design/ipc-backends.md`.
+
+```json
+"backend": {
+  "program": "backend/main",
+  "channel": "socket",
+  "sandbox": { "read": ["data/", "$TEMP/"], "write": ["$APPDATA/out/"], "env": ["HOME"] }
+}
+```
+
+- **`"sandbox"` is required** on a socket backend: an object of grants, or
+  `"none"`. `read` and `write` are paths as app.json's `fs` grants write
+  them (`$APPDATA`, `$HOME`, `$DOCUMENTS`, `$DOWNLOADS`, `$DESKTOP`,
+  `$TEMP` at the front), a relative one inside the app, a folder ending in
+  `/` granted with what is under it; `env` names variables. `{}` is
+  nothing: an Aether backend needs no grant to start. Another key refuses
+  the app (no exec, network or interpreter grants yet: `grant_runtime`
+  panics when the interpreter cannot be asked, which would take sae down).
+  Beside `"channel": "stdio"` (or none) the key refuses the app: only a
+  socket backend is contained. A path granted must exist when the backend
+  starts (Landlock's rules are made on paths that exist).
+- **Contained** (`"sandbox"` an object): `sandbox.spawn_socket`, the sandbox
+  preload in the child's libc and, on Linux, Landlock and a seccomp filter
+  under it. It fails closed: on macOS, FreeBSD, Windows and Linux without
+  Landlock the backend is not started (said once, its pages' calls fail
+  with the reason), as a missing program is. The line at launch says how
+  it started: `sae: backend: backend/main started on a socket, contained`.
+- **Not contained**: `"sandbox": "none"`, said every launch (`... started on
+  a socket, not contained (app.json sandbox "none")`); or the person's
+  `sae --app <dir> --uncontained-backend`, for running a contained app
+  where containment is not built (`... not contained
+  (--uncontained-backend)`).
+- **A picked document**: `backend.invoke(name, arg, doc)` with a handle
+  `documents` gave. sae opens the file read only (`services/documents`,
+  under its one-file grant) and sends the descriptor on one byte straight
+  after the call's frame, which says `"fd": true`; sae's copy is closed.
+  The backend takes it with `saebackend.handed(sb)` and closes it. A stdio
+  backend, an app without `documents`, or a handle documents did not give
+  is refused, the promise rejected with why. Read only: no descriptor to
+  write is handed over yet. Descriptors only go down: std.ipc refuses one
+  a backend sends up.
+- **The backend's stdout is its own**: what it prints goes where sae's
+  output goes, and cannot break a frame.
+- **The same program either way**: `saebackend.open()` takes the socket when
+  sae started the backend on one, and claims stdin and stdout otherwise;
+  `saebackend.poll(sb)` is `next` without waiting, for a backend that
+  looks for a call (a cancel) between the steps of a long job.
+- **The kill switch, both transports**: `backend.restart()` kills the
+  backend at once (no grace), fails every call waiting and tells `on_gone`
+  (`backend: restarted by the page`), then starts a new one from the same
+  declaration, after the page's entry; its promise settles when the new
+  one runs, or rejects with why it does not.
+- An Aether backend can hold itself too, on every platform: its loop inside
+  `sandbox.enforce` with no grants, after `open()` (docstats and
+  rexxconsole do; treewalk, which reads folders, has the process sandbox
+  alone).
+- Tests: `tests/apps/backend_socket` and `spec_app_backend_socket`
+  (Linux; elsewhere the refusal): calls and events, stray stdout, a picked
+  document read through its descriptor, the same path refused when the
+  backend opens it itself, a granted folder read and `/etc/passwd`, an
+  ungranted variable and exec refused, a forged handle refused, and
+  restart ending a backend that stopped reading. Run with
+  `SAE_TEST_FLAGS=--uncontained-backend` its containment checks fail, as
+  they should. `spec_app_backend` holds the stdio backend's refusal of a
+  document.
+- Examples, each with a README and a spec: `apps/docstats` (a document
+  worker), `apps/rexxconsole` (Rexx in the backend, with a time limit,
+  Cancel and Kill) and `apps/treewalk` (a long job pushing events, with
+  back-pressure, cancel, navigation and a crash).
+
+### Per platform
+
+| | stdin and stdout | socket | socket, contained | a picked document |
+|---|---|---|---|---|
+| Linux | yes | yes | yes, with Landlock (5.13 on); refused without | yes |
+| macOS | yes | yes | refused (`--uncontained-backend` runs it) | yes |
+| FreeBSD | yes | yes | refused (no kernel layer for `spawn_socket` there yet) | yes |
+| Windows | yes, and wslc | refused (std.ipc has no socket channel there) | refused | no |
+
+Run (2026-11-19): every socket spec, contained, on cachyos (CachyOS,
+Linux 7.3, Landlock, Aether 0.923.0); `spec_backend_socket_service` (no
+window: the socket, a descriptor handed over, kill, and `spawn_socket`'s
+refusal) on macOS (Aether 0.923.0) and on ghostbsd (GhostBSD, FreeBSD 15.1,
+its installed Aether 0.909.0). The Windows row is what Aether's own
+documents say (std.ipc's README, docs/containment-sandbox.md) and what
+services/backend checks before it tries; not run on Windows.
 
 ## Open
 
-1. **Containment.** `sandbox.spawn_socket` contains a child only on Linux
-   with Landlock today; on macOS and Windows it refuses
-   (`../aether-child-sandboxing`). Tauri's core runs uncontained; whether
-   Bob's backend may, and on which platforms, is a decision, not a default.
-   A wslc backend is in a container already (its own file system and
-   network namespace in WSL's VM).
+1. **Containment.** Decided for a socket backend (2026-11-19): app.json must
+   say what it may reach, or `"none"`, and `sandbox.spawn_socket` fails
+   closed where it cannot contain (macOS, FreeBSD, Windows today). A
+   backend on stdin and stdout is still uncontained: Aether has no
+   contained `run_stdio`. A wslc backend is in a container already (its own
+   file system and network namespace in WSL's VM).
 2. **The frame protocol**: names, ids for matching replies, errors,
    cancellation (the guest-language work in aether-child-sandboxing has
    `CANCEL` with a grace period; reuse it rather than invent one).
 3. **Plugins**: what "Aether plus plugins" means for a backend (contrib
    modules, other Aether libraries) and how `app.json` declares them.
-4. **A picked document for the backend**, now that no descriptor crosses
-   the channel (What the kernel does, above).
+4. ~~**A picked document for the backend**~~: built on the socket
+   channel, read only (2026-11-19). A descriptor to write is open.
 5. **The bus's future**: if backends, the control channel and a Unix
    socket cover its cases, the loopback TCP bus, its courier file and its
    sealing could go. What still needs it: attaching to an app already

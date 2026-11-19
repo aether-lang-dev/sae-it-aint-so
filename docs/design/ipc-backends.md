@@ -72,10 +72,10 @@ backend's library are the same for both.
     needs no grants to start). The keys are `read` and `write` (paths, as
     app.json's `fs` grants write them: `$APPDATA`, `$HOME`, `$TEMP` and the
     others at the front; a relative path is inside the app's folder, as
-    `program` is), `env` (variable names) and `runtime` (an interpreter
-    whose own library it must read to start, `grant_runtime`'s names:
-    `python3`). Nothing else yet (no exec, no network); an unknown key
-    refuses the app, so a grant is never silently dropped.
+    `program` is) and `env` (variable names). Nothing else yet (no exec, no
+    network, and no `runtime` for an interpreter: `grant_runtime` panics
+    when the interpreter cannot be asked, which would take sae down); an
+    unknown key refuses the app, so a grant is never silently dropped.
   - `"none"`: sae starts it with `sandbox.spawn_socket_uncontained`, and
     says so every launch (`sae: backend: backend/main started, not
     contained (app.json sandbox "none")`).
@@ -223,5 +223,8 @@ what it shows and a spec under `tests/` driven through the driver.
 | FreeBSD | yes | yes | no: refused (spawn_socket has no kernel layer for a foreign program there yet) | yes |
 | Windows | yes (and wslc) | no: refused | no | no |
 
-To be confirmed on each host before the docs say it as fact; the specs
-run on cachyos (Linux), and the headless parts on macOS.
+Built and run (2026-11-19): the Linux row on cachyos (every spec,
+contained); the macOS and FreeBSD rows with `spec_backend_socket_service`
+(no window) on macOS and ghostbsd. The Windows row is what Aether's
+documents say; not run on Windows. `docs/app-backend.md` ("A backend on a
+socket") is the reference as built.

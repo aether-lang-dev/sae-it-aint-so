@@ -415,6 +415,13 @@ service touches files, and each of its operations runs inside Aether's
   sae's own stdin and stdout instead (`sae --app <dir> --control-stdio`, the
   control channel: no file, nothing listening, docs/app-backend.md);
   spraedsheet's MCP server does.
+- `backend.invoke(name, arg)`, `backend.on(name, fn)`, `backend.on_gone(fn)`
+  and `backend.restart()`: an app declaring `capabilities.backend` has its
+  own process, which sae starts and talks to in frames, on its stdin and
+  stdout or, with `"channel": "socket"`, on a socket that also carries a
+  document the person picked as an open descriptor
+  (`backend.invoke(name, arg, doc)`) and is contained to what app.json's
+  `"sandbox"` grants (docs/app-backend.md, docs/design/ipc-backends.md).
 - A web page has no `fs`, no `documents`, no `shell`, no `printing` and no `sqlite` at all.
 
 A page says at its top which privileges it seeks, one per line:
@@ -902,7 +909,12 @@ them and starts in app mode with no arguments, and the non-system dylibs sae
 links (Homebrew's OpenSSL, nghttp2, pcre2) copied into `Contents/Frameworks`
 with their load paths rewritten, so it runs on a Mac without Homebrew. Signed
 ad hoc; not notarized. `apps/tasks` is the small example
-(`SAE_TEST_APP=apps/tasks tests/run_spec.sh spec_app` its spec). Two real
+(`SAE_TEST_APP=apps/tasks tests/run_spec.sh spec_app` its spec). Three
+more show an app's backend on a socket, each with a README and a spec:
+`apps/docstats` (a file the person picks, read by a backend that may open
+none), `apps/rexxconsole` (Rexx in a contained backend, with a time limit,
+Cancel and a kill switch) and `apps/treewalk` (a long job pushing events,
+with back-pressure, cancel, navigation and a crash). Two real
 apps are ported: `examples/pomatez`, a Pomodoro timer from Electron/Tauri
 (7.6 MB packaged), and `examples/gitify`, GitHub notifications from Electron
 (7.7 MB), which talks to the GitHub API over sae's actor-backed http and is

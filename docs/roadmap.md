@@ -187,6 +187,15 @@ being secured now (Sigstore, SLSA). sae's strategy, in layers:
 7. **No code arrives at run time.** Pages are bundled and hashed; `http`
    carries data only; a remote start page is already refused. This is also
    what keeps the App Store door open (`page-services.md` section 9).
+8. **An app's own code runs apart, and contained.** An app's backend is its
+   own process (`docs/app-backend.md`). On a socket (`"channel":
+   "socket"`, 2026-11-19, `docs/design/ipc-backends.md`) app.json says what
+   it may reach, `sandbox.spawn_socket` holds it to that on Linux and
+   refuses to start it where it cannot, and a file the person picked
+   reaches it as an open descriptor, not a path. `apps/docstats`,
+   `apps/rexxconsole` and `apps/treewalk` show it. Next: containment on
+   macOS and FreeBSD (Aether's), a descriptor to write, and a second
+   channel when an app streams more than events.
 
 ## 3. Growing the dialect: terse, elegant, still erasable
 
