@@ -534,9 +534,11 @@ gRPC bridge: sae is in-process. The three.js-over-fake-WebGL route:
    a sae-specific form? (Plain ES, I think: tsc and editors understand it.)
    **Built as plain ES.**
 5. **Signing**: ed25519 with a `.well-known` domain proof, as above?
+   **Decided 2026-11-18: yes, ed25519 with a `.well-known` domain proof.**
 6. **JSX stays out**, the trailing-block form stays the house style?
 7. **The gate spec's format** (one table in a `.md` the generator reads, or a
    small `.ae` DSL)?
+   **Decided 2026-11-18: a small `.ae` DSL** (docs/design/gate-dsl.md).
 8. **The `sae:` library origin**: that name, and the first modules (8.1)?
    **Built as `sae:`** with `noise`, `scales`, `easing`; the name is one
    constant to change.
