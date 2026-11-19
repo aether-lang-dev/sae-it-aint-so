@@ -19,22 +19,36 @@
 #
 #   --mod DIR       only the module tests in DIR, another repo's (an app
 #                   built on sae, such as ../spraedsheet), run
-#                   as tests/mod's are; their output goes to DIR/../target
-#                   or $SAE_LOWER_OUT.
+#                   as tests/mod's are; their output goes to a directory of
+#                   the run's own under DIR/../target/lower-tests or
+#                   $SAE_LOWER_OUT (removed on exit; SAE_LOWER_KEEP=1 keeps it).
 #
 # Needs target/saelower and target/saejs (see the README).
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LOWER="$ROOT/target/saelower"
 SAEJS=${SAEJS:-$ROOT/target/saejs}
 MOD="$ROOT/lower/tests/mod"
-OUT="$ROOT/target/lower-tests"
+OUT_BASE="$ROOT/target/lower-tests"
 only_mod=0
 if [ "${1:-}" = --mod ]; then
     MOD=$(cd "$2" && pwd)
-    OUT=${SAE_LOWER_OUT:-$MOD/../target/lower-tests}
+    OUT_BASE=${SAE_LOWER_OUT:-$MOD/../target/lower-tests}
     only_mod=1
 fi
-mkdir -p "$OUT"
+# Each run works in a directory of its own under the output directory: every
+# file below has a fixed name (mod.js, mod_<test>.js, ...), so two runs
+# sharing one directory (two agents on one checkout, a run and its rerun)
+# overwrote each other's lowered modules and bundles. Removed on exit;
+# SAE_LOWER_KEEP=1 keeps it (the path is printed) for reading a failure.
+mkdir -p "$OUT_BASE" || exit 2
+OUT=$(mktemp -d "$OUT_BASE/run.XXXXXX") || exit 2
+if [ -n "${SAE_LOWER_KEEP:-}" ]; then
+    echo "lower: output kept in $OUT"
+else
+    trap 'rm -rf "$OUT"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+fi
 pass=0
 fail=0
 
