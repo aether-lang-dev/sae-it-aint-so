@@ -18,6 +18,7 @@ extern aether_error_pages_opts_new() -> ptr
 
 struct Site {
     dir: string
+    port: int // the port it listens on, for the URLs its fake GitHub API puts in its answers
 }
 
 // A page is <name>.ts, or <name>.js if there is no .ts; a path that already
@@ -152,12 +153,12 @@ gh_json_(res: ptr, status: int, body: string) {
     http.response_set_body(res, body)
 }
 
-gh_note_(n: int) -> string {
+gh_note_(n: int, port: int) -> string {
     if n == 1 {
-        return "{\"id\":\"1\",\"unread\":true,\"reason\":\"mention\",\"updated_at\":\"2026-10-03T10:00:00Z\",\"subject\":{\"title\":\"Crash on start\",\"url\":\"http://127.0.0.1:8091/api/v3/repos/octo/hello/issues/7\",\"latest_comment_url\":null,\"type\":\"Issue\"},\"repository\":{\"full_name\":\"octo/hello\",\"html_url\":\"https://github.com/octo/hello\"}}"
+        return "{\"id\":\"1\",\"unread\":true,\"reason\":\"mention\",\"updated_at\":\"2026-10-03T10:00:00Z\",\"subject\":{\"title\":\"Crash on start\",\"url\":\"http://127.0.0.1:${port}/api/v3/repos/octo/hello/issues/7\",\"latest_comment_url\":null,\"type\":\"Issue\"},\"repository\":{\"full_name\":\"octo/hello\",\"html_url\":\"https://github.com/octo/hello\"}}"
     }
     if n == 2 {
-        return "{\"id\":\"2\",\"unread\":true,\"reason\":\"review_requested\",\"updated_at\":\"2026-10-02T09:00:00Z\",\"subject\":{\"title\":\"Add dark mode\",\"url\":\"http://127.0.0.1:8091/api/v3/repos/octo/hello/pulls/8\",\"latest_comment_url\":null,\"type\":\"PullRequest\"},\"repository\":{\"full_name\":\"octo/hello\",\"html_url\":\"https://github.com/octo/hello\"}}"
+        return "{\"id\":\"2\",\"unread\":true,\"reason\":\"review_requested\",\"updated_at\":\"2026-10-02T09:00:00Z\",\"subject\":{\"title\":\"Add dark mode\",\"url\":\"http://127.0.0.1:${port}/api/v3/repos/octo/hello/pulls/8\",\"latest_comment_url\":null,\"type\":\"PullRequest\"},\"repository\":{\"full_name\":\"octo/hello\",\"html_url\":\"https://github.com/octo/hello\"}}"
     }
     return "{\"id\":\"3\",\"unread\":true,\"reason\":\"subscribed\",\"updated_at\":\"2026-09-30T08:00:00Z\",\"subject\":{\"title\":\"v1.2.0\",\"url\":null,\"latest_comment_url\":null,\"type\":\"Release\"},\"repository\":{\"full_name\":\"octo/tools\",\"html_url\":\"https://github.com/octo/tools\"}}"
 }
@@ -169,6 +170,7 @@ gh_user_(req: ptr, res: ptr, ud: ptr) {
 
 gh_notifications_(req: ptr, res: ptr, ud: ptr) {
     if gh_authed_(req, res) == 0 { return }
+    site = ud as *Site
     part = http.http_get_query_param(req, "participating")
     only = 0
     if part != null && part == "true" { only = 1 }
@@ -181,7 +183,7 @@ gh_notifications_(req: ptr, res: ptr, ud: ptr) {
         // Notification 3 (a subscription) is not participating.
         if (gh_live_ & bit) != 0 && (only == 0 || n != 3) {
             if out != "[" { out = string.concat(out, ",") }
-            out = string.concat(out, gh_note_(n))
+            out = string.concat(out, gh_note_(n, site.port))
         }
         n = n + 1
     }
@@ -295,6 +297,7 @@ main() {
         p, _ = string.to_int(os.args_get(2))
         port = p
     }
+    site.port = port
 
     server = http.server_create(port)
     if server == 0 {
@@ -312,7 +315,7 @@ main() {
     http.http_server_add_route(server, "PUT", "/api/headers", api_headers_, 0)
     http.http_server_add_route(server, "DELETE", "/api/headers", api_headers_, 0)
     http.server_get(server, "/api/v3/user", gh_user_, 0)
-    http.server_get(server, "/api/v3/notifications", gh_notifications_, 0)
+    http.server_get(server, "/api/v3/notifications", gh_notifications_, site)
     http.http_server_add_route(server, "PUT", "/api/v3/notifications", gh_mark_all_, 0)
     http.http_server_add_route(server, "PUT", "/api/v3/repos/octo/hello/notifications", gh_mark_repo_hello_, 0)
     http.server_get(server, "/api/v3/repos/octo/hello/issues/7", gh_issue_, 0)

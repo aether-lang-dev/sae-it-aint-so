@@ -41,7 +41,8 @@ SITE_PORT="${SAE_TEST_SITE_PORT:-8091}"
 DRIVER_PORT="${AETHER_UI_TEST_PORT:-9222}"
 
 # One spec at a time per machine: the page server and the driver bind fixed
-# ports (the app specs' app.json lists 8091), so concurrent runs -- several
+# ports (8091 and 9222, unless SAE_TEST_SITE_PORT and AETHER_UI_TEST_PORT
+# move them), so concurrent runs -- several
 # worktrees, several agents -- would collide. A mkdir lock is atomic on every
 # platform sae builds on (macOS has no flock); a lock whose owner has died is
 # cleared, one whose owner lives is waited for however long it has run
@@ -77,6 +78,34 @@ done
 if curl -s -o /dev/null "http://127.0.0.1:$DRIVER_PORT/widgets"; then
     echo "run_spec.sh: something already answers on driver port $DRIVER_PORT" >&2
     exit 2
+fi
+
+# The specs, the site's pages and the test apps name the default ports in
+# their text (the page server on 8091 in a page's URL, an app.json's grant, a
+# spec's expected line; the driver on 9222). On other ports -- SAE_TEST_SITE_PORT
+# and AETHER_UI_TEST_PORT, to run beside another checkout's run -- they run as
+# copies with the ports they name moved, under target/retarget/.
+SPEC_FILE="$SPEC_DIR/$SPEC.ae"
+if [ "$SITE_PORT" != 8091 ] || [ "$DRIVER_PORT" != 9222 ]; then
+    RT="$ROOT/target/retarget/$SITE_PORT-$DRIVER_PORT"
+    rm -rf "$RT" && mkdir -p "$RT"
+    retarget_() {   # retarget_ <dir> <copy>: a copy of a directory with the ports moved
+        mkdir -p "$2"
+        (cd "$1" && tar cf - .) | (cd "$2" && tar xf -)
+        find "$2" -type f \( -name '*.ts' -o -name '*.js' -o -name '*.json' -o -name '*.html' \) \
+            -exec sed -i.rt -e "s/8091/$SITE_PORT/g" -e "s/9222/$DRIVER_PORT/g" {} +
+        find "$2" -name '*.rt' -type f -delete
+    }
+    retarget_ "$SITE" "$RT/site"
+    SITE="$RT/site"
+    if [ -n "${SAE_TEST_APP:-}" ]; then
+        retarget_ "$SAE_TEST_APP" "$RT/app"
+        SAE_TEST_APP="$RT/app"
+        export SAE_TEST_APP
+    fi
+    mkdir -p "$RT/spec"
+    sed -e "s/8091/$SITE_PORT/g" -e "s/9222/$DRIVER_PORT/g" "$SPEC_FILE" > "$RT/spec/$SPEC.ae"
+    SPEC_FILE="$RT/spec/$SPEC.ae"
 fi
 
 LOG="$ROOT/target/$SPEC.log"
@@ -129,10 +158,10 @@ status=0
 if [ -n "${SAE_TEST_PARENT:-}" ]; then
     env AETHER_LIB_DIR="${SAE_TEST_LIB_DIR:+$SAE_TEST_LIB_DIR:}$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT:$ROOT/sdk" \
         SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
-        ae run "$SPEC.ae" 2>>"$LOG" || status=$?
+        ae run "$SPEC_FILE" 2>>"$LOG" || status=$?
 else
     env AETHER_LIB_DIR="${SAE_TEST_LIB_DIR:+$SAE_TEST_LIB_DIR:}$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT:$ROOT/sdk" \
         SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
-        ae run "$SPEC.ae" || status=$?
+        ae run "$SPEC_FILE" || status=$?
 fi
 exit $status
