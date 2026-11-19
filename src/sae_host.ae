@@ -9690,6 +9690,15 @@ const V_PAGE_URL = 1
 // resolves where a callback would have run.
 const HTTP_FETCH_JS = "http.fetch = function (o) { return new Promise(function (resolve) { if (typeof o === 'string') http.get(o, resolve); else http.request(o, resolve); }); };"
 
+// The JavaScript that takes each hidden __sae_* object of a wrapped namespace,
+// makes the object the page sees out of it and deletes it, so a page has only
+// `documents`, `clipboard`, `bus` and `backend`, all of it promises or plain
+// functions of the page's own.
+const DOCUMENTS_JS = "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); }, read_base64: function () { return Promise.resolve().then(function () { return raw.read64(h); }); }, write_base64: function (t) { return Promise.resolve().then(function () { raw.write64(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;"
+const CLIPBOARD_JS = "globalThis.clipboard = (function (raw) { return Object.freeze({ write_text: function (t) { return Promise.resolve().then(function () { raw.write(String(t)); }); }, read_text: function () { return Promise.resolve().then(function () { return raw.read(); }); } }); })(globalThis.__sae_clipboard); delete globalThis.__sae_clipboard;"
+const BUS_JS = "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;"
+const BACKEND_JS = "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; raw.listen(function (kind, id, ok, name, payload) { if (kind === 0) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg): name must be a string'); var a = arg === undefined ? '' : String(arg); return new Promise(function (resolve, reject) { var id = raw.call(name, a); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;"
+
 const GATE_TAG_SPACE = 71
 const GATE_TAG_ENTRY = 72
 
@@ -9706,6 +9715,8 @@ struct GateSpace {
     on: int // installed for this page
     obj: int // the JS object of an installed space
     cond: int
+    raw: int // a hidden object a wrapper takes (__sae_documents): its entries are not page-visible
+    has_obj: int // has an object of its own (a provided_space has not: its members are JavaScript's)
     name: string // describing only
     seek: string
     reach: string
@@ -9836,19 +9847,22 @@ gate_end_(g: *Gate) {
     heap.free(g)
 }
 
-// A namespace. Registering, it decides whether this page has it (as
-// api_register_ did) and makes its object and global; describing, it is on
-// for every page, whatever the page's grants.
-space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
+// The namespace in hand, begun. Registering, it decides whether this page
+// has it (as api_register_ did) and, if it has an object (has_obj), makes the
+// object and its global; describing, it is on for every page, whatever the
+// page's grants.
+gate_space_(g: *Gate, name: string, cond: int, seek: string, raw: int, has_obj: int) -> ptr {
     gate_close_space_(g)
     s = g.sp as *GateSpace
     s.on = 1
     s.cond = cond
+    s.raw = raw
+    s.has_obj = has_obj
     if g.mode == G_REGISTER {
         p = g.p as *Page
         if cond != WHEN_ALWAYS && string.contains(p.absent, ",${seek},") == 1 { s.on = 0 }
         if cond == WHEN_APP_SEEKS && browser_of_(p).app_dir == "" { s.on = 0 }
-        if s.on == 1 {
+        if s.on == 1 && has_obj == 1 {
             s.obj = quickjs.new_object(p.ctx)
             js_set_global_(p.ctx, name, s.obj)
         }
@@ -9859,9 +9873,30 @@ space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
     return s
 }
 
+// A namespace of the page: an object, and the global that names it.
+space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
+    return gate_space_(g, name, cond, seek, 0, 1)
+}
+
+// The hidden object a wrapper takes and deletes (__sae_documents): made and
+// registered like a space, but the page never sees it, so it is not part of
+// what the page is held to. A js_wrapper in its block makes the object the
+// page does see; a provided_space after it describes that.
+raw_space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
+    return gate_space_(g, name, cond, seek, 1, 1)
+}
+
+// A namespace whose object JavaScript makes (documents, from a wrapper): it
+// makes nothing, and its provided members are what the page is held to.
+provided_space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
+    return gate_space_(g, name, cond, seek, 0, 0)
+}
+
 // One function of the space: obj[name] calls f, `arity` its .length.
 api(_ctx: @keep ptr, name: string, f: @keep fn(*Page, int, int) -> int, arity: int) -> ptr {
+    gate_check_(_ctx, GATE_TAG_SPACE, "api")
     s = _ctx as *GateSpace
+    if s.has_obj == 0 { gate_wrong_ctx_("api in a provided_space") }
     g = s.g as *Gate
     gate_flush_(g)
     if g.mode == G_REGISTER {
@@ -9871,6 +9906,7 @@ api(_ctx: @keep ptr, name: string, f: @keep fn(*Page, int, int) -> int, arity: i
         }
         return g.en
     }
+    if s.raw == 1 { return gate_begin_(g, "raw", name, arity) }
     return gate_begin_(g, "fn", name, arity)
 }
 
@@ -9883,6 +9919,14 @@ global_fn(_ctx: @keep ptr, g: *Gate, name: string, f: @keep fn(*Page, int, int) 
         return g.en
     }
     return gate_begin_(g, "global", name, arity)
+}
+
+// A bare global function that the prelude's JavaScript provides (state):
+// nothing is registered, but the page sees it.
+provided_global(_ctx: @keep ptr, g: *Gate, name: string, arity: int) -> ptr {
+    gate_close_space_(g)
+    if g.mode == G_REGISTER { return g.en }
+    return gate_begin_(g, "provided_global", name, arity)
 }
 
 // A builtin's member the page API replaces: global[name] calls f (Date.now).
@@ -11239,6 +11283,123 @@ gate_spec_(g: *Gate) {
             doc("Removes a file or folder in a granted folder.")
         }
     }
+    // documents: the person's files, picked; the page gets handles, never
+    // paths. The raw functions go in a hidden global the wrapper takes and
+    // deletes, so a page has only `documents`, all of it promises.
+    raw_space(g, "__sae_documents", WHEN_APP_SEEKS, "documents") {
+        reach("documents")
+        api("open", sae_docs_pick_open, 1) { arg("title", T_STR) }
+        api("save", sae_docs_pick_save, 1) { arg("name", T_STR) }
+        api("name", sae_docs_name, 1) { arg("h", T_INT) }
+        api("read", sae_docs_read_text, 1) { arg("h", T_INT) }
+        api("write", sae_docs_write_text, 2) {
+            arg("h", T_INT)
+            arg("text", T_STR)
+        }
+        api("read64", sae_docs_read_base64, 1) { arg("h", T_INT) }
+        api("write64", sae_docs_write_base64, 2) {
+            arg("h", T_INT)
+            arg("b64", T_STR)
+        }
+        js_wrapper("sae:documents", DOCUMENTS_JS)
+    }
+    provided_space(g, "documents", WHEN_APP_SEEKS, "documents") {
+        provided("pick_open", 1) {
+            opt("title", T_STR)
+            gives_ts("Promise<sae.Document | null>")
+            doc("The system's open dialog: a promise of a handle to the one file picked, or null when the person cancels. A page never sees a path.")
+        }
+        provided("pick_save", 1) {
+            opt("name", T_STR)
+            gives_ts("Promise<sae.Document | null>")
+            doc("The system's save dialog, suggesting name: a promise of a handle to the one file chosen, or null.")
+        }
+    }
+    // clipboard: writes while the person clicks or types, reads only their
+    // paste (services/clipboard has the rules), in the browser and in apps.
+    raw_space(g, "__sae_clipboard", WHEN_APP_OR_WEB_SEEKS, "clipboard") {
+        reach("clipboard")
+        api("write", sae_clip_write, 1) { arg("text", T_STR) }
+        api("read", sae_clip_read, 0) { gives(T_STR) }
+        js_wrapper("sae:clipboard", CLIPBOARD_JS)
+    }
+    provided_space(g, "clipboard", WHEN_APP_OR_WEB_SEEKS, "clipboard") {
+        provided("write_text", 1) {
+            arg("text", T_STR)
+            gives_promise(T_VOID)
+            doc("Puts text on the clipboard; allowed while the person clicks or types.")
+        }
+        provided("read_text", 0) {
+            gives_promise(T_STR)
+            doc("The text the person pasted; refused except in answer to their paste.")
+        }
+    }
+    // bus: the control bus (app mode, capabilities.controlBus, --control-bus).
+    // A request reaches the handler as its command string; what the handler
+    // gives (or its promise's value) goes back as JSON. bus.serve(fn, stopped):
+    // stopped(reason) runs, in an entry of its own, when a request was answered
+    // as failed without the handler: "interrupted" (the page's time limit
+    // stopped it) or "deadline" (it was still running at BUS_DEADLINE_MS).
+    raw_space(g, "__sae_bus", WHEN_APP_SEEKS, "control-bus") {
+        reach("bus")
+        api("serve", sae_bus_serve, 2) {
+            arg("fn", T_FN)
+            opt("stopped", T_FN)
+        }
+        api("stop", sae_bus_stop, 0) { }
+        api("answer", sae_bus_answer, 4) {
+            arg("id", T_INT)
+            arg("ok", T_INT)
+            arg("json", T_STR)
+            arg("error", T_STR)
+        }
+        js_wrapper("sae:bus", BUS_JS)
+    }
+    provided_space(g, "bus", WHEN_APP_SEEKS, "control-bus") {
+        provided("serve", 2) {
+            arg_ts("fn", "(command: string) => unknown")
+            opt_ts("stopped", "(reason: string) => void")
+            gives_promise(T_VOID)
+            doc("Answers each request of the control bus with fn(command), its value (or its promise's) going back as JSON; stopped(reason) when a request was answered as failed without the handler (\"interrupted\" or \"deadline\").")
+        }
+        provided("stop", 0) {
+            doc("Stops serving.")
+        }
+    }
+    // backend: the app's own process (capabilities.backend, docs/app-backend.md).
+    // invoke's promise is settled by the dispatcher when the answer comes
+    // (backend_tick_), or at once when there is no backend to ask.
+    raw_space(g, "__sae_backend", WHEN_APP_SEEKS, "backend") {
+        reach("backend")
+        api("listen", sae_backend_listen, 1) { arg("fn", T_FN) }
+        api("call", sae_backend_call, 2) {
+            arg("name", T_STR)
+            arg("arg", T_STR)
+        }
+        api("why", sae_backend_why, 0) { gives(T_STR) }
+        js_wrapper("sae:backend", BACKEND_JS)
+    }
+    provided_space(g, "backend", WHEN_APP_SEEKS, "backend") {
+        provided("invoke", 2) {
+            arg("name", T_STR)
+            opt("arg", T_STR)
+            gives_promise(T_STR)
+            doc("Calls the app's backend process by name with a string; a promise of its answer, rejected with an Error when it fails or there is no backend.")
+        }
+        provided("on", 2) {
+            arg("name", T_STR)
+            arg_ts("fn", "(payload: string) => void")
+            doc("fn(payload) when the backend sends an event called name.")
+        }
+        provided("on_gone", 1) {
+            arg_ts("fn", "(why: string) => void")
+            doc("fn(why) when the backend has stopped.")
+        }
+        provided("running", 0) {
+            gives(T_BOOL)
+            doc("Whether the backend is running.")
+        }
+    }
     space(g, "printing", WHEN_APP_SEEKS, "print") {
         reach("printing")
         api("pdf", sae_printing_pdf, 2) {
@@ -11253,6 +11414,52 @@ gate_spec_(g: *Gate) {
             arg("url", T_STR)
             doc("Hands a URL to the system (the default browser), for the granted prefixes.")
         }
+    }
+    // The reactive surface, as globals too (src/sae_prelude.js).
+    provided_global(g, "state", 1) {
+        arg("initial", T_ANY)
+        signature("<T>(initial: T): sae.State<T>")
+        doc("As ui.state: a reactive value.")
+    }
+    provided_global(g, "computed", 1) {
+        arg("fn", T_FN)
+        rest("states")
+        signature("<T>(fn: () => T, ...states: sae.State<any>[]): sae.State<T>")
+        doc("As ui.computed: a state that follows fn().")
+    }
+    provided_global(g, "bind", 1) {
+        arg("widget", T_ANY)
+        rest("rest")
+        signature("<W extends sae.Widget>(widget: W, state: sae.State<any> | number): W")
+        signature("(strings: TemplateStringsArray, ...values: unknown[]): sae.Widget")
+        doc("As ui.bind: the widget's text follows the state.")
+    }
+    provided_global(g, "bind_enabled", 3) {
+        arg("widget", T_WIDGET)
+        arg("state", T_ANY)
+        opt("invert", T_FLAG)
+        gives(T_WIDGET)
+        doc("As ui.bind_enabled.")
+    }
+    provided_global(g, "bind_hidden", 3) {
+        arg("widget", T_WIDGET)
+        arg("state", T_ANY)
+        opt("invert", T_FLAG)
+        gives(T_WIDGET)
+        doc("As ui.bind_hidden.")
+    }
+    provided_global(g, "each", 3) {
+        arg("list", T_ANY)
+        arg("key", T_ANY)
+        arg("render", T_FN)
+        gives(T_WIDGET)
+        signature("<T>(list: sae.State<T[]>, key: keyof T | ((item: T) => unknown), render: (item: T, i: number) => unknown): sae.Widget")
+        doc("As ui.each: a keyed column of rows.")
+    }
+    provided_global(g, "batch", 1) {
+        arg("fn", T_FN)
+        signature("<T>(fn: () => T): T")
+        doc("As ui.batch: the observers of every state fn sets run once, at the end.")
     }
     space(g, "storage", WHEN_ALWAYS, "") {
         reach("storage_read_")
@@ -11754,63 +11961,6 @@ gate_describe_() {
 api_register_(p: *Page) {
     ab = p.browser as *Browser
     q = p.ctx
-    // documents: the person's files, picked; the page gets handles, never
-    // paths. The raw gates go in a hidden global the wrapper takes and
-    // deletes, so a page has only `documents`, all of it promises.
-    if ab.app_dir != "" && string.contains(p.absent, ",documents,") == 0 {
-        dr = quickjs.new_object(q)
-        reg_(p, q, dr, "open", 1, sae_docs_pick_open)
-        reg_(p, q, dr, "save", 1, sae_docs_pick_save)
-        reg_(p, q, dr, "name", 1, sae_docs_name)
-        reg_(p, q, dr, "read", 1, sae_docs_read_text)
-        reg_(p, q, dr, "write", 2, sae_docs_write_text)
-        reg_(p, q, dr, "read64", 1, sae_docs_read_base64)
-        reg_(p, q, dr, "write64", 2, sae_docs_write_base64)
-        js_set_global_(q, "__sae_documents", dr)
-        quickjs.release(q, dr)
-        dw, _dwe = js_eval_(q, "globalThis.documents = (function (raw) { const handle = function (h) { return h ? Object.freeze({ name: raw.name(h), read_text: function () { return Promise.resolve().then(function () { return raw.read(h); }); }, write_text: function (t) { return Promise.resolve().then(function () { raw.write(h, String(t)); }); }, read_base64: function () { return Promise.resolve().then(function () { return raw.read64(h); }); }, write_base64: function (t) { return Promise.resolve().then(function () { raw.write64(h, String(t)); }); } }) : null; }; return Object.freeze({ pick_open: function (title) { return Promise.resolve().then(function () { return handle(raw.open(title === undefined ? 'Open' : String(title))); }); }, pick_save: function (name) { return Promise.resolve().then(function () { return handle(raw.save(name === undefined ? '' : String(name))); }); } }); })(globalThis.__sae_documents); delete globalThis.__sae_documents;", "sae:documents")
-        quickjs.release(q, dw)
-    }
-    // clipboard: writes while the person clicks or types, reads only their
-    // paste (services/clipboard has the rules), in the browser and in apps.
-    if string.contains(p.absent, ",clipboard,") == 0 {
-        cr = quickjs.new_object(q)
-        reg_(p, q, cr, "write", 1, sae_clip_write)
-        reg_(p, q, cr, "read", 0, sae_clip_read)
-        js_set_global_(q, "__sae_clipboard", cr)
-        quickjs.release(q, cr)
-        cw, _cwe = js_eval_(q, "globalThis.clipboard = (function (raw) { return Object.freeze({ write_text: function (t) { return Promise.resolve().then(function () { raw.write(String(t)); }); }, read_text: function () { return Promise.resolve().then(function () { return raw.read(); }); } }); })(globalThis.__sae_clipboard); delete globalThis.__sae_clipboard;", "sae:clipboard")
-        quickjs.release(q, cw)
-    }
-    // bus: the control bus (app mode, capabilities.controlBus, --control-bus).
-    // A request reaches the handler as its command string; what the handler
-    // gives (or its promise's value) goes back as JSON. bus.serve(fn, stopped):
-    // stopped(reason) runs, in an entry of its own, when a request was answered
-    // as failed without the handler: "interrupted" (the page's time limit
-    // stopped it) or "deadline" (it was still running at BUS_DEADLINE_MS).
-    if ab.app_dir != "" && string.contains(p.absent, ",control-bus,") == 0 {
-        br = quickjs.new_object(q)
-        reg_(p, q, br, "serve", 2, sae_bus_serve)
-        reg_(p, q, br, "stop", 0, sae_bus_stop)
-        reg_(p, q, br, "answer", 4, sae_bus_answer)
-        js_set_global_(q, "__sae_bus", br)
-        quickjs.release(q, br)
-        bw, _bwe = js_eval_(q, "globalThis.bus = (function (raw) { return Object.freeze({ serve: function (fn, stopped) { if (typeof fn !== 'function') throw new TypeError('bus.serve(fn): fn must be a function'); if (stopped !== undefined && typeof stopped !== 'function') throw new TypeError('bus.serve(fn, stopped): stopped must be a function'); raw.serve(function (id, command) { Promise.resolve().then(function () { return fn(command); }).then(function (r) { raw.answer(id, 1, JSON.stringify(r === undefined ? null : r), ''); }, function (e) { raw.answer(id, 0, '', String(e && e.message !== undefined ? e.message : e)); }); }, stopped === undefined ? undefined : function (reason) { return stopped(String(reason)); }); return Promise.resolve(); }, stop: function () { raw.stop(); } }); })(globalThis.__sae_bus); delete globalThis.__sae_bus;", "sae:bus")
-        quickjs.release(q, bw)
-    }
-    // backend: the app's own process (capabilities.backend, docs/app-backend.md).
-    // invoke's promise is settled by the dispatcher when the answer comes
-    // (backend_tick_), or at once when there is no backend to ask.
-    if ab.app_dir != "" && string.contains(p.absent, ",backend,") == 0 {
-        bko = quickjs.new_object(q)
-        reg_(p, q, bko, "listen", 1, sae_backend_listen)
-        reg_(p, q, bko, "call", 2, sae_backend_call)
-        reg_(p, q, bko, "why", 0, sae_backend_why)
-        js_set_global_(q, "__sae_backend", bko)
-        quickjs.release(q, bko)
-        bkw, _bke = js_eval_(q, "globalThis.backend = (function (raw) { var waiting = {}; var handlers = {}; var gone = []; raw.listen(function (kind, id, ok, name, payload) { if (kind === 0) { var w = waiting[id]; if (w === undefined) return; delete waiting[id]; if (ok) w.resolve(payload); else w.reject(new Error(payload)); } else if (kind === 1) { var h = handlers[name]; if (h !== undefined) h(payload); } else { for (var i = 0; i < gone.length; i++) gone[i](payload); } }); return Object.freeze({ invoke: function (name, arg) { if (typeof name !== 'string') throw new TypeError('backend.invoke(name, arg): name must be a string'); var a = arg === undefined ? '' : String(arg); return new Promise(function (resolve, reject) { var id = raw.call(name, a); if (id <= 0) { reject(new Error(raw.why())); return; } waiting[id] = { resolve: resolve, reject: reject }; }); }, on: function (name, fn) { if (typeof name !== 'string' || typeof fn !== 'function') throw new TypeError('backend.on(name, fn): a name and a function'); handlers[name] = function (d) { return fn(d); }; }, on_gone: function (fn) { if (typeof fn !== 'function') throw new TypeError('backend.on_gone(fn): fn must be a function'); gone.push(function (why) { return fn(String(why)); }); }, running: function () { return raw.why() === ''; } }); })(globalThis.__sae_backend); delete globalThis.__sae_backend;", "sae:backend")
-        quickjs.release(q, bkw)
-    }
 
     // ===== wave1/sqlite: sqlite.<name> for each database the page seeks and app.json declares =====
     sdbs = sqlite_page_dbs_(p)

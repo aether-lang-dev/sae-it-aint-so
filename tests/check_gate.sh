@@ -51,7 +51,7 @@ fi
 
 # --- (ii) the live objects ---
 for mode in web webseeks all some unsought optional none \
-    just-local-filesystem just-outgoing-http just-open-urls just-print just-documents just-clipboard just-clipboard-read just-control-bus; do
+    just-local-filesystem just-outgoing-http just-open-urls just-print just-documents just-clipboard just-clipboard-read just-control-bus just-backend; do
     "$GATE" --expect "$mode" < "$WORK/describe.jsonl" | LC_ALL=C sort > "$WORK/expect-$mode.txt"
     sh "$ROOT/tests/gate/dump.sh" "$mode" 2>&1 | grep '^[GM] ' > "$WORK/dump-$mode.txt"
     # the dump's lines about the names the spec describes

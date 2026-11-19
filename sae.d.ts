@@ -43,6 +43,14 @@ declare namespace sae {
     body?: string;
     contentType?: string;
   }
+  /** A file the person picked, by handle: the page never sees its path, and a handle reaches that one file only. */
+  interface Document {
+    readonly name: string;
+    read_text(): Promise<string>;
+    write_text(text: string): Promise<void>;
+    read_base64(): Promise<string>;
+    write_base64(b64: string): Promise<void>;
+  }
   /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */
   type Timer = number;
   /** An id from requestAnimationFrame, for cancelAnimationFrame. */
@@ -442,6 +450,38 @@ declare const fs: {
   /** Removes a file or folder in a granted folder. */
   remove(path: string): void;
 };
+/** @seeks documents @appOnly */
+declare const documents: {
+  /** The system's open dialog: a promise of a handle to the one file picked, or null when the person cancels. A page never sees a path. */
+  pick_open(title?: string): Promise<sae.Document | null>;
+  /** The system's save dialog, suggesting name: a promise of a handle to the one file chosen, or null. */
+  pick_save(name?: string): Promise<sae.Document | null>;
+};
+/** @seeks clipboard */
+declare const clipboard: {
+  /** Puts text on the clipboard; allowed while the person clicks or types. */
+  write_text(text: string): Promise<void>;
+  /** The text the person pasted; refused except in answer to their paste. */
+  read_text(): Promise<string>;
+};
+/** @seeks control-bus @appOnly */
+declare const bus: {
+  /** Answers each request of the control bus with fn(command), its value (or its promise's) going back as JSON; stopped(reason) when a request was answered as failed without the handler ("interrupted" or "deadline"). */
+  serve(fn: (command: string) => unknown, stopped?: (reason: string) => void): Promise<void>;
+  /** Stops serving. */
+  stop(): void;
+};
+/** @seeks backend @appOnly */
+declare const backend: {
+  /** Calls the app's backend process by name with a string; a promise of its answer, rejected with an Error when it fails or there is no backend. */
+  invoke(name: string, arg?: string): Promise<string>;
+  /** fn(payload) when the backend sends an event called name. */
+  on(name: string, fn: (payload: string) => void): void;
+  /** fn(why) when the backend has stopped. */
+  on_gone(fn: (why: string) => void): void;
+  /** Whether the backend is running. */
+  running(): boolean;
+};
 /** @seeks print @appOnly */
 declare const printing: {
   /** A PDF the page made (its bytes as base64) to the system's print dialog, the job named title. */
@@ -452,6 +492,21 @@ declare const shell: {
   /** Hands a URL to the system (the default browser), for the granted prefixes. */
   open(url: string): void;
 };
+/** As ui.state: a reactive value. */
+declare function state<T>(initial: T): sae.State<T>;
+/** As ui.computed: a state that follows fn(). */
+declare function computed<T>(fn: () => T, ...states: sae.State<any>[]): sae.State<T>;
+/** As ui.bind: the widget's text follows the state. */
+declare function bind<W extends sae.Widget>(widget: W, state: sae.State<any> | number): W;
+declare function bind(strings: TemplateStringsArray, ...values: unknown[]): sae.Widget;
+/** As ui.bind_enabled. */
+declare function bind_enabled(widget: sae.Widget, state: unknown, invert?: boolean | number): sae.Widget;
+/** As ui.bind_hidden. */
+declare function bind_hidden(widget: sae.Widget, state: unknown, invert?: boolean | number): sae.Widget;
+/** As ui.each: a keyed column of rows. */
+declare function each<T>(list: sae.State<T[]>, key: keyof T | ((item: T) => unknown), render: (item: T, i: number) => unknown): sae.Widget;
+/** As ui.batch: the observers of every state fn sets run once, at the end. */
+declare function batch<T>(fn: () => T): T;
 declare const storage: {
   /** The value stored under key, or null; keys are letters, digits, '.', '_' and '-'. */
   get(key: string): string | null;

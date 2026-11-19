@@ -23,9 +23,9 @@ What changes in the design:
 - `string` cannot be written bare in a seal list (E0100, reserved word): write it in backticks. `seal except` may be on any line of the body, but put it first as the page veto does.
 - The seal check that reads `api(...)` lines for the host function name now takes the second argument, not the last.
 
-## As built, steps 1 to 6 (2026-11-19)
+## As built, steps 1 to 7 (2026-11-19)
 
-Steps 1 to 6 are in `src/sae_host.ae` (from the "the gate" banner to `gate_spec_`), `tools/saegate.ae`, `tools/gen-dts.sh`, `tests/check_gate.sh`, `tests/gate/dump.{ts,sh}` and the checked-in `sae.d.ts`. `storage`, `browserContext`, `performance`, `ui`, `vg`, `http`, `fs`, `shell`, `printing`, `print`, the timer globals and `Date.now` are in the spec; `documents`, `clipboard`, `bus`, `backend`, `sqlite`, `natives`, the prelude's globals and `$sae` are not yet. Where the sections below disagree with this one, this one wins.
+Steps 1 to 7 are in `src/sae_host.ae` (from the "the gate" banner to `gate_spec_`), `tools/saegate.ae`, `tools/gen-dts.sh`, `tests/check_gate.sh`, `tests/gate/dump.{ts,sh}` and the checked-in `sae.d.ts`. `storage`, `browserContext`, `performance`, `ui`, `vg`, `http`, `fs`, `shell`, `printing`, `documents`, `clipboard`, `bus`, `backend`, `print`, the timer globals, the prelude's globals and `Date.now` are in the spec; `sqlite`, `natives` and `$sae` are not yet. Where the sections below disagree with this one, this one wins.
 
 **The DSL, as written** (each setter checks the tag that begins its context, `GATE_TAG_SPACE` or `GATE_TAG_ENTRY`, and exits if it was used in the wrong block):
 
@@ -36,6 +36,9 @@ Steps 1 to 6 are in `src/sae_host.ae` (from the "the gate" banner to `gate_spec_
 | `global_fn(g, name, host_fn, arity) { ... }` | spec | a bare global |
 | `patch(g, global, name, host_fn, arity) { ... }` | spec | a member of a builtin that the page API replaces (`Date.now`). Only for a builtin that the dump does not enumerate: its page-side lines would be compared with the one it describes |
 | `value(name, type, src)` | space | a readonly string, set at registration (`browserContext.currentUrl`) |
+| `raw_space(g, name, cond, seek) { ... }` | spec | the hidden `__sae_*` object that a wrapper takes and deletes: registered like a space, its entries kind `raw` (checked for arity, never part of what the page is held to; the dump holds that the page has no `__sae_*` global left) |
+| `provided_space(g, name, cond, seek) { ... }` | spec | the namespace the wrapper makes (`documents`): no object of its own, only `provided` members. `api` in one is refused |
+| `provided_global(g, name, arity) { ... }` | spec | a bare global the prelude provides (`state`) |
 | `provided(name, arity) { ... }`, `provided_value(name, type)` | space | a member that the prelude's JavaScript, or a wrapper, provides: nothing is registered, but the page sees it, so it is described and held to the live page. Replaces the design's `surface`, whose name aether-ui's `ui` module already has (as it has `wrap`) |
 | `js_wrapper(name, source)` | space | evaluates `source` in the page's runtime once the space's functions are registered (`http.fetch`); nothing when the space is off or describing. Replaces the design's `wrap` |
 | `arg`, `opt`, `rest` | entry | a required argument, one that may be left out, the rest parameter (past the arity, not counted) |
@@ -54,7 +57,7 @@ Steps 1 to 6 are in `src/sae_host.ae` (from the "the gate" banner to `gate_spec_
 **What the checks hold** (`tests/check_gate.sh`; `tests/check_page_veto.sh`):
 
 - (i) `sae.d.ts` is what `tools/gen-dts.sh` makes of `sae --gate-describe`; (iii) each arity is its count of parameters that are not `rest` or `beyond`; (iv) the name audit above.
-- (ii) the page's own keys, `typeof` and `.length`, in fifteen modes of `tests/gate/dump.sh`: a web page seeking nothing or `outgoing-http` and `clipboard`; an app granted and seeking everything, two privileges or nothing; an app granted nothing that seeks everything as optional; an app granted nothing; and eight apps, each granted everything and seeking one privilege. The last eight are what shows a seek spelled wrong or copied from another space (the others cannot tell `print` from `open-urls`). The `app_dir` half of `WHEN_APP_SEEKS` is not observable: a web page cannot seek `local-filesystem` (it is refused at load, or absent as optional), so `available_` already keeps the object out.
+- (ii) the page's own keys, `typeof` and `.length`, in sixteen modes of `tests/gate/dump.sh`: a web page seeking nothing or `outgoing-http` and `clipboard`; an app granted and seeking everything, two privileges or nothing; an app granted nothing that seeks everything as optional; an app granted nothing; and nine apps, each granted everything and seeking one privilege. The last eight are what shows a seek spelled wrong or copied from another space (the others cannot tell `print` from `open-urls`). The `app_dir` half of `WHEN_APP_SEEKS` is not observable: a web page cannot seek `local-filesystem` (it is refused at load, or absent as optional), so `available_` already keeps the object out.
 - The checks hold the spec to the live page and to `sae.d.ts`; they do not hold the spec's text to the truth. A wrong `when`, `seek` or type that the spec and the registration share agrees with itself. The byte-identical dumps before and after each step (the fixtures kept beside the checkout, never in the tree) are what held the moved namespaces to what they were; from step 7 on the dump is the only fixture, so keep one.
 - `check_page_veto.sh` reads `api_register_`, `ae_register_` and the spec, and fails a function with the page-API signature that nothing binds (dead code the check could not see; thirteen superseded `vg` functions and `sae_bc_current_url` were that).
 
@@ -62,7 +65,8 @@ Steps 1 to 6 are in `src/sae_host.ae` (from the "the gate" banner to `gate_spec_
 
 - Step 4 (a) deleted the superseded first `vg` registrations *and* the thirteen functions behind them. `ui.image` is registered with the other `ui` entries, not in the `vg` block. `vg.easings` (an object) and `vg.animate`, `vg.items` (functions) are `provided`, and `vg.view_box` takes a state or a function (the prelude wraps it).
 - Step 5: `ui` is one space (176 host functions, eight provided, the reactive layer's primitives `internal`). The `ui` members that are also globals (`state`, `bind` and so on) are `provided` on `ui` now and become `provided_global` at step 7.
-- Step 6: `http.fetch` is a `provided` member with a `js_wrapper`; the raw-object-and-wrapper shape of `documents`, `clipboard`, `bus` and `backend` (step 7) will need a space that creates the hidden `__sae_*` global but is not described as part of the page, and a described space that creates nothing.
+- Step 6: `http.fetch` is a `provided` member with a `js_wrapper`.
+- Step 7: `documents`, `clipboard`, `bus` and `backend` are a `raw_space` (`__sae_documents`, with the host functions and the `js_wrapper`) followed by a `provided_space` (the object the page sees). The wrappers' JavaScript is `DOCUMENTS_JS`, `CLIPBOARD_JS`, `BUS_JS` and `BACKEND_JS` constants. An app that declares a backend is in the dump (`no-such-backend`, which sae reports and goes on), and `just-backend` is its mode.
 - The conditions of a space are decided in `space()` once; `api_register_` no longer tests any.
 
 # SUMMARY (under 500 words)
@@ -84,7 +88,7 @@ Steps 1 to 6 are in `src/sae_host.ae` (from the "the gate" banner to `gate_spec_
 4. `vg`: delete the duplicate first registrations, then convert. (Done.)
 5. `ui`: one commit, not chunks. (Done.)
 6. Capability-gated namespaces: `http`, `fs`, `shell`, `printing`. (Done.)
-7. Wrapped namespaces (`documents`, `clipboard`, `bus`, `backend`) and the prelude's globals, as `surface` entries.
+7. Wrapped namespaces (`documents`, `clipboard`, `bus`, `backend`) and the prelude's globals. (Done.)
 8. Dynamic namespaces (`sqlite.<db>`, `natives.<mod>`) and the loader's `$sae`.
 9. Turn on the drift check: no `reg_`, `glob_fn_`, `host_fn_` or `set_global` outside the gate DSL.
 10. Replace the pasted `hide` lines with `seal except`, one namespace at a time, and enforce the subset rule.

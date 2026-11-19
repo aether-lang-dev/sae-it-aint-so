@@ -13,7 +13,8 @@
 //                                             count of non-rest parameters
 //
 // The line's fields: kind (fn, global, patch, value, provided,
-// provided_value), space, when (always, app_or_web_seeks, app_seeks), seek,
+// provided_value, provided_global, raw: a hidden object's function, which a
+// page never sees), space, when (always, app_or_web_seeks, app_seeks), seek,
 // reach, name, arity, params (each {k: arg|opt|rest|beyond, n, t}, t a spec type or "ts:..."), gives, ts (the
 // TypeScript of a "raw" result), promise, doc, internal.
 
@@ -165,7 +166,7 @@ mode_has_(mode: string) -> string {
     if string.starts_with(mode, "just-") == 1 { return ",${string.substring(mode, 5, string.length(mode))}," }
     if mode == "webseeks" || mode == "some" { return ",outgoing-http,clipboard," }
     if mode == "optional" { return ",clipboard," }
-    if mode == "all" { return ",local-filesystem,outgoing-http,open-urls,print,documents,clipboard,clipboard-read,control-bus," }
+    if mode == "all" { return ",local-filesystem,outgoing-http,open-urls,print,documents,clipboard,clipboard-read,control-bus,backend," }
     return ","
 }
 
@@ -235,6 +236,8 @@ dts_header_(out: ptr) {
     _id = strbuilder.append(out, "  /** What http.get, post and request return. */\n")
     _ie = strbuilder.append(out, "  interface HttpRequest {\n    id: number;\n    cancel(): void;\n  }\n")
     _if = strbuilder.append(out, "  interface HttpOptions {\n    method?: string;\n    url: string;\n    headers?: Record<string, string>;\n    body?: string;\n    contentType?: string;\n  }\n")
+    _ig = strbuilder.append(out, "  /** A file the person picked, by handle: the page never sees its path, and a handle reaches that one file only. */\n")
+    _ih = strbuilder.append(out, "  interface Document {\n    readonly name: string;\n    read_text(): Promise<string>;\n    write_text(text: string): Promise<void>;\n    read_base64(): Promise<string>;\n    write_base64(b64: string): Promise<void>;\n  }\n")
     _i = strbuilder.append(out, "  /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */\n")
     _j = strbuilder.append(out, "  type Timer = number;\n")
     _j2 = strbuilder.append(out, "  /** An id from requestAnimationFrame, for cancelAnimationFrame. */\n")
@@ -272,10 +275,16 @@ main() {
                     _w = io.stderr_write("FAIL ${space}.${name}: arity ${int_of_(e, "arity")} but ${nonrest_(params)} non-rest parameters\n")
                     bad = bad + 1
                 }
+            } else if kind == "raw" && expect_mode != "" {
+                // a hidden object a wrapper deletes: the page never sees it
+                if space != cur {
+                    cur = space
+                    _r = strbuilder.append(out, "G ${space} absent\n")
+                }
             } else if expect_mode != "" {
                 if kind == "patch" {
                     _a = strbuilder.append(out, "M ${space}.${name} ${shape_of_(e)}\n")
-                } else if kind == "global" {
+                } else if kind == "global" || kind == "provided_global" {
                     _b = strbuilder.append(out, "G ${name} ${shape_of_(e)}\n")
                 } else {
                     here = present_(e, expect_mode)
@@ -295,14 +304,24 @@ main() {
                         }
                     }
                 }
-            } else if kind != "patch" && int_of_(e, "internal") == 0 {
-                if kind == "global" {
+            } else if kind != "patch" && kind != "raw" && int_of_(e, "internal") == 0 {
+                if kind == "global" || kind == "provided_global" {
                     if cur != "" {
                         _g = strbuilder.append(out, "};\n")
                         cur = ""
                     }
                     doc_(out, "", e)
-                    _h = strbuilder.append(out, "declare function ${name}(${ts_params_(params, 1)}): ${ts_result_(e)};\n")
+                    if str_of_(e, "sigs") != "" {
+                        gsigs = string.split(str_of_(e, "sigs"), "\n")
+                        gn = string.string_array_size(gsigs)
+                        gi = 0
+                        while gi < gn {
+                            _gs = strbuilder.append(out, "declare function ${name}${string.string_array_get(gsigs, gi)};\n")
+                            gi = gi + 1
+                        }
+                    } else {
+                        _h = strbuilder.append(out, "declare function ${name}(${ts_params_(params, 1)}): ${ts_result_(e)};\n")
+                    }
                 } else {
                     if space != cur {
                         if cur != "" { _i = strbuilder.append(out, "};\n") }

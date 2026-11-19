@@ -9,7 +9,9 @@ const names = ["ui", "vg", "storage", "browserContext", "performance", "print",
   "requestAnimationFrame", "cancelAnimationFrame",
   "state", "computed", "bind", "bind_enabled", "bind_hidden", "each", "batch",
   "http", "fs", "documents", "clipboard", "bus", "backend", "printing", "shell",
-  "sqlite", "natives"];
+  "sqlite", "natives",
+  // the hidden objects a wrapper takes and deletes: a page must never see one
+  "__sae_documents", "__sae_clipboard", "__sae_bus", "__sae_backend", "__sae_natives"];
 const g: any = globalThis;
 const shape = (v: any): string => {
   const t = typeof v;

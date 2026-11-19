@@ -11,7 +11,7 @@
 #   none        an app that grants nothing and seeks nothing
 #   just-<priv> an app that grants everything and seeks only <priv>, one of
 #               local-filesystem outgoing-http open-urls print documents
-#               clipboard clipboard-read control-bus: which space each
+#               clipboard clipboard-read control-bus backend: which space each
 #               privilege unlocks, so a seek spelled wrong, or taken from the
 #               wrong line, shows
 # Used by tests/check_gate.sh.
@@ -21,7 +21,7 @@ mode=${1:?mode}
 W="$ROOT/target/gate/$mode"
 rm -rf "$W" && mkdir -p "$W"
 export SAE_NO_WINDOW=1
-SEEKS_ALL="local-filesystem outgoing-http open-urls print documents clipboard clipboard-read control-bus"
+SEEKS_ALL="local-filesystem outgoing-http open-urls print documents clipboard clipboard-read control-bus backend"
 
 # The app.json that grants every privilege.
 grant_all() {
@@ -35,6 +35,7 @@ grant_all() {
     "documents": {},
     "print": {},
     "controlBus": { "name": "gatedump" },
+    "backend": { "program": "no-such-backend" },
     "clipboard": ["write", "read"]
   }
 }
