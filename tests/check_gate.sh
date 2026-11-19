@@ -9,7 +9,10 @@
 # (ii)  tests/gate/dump.ts, run headless in each mode of tests/gate/dump.sh (a
 #       web page seeking nothing or something; an app granted and seeking
 #       everything, something, nothing, or one privilege at a time, or granted
-#       nothing and seeking everything as optional), prints each global's own keys, typeof and
+#       nothing and seeking everything as optional; an app with a sqlite
+#       database and one with a native module (on its own sae, which
+#       tools/saehost.sh builds); a page with the sandbox probe on; a page that
+#       imports and so has $sae), prints each global's own keys, typeof and
 #       .length; for every global and member the spec describes, that is what
 #       the spec says that mode has (a namespace not yet in the spec is
 #       compared with nothing).
@@ -51,8 +54,15 @@ fi
 
 # --- (ii) the live objects ---
 for mode in web webseeks all some unsought optional none \
-    just-local-filesystem just-outgoing-http just-open-urls just-print just-documents just-clipboard just-clipboard-read just-control-bus just-backend; do
-    "$GATE" --expect "$mode" < "$WORK/describe.jsonl" | LC_ALL=C sort > "$WORK/expect-$mode.txt"
+    just-local-filesystem just-outgoing-http just-open-urls just-print just-documents just-clipboard just-clipboard-read just-control-bus just-backend \
+    probe module just-database just-native; do
+    # the names an each space has in the mode (tests/gate/dump.sh makes them)
+    names=""
+    case "$mode" in
+        just-database) names="sqlite=notes" ;;
+        just-native) names="natives=calc:sum+upper+spin+refuse" ;;
+    esac
+    "$GATE" --expect "$mode" --names "$names" < "$WORK/describe.jsonl" | LC_ALL=C sort > "$WORK/expect-$mode.txt"
     sh "$ROOT/tests/gate/dump.sh" "$mode" 2>&1 | grep '^[GM] ' > "$WORK/dump-$mode.txt"
     # the dump's lines about the names the spec describes
     awk 'NR == FNR { n = $2; sub(/\..*/, "", n); want[n] = 1; next }

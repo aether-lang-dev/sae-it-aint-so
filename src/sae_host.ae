@@ -9792,6 +9792,9 @@ const G_DESCRIBE = 1
 const WHEN_ALWAYS = 0
 const WHEN_APP_OR_WEB_SEEKS = 1 // not in p.absent
 const WHEN_APP_SEEKS = 2 // not in p.absent, and an installed app
+const WHEN_APP_SEEKS_EACH = 3 // an installed app that seeks at least one "<seek> <name>" it has and was not left out: sqlite's databases, natives' modules
+const WHEN_PROBE = 4 // a test build with the sandbox probe on (SAE_SANDBOX_PROBE and AETHER_UI_TEST_PORT)
+const WHEN_WRAPPED = 5 // a page that imports, or has a top-level await: its units take the loader object $sae
 
 // The types the spec speaks of, named in the description for tools/saegate.
 const T_VOID = 0
@@ -9822,6 +9825,8 @@ const T_HANDLE = 24 // a widget, or a vg scene or shape (or 0, the whole page)
 
 // What `value` takes its string from, when a page is registered.
 const V_PAGE_URL = 1
+const V_EACH_NAME = 2 // in a space_each: the name of the object it is set on (sqlite.<db>.__db)
+
 
 // http.fetch(url or options): the same request as a promise of the same
 // response object, for `await`. It runs on the same actors; the promise
@@ -9853,6 +9858,9 @@ struct GateSpace {
     on: int // installed for this page
     obj: int // the JS object of an installed space
     cond: int
+    each: int // an object for each name the page gets (sqlite.<db>), the entries registered on each
+    names: string // the names of an each space or an each-conditioned one, as ",a,b,"
+    objs: ptr // a list of the JS objects of an each space, in the order of names
     raw: int // a hidden object a wrapper takes (__sae_documents): its entries are not page-visible
     has_obj: int // has an object of its own (a provided_space has not: its members are JavaScript's)
     name: string // describing only
@@ -9922,6 +9930,9 @@ gate_type_name_(t: int) -> string {
 when_name_(w: int) -> string {
     if w == WHEN_APP_OR_WEB_SEEKS { return "app_or_web_seeks" }
     if w == WHEN_APP_SEEKS { return "app_seeks" }
+    if w == WHEN_APP_SEEKS_EACH { return "app_seeks_each" }
+    if w == WHEN_PROBE { return "probe" }
+    if w == WHEN_WRAPPED { return "wrapped" }
     return "always"
 }
 
@@ -9940,7 +9951,7 @@ gate_flush_(g: *Gate) {
     if e.open == 0 { return }
     s = g.sp as *GateSpace
     pj = strbuilder.finish(e.params)
-    line = "{\"kind\":${gate_json_(e.kind)},\"space\":${gate_json_(s.name)},\"when\":${gate_json_(when_name_(s.cond))},\"seek\":${gate_json_(s.seek)},\"reach\":${gate_json_(s.reach)},\"name\":${gate_json_(e.name)},\"arity\":${e.arity},\"params\":[${pj}],\"gives\":${gate_json_(gate_type_name_(e.gives))},\"ts\":${gate_json_(e.ts)},\"sigs\":${gate_json_(e.sigs)},\"promise\":${e.promise},\"doc\":${gate_json_(e.doc)},\"internal\":${e.internal}}\n"
+    line = "{\"kind\":${gate_json_(e.kind)},\"space\":${gate_json_(s.name)},\"when\":${gate_json_(when_name_(s.cond))},\"seek\":${gate_json_(s.seek)},\"each\":${s.each},\"reach\":${gate_json_(s.reach)},\"name\":${gate_json_(e.name)},\"arity\":${e.arity},\"params\":[${pj}],\"gives\":${gate_json_(gate_type_name_(e.gives))},\"ts\":${gate_json_(e.ts)},\"sigs\":${gate_json_(e.sigs)},\"promise\":${e.promise},\"doc\":${gate_json_(e.doc)},\"internal\":${e.internal}}\n"
     fputs(line, sae_stdout())
     e.open = 0
 }
@@ -9965,17 +9976,46 @@ gate_begin_(g: *Gate, kind: string, name: string, arity: int) -> *GateEntry {
 gate_close_space_(g: *Gate) {
     gate_flush_(g)
     s = g.sp as *GateSpace
+    if s.objs != null {
+        n = list.size(s.objs)
+        i = 0
+        while i < n {
+            ov, _ = list.get(s.objs, i)
+            quickjs.release((g.p as *Page).ctx, mem.ptr_to_long(ov))
+            i = i + 1
+        }
+        list.free(s.objs)
+        s.objs = null
+    }
     if s.obj != 0 {
         quickjs.release((g.p as *Page).ctx, s.obj)
         s.obj = 0
     }
     s.on = 0
+    s.each = 0
+    s.names = ""
     if g.mode == G_DESCRIBE {
         s.name = ""
         s.seek = ""
         s.reach = ""
         s.cond = WHEN_ALWAYS
     }
+}
+
+// The names an each-conditioned space is for, as ",a,b,": the databases the
+// page gets (seek "database") or the native modules (seek "native").
+gate_each_names_(p: *Page, seek: string) -> string {
+    if seek == "database" { return sqlite_page_dbs_(p) }
+    out = natives_page_mods_(p)
+    p.natives_set = own_(out)
+    return out
+}
+
+// The JavaScript of the page's natives object (natives_js_), for the page being registered.
+gate_natives_js_(g: *Gate) -> string {
+    if g.mode == G_DESCRIBE { return "" }
+    p = g.p as *Page
+    return natives_js_(browser_of_(p).native_jobs, p.natives_set)
 }
 
 gate_end_(g: *Gate) {
@@ -9989,20 +10029,29 @@ gate_end_(g: *Gate) {
 // has it (as api_register_ did) and, if it has an object (has_obj), makes the
 // object and its global; describing, it is on for every page, whatever the
 // page's grants.
-gate_space_(g: *Gate, name: string, cond: int, seek: string, raw: int, has_obj: int) -> ptr {
+gate_space_(g: *Gate, name: string, cond: int, seek: string, raw: int, has_obj: int, each: int) -> ptr {
     gate_close_space_(g)
     s = g.sp as *GateSpace
     s.on = 1
     s.cond = cond
     s.raw = raw
     s.has_obj = has_obj
+    s.each = each
     if g.mode == G_REGISTER {
         p = g.p as *Page
-        if cond != WHEN_ALWAYS && string.contains(p.absent, ",${seek},") == 1 { s.on = 0 }
+        if cond == WHEN_APP_SEEKS_EACH {
+            s.names = own_(gate_each_names_(p, seek))
+            if s.names == "," { s.on = 0 }
+        } else if cond == WHEN_PROBE {
+            if browser_of_(p).probe_dir == "" { s.on = 0 }
+        } else if cond == WHEN_WRAPPED {
+            if p.imports == "" && p.wrapped == 0 { s.on = 0 }
+        } else if cond != WHEN_ALWAYS && string.contains(p.absent, ",${seek},") == 1 { s.on = 0 }
         if cond == WHEN_APP_SEEKS && browser_of_(p).app_dir == "" { s.on = 0 }
         if s.on == 1 && has_obj == 1 {
             s.obj = quickjs.new_object(p.ctx)
             js_set_global_(p, name, s.obj)
+            if each == 1 { gate_each_objects_(s, p) }
         }
     } else {
         s.name = own_(name)
@@ -10011,9 +10060,40 @@ gate_space_(g: *Gate, name: string, cond: int, seek: string, raw: int, has_obj: 
     return s
 }
 
+// An object for each name of s.names, each in s.obj under its name.
+gate_each_objects_(s: *GateSpace, p: *Page) {
+    s.objs = list.new()
+    parts = string.split(s.names, ",")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        nm = string.string_array_get(parts, i)
+        i = i + 1
+        if nm == "" { continue }
+        o = quickjs.new_object(p.ctx)
+        _e = js_set_(p, s.obj, nm, o)
+        list.add(s.objs, mem.long_to_ptr(o))
+    }
+}
+
 // A namespace of the page: an object, and the global that names it.
 space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
-    return gate_space_(g, name, cond, seek, 0, 1)
+    return gate_space_(g, name, cond, seek, 0, 1, 0)
+}
+
+// A namespace with an object for each name the page gets (sqlite: one per
+// database), under the global. Its entries are registered on every one of
+// them. `seek` is the kind of the page's "seeks <seek> <name>" lines
+// ("database"); the names come from what the page seeks, the app has and
+// was not left out.
+space_each(_ctx: @keep ptr, g: *Gate, name: string, seek: string) -> ptr {
+    return gate_space_(g, name, WHEN_APP_SEEKS_EACH, seek, 0, 1, 1)
+}
+
+// The sandbox probe's object (tests only): there only in a build that
+// has the probe switched on. All its entries are internal: it is never in sae.d.ts.
+test_space(_ctx: @keep ptr, g: *Gate, name: string) -> ptr {
+    return gate_space_(g, name, WHEN_PROBE, "", 0, 1, 0)
 }
 
 // The hidden object a wrapper takes and deletes (__sae_documents): made and
@@ -10021,13 +10101,13 @@ space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
 // what the page is held to. A js_wrapper in its block makes the object the
 // page does see; a provided_space after it describes that.
 raw_space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
-    return gate_space_(g, name, cond, seek, 1, 1)
+    return gate_space_(g, name, cond, seek, 1, 1, 0)
 }
 
 // A namespace whose object JavaScript makes (documents, from a wrapper): it
 // makes nothing, and its provided members are what the page is held to.
 provided_space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
-    return gate_space_(g, name, cond, seek, 0, 0)
+    return gate_space_(g, name, cond, seek, 0, 0, 0)
 }
 
 // One function of the space: obj[name] calls f, `arity` its .length.
@@ -10040,7 +10120,17 @@ api(_ctx: @keep ptr, name: string, f: @keep fn(*Page, int, int) -> int, arity: i
     if g.mode == G_REGISTER {
         if s.on == 1 {
             p = g.p as *Page
-            reg_(p, p.ctx, s.obj, name, arity, f)
+            if s.each == 1 {
+                n = list.size(s.objs)
+                i = 0
+                while i < n {
+                    ov, _ = list.get(s.objs, i)
+                    reg_(p, p.ctx, mem.ptr_to_long(ov), name, arity, f)
+                    i = i + 1
+                }
+            } else {
+                reg_(p, p.ctx, s.obj, name, arity, f)
+            }
         }
         return g.en
     }
@@ -10085,22 +10175,49 @@ patch(_ctx: @keep ptr, g: *Gate, global: string, name: string, f: @keep fn(*Page
 // A readonly string property of the space, which is not a function: what
 // the page is told, as `src` names it (V_PAGE_URL).
 value(_ctx: @keep ptr, name: string, t: int, src: int) {
+    gate_value_(_ctx, name, t, src, 0)
+}
+
+// A value that is page-reachable and not part of its documented surface.
+internal_value(_ctx: @keep ptr, name: string, t: int, src: int) {
+    gate_value_(_ctx, name, t, src, 1)
+}
+
+gate_value_(_ctx: @keep ptr, name: string, t: int, src: int, internal: int) {
     s = _ctx as *GateSpace
     g = s.g as *Gate
     gate_flush_(g)
     if g.mode == G_REGISTER {
         if s.on == 1 {
             p = g.p as *Page
-            v = ""
-            if src == V_PAGE_URL { v = p.url }
-            h = quickjs.new_string(p.ctx, v)
-            _e = js_set_(p, s.obj, name, h)
-            quickjs.release(p.ctx, h)
+            if src == V_EACH_NAME {
+                parts = string.split(s.names, ",")
+                np = string.string_array_size(parts)
+                k = 0
+                j = 0
+                while k < np {
+                    nm = string.string_array_get(parts, k)
+                    k = k + 1
+                    if nm == "" { continue }
+                    ov, _ = list.get(s.objs, j)
+                    j = j + 1
+                    h = quickjs.new_string(p.ctx, nm)
+                    _e = js_set_(p, mem.ptr_to_long(ov), name, h)
+                    quickjs.release(p.ctx, h)
+                }
+            } else {
+                v = ""
+                if src == V_PAGE_URL { v = p.url }
+                h = quickjs.new_string(p.ctx, v)
+                _e = js_set_(p, s.obj, name, h)
+                quickjs.release(p.ctx, h)
+            }
         }
         return
     }
     e = gate_begin_(g, "value", name, 0)
     e.gives = t
+    e.internal = internal
     gate_flush_(g)
 }
 
@@ -10125,6 +10242,52 @@ provided_value(_ctx: @keep ptr, name: string, t: int) {
     e = gate_begin_(g, "provided_value", name, 0)
     e.gives = t
     gate_flush_(g)
+}
+
+// A namespace whose members are the names the page gets, made by JavaScript
+// (natives: natives.<module>.<function>): an object of objects of functions
+// that each have `arity` parameters, `ts` its TypeScript type. Nothing is
+// registered and no member is described: the live check holds the shape.
+provided_dynamic(_ctx: @keep ptr, g: *Gate, name: string, seek: string, arity: int, ts: string) -> ptr {
+    _s = gate_space_(g, name, WHEN_APP_SEEKS_EACH, seek, 0, 0, 0)
+    if g.mode == G_REGISTER { return g.en }
+    e = gate_begin_(g, "dynamic", name, arity)
+    e.ts = own_(ts)
+    e.gives = T_RAW
+    return e
+}
+
+// A function of the module loader that the page's units see: `$sae.m`, which
+// a unit's wrapper takes. Kept on the page (p.mod_get), for every page, and
+// described in the space `$sae`, which only a wrapped page has (WHEN_WRAPPED).
+// Always internal.
+loader_fn(_ctx: @keep ptr, g: *Gate, name: string, f: @keep fn(*Page, int, int) -> int, arity: int) -> ptr {
+    gate_close_space_(g)
+    if g.mode == G_REGISTER {
+        p = g.p as *Page
+        p.mod_get = host_fn_(p, p.ctx, name, arity, f)
+        return g.en
+    }
+    s = g.sp as *GateSpace
+    s.name = own_("$sae")
+    s.cond = WHEN_WRAPPED
+    e = gate_begin_(g, "loader", name, arity)
+    e.internal = 1
+    return e
+}
+
+// A host function the engine is given and a page cannot name (the handler of
+// a rejected top-level await, p.mod_fail): kept on the page, for every page.
+held_fn(_ctx: @keep ptr, g: *Gate, name: string, f: @keep fn(*Page, int, int) -> int, arity: int) -> ptr {
+    gate_close_space_(g)
+    if g.mode == G_REGISTER {
+        p = g.p as *Page
+        p.mod_fail = host_fn_(p, p.ctx, name, arity, f)
+        return g.en
+    }
+    e = gate_begin_(g, "held", name, arity)
+    e.internal = 1
+    return e
 }
 
 // JavaScript the page's runtime evaluates over the space's functions, once they
@@ -11538,6 +11701,63 @@ gate_spec_(g: *Gate) {
             doc("Whether the backend is running.")
         }
     }
+    // sqlite: an object for each database the page seeks, the app declares and
+    // was not left out; every call a promise, answered off the UI thread (README
+    // "An app's databases").
+    space_each(g, "sqlite", "database") {
+        reach("sqlite")
+        internal_value("__db", T_STR, V_EACH_NAME)
+        api("all", sae_sqlite_all, 2) {
+            arg("sql", T_STR)
+            opt_ts("params", "unknown[] | Record<string, unknown>")
+            signature("<T = Record<string, unknown>>(sql: string, params?: unknown[] | Record<string, unknown>): Promise<T[]>")
+            doc("The rows of a query, as objects. params: an array for ?, an object for $name.")
+        }
+        api("get", sae_sqlite_get, 2) {
+            arg("sql", T_STR)
+            opt_ts("params", "unknown[] | Record<string, unknown>")
+            signature("<T = Record<string, unknown>>(sql: string, params?: unknown[] | Record<string, unknown>): Promise<T | null>")
+            doc("The first row of a query, or null.")
+        }
+        api("run", sae_sqlite_run, 2) {
+            arg("sql", T_STR)
+            opt_ts("params", "unknown[] | Record<string, unknown>")
+            signature("(sql: string, params?: unknown[] | Record<string, unknown>): Promise<{ changes: number; lastId: number }>")
+            doc("A statement that changes rows: how many, and the last row's id.")
+        }
+        api("transaction", sae_sqlite_transaction, 1) {
+            arg_ts("fn", "(tx: sae.SqliteTx) => Promise<unknown> | unknown")
+            signature("<T>(fn: (tx: sae.SqliteTx) => Promise<T> | T): Promise<T>")
+            doc("BEGIN, fn with a tx whose all, get and run run inside it, then COMMIT; ROLLBACK if fn throws or rejects. Resolves to fn's value.")
+        }
+        api("__begin", sae_sqlite_begin, 1) {
+            arg("id", T_INT)
+            gives_promise(T_ANY)
+            internal()
+        }
+        api("__end", sae_sqlite_end, 2) {
+            arg("id", T_INT)
+            arg("commit", T_FLAG)
+            gives_promise(T_ANY)
+            internal()
+        }
+    }
+    // natives: the app's own native modules, compiled into its own sae
+    // (docs/natives.md). The raw gate is a hidden object a wrapper takes; what
+    // the page sees is natives.<module>.<function>(text), made from app.json.
+    raw_space(g, "__sae_natives", WHEN_APP_SEEKS_EACH, "native") {
+        reach("natives")
+        api("call", sae_natives_call, 3) {
+            arg("unit", T_STR)
+            arg("fn", T_STR)
+            arg("text", T_STR)
+            gives_promise(T_STR)
+        }
+        js_wrapper("sae:natives", gate_natives_js_(g))
+    }
+    provided_dynamic(g, "natives", "native", 1, "Record<string, Record<string, (text: string) => Promise<string>>>") {
+        doc("Each function app.json declares for a module the page seeks, as natives.<module>.<function>(text): a promise of the text it gives; its error rejects with an Error.")
+    }
     space(g, "printing", WHEN_APP_SEEKS, "print") {
         reach("printing")
         api("pdf", sae_printing_pdf, 2) {
@@ -12074,6 +12294,61 @@ gate_spec_(g: *Gate) {
         }
         provided_value("easings", T_OBJ)
     }
+    // The sandbox probe (tests only): what tests/escape/kernel_slip.ts asks
+    // sae's own code to do that the page's grants do not allow. There only in a
+    // build with SAE_SANDBOX_PROBE and AETHER_UI_TEST_PORT set; never in sae.d.ts.
+    test_space(g, "__sae_probe") {
+        reach("sandboxprobe")
+        api("fs", sae_probe_fs, 0) {
+            gives(T_STR)
+            internal()
+        }
+        api("write", sae_probe_write, 0) {
+            gives(T_STR)
+            internal()
+        }
+        api("env", sae_probe_env, 0) {
+            gives(T_STR)
+            internal()
+        }
+        api("tcp", sae_probe_tcp, 0) {
+            gives(T_STR)
+            internal()
+        }
+        api("exec", sae_probe_exec, 0) {
+            gives(T_STR)
+            internal()
+        }
+        api("depth", sae_probe_depth, 0) {
+            gives(T_INT)
+            internal()
+        }
+        api("tick", sae_probe_tick, 0) { internal() }
+    }
+    // The module loader's two functions. Not globals: a unit's wrapper takes
+    // $sae.m, and the engine calls fail when a page's top-level await rejects.
+    loader_fn(g, "m", sae_mod_get, 1) {
+        arg("spec", T_STR)
+        gives(T_OBJ)
+        doc("$sae.m(spec): the namespace of a module this page imported, resolved against the unit's own url. Nothing is fetched; a module not imported statically is a TypeError.")
+    }
+    provided_space(g, "$sae", WHEN_WRAPPED, "") {
+        provided_value("url", T_STR)
+        provided("x", 1) {
+            arg("exports", T_OBJ)
+            rest("pairs")
+            internal()
+        }
+        provided("all", 2) {
+            arg("exports", T_OBJ)
+            arg("ns", T_OBJ)
+            internal()
+        }
+    }
+    held_fn(g, "fail", sae_mod_fail, 1) {
+        arg("e", T_ANY)
+        doc("What the engine calls when a page's top-level await rejects (a page cannot name it).")
+    }
 }
 
 // Install the spec's names in a page's runtime.
@@ -12134,75 +12409,10 @@ sae_probe_tick(p: *Page, this_val: int, argv: int) -> int {
 // exist only in app mode: a
 // web page has no such objects at all.
 api_register_(p: *Page) {
-    ab = p.browser as *Browser
-    q = p.ctx
-
-    // The sandbox probe (tests only: probe_* above).
-    if ab.probe_dir != "" {
-        po = quickjs.new_object(q)
-        reg_(p, q, po, "fs", 0, sae_probe_fs)
-        reg_(p, q, po, "write", 0, sae_probe_write)
-        reg_(p, q, po, "env", 0, sae_probe_env)
-        reg_(p, q, po, "tcp", 0, sae_probe_tcp)
-        reg_(p, q, po, "exec", 0, sae_probe_exec)
-        reg_(p, q, po, "depth", 0, sae_probe_depth)
-        reg_(p, q, po, "tick", 0, sae_probe_tick)
-        js_set_global_(p, "__sae_probe", po)
-        quickjs.release(q, po)
-    }
-
-    // ===== wave1/sqlite: sqlite.<name> for each database the page seeks and app.json declares =====
-    sdbs = sqlite_page_dbs_(p)
-    if sdbs != "," {
-        so = quickjs.new_object(q)
-        snames = string.split(sdbs, ",")
-        sn = string.string_array_size(snames)
-        si = 0
-        while si < sn {
-            sname = string.string_array_get(snames, si)
-            si = si + 1
-            if sname == "" { continue }
-            dbo = quickjs.new_object(q)
-            nmh = quickjs.new_string(q, sname)
-            _sd = js_set_(p, dbo, "__db", nmh)
-            quickjs.release(q, nmh)
-            reg_(p, q, dbo, "all", 2, sae_sqlite_all)
-            reg_(p, q, dbo, "get", 2, sae_sqlite_get)
-            reg_(p, q, dbo, "run", 2, sae_sqlite_run)
-            reg_(p, q, dbo, "transaction", 1, sae_sqlite_transaction)
-            reg_(p, q, dbo, "__begin", 1, sae_sqlite_begin)
-            reg_(p, q, dbo, "__end", 2, sae_sqlite_end)
-            _so = js_set_(p, so, sname, dbo)
-            quickjs.release(q, dbo)
-        }
-        js_set_global_(p, "sqlite", so)
-        quickjs.release(q, so)
-    }
-    // ===== end wave1/sqlite =====
-
-    // ===== wave1/natives: natives.<module> for each native module the page seeks and the app has =====
-    nmods = natives_page_mods_(p)
-    p.natives_set = own_(nmods)
-    if nmods != "," {
-        nr = quickjs.new_object(q)
-        reg_(p, q, nr, "call", 3, sae_natives_call)
-        js_set_global_(p, "__sae_natives", nr)
-        quickjs.release(q, nr)
-        nw, _nwe = js_eval_(p, natives_js_((p.browser as *Browser).native_jobs, nmods), "sae:natives")
-        quickjs.release(q, nw)
-    }
-    // ===== end wave1/natives =====
-
-    // storage, browserContext, print, the timers, Date.now and performance:
-    // said in the gate spec (gate_spec_)
+    // everything but the prelude: said in the gate spec (gate_spec_)
     gate_register_(p)
-
-    // ===== wave1/imports: the loader's two functions. Not globals: each
-    // unit meets them on the $sae object its wrapper takes (modules_prepare_).
-    p.mod_get = host_fn_(p, q, "m", 1, sae_mod_get)
-    p.mod_fail = host_fn_(p, q, "fail", 1, sae_mod_fail)
-    // ===== wave1/aevg: the reactive and AeVG surfaces (their reg_ lines are
-    // in ae_register_, one block, above) =====
+    // The prelude: the reactive surface over ui's and vg's host primitives
+    // (ae_register_), after the gate spec has made them.
     ae_register_(p)
 }
 

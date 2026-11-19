@@ -43,6 +43,8 @@ declare namespace sae {
     body?: string;
     contentType?: string;
   }
+  /** What a sqlite transaction's callback gets: the database's own all, get and run, run inside the transaction. */
+  type SqliteTx = Pick<(typeof sqlite)[string], "all" | "get" | "run">;
   /** A file the person picked, by handle: the page never sees its path, and a handle reaches that one file only. */
   interface Document {
     readonly name: string;
@@ -482,6 +484,24 @@ declare const backend: {
   /** Whether the backend is running. */
   running(): boolean;
 };
+/** @seeks database @appOnly */
+declare const sqlite: {
+  [database: string]: {
+    /** The rows of a query, as objects. params: an array for ?, an object for $name. */
+    all<T = Record<string, unknown>>(sql: string, params?: unknown[] | Record<string, unknown>): Promise<T[]>;
+    /** The first row of a query, or null. */
+    get<T = Record<string, unknown>>(sql: string, params?: unknown[] | Record<string, unknown>): Promise<T | null>;
+    /** A statement that changes rows: how many, and the last row's id. */
+    run(sql: string, params?: unknown[] | Record<string, unknown>): Promise<{ changes: number; lastId: number }>;
+    /** BEGIN, fn with a tx whose all, get and run run inside it, then COMMIT; ROLLBACK if fn throws or rejects. Resolves to fn's value. */
+    transaction<T>(fn: (tx: sae.SqliteTx) => Promise<T> | T): Promise<T>;
+  };
+};
+/**
+ * Each function app.json declares for a module the page seeks, as natives.<module>.<function>(text): a promise of the text it gives; its error rejects with an Error.
+ * @seeks native @appOnly
+ */
+declare const natives: Record<string, Record<string, (text: string) => Promise<string>>>;
 /** @seeks print @appOnly */
 declare const printing: {
   /** A PDF the page made (its bytes as base64) to the system's print dialog, the job named title. */

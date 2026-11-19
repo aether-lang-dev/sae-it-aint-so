@@ -4,18 +4,24 @@
 // (docs/design/gate-dsl.md, section 2).
 //
 //   sae --gate-describe | saegate             sae.d.ts on stdout
-//   sae --gate-describe | saegate --expect M  the lines tests/gate/dump.ts
+//   sae --gate-describe | saegate --expect M [--names N]
+//                                             the lines tests/gate/dump.ts
 //                                             should print for the described
 //                                             names, M a mode of
-//                                             tests/gate/dump.sh
+//                                             tests/gate/dump.sh; N the names
+//                                             the page's each spaces have
+//                                             (sqlite: notes; natives:
+//                                             calc=sum+upper)
 //   sae --gate-describe | saegate --check-arity
 //                                             each entry's arity equals its
 //                                             count of non-rest parameters
 //
 // The line's fields: kind (fn, global, patch, value, provided,
 // provided_value, provided_global, raw: a hidden object's function, which a
-// page never sees), space, when (always, app_or_web_seeks, app_seeks), seek,
-// reach, name, arity, params (each {k: arg|opt|rest|beyond, n, t}, t a spec type or "ts:..."), gives, ts (the
+// page never sees; dynamic: members the page's own names make; loader: the
+// module loader's `$sae.m`; held: a function the engine is given), space, when
+// (always, app_or_web_seeks, app_seeks, app_seeks_each, probe, wrapped), seek,
+// each (1: an object for each name the page gets), reach, name, arity, params (each {k: arg|opt|rest|beyond, n, t}, t a spec type or "ts:..."), gives, ts (the
 // TypeScript of a "raw" result), promise, doc, internal.
 
 import std.io
@@ -158,6 +164,8 @@ shape_of_(e: ptr) -> string {
 // granted or available: tests/gate/dump.sh has each mode). Separated by commas.
 //   web, none, unsought   nothing: a page seeking nothing, or an app that
 //                         grants everything and seeks nothing
+//   probe, module         nothing, from a page loaded from a file: the sandbox
+//                         probe switched on; a page that imports
 //   webseeks, some        outgoing-http, clipboard
 //   optional              clipboard (the one privilege an app has without a grant)
 //   all                   every privilege an app can seek and be granted
@@ -170,9 +178,10 @@ mode_has_(mode: string) -> string {
     return ","
 }
 
-// Whether the mode is an installed app (web and webseeks load a page from a file).
+// Whether the mode is an installed app (web, webseeks, probe and module load a
+// page from a file).
 mode_is_app_(mode: string) -> int {
-    if mode == "web" || mode == "webseeks" { return 0 }
+    if mode == "web" || mode == "webseeks" || mode == "probe" || mode == "module" { return 0 }
     return 1
 }
 
@@ -180,17 +189,40 @@ mode_is_app_(mode: string) -> int {
 present_(e: ptr, mode: string) -> int {
     when_ = str_of_(e, "when")
     if when_ == "always" { return 1 }
+    if when_ == "probe" {
+        if mode == "probe" { return 1 }
+        return 0
+    }
+    if when_ == "wrapped" {
+        if mode == "module" { return 1 }
+        return 0
+    }
     if string.contains(mode_has_(mode), ",${str_of_(e, "seek")},") == 0 { return 0 }
-    if when_ == "app_seeks" && mode_is_app_(mode) == 0 { return 0 }
+    if (when_ == "app_seeks" || when_ == "app_seeks_each") && mode_is_app_(mode) == 0 { return 0 }
     return 1
 }
 
+// What `--names` says of one space: "sqlite=notes;natives=calc:sum+upper" has
+// "notes" for sqlite (the names its objects have) and "calc:sum+upper" for
+// natives (a module and its functions, more than one separated by commas).
+names_of_(names: string, space: string) -> string {
+    parts = string.split(names, ";")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        part = string.string_array_get(parts, i)
+        if string.starts_with(part, "${space}=") == 1 { return string.substring(part, string.length(space) + 1, string.length(part)) }
+        i = i + 1
+    }
+    return ""
+}
+
 // The d.ts for one entry (an installed member), indented, into `out`.
-member_(out: ptr, e: ptr) {
+member_(out: ptr, e: ptr, ind: string) {
     kind = str_of_(e, "kind")
-    doc_(out, "  ", e)
+    doc_(out, ind, e)
     if kind == "value" || kind == "provided_value" {
-        _a = strbuilder.append(out, "  readonly ${str_of_(e, "name")}: ${ts_type_(str_of_(e, "gives"))};\n")
+        _a = strbuilder.append(out, "${ind}readonly ${str_of_(e, "name")}: ${ts_type_(str_of_(e, "gives"))};\n")
         return
     }
     params = json.json_object_get_raw(e, "params")
@@ -200,14 +232,14 @@ member_(out: ptr, e: ptr) {
         np = string.string_array_size(parts)
         pi = 0
         while pi < np {
-            _s = strbuilder.append(out, "  ${str_of_(e, "name")}${string.string_array_get(parts, pi)};\n")
+            _s = strbuilder.append(out, "${ind}${str_of_(e, "name")}${string.string_array_get(parts, pi)};\n")
             pi = pi + 1
         }
         return
     }
-    _b = strbuilder.append(out, "  ${str_of_(e, "name")}(${ts_params_(params, 1)}): ${ts_result_(e)};\n")
+    _b = strbuilder.append(out, "${ind}${str_of_(e, "name")}(${ts_params_(params, 1)}): ${ts_result_(e)};\n")
     if has_lead_(params) == 1 {
-        _c = strbuilder.append(out, "  ${str_of_(e, "name")}(${ts_params_(params, 0)}): ${ts_result_(e)};\n")
+        _c = strbuilder.append(out, "${ind}${str_of_(e, "name")}(${ts_params_(params, 0)}): ${ts_result_(e)};\n")
     }
 }
 
@@ -236,6 +268,7 @@ dts_header_(out: ptr) {
     _id = strbuilder.append(out, "  /** What http.get, post and request return. */\n")
     _ie = strbuilder.append(out, "  interface HttpRequest {\n    id: number;\n    cancel(): void;\n  }\n")
     _if = strbuilder.append(out, "  interface HttpOptions {\n    method?: string;\n    url: string;\n    headers?: Record<string, string>;\n    body?: string;\n    contentType?: string;\n  }\n")
+    _if2 = strbuilder.append(out, "  /** What a sqlite transaction's callback gets: the database's own all, get and run, run inside the transaction. */\n  type SqliteTx = Pick<(typeof sqlite)[string], \"all\" | \"get\" | \"run\">;\n")
     _ig = strbuilder.append(out, "  /** A file the person picked, by handle: the page never sees its path, and a handle reaches that one file only. */\n")
     _ih = strbuilder.append(out, "  interface Document {\n    readonly name: string;\n    read_text(): Promise<string>;\n    write_text(text: string): Promise<void>;\n    read_base64(): Promise<string>;\n    write_base64(b64: string): Promise<void>;\n  }\n")
     _i = strbuilder.append(out, "  /** An id from setTimeout or setInterval, for clearTimeout and clearInterval. */\n")
@@ -248,15 +281,18 @@ dts_header_(out: ptr) {
 main() {
     arg1 = os.args_get(1)
     expect_mode = ""
+    each_names = ""
     if arg1 == "--expect" {
         expect_mode = os.args_get(2)
-        if string.contains(",web,webseeks,all,some,unsought,optional,none,", ",${expect_mode},") == 0 && string.starts_with(expect_mode, "just-") == 0 { fail_("--expect takes web, webseeks, all, some, unsought, optional, none or just-<privilege>") }
+        if string.contains(",web,webseeks,all,some,unsought,optional,none,probe,module,", ",${expect_mode},") == 0 && string.starts_with(expect_mode, "just-") == 0 { fail_("--expect takes web, webseeks, all, some, unsought, optional, none, probe, module or just-<privilege>") }
+        if os.args_get(3) == "--names" { each_names = os.args_get(4) }
     } else {
         if arg1 != "" && arg1 != "--check-arity" { fail_("usage: saegate [--expect MODE | --check-arity]") }
     }
     out = strbuilder.new(4096)
     if arg1 == "" { dts_header_(out) }
     cur = "" // the space whose declaration is open
+    cur_each = 0 // it has an object for each name the page gets: one more level
     bad = 0
     count = 0
     while true {
@@ -271,7 +307,7 @@ main() {
             name = str_of_(e, "name")
             params = json.json_object_get_raw(e, "params")
             if arg1 == "--check-arity" {
-                if kind != "value" && kind != "provided_value" && nonrest_(params) != int_of_(e, "arity") {
+                if kind != "value" && kind != "provided_value" && kind != "dynamic" && nonrest_(params) != int_of_(e, "arity") {
                     _w = io.stderr_write("FAIL ${space}.${name}: arity ${int_of_(e, "arity")} but ${nonrest_(params)} non-rest parameters\n")
                     bad = bad + 1
                 }
@@ -282,33 +318,87 @@ main() {
                     _r = strbuilder.append(out, "G ${space} absent\n")
                 }
             } else if expect_mode != "" {
-                if kind == "patch" {
+                if kind == "held" {
+                    // a function the engine is given: a page cannot name it
+                    cur = cur
+                } else if kind == "patch" {
                     _a = strbuilder.append(out, "M ${space}.${name} ${shape_of_(e)}\n")
                 } else if kind == "global" || kind == "provided_global" {
                     _b = strbuilder.append(out, "G ${name} ${shape_of_(e)}\n")
+                } else if kind == "dynamic" {
+                    // natives.<module>.<function>: objects of functions of the arity the entry says
+                    cur = space
+                    if present_(e, expect_mode) == 0 {
+                        _d2 = strbuilder.append(out, "G ${space} absent\n")
+                    } else {
+                        _c2 = strbuilder.append(out, "G ${space} object\n")
+                        mods = string.split(names_of_(each_names, space), ",")
+                        nm_ = string.string_array_size(mods)
+                        mi = 0
+                        while mi < nm_ {
+                            mspec = string.string_array_get(mods, mi)
+                            mi = mi + 1
+                            if mspec == "" { continue }
+                            mparts = string.split(mspec, ":")
+                            mname = string.string_array_get(mparts, 0)
+                            _m1 = strbuilder.append(out, "M ${space}.${mname} object\n")
+                            fns = string.split(string.string_array_get(mparts, 1), "+")
+                            nf_ = string.string_array_size(fns)
+                            fi = 0
+                            while fi < nf_ {
+                                _m2 = strbuilder.append(out, "M ${space}.${mname}.${string.string_array_get(fns, fi)} ${shape_of_(e)}\n")
+                                fi = fi + 1
+                            }
+                        }
+                    }
                 } else {
                     here = present_(e, expect_mode)
+                    eachn = string.split(names_of_(each_names, space), ",")
+                    ne_ = string.string_array_size(eachn)
                     if space != cur {
                         cur = space
                         if here == 1 {
                             _c = strbuilder.append(out, "G ${space} object\n")
+                            if int_of_(e, "each") == 1 {
+                                ei = 0
+                                while ei < ne_ {
+                                    if string.string_array_get(eachn, ei) != "" { _c3 = strbuilder.append(out, "M ${space}.${string.string_array_get(eachn, ei)} object\n") }
+                                    ei = ei + 1
+                                }
+                            }
                         } else {
                             _d = strbuilder.append(out, "G ${space} absent\n")
                         }
                     }
                     if here == 1 {
-                        if kind == "value" || kind == "provided_value" {
-                            _e = strbuilder.append(out, "M ${space}.${name} ${typeof_(str_of_(e, "gives"))}\n")
+                        line_ = "${shape_of_(e)}"
+                        if kind == "value" || kind == "provided_value" { line_ = "${typeof_(str_of_(e, "gives"))}" }
+                        if int_of_(e, "each") == 1 {
+                            ei2 = 0
+                            while ei2 < ne_ {
+                                if string.string_array_get(eachn, ei2) != "" { _f2 = strbuilder.append(out, "M ${space}.${string.string_array_get(eachn, ei2)}.${name} ${line_}\n") }
+                                ei2 = ei2 + 1
+                            }
                         } else {
-                            _f = strbuilder.append(out, "M ${space}.${name} ${shape_of_(e)}\n")
+                            _f = strbuilder.append(out, "M ${space}.${name} ${line_}\n")
                         }
                     }
                 }
-            } else if kind != "patch" && kind != "raw" && int_of_(e, "internal") == 0 {
-                if kind == "global" || kind == "provided_global" {
+            } else if kind != "patch" && kind != "raw" && kind != "held" && kind != "loader" && str_of_(e, "when") != "probe" && str_of_(e, "when") != "wrapped" && int_of_(e, "internal") == 0 {
+                if kind == "dynamic" {
                     if cur != "" {
+                        if cur_each == 1 { _g3 = strbuilder.append(out, "  };\n") }
+                        _g2 = strbuilder.append(out, "};\n")
+                        cur = ""
+                        cur_each = 0
+                    }
+                    _dn = strbuilder.append(out, "/**\n * ${str_of_(e, "doc")}\n * @seeks ${str_of_(e, "seek")} @appOnly\n */\ndeclare const ${space}: ${str_of_(e, "ts")};\n")
+                } else if kind == "global" || kind == "provided_global" {
+                    if cur != "" {
+                        if cur_each == 1 { _g4 = strbuilder.append(out, "  };\n") }
                         _g = strbuilder.append(out, "};\n")
                         cur = ""
+                        cur_each = 0
                     }
                     doc_(out, "", e)
                     if str_of_(e, "sigs") != "" {
@@ -324,17 +414,22 @@ main() {
                     }
                 } else {
                     if space != cur {
-                        if cur != "" { _i = strbuilder.append(out, "};\n") }
+                        if cur != "" {
+                            if cur_each == 1 { _i2 = strbuilder.append(out, "  };\n") }
+                            _i = strbuilder.append(out, "};\n")
+                        }
                         cur = space
+                        cur_each = int_of_(e, "each")
                         when_ = str_of_(e, "when")
                         if when_ != "always" {
                             note = "@seeks ${str_of_(e, "seek")}"
-                            if when_ == "app_seeks" { note = "${note} @appOnly" }
+                            if when_ == "app_seeks" || when_ == "app_seeks_each" { note = "${note} @appOnly" }
                             _j = strbuilder.append(out, "/** ${note} */\n")
                         }
                         _k = strbuilder.append(out, "declare const ${space}: {\n")
+                        if cur_each == 1 { _k2 = strbuilder.append(out, "  [${str_of_(e, "seek")}: string]: {\n") }
                     }
-                    member_(out, e)
+                    if cur_each == 1 { member_(out, e, "    ") } else { member_(out, e, "  ") }
                 }
             }
         }
@@ -346,7 +441,10 @@ main() {
         io.stdout_write("ok   ${count} entries: each arity is its count of non-rest parameters\n")
         return
     }
-    if cur != "" && expect_mode == "" { _l = strbuilder.append(out, "};\n") }
+    if cur != "" && expect_mode == "" {
+        if cur_each == 1 { _l2 = strbuilder.append(out, "  };\n") }
+        _l = strbuilder.append(out, "};\n")
+    }
     if count == 0 { fail_("no entries on stdin") }
     io.stdout_write(strbuilder.finish(out))
 }

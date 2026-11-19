@@ -42,16 +42,16 @@ n=0
 # The functions api_register_ hands the engine: the last argument of each
 # reg_(...), glob_fn_(...) and host_fn_(...) call inside it; and the functions
 # the gate spec (gate_spec_, the DSL of src/sae_host.ae) binds: the function
-# of each api(name, fn, arity), global_fn(g, name, fn, arity) and
-# patch(g, global, name, fn, arity) line (one per line, as the spec is
-# written).
+# of each api(name, fn, arity), global_fn(g, name, fn, arity),
+# patch(g, global, name, fn, arity), loader_fn(g, name, fn, arity) and
+# held_fn(g, name, fn, arity) line (one per line, as the spec is written).
 fns=$(awk '/^(api_register_|ae_register_)\(/ { on = 1; next } on && /^}/ { on = 0 }
            on && /(reg_|glob_fn_|host_fn_)\(/ { line = $0; sub(/\)[[:space:]]*$/, "", line); n = split(line, a, ","); f = a[n]; gsub(/[[:space:]]/, "", f); print f }' "$HOST"
       awk '/^gate_spec_\(/ { on = 1; next } on && /^}/ { exit }
-           on && /^[[:space:]]*(api|global_fn|patch)\(/ {
+           on && /^[[:space:]]*(api|global_fn|patch|loader_fn|held_fn)\(/ {
                line = $0; sub(/^[[:space:]]*/, "", line); kind = line; sub(/\(.*/, "", kind)
                sub(/^[a-z_]+\(/, "", line); sub(/\).*$/, "", line); n = split(line, a, ",")
-               i = (kind == "api") ? 2 : (kind == "global_fn") ? 3 : 4
+               i = (kind == "api") ? 2 : (kind == "patch") ? 4 : 3
                f = a[i]; gsub(/[[:space:]]/, "", f); print f }' "$HOST")
 fns=$(printf '%s\n' "$fns" | sort -u)
 for fn in $fns; do
