@@ -71,10 +71,10 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 ../aether/build/ae build tools/saelower.ae -o target/saelower
 ../aether/build/ae build tools/saejs.ae -o target/saejs
 ../aether/build/ae build tools/saebus.ae -o target/sae-bus
-lower/run-tests.sh                           # 67 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless; --mod DIR runs another repo's)
+lower/run-tests.sh                           # 70 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless; --mod DIR runs another repo's)
 tests/run_all.sh                             # every spec and check below, each with its environment (a label filter: tests/run_all.sh spec_app_)
 tests/run_spec.sh                            # spec_nav: 45 specs
-# A slow engine (the x86_64 lab host ae-x64 runs QuickJS about twelve times slower than the Macs): SAE_TEST_WAIT_SCALE=6 multiplies every wait's three seconds, SAE_PAGE_TIME_MS=60000 lifts the page's 5 s limit per entry into JS (without it "InternalError: interrupted" ends Solver and the like); a timing budget in a test (spraedsheet's sheet_large) stays the Mac's.
+# A slow engine (the x86_64 lab host ae-x64 runs QuickJS about twelve times slower than the Macs): SAE_TEST_WAIT_SCALE=6 multiplies every wait's three seconds, SAE_PAGE_TIME_MS=60000 lifts the page's 5 s limit per entry into JS (without it "InternalError: interrupted" ends Solver and the like; do NOT set it for spec_app_bus, which asserts the 5 s limit, there SAE_TEST_WAIT_SCALE=6 alone is right); a timing budget in a test (spraedsheet's sheet_large) stays the Mac's.
 tests/check_page_veto.sh                     # page veto present and enforced
 tests/check_layers.sh                        # services held to their imports
 tests/check_android_sources.sh               # the APK compiles the same C as .build.ae
@@ -112,6 +112,8 @@ tests/run_spec.sh spec_terrain                 # demo 13
 tests/run_spec.sh spec_life                    # demo 14
 tests/run_spec.sh spec_algos                   # demo 17: sorting generators race on the frame clock
 tests/check_prelude.sh                         # src/sae_prelude.c is tools/embed-prelude.sh of the .js, and it parses
+tests/check_timed_entries.sh                  # every host read of a page's value (getter, toString, valueOf, toJSON) is a timed entry: no raw quickjs.get/to_string/... outside the js_* helpers
+tests/check_listeners.sh                      # tests/lib/listeners.sh (what the app specs ask of lsof: /proc on Linux) sees a TCP and a Unix listener
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom
 tests/run_spec.sh spec_aevg_parity             # corpus pages (tools/gen-corpus.sh) against librsvg's PNGs: mean error
@@ -120,13 +122,12 @@ tests/run_spec.sh spec_reorder                 # ui.reorderable: a plain hstack 
 tests/run_spec.sh spec_a11y                    # ui.a11y_label/role/description/announce on a widget and a vg scene; vg.on_key: a board from the keyboard (site/a11y.ts)
 ```
 
-Toolchain: Aether 0.818.0 or later (`pins`: `@keep ptr` parameters, aether#2926, which aether-ui and sae now declare; enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
+Toolchain: Aether 0.923.0 or later (`AE_PIN` in `pins`: contrib.quickjs's 0.915+ API, `quickjs.to_string` returning `(string, error)` and a per-runtime absolute deadline, `set_deadline_ns`, in place of `set_time_limit`; `@keep ptr` parameters, aether#2926; enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
 and column API, contrib.quickjs's `arg_bytes`), installed, or a dev tree
 (`$SAE_AETHER_HOME`, default `../aether`, built with `make compiler ae
 stdlib contrib`; `SAE_AETHER_HOME=none` builds against the installed one even when
-`../aether` exists; the bare release still does not link (0.818.0 too), as it ships
-contrib/sqlite's source without its archive), and aeb at `AEB_REF` or
-later (it compiles the C contrib.quickjs ships, and builds under 0.818), installed privately under `target/toolchain`.
+`../aether` exists; the bare release links, with contrib/sqlite's archive, since 0.905.0), and aeb at `AEB_REF` (v0.347) or
+later (it compiles the C contrib.quickjs ships), installed privately under `target/toolchain`.
 aeb's install runs `ae`, so put one on `PATH` first (here the dev tree's):
 
 ```sh
