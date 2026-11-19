@@ -9838,8 +9838,202 @@ glob_fn_(p: *Page, q: ptr, name: string, arity: int, f: @keep fn(*Page, int, int
     quickjs.release(q, h)
 }
 
+// ===== the gate: every name a page can reach, said once (docs/design/gate-dsl.md) =====
+//
+// gate_spec_ below is the spec; gate_register_ runs it for a page, and each
+// entry is installed through reg_/glob_fn_, the path every page-API function
+// took before. Nothing is generated: the blocks run. The shapes
+// (docs/design/gate-dsl.md, "Step 0 findings"; tests/check_gate_probes.sh has
+// each mechanic):
+//
+//   - `space(g, ...) { ... }`: a namespace; its return is the _ctx of its block.
+//   - `api(name, host_fn, arity) { setters }`: one function in the namespace.
+//     The function comes BEFORE the arity: a `@keep fn` as the last parameter
+//     would take the trailing block for the closure.
+//   - Every _ctx function that stores or returns its context takes `@keep ptr`.
+//   - A `return` inside a spec block returns from the enclosing function, so
+//     the spec never returns early.
+//   - There is no end-of-block hook: a space is finished when the next one
+//     begins, or at gate_end_.
+//   - The setters return at once while registering (a later step makes them
+//     describe the entry). A space's block holds only `reach`; an entry's
+//     holds the rest. Each context starts with a tag and a setter refuses the
+//     wrong one.
+
+const G_REGISTER = 0
+
+// When a namespace exists for a page (the conditions api_register_ used).
+const WHEN_ALWAYS = 0
+const WHEN_APP_OR_WEB_SEEKS = 1 // not in p.absent
+const WHEN_APP_SEEKS = 2 // not in p.absent, and an installed app
+
+// The types the spec speaks of.
+const T_VOID = 0
+const T_STR = 1
+const T_STR_NULL = 2
+
+const GATE_TAG_SPACE = 71
+const GATE_TAG_ENTRY = 72
+
+struct Gate {
+    mode: int
+    p: ptr // the page being registered
+    sp: ptr // the one GateSpace, reused by every space
+    en: ptr // the one GateEntry, reused by every entry
+}
+
+struct GateSpace {
+    tag: int
+    g: ptr
+    on: int // installed for this page
+    obj: int // the JS object of an installed space
+}
+
+struct GateEntry {
+    tag: int
+    s: ptr
+}
+
+gate_new_(mode: int, p: @keep ptr) -> *Gate {
+    g = heap.new(Gate)
+    sp = heap.new(GateSpace)
+    en = heap.new(GateEntry)
+    g.mode = mode
+    g.p = p
+    g.sp = sp
+    g.en = en
+    sp.tag = GATE_TAG_SPACE
+    sp.g = g
+    en.tag = GATE_TAG_ENTRY
+    en.s = sp
+    return g
+}
+
+// Finish the space in hand: its object released (the page's global holds it).
+gate_close_space_(g: *Gate) {
+    s = g.sp as *GateSpace
+    if s.obj != 0 {
+        quickjs.release((g.p as *Page).ctx, s.obj)
+        s.obj = 0
+    }
+    s.on = 0
+}
+
+gate_end_(g: *Gate) {
+    gate_close_space_(g)
+    heap.free(g.en)
+    heap.free(g.sp)
+    heap.free(g)
+}
+
+// A namespace: it decides whether this page has it (as api_register_ did)
+// and makes its object and global.
+space(_ctx: @keep ptr, g: *Gate, name: string, cond: int, seek: string) -> ptr {
+    gate_close_space_(g)
+    s = g.sp as *GateSpace
+    s.on = 1
+    p = g.p as *Page
+    if cond != WHEN_ALWAYS && string.contains(p.absent, ",${seek},") == 1 { s.on = 0 }
+    if cond == WHEN_APP_SEEKS && browser_of_(p).app_dir == "" { s.on = 0 }
+    if s.on == 1 {
+        s.obj = quickjs.new_object(p.ctx)
+        js_set_global_(p.ctx, name, s.obj)
+    }
+    return s
+}
+
+// One function of the space: obj[name] calls f, `arity` its .length.
+api(_ctx: @keep ptr, name: string, f: @keep fn(*Page, int, int) -> int, arity: int) -> ptr {
+    s = _ctx as *GateSpace
+    g = s.g as *Gate
+    if s.on == 1 {
+        p = g.p as *Page
+        reg_(p, p.ctx, s.obj, name, arity, f)
+    }
+    return g.en
+}
+
+gate_wrong_ctx_(setter: string) {
+    fputs("sae: gate spec: ${setter} used in the wrong block\n", sae_stderr())
+    exit(3)
+}
+
+// Refuse a setter used in the wrong kind of block (the tag is each context's
+// first field).
+gate_check_(_ctx: ptr, tag: int, setter: string) {
+    t = _ctx as *GateEntry
+    if t.tag != tag { gate_wrong_ctx_(setter) }
+}
+
+// What a space's functions may reach beyond the shared helpers (read by a
+// later step's seal check).
+reach(_ctx: ptr, what: string) {
+    gate_check_(_ctx, GATE_TAG_SPACE, "reach")
+}
+
+// A required argument.
+arg(_ctx: ptr, name: string, t: int) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "arg")
+}
+
+// An argument a page may leave out.
+opt(_ctx: ptr, name: string, t: int) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "opt")
+}
+
+// The rest parameter: more arguments, past the arity.
+rest(_ctx: ptr, name: string) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "rest")
+}
+
+gives(_ctx: ptr, t: int) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "gives")
+}
+
+gives_promise(_ctx: ptr, t: int) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "gives_promise")
+}
+
+doc(_ctx: ptr, text: string) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "doc")
+}
+
+// Reachable from a page but not part of its documented surface.
+internal(_ctx: ptr) {
+    gate_check_(_ctx, GATE_TAG_ENTRY, "internal")
+}
+
+// ===== the spec =====
+gate_spec_(g: *Gate) {
+    space(g, "storage", WHEN_ALWAYS, "") {
+        reach("storage_read_")
+        api("get", sae_storage_get, 1) {
+            arg("key", T_STR)
+            gives(T_STR_NULL)
+            doc("The value stored under key, or null; keys are letters, digits, '.', '_' and '-'.")
+        }
+        api("set", sae_storage_set, 2) {
+            arg("key", T_STR)
+            arg("value", T_STR)
+            doc("Keeps value under key, for this app or this origin; at most 1 MB.")
+        }
+        api("remove", sae_storage_remove, 1) {
+            arg("key", T_STR)
+            doc("Forgets key.")
+        }
+    }
+}
+
+// Install the spec's names in a page's runtime.
+gate_register_(p: *Page) {
+    g = gate_new_(G_REGISTER, p as ptr)
+    gate_spec_(g)
+    gate_end_(g)
+}
+
 // Install the page API in a page's runtime: everything a page can reach is
-// registered here, so this function is the sandbox boundary. fs and shell
+// registered here (or in the gate spec it runs, gate_spec_), so this function
+// is the sandbox boundary. fs and shell
 // exist only in app mode: a
 // web page has no such objects at all.
 api_register_(p: *Page) {
@@ -10196,12 +10390,8 @@ api_register_(p: *Page) {
     }
     // ===== end wave1/natives =====
 
-    st = quickjs.new_object(q)
-    reg_(p, q, st, "get", 1, sae_storage_get)
-    reg_(p, q, st, "set", 2, sae_storage_set)
-    reg_(p, q, st, "remove", 1, sae_storage_remove)
-    js_set_global_(q, "storage", st)
-    quickjs.release(q, st)
+    // storage: said in the gate spec (gate_spec_)
+    gate_register_(p)
 
     bc = quickjs.new_object(q)
     reg_(p, q, bc, "changePage", 1, sae_bc_change_page)

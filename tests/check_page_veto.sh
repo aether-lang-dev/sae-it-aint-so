@@ -2,7 +2,8 @@
 # tests/check_page_veto.sh — the page veto is in place and enforced.
 #
 # 1. Every function a page can reach (each one api_register_ in
-#    src/sae_host.ae installs with reg_, glob_fn_ or host_fn_) opens with the
+#    src/sae_host.ae installs with reg_, glob_fn_ or host_fn_, and each one
+#    the gate spec binds with api, global_fn or patch) opens with the
 #    page veto: one `hide` line, the same in all of them (see "The page
 #    veto" in src/sae_host.ae).
 # 2. The compiler in use enforces that line where it matters: a hidden
@@ -37,9 +38,20 @@ if [ -z "$veto" ]; then
 fi
 n=0
 # The functions api_register_ hands the engine: the last argument of each
-# reg_(...), glob_fn_(...) and host_fn_(...) call inside it.
+# reg_(...), glob_fn_(...) and host_fn_(...) call inside it; and the functions
+# the gate spec (gate_spec_, the DSL of src/sae_host.ae) binds: the function
+# of each api(name, fn, arity), global_fn(g, name, fn, arity) and
+# patch(g, global, name, fn, arity) line (one per line, as the spec is
+# written).
 fns=$(awk '/^api_register_\(/ { on = 1; next } on && /^}/ { exit }
-           on && /(reg_|glob_fn_|host_fn_)\(/ { line = $0; sub(/\)[[:space:]]*$/, "", line); n = split(line, a, ","); f = a[n]; gsub(/[[:space:]]/, "", f); print f }' "$HOST" | sort -u)
+           on && /(reg_|glob_fn_|host_fn_)\(/ { line = $0; sub(/\)[[:space:]]*$/, "", line); n = split(line, a, ","); f = a[n]; gsub(/[[:space:]]/, "", f); print f }' "$HOST"
+      awk '/^gate_spec_\(/ { on = 1; next } on && /^}/ { exit }
+           on && /^[[:space:]]*(api|global_fn|patch)\(/ {
+               line = $0; sub(/^[[:space:]]*/, "", line); kind = line; sub(/\(.*/, "", kind)
+               sub(/^[a-z_]+\(/, "", line); sub(/\).*$/, "", line); n = split(line, a, ",")
+               i = (kind == "api") ? 2 : (kind == "global_fn") ? 3 : 4
+               f = a[i]; gsub(/[[:space:]]/, "", f); print f }' "$HOST")
+fns=$(printf '%s\n' "$fns" | sort -u)
 for fn in $fns; do
     n=$((n + 1))
     # Each takes its page first (host_fn_ hands it over): fn(p: *Page, ...).
