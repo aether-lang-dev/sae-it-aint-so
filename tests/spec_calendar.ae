@@ -1,0 +1,62 @@
+// spec_calendar.ae -- the Calendar port (examples/calendar) as an app. It
+// reads the real date, so what it holds to is the sample events (relative to
+// today), the weekday headers, a new event, a delete, and months reached by
+// date (June 2024) and back with Today.
+//
+//   SAE_TEST_APP=examples/calendar tests/run_spec.sh spec_calendar
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Calendar on sae") {
+        spec.it("shows the month, the weekdays and today's sample events") callback {
+            b.assert_text("Calendar", "title")
+            pt = b.page_texts()
+            for_each_day = string.contains(pt, "Sun") == 1 && string.contains(pt, "Sat") == 1
+            spec.assert_true(for_each_day, "weekday headers")
+            b.assert_text("Today", "today's section")
+            b.assert_text("Team Standup", "an event today")
+            b.assert_text("09:00 - 09:30", "its time")
+            b.assert_text("Lunch Break", "another")
+            spec.assert_true(b.button_exists("+ New Event"), "a New Event button")
+        }
+        spec.it("a titled new event appears in today's list") callback {
+            b.set_field_by("Event title", "Review notes")
+            b.click("+ New Event")
+            b.assert_text("Review notes", "the new event")
+            b.assert_text("10:00 - 11:00", "at ten")
+        }
+        spec.it("Delete takes an event away") callback {
+            b.click_nth("Delete", 0)
+            b.assert_no_text("Team Standup", "the first of today's, by time (09:00), is gone")
+            b.assert_text("Lunch Break", "the rest stay")
+        }
+        spec.it("Go to 2024-06-15 shows June 2024; Next and Prev walk the months") callback {
+            b.set_field_by("YYYY-MM-DD", "2024-06-15")
+            b.click("Go to")
+            b.assert_text("June 2024", "June")
+            b.click("Next >")
+            b.assert_text("July 2024", "July")
+            b.click("< Prev")
+            b.click("< Prev")
+            b.assert_text("May 2024", "May")
+        }
+        spec.it("a bad date is refused") callback {
+            b.set_field_by("YYYY-MM-DD", "June")
+            b.click("Go to")
+            b.assert_text("Give a date as YYYY-MM-DD", "the refusal")
+            b.assert_text("May 2024", "the month is as it was")
+        }
+        spec.it("Today comes back to the current month") callback {
+            b.click("Today")
+            b.assert_no_text("May 2024", "not May 2024 now")
+            spec.assert_true(b.wait_for_text("Lunch Break") == 1, "today's events are shown again")
+        }
+    }
+    return spec.run_summary(fw)
+}

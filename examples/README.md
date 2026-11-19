@@ -26,3 +26,4 @@ toolkit) are the apps only; none of Tsyne's framework code is used.
 | `charts` | Animated bars, line chart with zoom, heat map | Tsyne `phone-apps/{bar-chart,line-chart-demo,heatmap-demo}` | MIT, Paul Hammant |
 | `dashboards` | Animated gauges and turnable dials | Tsyne `phone-apps/{gauge-dashboard,dial-dashboard}` | MIT, Paul Hammant |
 | `animations` | Spinner, fractal tree, particle fountain | Tsyne `phone-apps/{spinner,fractal-tree,particles}` | MIT, Paul Hammant |
+| `calendar` | Month calendar with events | Tsyne `phone-apps/calendar` | BSD-2-Clause terms, Paul Hammant |
