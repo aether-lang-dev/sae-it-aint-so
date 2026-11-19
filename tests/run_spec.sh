@@ -91,7 +91,7 @@ if [ "$SITE_PORT" != 8091 ] || [ "$DRIVER_PORT" != 9222 ]; then
     rm -rf "$RT" && mkdir -p "$RT"
     retarget_() {   # retarget_ <dir> <copy>: a copy of a directory with the ports moved
         mkdir -p "$2"
-        (cd "$1" && tar cf - .) | (cd "$2" && tar xf -)
+        (cd "$1" && tar chf - .) | (cd "$2" && tar xf -)   # -h: an app's index.ts is a link into site/
         find "$2" -type f \( -name '*.ts' -o -name '*.js' -o -name '*.json' -o -name '*.html' \) \
             -exec sed -i.rt -e "s/8091/$SITE_PORT/g" -e "s/9222/$DRIVER_PORT/g" {} +
         find "$2" -name '*.rt' -type f -delete
