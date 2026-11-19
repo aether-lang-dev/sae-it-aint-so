@@ -63,26 +63,30 @@ eq("one wrong cell and it does not", w.isWon(), false);
 w.reset();
 eq("reset puts the givens back", [cells(w).filter((x) => x !== "empty").length, w.canUndo()], [4, false]);
 
-// every level has a solution (found by trying, so the puzzles are playable)
+// every level has a solution: a backtracking search over plain arrays (no
+// game moves while searching), whose first answer is then played into the game
 const solvable = (lv: number): boolean => {
   const g = new TangoPuzzleGame();
   g.setLevel(lv);
   const n = g.getSize();
   const b: string[] = cells(g);
+  const ok3 = (line: string[]) => !(line.length >= 3 && line[line.length - 1] === line[line.length - 2] && line[line.length - 2] === line[line.length - 3]);
+  const half = (line: string[], v: string) => line.filter((x) => x === v).length <= n / 2;
   const place = (i: number): boolean => {
-    if (i === n * n) { for (let k = 0; k < n * n; k++) set(g, k, b[k]); return g.isWon(); }
-    if (g.isGiven(i)) return place(i + 1);
-    for (const val of ["sun", "moon"]) {
+    if (i === n * n) return true;
+    // a given is checked like any other cell, it just has only the one value
+    for (const val of g.isGiven(i) ? [b[i]] : ["sun", "moon"]) {
       b[i] = val;
       const r = Math.floor(i / n), col = i % n;
       const row = b.slice(r * n, r * n + col + 1), cl = Array.from({ length: r + 1 }, (_, k) => b[k * n + col]);
-      const ok = (line: string[]) => !(line.length >= 3 && line[line.length - 1] === line[line.length - 2] && line[line.length - 2] === line[line.length - 3]);
-      if (ok(row) && ok(cl) && place(i + 1)) return true;
+      if (ok3(row) && ok3(cl) && half(row, val) && half(cl, val) && place(i + 1)) return true;
     }
-    b[i] = "empty";
+    if (!g.isGiven(i)) b[i] = "empty";
     return false;
   };
-  return place(0);
+  if (!place(0)) return false;
+  for (let k = 0; k < n * n; k++) set(g, k, b[k]);
+  return g.isWon();
 };
 eq("every level can be won", PUZZLES.map((_, i) => solvable(i)), [true, true, true, true, true]);
 // expect: ok starts at level 0, 4x4, not won, nothing to undo
@@ -105,4 +109,4 @@ eq("every level can be won", PUZZLES.map((_, i) => solvable(i)), [true, true, tr
 // expect: ok a balanced board without triples wins
 // expect: ok one wrong cell and it does not
 // expect: ok reset puts the givens back
-// expect: InternalError: out of memory (the runtime's memory limit)
+// expect: ok every level can be won

@@ -24,3 +24,4 @@ toolkit) are the apps only; none of Tsyne's framework code is used.
 | `fractals` | Mandelbrot, Julia, Newton, Tricorn and Burning Ship explorer | Tsyne `phone-apps/{mandelbrot,julia-set,newton-fractal,tricorn,burning-ship}` | BSD-3-Clause, Paul Hammant |
 | `tsello` | Kanban board | Tsyne `ported-apps/tsello` (from cl-trello-clone) | MIT, Rajasegar Chandran and Paul Hammant |
 | `charts` | Animated bars, line chart with zoom, heat map | Tsyne `phone-apps/{bar-chart,line-chart-demo,heatmap-demo}` | MIT, Paul Hammant |
+| `dashboards` | Animated gauges and turnable dials | Tsyne `phone-apps/{gauge-dashboard,dial-dashboard}` | MIT, Paul Hammant |

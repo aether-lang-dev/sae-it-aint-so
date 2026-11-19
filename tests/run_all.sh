@@ -156,6 +156,7 @@ spec_eliza|SAE_TEST_APP=examples/eliza|spec spec_eliza
 spec_fractals|SAE_TEST_APP=examples/fractals|spec spec_fractals
 spec_tsello|SAE_TEST_APP=examples/tsello SAE_STORAGE_DIR=$T/spec-storage|spec spec_tsello
 spec_charts|SAE_TEST_APP=examples/charts|spec spec_charts
+spec_dashboards|SAE_TEST_APP=examples/dashboards|spec spec_dashboards
 spec_http_grants||aerun spec_http_grants
 spec_page_grants||aerun spec_page_grants
 spec_origin_rules||aerun spec_origin_rules
@@ -198,6 +199,12 @@ for line in $TABLE; do
     case "$label" in *"$FILTER"*) ;; *) IFS='
 '; continue ;; esac
     log="$LOGS/$label.log"
+    # A spec that keeps app storage starts from a first launch, whichever spec
+    # ran before it and however it was run: the folder is emptied here, not
+    # once at the top (pomatez failed in a full run and passed alone, 2026-11-19).
+    for w in $envs; do
+        case "$w" in SAE_STORAGE_DIR=?*) rm -rf "${w#SAE_STORAGE_DIR=}" ;; esac
+    done
     set -- $cmd
     kind=$1; shift
     case "$kind" in

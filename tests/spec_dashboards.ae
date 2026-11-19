@@ -1,0 +1,73 @@
+// spec_dashboards.ae -- the Dashboards port (examples/dashboards) as an app:
+// the gauges held at t=0 (their values, an arc's colour and the track beyond
+// it), then the dials: a click sets the volume from the pointer's angle, a
+// drag turns another, the footer follows.
+//
+//   SAE_TEST_APP=examples/dashboards tests/run_spec.sh spec_dashboards
+import std.spec
+import std.string
+import saedriver as b
+import uidriver
+
+gx(x: float) -> int { return b.vg_px_x(x, 520.0, 440.0) }
+gy(y: float) -> int { return b.vg_px_y(y, 520.0, 440.0) }
+dx(x: float) -> int { return b.vg_px_x(x, 520.0, 480.0) }
+dy(y: float) -> int { return b.vg_px_y(y, 520.0, 480.0) }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "Dashboards on sae") {
+        spec.it("the gauges, held at t=0, read Tsyne's values") callback {
+            b.click("Pause")
+            b.click("Restart")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "drawn")
+            sleep(400)
+            nodes = b.vg_nodes()
+            spec.assert_contains(nodes, "System Metrics", "the section title")
+            spec.assert_contains(nodes, "\"text\":\"30%\"", "CPU 30")
+            spec.assert_contains(nodes, "\"text\":\"40%\"", "memory 40")
+            spec.assert_contains(nodes, "\"text\":\"65%\"", "disk 65")
+            spec.assert_contains(nodes, "\"text\":\"95%\"", "the Top gauge 95")
+            spec.assert_contains(nodes, "\"text\":\"75%\"", "the Full gauge 75")
+        }
+        spec.it("CPU's arc is blue as far as 30 percent of its 90 degrees, grey beyond") callback {
+            // centre (65, 75), radius 35, from 225 degrees counter-clockwise; 30% is 27 degrees
+            spec.assert_true(b.wait_for_vg_pixel(gx(42.5), gy(101.8), 0x3498DB), "at 230 degrees: the value")
+            spec.assert_true(b.wait_for_vg_pixel(gx(82.5), gy(105.3), 0xE0E0E0), "at 300 degrees: the track")
+        }
+        spec.it("the Full gauge's arc runs all the way round to 75 percent") callback {
+            // centre (52 + 4 * 104, 215), radius 30, from 90 degrees: 75% is 270 degrees on, to 0 degrees (3 o'clock)
+            spec.assert_true(b.wait_for_vg_pixel(gx(468.0 - 30.0), gy(215.0), 0x27AE60), "at 180 degrees: the value (left of centre)")
+            spec.assert_true(b.wait_for_vg_pixel(gx(468.0 + 30.0), gy(215.0), 0x27AE60), "at 0 degrees: 270 degrees on, the value ends here")
+        }
+        spec.it("Dials: a click at the right of the volume dial sets 83") callback {
+            b.click("Dials")
+            spec.assert_true(b.wait_for_vg_canvas() == 1, "drawn")
+            spec.assert_contains(b.page_texts(), "Vol: 50%  Temp: 21.5°  Pan: 0  Speed: 75", "the footer as it starts")
+            b.vg_click(dx(100.0), dy(85.0))
+            spec.assert_true(b.wait_for_text("Vol: 83%  Temp: 21.5°  Pan: 0  Speed: 75") == 1, "(360 - 135) / 270 of 100")
+            spec.assert_contains(b.vg_nodes(), "\"text\":\"83%\"", "and the dial says so")
+        }
+        spec.it("the temperature dial snaps to half degrees") callback {
+            b.vg_click(dx(330.0), dy(85.0))
+            spec.assert_true(b.wait_for_text("Vol: 83%  Temp: 27.5°  Pan: 0  Speed: 75") == 1, "27.5")
+        }
+        spec.it("a drag turns the speed dial") callback {
+            b.vg_click(dx(420.0), dy(45.0))
+            spec.assert_true(b.wait_for_text("Vol: 83%  Temp: 27.5°  Pan: 0  Speed: 50") == 1, "pointing up: 50")
+            b.vg_move(dx(390.0), dy(85.0))
+            b.vg_release(dx(390.0), dy(85.0))
+            spec.assert_true(b.wait_for_text("Vol: 83%  Temp: 27.5°  Pan: 0  Speed: 17") == 1, "dragged to the left: (180 - 135) / 270")
+        }
+        spec.it("the pan dial runs from -100 to 100 and starts at 0") callback {
+            b.vg_click(dx(335.0), dy(250.0))
+            sleep(500)
+            pt = b.page_texts()
+            ok = string.contains(pt, "Pan: 67") == 1 || string.contains(pt, "Pan: 66") == 1
+            spec.assert_true(ok, "pointing right: 66.67, a pixel's rounding either side ${pt}")
+        }
+    }
+    return spec.run_summary(fw)
+}
