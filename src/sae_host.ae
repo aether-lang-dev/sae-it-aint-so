@@ -4353,7 +4353,7 @@ raf_cancel_in_(l: ptr, id: int) {
 // delivered the same way.
 
 sae_http_get(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, held_fn_, http_start_, own_, quickjs
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     return http_start_(p, "GET", own_(arg_str_(ctx, argv, argc, 0)), "", "", null, held_fn_(ctx, argv, argc, 1))
@@ -4362,7 +4362,7 @@ sae_http_get(p: *Page, this_val: int, argv: int) -> int {
 // http.cancel(id): what req.cancel() calls. The request may still run to
 // completion on its actor; its callback will not.
 sae_http_cancel(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_int_, http_cancel_, quickjs
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     http_cancel_(p, arg_int_(ctx, argv, argc, 0, 0))
@@ -4370,7 +4370,7 @@ sae_http_cancel(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_http_post(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, held_fn_, http_start_, own_, quickjs
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     return http_start_(p, "POST", own_(arg_str_(ctx, argv, argc, 0)),
@@ -4381,7 +4381,7 @@ sae_http_post(p: *Page, this_val: int, argv: int) -> int {
 // http.request({ method, url, headers, body, contentType }, (res) => ...):
 // any method, request headers; res.headers holds the response's, lowercased.
 sae_http_request(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except held_fn_, http_start_, js_get_, js_key_, js_keys_, js_length_, js_prop_str_, quickjs, sae_throw_type_error, strarr, `string`
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if argc < 2 { return sae_throw_type_error(ctx, "http.request(options, fn)") }
