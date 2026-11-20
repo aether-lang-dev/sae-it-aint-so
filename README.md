@@ -745,8 +745,8 @@ The helpers a seal names carry the page veto, a `hide` line that takes the
 kernel out of their scope, unless the spec lists them as kernel helpers
 with a reason (the clocks, storage's files, opening a request, navigation).
 `tests/check_page_veto.sh` checks that every page-reachable function has
-its seal (six sqlite ones keep the veto until Aether fixes two faults, held
-as tripwires in `tests/check_gate_probes.sh`) and that the compiler
+its seal (all 302 since Aether 0.931.0, the six sqlite ones the last) and
+that the compiler
 enforces seal and veto; it is compile-time hygiene with a reviewed helper
 set, not a security boundary (the sandbox around each page entry is that).
 

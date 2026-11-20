@@ -97,13 +97,12 @@ underneath it, and `architecture.md` already lists it as stage 3. Concretely:
    page can reach (nothing registers outside it, `tests/check_gate.sh`),
    `sae.d.ts` is made from it, and the live page, the lowerer's tables and a
    `tsc` over real pages are held to it (docs/design/gate-dsl.md, "As built,
-   steps 8 to 11"). Since 2026-11-20 (Aether 0.926.0) 296 of the 302 host
-   functions open with their own `seal except` line in place of the pasted
-   `hide`, held to the spec's `basis` and each space's `reach`, and the
-   helpers they name carry the veto or are reviewed kernel helpers. The six
-   sqlite functions keep the veto until Aether fixes two seal faults, held
-   as tripwires in `tests/check_gate_probes.sh`. The README table is not yet
-   made from the spec.
+   steps 8 to 11"). Since 2026-11-20 every one of the 302 host functions
+   opens with its own `seal except` line in place of the pasted `hide` (296
+   on Aether 0.926.0, the six sqlite ones on 0.931.0), held to the spec's
+   `basis` and each space's `reach`, and the helpers they name carry the
+   veto or are reviewed kernel helpers. The README table is not yet made
+   from the spec.
 3. **`std.audit` as the browser's "why was that refused" panel**: every
    denial (capability, sandbox, cap) in one queryable log, shown in the
    devtools overlay (section 5, demo 5) and asserted on by specs.
@@ -373,8 +372,8 @@ Each wave is what a few agent-days can finish and verify on every lane
    LD_PRELOAD and Capsicum lanes running the corpus.
 3. The gate generated from one spec, with `seal except`, and `sae.d.ts` out
    of the same spec (1.3 item 2, 3.2). **The spec and `sae.d.ts`: done. The
-   `seal except` conversion: done, but six sqlite functions that wait on
-   Aether** (1.3 item 2).
+   `seal except` conversion: done, all 302 functions (the last six on Aether
+   0.931.0)** (1.3 item 2).
 4. Same-origin and in-bundle `import` (3.1). **Done.**
 5. The reactive surface for pages (3.4) and the AeVG surface (4): the full
    grammar in TS guise, components, bindings, data joins, tweens, events, and

@@ -39,8 +39,8 @@ and the guest can only ask, through the gate, for what a service will do.
    names open with the page veto, a `hide` line naming the kernel (fs, os,
    the network client, the lowerer, page lifecycle, the engine's
    parse/run), or are the spec's reviewed kernel helpers
-   (`tests/check_page_veto.sh`; docs/design/gate-dsl.md, step 10). Six
-   sqlite functions keep the veto until Aether fixes two seal faults.
+   (`tests/check_page_veto.sh`; docs/design/gate-dsl.md, step 10). All 302
+   are sealed since Aether 0.931.0.
 3. **Layer rules, checked by the compiler and a script.** The kernel
    imports `ui hiding (open_url, print_pdf, clipboard_read, clipboard_write)`
    and `std.http.client hiding (request)`, so naming any of them outside
