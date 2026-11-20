@@ -140,6 +140,16 @@ probe client_in_closure reject '    g = || { _r = client.request("GET", "http://
     g()'
 probe kernel_fn reject '    if n > 0 { _x = fetch_() }'
 probe net_service reject '    if n > 0 { _x = net() }'
+# A module imported under an alias is hidden by its real name too: the veto
+# names `fs`, and a helper that imported std.fs as files would write
+# files.read (so on 0.926.0 and 0.931.0; aether #3781 made `hide files` hide
+# it as well, which on 0.926.0 hid nothing).
+sed 's/^import std.fs$/import std.fs as files/' "$work/head.ae" > "$work/head_alias.ae"
+cp "$work/head.ae" "$work/head_plain.ae"
+cp "$work/head_alias.ae" "$work/head.ae"
+probe fs_by_alias reject '    if n > 0 { _c, _e = files.read("/etc/hosts") }'
+cp "$work/head_plain.ae" "$work/head.ae"
+
 # A page-API function's own seal: what it lists and its own names pass, and
 # anything else is refused at any depth (the shape of the bound functions:
 # `seal except quickjs, own_` and the like).

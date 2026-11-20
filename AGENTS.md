@@ -45,7 +45,8 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
    arguments), whose first line is its own `seal except <names>`: the
    shortest list it compiles with (write the body, start from `seal except
    quickjs`, add each name the compiler refuses; its own parameters and
-   locals need none; a module by its real name, not an import alias; a
+   locals need none; a module by its real name, not an import alias, which
+   the compiler admits since 0.931.0 but `tests/check_gate.sh` refuses; a
    selectively imported const as the body writes it; `string` and `print` in
    backticks). Every name must be in the spec's `basis(...)` or its space's
    `reach(...)` (add it to the reach if the space really needs it), and a
@@ -134,7 +135,7 @@ tests/check_page_sandbox.sh                   # the sandbox's source rules: who 
 ../aether/build/ae run tests/spec_page_grants.ae   # the page's grant list, by doing each operation under it: no window
 tests/check_timed_entries.sh                  # every host read of a page's value (getter, toString, valueOf, toJSON) is a timed entry: no raw quickjs.get/to_string/... outside the js_* helpers
 tests/check_gate.sh                          # the gate spec, sae.d.ts and the objects a page really sees agree (twenty dump modes, the natives one on the app's own sae that tools/saehost.sh builds), no registration outside the DSL, every seal within the spec's basis and reach and every helper it names vetoed or a kernel helper, the lowerer's tables equal the spec's, and, with SAE_TSC=<typescript's bin/tsc> or a tsc on PATH, sae.d.ts and 38 real pages, in either form (each through tools/tscheck.sh), pass tsc --strict (tools/gen-dts.sh regenerates the d.ts)
-tests/check_gate_probes.sh                   # what the pinned Aether does with the gate's mechanics and seal except (0.926.0's fixes held), and two seal faults it still has as tripwires (they fail when Aether fixes one)
+tests/check_gate_probes.sh                   # what the pinned Aether does with the gate's mechanics and seal except (0.926.0's and 0.931.0's fixes held, each beside what must still be refused)
 tests/check_listeners.sh                      # tests/lib/listeners.sh (what the app specs ask of lsof: /proc on Linux) sees a TCP and a Unix listener
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom

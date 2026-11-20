@@ -240,6 +240,24 @@ else
     echo "$stale" | while read -r v; do echo "FAIL seal policy: $v is listed by no seal"; done
     fails=$((fails + $(echo "$stale" | wc -l)))
 fi
+# aliases: no basis or reach name is the alias of an import of the host. From
+# Aether 0.931.0 (aether #3781) `seal except X` admits a module imported `as X`
+# as it admits one whose real name is X, so a reviewed name would reach any
+# module given it as an alias (`import std.fs as list` and a seal listing
+# `list`, a basis name, reach std.fs: tests/check_gate_probes.sh m_alias_basis).
+# The policy names modules by their real name (docs/design/gate-dsl.md), so an
+# alias in it is refused, and a name here means what its import says it does.
+aliases=$(sed -n 's/^import [a-z_.]* as \([A-Za-z_0-9]*\)[[:space:]]*$/\1/p' "$HOST" | LC_ALL=C sort -u)
+nalias=0 abad=0
+for a in $aliases; do
+    nalias=$((nalias + 1))
+    if awk -v a="$a" '($1 == "basis" && $2 == a) || ($1 == "reach" && $3 == a) { found = 1 } END { exit !found }' "$WORK/seal-policy.txt"; then
+        bad "seal policy: $a is the alias of an import of src/sae_host.ae ($(grep "^import .* as $a\$" "$HOST")): name the module by its real name"
+        abad=1
+    fi
+done
+[ "$abad" = 1 ] || ok "no basis or reach name is one of the host's $nalias import aliases (${aliases:-none}): a seal admits a module by its alias"
+
 # helpers: each policy name that is a function of the host opens with the veto,
 # or is a kernel helper (which then does not)
 awk -v veto="$veto" '/^[a-zA-Z_0-9]+\(/ { split($0, a, "("); fn = a[1]

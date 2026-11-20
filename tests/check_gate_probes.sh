@@ -5,7 +5,7 @@
 # rejected; a rejection is checked against its diagnostic, not only the exit
 # status. Nothing here touches src/ or target/; only `ae` is needed.
 #
-# FINDINGS (Aether 0.926.0, the pin; first taken on 0.923.0, same on macOS
+# FINDINGS (Aether 0.931.0, the pin; first taken on 0.923.0, same on macOS
 # and Linux, see the design doc)
 #
 #   name used inside `seal except ...`          sealed?  what to list
@@ -14,7 +14,10 @@
 #   `builtin` println                           yes      println   (E0301)
 #   module prefix (fs.read, os.getenv)          yes      the module (E0304)
 #   `string` module                             yes      `string` in backticks (bare: E0100, reserved)
-#   import std.fs as files                      yes      the REAL name `fs`; `files` alone is E0304
+#   import std.fs as files                      yes      `files` or the real name `fs` (0.931.0; before,
+#                                                        `fs` only); `hide` of either hides it
+#   a module sharing its last name (services.mq yes      the name the source writes, `mq` (0.931.0;
+#     beside contrib.mq)                                 before, only the merged `services_mq`)
 #   top-level const                             yes      its name  (E0304)
 #   a listed module's exported const (mm.K)     no       the module is enough (0.926.0; refused before)
 #   enum name (Color.RED)                       yes      the enum  (E0304)
@@ -27,6 +30,9 @@
 #   a field read of an unlisted struct          no       the value keeps its type (0.926.0; on
 #                                                        0.923.0 the field silently lost it)
 #   local variable, closure, "${}"              no       -
+#   a destructured local named like a top-level no       - (0.931.0; on 0.926.0 E0304): it is a
+#     function (`r, err = f()` beside fn r)              new local, as `r = f()` is. Rebinding a
+#                                                        hidden local of the enclosing body is E0304
 #   parameter of the function itself            no       - (0.926.0; through 0.923.0 E0304: each
 #                                                        had to be listed). A seal on a nested
 #                                                        block still needs them; `hide p` hides one
@@ -54,8 +60,8 @@
 #
 # Part g holds what step 10 needs of seal except on sae's kind of function:
 # the four fixes of Aether 0.926.0, each with what must still be refused.
-# Part h holds two faults 0.926.0 still has as tripwires (they fail when
-# Aether fixes one).
+# Part h holds the two fixes of Aether 0.931.0 (aether #3781) that let the six
+# sqlite functions take their seals, likewise.
 #
 # Exit status: the number of failed checks.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -198,8 +204,11 @@ main() { println(f(null, 1)) }'
     } > "$work/m_hiding_$fn.ae"
     check "m_hiding_$fn" "$want" "${pat:-}"
 done
-for k in files:reject fs:accept; do
-    listed=${k%%:*}; want=${k#*:}
+# An aliased module: from 0.931.0 (aether #3781) the seal admits it by the
+# alias the source writes as well as by its real name, and `hide` hides it by
+# either (the page veto's `hide fs` reaches `import std.fs as files`). On
+# 0.926.0 the seal needed the real name `fs` (`files` alone was E0304).
+for listed in files fs; do
     {
         echo 'import std.fs as files
 f(p: ptr, n: int) -> int {'
@@ -209,8 +218,25 @@ f(p: ptr, n: int) -> int {'
 }
 main() { println(f(null, 1)) }'
     } > "$work/m_alias_$listed.ae"
-    check "m_alias_$listed" "$want" "$( [ $want = reject ] && echo E0304 )"
+    check "m_alias_$listed" accept ''
+    sed "s/    seal except p, n, $listed/    hide $listed/" "$work/m_alias_$listed.ae" > "$work/m_alias_hide_$listed.ae"
+    check "m_alias_hide_$listed" reject "E0304.*'fs.exists'"
 done
+# So a reviewed name admits whatever module is imported under it: with
+# `import std.fs as list` beside std.list, `seal except list` (`list` is in
+# sae's basis) reaches std.fs. tests/check_gate.sh part (viii) closes this for
+# sae: no basis or reach name may be an import alias of src/sae_host.ae.
+cat > "$work/m_alias_basis.ae" <<'EOP'
+import std.list
+import std.fs as list
+f(n: int) -> int {
+    seal except list
+    _x = list.exists("/")
+    return n
+}
+main() { println(f(1)) }
+EOP
+check m_alias_basis accept ''
 
 # --- c. seal does not reach through calls ---
 cat > "$work/c_transitive.ae" <<'EOP'
@@ -490,14 +516,13 @@ check g_struct_named reject "E0200.*T"
 # D: the body's own parameters (here p and argv) need no listing; that is
 # s_param_unlisted, s_param_hidden and s_param_nested in part a.
 
-# --- h. two faults of seal except that 0.926.0 still has (tripwires) ---
-# Each passes while the fault stands and FAILS when Aether fixes it, which is
-# the signal to convert the sqlite functions that keep the page veto
-# (docs/design/gate-dsl.md, "Step 10").
+# --- h. the two seal faults 0.926.0 had, fixed in 0.931.0 (aether #3781) ---
+# They held the six sqlite functions on the page veto through step 10; each
+# probe fails if its fault comes back, beside what the seal must still refuse.
 # E: a tuple-destructured local named like a top-level name (a function, a
-# const or an extern) is refused under a seal, though `r = ...` makes the
-# same local and the unsealed body shadows it: sae_sqlite_transaction's
-# `r, err = js_call_(...)` (sae has an outer `r`).
+# const or an extern) is a new local under a seal, as `r = ...` is:
+# sae_sqlite_transaction's `r, err = js_call_(...)` (sae has an outer `r`).
+# On 0.926.0 it was E0304 "'r' is hidden".
 cat > "$work/h_tuple_shadow.ae" <<'EOP'
 r(x: int) -> int { return x }
 pair(x: int) -> (int, string) { return x, "" }
@@ -507,22 +532,37 @@ f(p: int) -> int {
     if err != "" { return 0 }
     return r
 }
-main() { println(f(1)) }
+main() { println("${f(1)}${r(2)}") }
 EOP
 sed 's/    r, err = pair(p)/    r = pair(p)/; s/    if err != "" { return 0 }//; s/^pair(x: int) -> (int, string) { return x, "" }/pair(x: int) -> int { return x }/' "$work/h_tuple_shadow.ae" > "$work/h_plain_shadow.ae"
 check h_plain_shadow accept ''
-if build h_tuple_shadow; then
-    bad "Aether fixed fault E (a sealed tuple destructure to a local named like a top-level name): seal sae_sqlite_transaction (docs/design/gate-dsl.md, Step 10)"
-elif grep -q "E0304.*'r' is hidden" "$work/h_tuple_shadow.log"; then
-    ok "fault E stands (h_tuple_shadow: E0304 'r' is hidden, for the body's own tuple local)"
-else
-    bad "h_tuple_shadow rejected, but not as fault E ($(head -c 300 "$work/h_tuple_shadow.log" | tr '\n' ' '))"
-fi
-# F: a module whose last name another module also has (services.sqlite,
-# which imports contrib.sqlite as engine) is not admitted by its name: `seal
-# except mq` refuses mq.bump and mq.KIND as 'services_mq.bump', and only the
-# merged name `services_mq` admits them. sae_sqlite_all, _get, _run, _begin
-# and _end use sqlite.KIND_*.
+check h_tuple_shadow accept ''
+[ "$("$work/h_tuple_shadow")" = 12 ] && ok "h_tuple_shadow runs: the local is the tuple's, the outer r untouched (12)" \
+    || bad "h_tuple_shadow printed '$("$work/h_tuple_shadow")', not 12"
+# ...but the outer function itself stays sealed: calling r unlisted is refused.
+sed 's/    return r$/    return r(1)/; s/    r, err = pair(p)/    _r, err = pair(p)/' "$work/h_tuple_shadow.ae" > "$work/h_tuple_outer.ae"
+check h_tuple_outer reject "E0301.*'r'"
+# ...and a destructure may not rebind a local of the enclosing body the seal
+# hides (a parameter here): codegen has no block shadowing, so it would write
+# the hidden variable (E0304, "a local is not shadowed").
+cat > "$work/h_tuple_param.ae" <<'EOP'
+pair(x: int) -> (int, string) { return x, "" }
+f(p: int) -> int {
+    if p > 0 {
+        seal except pair
+        p, err = pair(5)
+        if err != "" { return 0 }
+    }
+    return p
+}
+main() { println(f(1)) }
+EOP
+check h_tuple_param reject "E0304.*not shadowed"
+# F: a module that shares its last name with another module of the program
+# (services.sqlite, which imports contrib.sqlite as engine) is admitted by the
+# name the source writes: `seal except mq2` admits mq2.bump and mq2.KIND. On
+# 0.926.0 only the merged name `services_mq2` did (E0304 'services_mq2.bump').
+# sae_sqlite_all, _get, _run, _begin and _end use sqlite.KIND_*.
 mkdir -p "$work/services/mq2" "$work/contrib/mq2"
 printf 'exports (low)\nlow(x: int) -> int { return x }\n' > "$work/contrib/mq2/module.ae"
 cat > "$work/services/mq2/module.ae" <<'EOP'
@@ -539,13 +579,14 @@ f(p: int) -> int {
 }
 main() { println(f(1)) }
 EOP
-if build h_module_twin; then
-    bad "Aether fixed fault F (a module sharing its last name with another, under seal except): seal sae_sqlite_all, _get, _run, _begin, _end (docs/design/gate-dsl.md, Step 10)"
-elif grep -q "E0304.*services_mq2" "$work/h_module_twin.log"; then
-    ok "fault F stands (h_module_twin: E0304 'services_mq2.bump': only the merged name is admitted)"
-else
-    bad "h_module_twin rejected, but not as fault F ($(head -c 300 "$work/h_module_twin.log" | tr '\n' ' '))"
-fi
+check h_module_twin accept ''
+[ "$("$work/h_module_twin")" = 7 ] && ok "h_module_twin runs (7)" || bad "h_module_twin printed '$("$work/h_module_twin")', not 7"
+# ...not listed, it is refused, named as the source writes it, with its module;
+# and `hide mq2` hides it (on 0.926.0 `hide` of such a module hid nothing).
+sed 's/    seal except mq2/    seal except p/' "$work/h_module_twin.ae" > "$work/h_module_twin_unlisted.ae"
+check h_module_twin_unlisted reject "E0304.*'mq2.bump' of module 'services.mq2'"
+sed 's/    seal except mq2/    hide mq2/' "$work/h_module_twin.ae" > "$work/h_module_twin_hidden.ae"
+check h_module_twin_hidden reject "E0304.*'mq2.bump' of module 'services.mq2'"
 unset AETHER_LIB_DIR
 
 exit $fails
