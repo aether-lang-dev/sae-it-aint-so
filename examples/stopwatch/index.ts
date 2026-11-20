@@ -22,35 +22,35 @@ const refresh = (): void => {
 
 const drawLaps = (): void => {
   clear(lapList);
-  into(lapList, () => {
+  into(lapList) {
     for (let i = sw.laps.length; i >= 1; i--) {
-      hstack(4, () => { text(`Lap ${i}`); spacer(); text(formatStopwatchTime(sw.laps[i - 1])); });
+      hstack(4) { text(`Lap ${i}`); spacer(); text(formatStopwatchTime(sw.laps[i - 1])) }
     }
-  });
+  }
 };
 
-scene(`0 0 ${STOPWATCH_SIZE} ${STOPWATCH_SIZE}`, STOPWATCH_SIZE, STOPWATCH_SIZE, () => {
-  circle(STOPWATCH_CENTER, STOPWATCH_CENTER, STOPWATCH_RADIUS + 5, () => { fill("#f5f5f5"); stroke("#333333", 2); });
+scene(`0 0 ${STOPWATCH_SIZE} ${STOPWATCH_SIZE}`, STOPWATCH_SIZE, STOPWATCH_SIZE) {
+  circle(STOPWATCH_CENTER, STOPWATCH_CENTER, STOPWATCH_RADIUS + 5) { fill("#f5f5f5"); stroke("#333333", 2) }
   for (let i = 0; i < 60; i++) {
     const l = calcSecondMarkerLine(i);
-    line(l.x1, l.y1, l.x2, l.y2, () => stroke(i % 5 === 0 ? "#333333" : "#999999", i % 5 === 0 ? 2 : 1));
+    line(l.x1, l.y1, l.x2, l.y2) { stroke(i % 5 === 0 ? "#333333" : "#999999", i % 5 === 0 ? 2 : 1) }
   }
   const h = calcStopwatchHandLine(0, STOPWATCH_RADIUS * 0.75);
-  line(h.x1, h.y1, h.x2, h.y2, () => {
+  line(h.x1, h.y1, h.x2, h.y2) {
     stroke("#e74c3c", 3); linecap("round");
     vg.bind_transform(() => `rotate(${turn.value * 360} ${STOPWATCH_CENTER} ${STOPWATCH_CENTER})`);
-  });
-  circle(STOPWATCH_CENTER, STOPWATCH_CENTER, 5, () => fill("#333333"));
-});
+  }
+  circle(STOPWATCH_CENTER, STOPWATCH_CENTER, 5) { fill("#333333") }
+}
 bind(text(""), display);
-hstack(4, () => {
+hstack(4) {
   startStop = btn("Start", () => { sw.toggle(Date.now()); set_text(startStop, sw.running ? "Stop" : "Start"); refresh(); });
   btn("Lap", () => { sw.lap(Date.now()); drawLaps(); });
   btn("Reset", () => { sw.reset(); set_text(startStop, "Start"); refresh(); drawLaps(); });
-});
+}
 divider();
 text("Laps");
-scroll(() => { lapList = vstack(2); });
+scroll { lapList = vstack(2) }
 
 // Tsyne updates at 10 ms; a frame is as often as the screen shows
-timer(20, () => { if (sw.running) refresh(); });
+timer(20) { if (sw.running) refresh() }

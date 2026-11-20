@@ -70,31 +70,31 @@ const reset = (): void => {
   render();
 };
 
-hstack(4, () => {
+hstack(4) {
   const pick = picker((i: number) => { kindIx = i; set_visible(presetBtn, i === 1); reset(); });
   for (const k of KINDS) picker_add(pick, k.name);
   btn("Zoom In", () => go(zoomIn(view)));
   btn("Zoom Out", () => go(zoomOut(view)));
   btn("Reset", reset);
-});
-hstack(4, () => {
+}
+hstack(4) {
   btn("Left", () => go(pan(view, W, H, -1, 0)));
   btn("Up", () => go(pan(view, W, H, 0, -1)));
   btn("Down", () => go(pan(view, W, H, 0, 1)));
   btn("Right", () => go(pan(view, W, H, 1, 0)));
-});
-hstack(4, () => {
+}
+hstack(4) {
   btn("Next Palette", () => { paletteIx = (paletteIx + 1) % paletteNames.length; render(); });
   presetBtn = btn("Next Preset", () => { presetIx = (presetIx + 1) % PRESETS.length; render(); });
-});
+}
 set_visible(presetBtn, false);
 divider();
-scene(`0 0 ${W} ${H}`, W, H, () => {
-  raster = vg.raster(W, H, pixels, () => {
+scene(`0 0 ${W} ${H}`, W, H) {
+  raster = vg.raster(W, H, pixels) {
     on_click((x: number, y: number) => go(tapZoom(view, W, H, x, y)));
     on_scroll((dx: number, dy: number) => go(scrollZoom(view, W, H, W / 2, H / 2, -dy)));
-  });
-});
+  };
+}
 bind(text(""), status);
 
 on_key((key: string) => {

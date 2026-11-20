@@ -11,23 +11,23 @@ const { vstack, hstack, text, btn, divider, spacer, state, bind } = ui;
 const cd = new Countdown();
 const display = state(formatTimerTime(0));
 const status = state("");
-const refresh = (): void => display.set(formatTimerTime(cd.seconds(Date.now())));
+const refresh = (): void => { display.set(formatTimerTime(cd.seconds(Date.now()))); };
 
 spacer();
 bind(text(""), display);
 bind(text(""), status);
 spacer();
-hstack(4, () => {
+hstack(4) {
   btn("+1m", () => { cd.addMinutes(1); refresh(); });
   btn("+5m", () => { cd.addMinutes(5); refresh(); });
   btn("+10m", () => { cd.addMinutes(10); refresh(); });
-});
+}
 divider();
-hstack(4, () => {
+hstack(4) {
   btn("Start", () => { cd.start(Date.now()); status.set(cd.running ? "Running" : ""); refresh(); });
   btn("Stop", () => { cd.stop(Date.now()); status.set(""); refresh(); });
   btn("Reset", () => { cd.reset(); status.set(""); refresh(); });
-});
+}
 
 setInterval(() => {
   if (!cd.running) return;

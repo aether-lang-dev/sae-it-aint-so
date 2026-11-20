@@ -59,22 +59,22 @@ const drawBoard = (): void => {
   vg.resize(sceneH, px, px);
   if (boardG) vg.remove(boardG);
   cellFill = []; sunH = []; moonH = [];
-  vg.into(sceneH, () => {
-    boardG = g(() => {
+  vg.into(sceneH) {
+    boardG = g {
       for (let i = 0; i < size * size; i++) {
         const x = (i % size) * PITCH, y = Math.floor(i / size) * PITCH;
         const click = () => on_click(() => { game.tryClick(i); refresh(); });
-        cellFill[i] = rect(x, y, CELL, CELL, () => { fill("#F5F5F0"); stroke("#DDDDDD", 1); click(); });
-        sunH[i] = circle(x + CELL / 2, y + CELL / 2, 16, () => { fill("#F5A623"); click(); });
+        cellFill[i] = rect(x, y, CELL, CELL) { fill("#F5F5F0"); stroke("#DDDDDD", 1); click() };
+        sunH[i] = circle(x + CELL / 2, y + CELL / 2, 16) { fill("#F5A623"); click() };
         // Tsyne's icon moon (a 12 by 12 crescent), scaled to the cell
-        moonH[i] = path("M16 4a6 6 0 1 0 0 12 5 5 0 1 1 0-12z", () => {
+        moonH[i] = path("M16 4a6 6 0 1 0 0 12 5 5 0 1 1 0-12z") {
           fill("#4A90D9");
           transform(`translate(${x + 8} ${y + 8}) scale(3)`);
           click();
-        });
+        };
       }
-    });
-  });
+    };
+  }
 };
 
 const newLevel = (level: number): void => {
@@ -84,13 +84,13 @@ const newLevel = (level: number): void => {
   refresh();
 };
 
-hstack(4, () => {
+hstack(4) {
   btn("Reset", () => { announced = false; game.reset(); refresh(); });
   btn("Undo", () => { game.undo(); refresh(); });
   btn("<", () => newLevel(game.getLevel() - 1));
   bind(text(""), levelText);
   btn(">", () => newLevel(game.getLevel() + 1));
-});
+}
 divider();
 sceneH = scene("0 0 225 225", 225, 225);
 divider();
