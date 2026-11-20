@@ -55,9 +55,17 @@ main() {
         i = i + 1
     }
     whole = "state: done: 10000 files, 4 folders, 100000 bytes"
+    // Contained on Linux with Landlock. Elsewhere (FreeBSD, macOS) spawn_socket
+    // refuses, so tests/run_all.sh runs it with --uncontained-backend and sae
+    // says so; this backend has no lockdown of its own (it must read the
+    // folders it is given), so there nothing holds it to app.json's grants.
+    contained = 0
+    if os.platform() == "linux" { contained = 1 }
+    started = "sae: backend: backend/main started on a socket, contained"
+    if contained == 0 { started = "sae: backend: backend/main started on a socket, not contained (--uncontained-backend)" }
     spec.describe(fw, "treewalk: a long job on a live channel") {
-        spec.it("starts its backend, contained") callback {
-            spec.assert_true(b.wait_for_console("sae: backend: backend/main started on a socket, contained"), "started")
+        spec.it("starts its backend, contained where Aether can contain it") callback {
+            spec.assert_true(b.wait_for_console(started), "started: ${started}")
             b.assert_text("state: idle: 0 files, 0 folders, 0 bytes", "idle, asked on load")
         }
         spec.it("walks, with every file an event, while the window keeps answering") callback {
@@ -86,10 +94,16 @@ main() {
             spec.assert_true(b.wait_for_text_secs(whole, 60), "the page coming back sees the walk's end")
             b.assert_text("answer: (none)", "a new page: the answer went to the one that asked, and was dropped with it")
         }
-        spec.it("a folder outside the app's grants is refused") callback {
+        spec.it("a folder outside the app's grants: refused where contained, walked where not") callback {
             b.set_field_by("a folder to walk", "/etc")
             b.click("Walk")
-            b.assert_text("answer: failed: /etc: cannot list it (not there, or not granted)", "refused")
+            if contained == 1 {
+                b.assert_text("answer: failed: /etc: cannot list it (not there, or not granted)", "refused")
+            } else {
+                // Not contained (FreeBSD, macOS): app.json's grants are not
+                // enforced on this backend, and the walk of /etc completes.
+                spec.assert_true(b.wait_for_text_starting("answer: done: ") == 1, "walked, since nothing contains the backend here")
+            }
         }
         spec.it("a backend that dies is told, and Restart starts another") callback {
             b.set_field_by("a folder to walk", root)

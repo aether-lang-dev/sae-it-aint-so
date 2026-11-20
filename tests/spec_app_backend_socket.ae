@@ -61,9 +61,16 @@ main() {
         spec.describe(fw, "a contained socket backend where Aether cannot contain one") {
             spec.it("is not started, said once; the app runs and its calls fail with why") callback {
                 spec.assert_true(b.wait_for_console("sae: backend: could not start"), "said")
+                // Why, in Aether's words for the platform: on FreeBSD the
+                // preload and an Aether child's own Capsicum exist, but
+                // nothing holds a foreign program, so spawn_socket refuses.
+                why = "sandbox.spawn_socket: cannot contain a child on "
+                if os.platform() == "freebsd" { why = "sandbox.spawn_socket: cannot contain a child on FreeBSD yet (no kernel layer for a foreign program)" }
+                spec.assert_true(b.console_contains(why) == 1, "why: ${why}")
                 b.assert_text("running: false", "the page sees none")
                 b.click("Echo")
-                b.assert_text("failed: backend: could not start", "a call fails with why")
+                // The call's error is the whole reason, path and all.
+                spec.assert_true(b.wait_for_text_starting("failed: backend: could not start ") == 1, "a call fails with why")
                 spec.assert_true(backends_() == 0, "nothing was started")
             }
         }

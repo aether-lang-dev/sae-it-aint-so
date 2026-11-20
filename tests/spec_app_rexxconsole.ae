@@ -3,7 +3,11 @@
 // SAYs stream back as events; an error comes back with its line; a time
 // limit and Cancel stop a script from inside the engine; a flood of SAYs
 // arrives whole; ADDRESS reaches nothing; and Kill (backend.restart()) ends
-// a backend that nothing else can reach. Needs ../RexxAE.
+// a backend that nothing else can reach. Needs ../RexxAE. Contained on
+// Linux with Landlock; elsewhere (FreeBSD, macOS: spawn_socket refuses) run
+// with SAE_TEST_FLAGS=--uncontained-backend, as tests/run_all.sh does, and
+// sae says it is not contained: the backend's own lockdown (sandbox.enforce
+// with no grants) and the engine's unmounted ADDRESS still refuse.
 //   (cd apps/rexxconsole && AETHER_LIB_DIR=../../sdk:../../../RexxAE ae build backend/main.ae -o backend/main)
 //   AETHER_UI_HEADLESS=1 SAE_TEST_APP=apps/rexxconsole tests/run_spec.sh spec_app_rexxconsole
 import std.spec
@@ -35,8 +39,10 @@ main() {
     fw = spec.init()
     uidriver.wait_server()
     spec.describe(fw, "rexxconsole: Rexx in a contained backend") {
-        spec.it("starts its backend, contained on a socket") callback {
-            spec.assert_true(b.wait_for_console("sae: backend: backend/main started on a socket"), "started")
+        spec.it("starts its backend on a socket, contained where Aether can contain it") callback {
+            started = "sae: backend: backend/main started on a socket, contained"
+            if os.platform() != "linux" { started = "sae: backend: backend/main started on a socket, not contained (--uncontained-backend)" }
+            spec.assert_true(b.wait_for_console(started), "started: ${started}")
             b.assert_text("status: ready", "ready")
         }
         spec.it("runs a script: its SAYs stream back, then its exit code") callback {

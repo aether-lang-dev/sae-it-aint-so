@@ -2,8 +2,10 @@
 // file, sae hands the open file to a backend that may open nothing, and the
 // backend reads it and answers with what is in it, with progress. The
 // backend cannot open the same file by its path. Linux with Landlock (the
-// backend is contained); elsewhere run with SAE_TEST_FLAGS=--uncontained-backend,
-// where only the backend's own lockdown holds it.
+// backend is contained); elsewhere (FreeBSD, macOS: spawn_socket refuses)
+// run with SAE_TEST_FLAGS=--uncontained-backend, as tests/run_all.sh does,
+// where sae says it is not contained and only the backend's own lockdown
+// (sandbox.enforce with no grants) holds it: both refusals below still hold.
 //   (cd apps/docstats && AETHER_LIB_DIR=../../sdk ae build backend/main.ae -o backend/main)
 //   AETHER_UI_HEADLESS=1 SAE_TEST_APP=apps/docstats tests/run_spec.sh spec_app_docstats
 import std.spec
@@ -44,7 +46,9 @@ main() {
     _w2 = fs.write("${dir}/big.txt", big)
     spec.describe(fw, "docstats: a picked file read by a backend that may open none") {
         spec.it("starts its backend on a socket") callback {
-            spec.assert_true(b.wait_for_console("sae: backend: backend/main started on a socket"), "started")
+            started = "sae: backend: backend/main started on a socket, contained"
+            if os.platform() != "linux" { started = "sae: backend: backend/main started on a socket, not contained (--uncontained-backend)" }
+            spec.assert_true(b.wait_for_console(started), "started: ${started}")
             b.assert_text("backend: running", "the page sees it")
         }
         spec.it("a CSV: counts, its SHA-256 and each column, read through the descriptor") callback {

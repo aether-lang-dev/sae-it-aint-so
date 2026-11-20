@@ -12,6 +12,24 @@ import uidriver
 px(x: int) -> int { return b.vg_px_x(x * 1.0 + 0.5, 200.0, 200.0) }
 py(y: int) -> int { return b.vg_px_y(y * 1.0 + 0.5, 200.0, 200.0) }
 
+// The centre the page printed the n-th time it drew the Mandelbrot set at
+// 2x ("... Center: (0.2955, 0.0048) | ..."), and "" when it could not be read.
+centre_2x(n: int) -> (float, float, string) {
+    rest = b.console_after("fractals: drew Mandelbrot Zoom: 2.0x | Center: (", n)
+    comma = string.index_of(rest, ", ")
+    close = string.index_of(rest, ")")
+    if comma < 0 || close < comma { return 0.0, 0.0, "no centre in '${rest}'" }
+    x, ex = string.to_float(string.substring(rest, 0, comma))
+    y, ey = string.to_float(string.substring(rest, comma + 2, close))
+    if string.length(ex) > 0 || string.length(ey) > 0 { return 0.0, 0.0, "not numbers: '${rest}'" }
+    return x, y, ""
+}
+
+near(a: float, b: float, d: float) -> int {
+    if a - b <= d && b - a <= d { return 1 }
+    return 0
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -40,8 +58,22 @@ main() {
             spec.assert_true(b.wait_for_console_n("fractals: drew Mandelbrot Zoom: 1.0x | Center: (-0.5000, 0.0000) | Palette: fire", 2) == 1, "back to where it was, drawn again")
         }
         spec.it("a click zooms in on the point clicked") callback {
-            b.vg_click(px(153), py(100))
-            spec.assert_true(b.wait_for_console_secs("fractals: drew Mandelbrot Zoom: 2.0x | Center: (0.2935, 0.0000)", 20), "centred on the pixel clicked (153.5 is 0.2935)")
+            // The click lands on a whole canvas pixel, and the canvas is the
+            // size the toolkit gives it (360x313 on FreeBSD's GTK 4.20): the
+            // page is handed that pixel's viewBox point, within a raster pixel
+            // of 153.5, and centres on it (0.015 of the plane a unit at 1x).
+            cx = px(153)
+            cy = py(100)
+            vx = b.vg_vb_x(cx, 200.0, 200.0)
+            vy = b.vg_vb_y(cy, 200.0, 200.0)
+            spec.assert_true(near(vx, 153.5, 1.0) == 1 && near(vy, 100.5, 1.0) == 1, "the pixel clicked is raster pixel (153, 100): (${vx}, ${vy})")
+            b.vg_click(cx, cy)
+            spec.assert_true(b.wait_for_console_n("fractals: drew Mandelbrot Zoom: 2.0x | Center: (", 3) == 1, "drawn at 2x a third time")
+            gx, gy, gerr = centre_2x(3)
+            spec.assert_true(string.length(gerr) == 0, "the centre printed: ${gerr}")
+            wx = -0.5 + (vx - 100.0) * 0.015
+            wy = (vy - 100.0) * 0.015
+            spec.assert_true(near(gx, wx, 0.0001) == 1 && near(gy, wy, 0.0001) == 1, "centred on the point clicked: (${gx}, ${gy}), want (${wx}, ${wy})")
         }
         spec.it("Reset goes home") callback {
             b.click("Reset")

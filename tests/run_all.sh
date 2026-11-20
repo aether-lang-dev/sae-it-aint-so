@@ -92,6 +92,12 @@ STARTED=$(mktemp "${TMPDIR:-/tmp}/sae-run_all.XXXXXX") || exit 2
 # "2 to do" read 3 and failed on every run after the first).
 rm -rf "$T/spec-storage" "$T/caps-appdata" "$T/globals-appdata" \
        "$T/spec-shell.log" "$T/caps-shell.log" "$T/sandbox-appdata" "$T/sandbox-shell.log"
+# The example apps' socket backends are contained only where Aether can hold
+# a child (Linux with Landlock). Elsewhere (FreeBSD, macOS) spawn_socket
+# refuses, so they run as their READMEs say, with --uncontained-backend, and
+# their specs assert what that gives (docs/freebsd.md).
+OFF_LINUX_UNCONTAINED=""
+[ "$(uname -s)" = Linux ] || OFF_LINUX_UNCONTAINED="SAE_TEST_FLAGS=--uncontained-backend"
 # label | environment (space-separated NAME=value) | command
 TABLE="
 spec_nav||spec spec_nav
@@ -176,9 +182,9 @@ spec_app_backend_deaf|SAE_TEST_APP=tests/apps/backend_deaf|backend tests/apps/ba
 spec_app_backend_wslc|SAE_TEST_APP=tests/apps/backend_wslc|wslc spec_app_backend_wslc
 spec_backend_socket_service||backendrun tests/apps/backend_socket spec_backend_socket_service
 spec_app_backend_socket|AETHER_UI_HEADLESS=1 SAE_BACKEND_TEST_ENV=from-the-spec SAE_TEST_APP=tests/apps/backend_socket|backend tests/apps/backend_socket spec_app_backend_socket
-spec_app_docstats|AETHER_UI_HEADLESS=1 SAE_TEST_APP=apps/docstats|backend apps/docstats spec_app_docstats
-spec_app_rexxconsole|AETHER_UI_HEADLESS=1 SAE_TEST_APP=apps/rexxconsole|backend apps/rexxconsole spec_app_rexxconsole
-spec_app_treewalk|AETHER_UI_HEADLESS=1 SAE_TEST_APP=apps/treewalk|backend apps/treewalk spec_app_treewalk
+spec_app_docstats|AETHER_UI_HEADLESS=1 $OFF_LINUX_UNCONTAINED SAE_TEST_APP=apps/docstats|backend apps/docstats spec_app_docstats
+spec_app_rexxconsole|AETHER_UI_HEADLESS=1 $OFF_LINUX_UNCONTAINED SAE_TEST_APP=apps/rexxconsole|backend apps/rexxconsole spec_app_rexxconsole
+spec_app_treewalk|AETHER_UI_HEADLESS=1 $OFF_LINUX_UNCONTAINED SAE_TEST_APP=apps/treewalk|backend apps/treewalk spec_app_treewalk
 spec_app_channel|SAE_TEST_PARENT=1 SAE_TEST_APP=tests/apps/bus|spec spec_app_channel
 check_sqlite_relaunch||check check_sqlite_relaunch
 check_natives||check check_natives

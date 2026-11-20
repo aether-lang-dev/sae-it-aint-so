@@ -36,7 +36,7 @@ exports(
     wait_for_url, wait_for_page, wait_for_text, wait_for_text_secs, wait_for_text_starting, wait_for_text_gone, wait_for_widget_count,
     assert_url, assert_page, assert_text, assert_no_text,
     vg_canvas, vg_handle, vg_px_x, vg_px_y, vg_click, vg_pixel, vg_pixel_near, wait_for_vg_pixel,
-    console_count, wait_for_console_n,
+    console_count, wait_for_console_n, console_after, vg_vb_x, vg_vb_y,
     vg_move, vg_release, vg_scroll, vg_grid, widget_bool, wait_for_widget_bool, vg_px_x_in, vg_px_y_in, wait_for_vg_canvas,
     screenshot, console_contains, wait_for_console, wait_for_console_secs, tries, url_encode, vg_nodes,
     vg_key, vg_a11y, wait_for_vg_a11y, tab, tab_name
@@ -515,6 +515,26 @@ vg_px_y(vb_y: float, vb_w: float, vb_h: float) -> int {
     return ((ch - vb_h * s) / 2.0 + vb_y * s) as int
 }
 
+// The inverse: the viewBox point a canvas pixel lands on, as the host maps
+// a click (aether-ui's scene_px_to_vb_x/y). A spec that clicks vg_px_x's
+// whole pixel predicts what the page is handed from this, not from the
+// viewBox point it started from: the canvas's size, and so the fraction the
+// pixel loses, is the toolkit's and the fonts' (examples/fractals' canvas is
+// 360x313 under GTK 4.20 on FreeBSD, another size on Linux).
+vg_vb_x(x: int, vb_w: float, vb_h: float) -> float {
+    cw = uidriver.widget_int_field_by_id(vg_canvas(), "w") * 1.0
+    ch = uidriver.widget_int_field_by_id(vg_canvas(), "h") * 1.0
+    s = fit_scale(cw, ch, vb_w, vb_h)
+    return (x * 1.0 - (cw - vb_w * s) / 2.0) / s
+}
+
+vg_vb_y(y: int, vb_w: float, vb_h: float) -> float {
+    cw = uidriver.widget_int_field_by_id(vg_canvas(), "w") * 1.0
+    ch = uidriver.widget_int_field_by_id(vg_canvas(), "h") * 1.0
+    s = fit_scale(cw, ch, vb_w, vb_h)
+    return (y * 1.0 - (ch - vb_h * s) / 2.0) / s
+}
+
 fit_scale(cw: float, ch: float, vb_w: float, vb_h: float) -> float {
     sx = cw / vb_w
     sy = ch / vb_h
@@ -756,6 +776,26 @@ console_count(text: string) -> int {
     body, err = fs.read(p)
     if string.length(err) > 0 { return 0 }
     return uidriver.count_occurrences(body, text)
+}
+
+// The rest of the line after the n-th time (from 1) sae-driver printed
+// `text`, or "" before it has: for a number a page prints, read back.
+console_after(text: string, n: int) -> string {
+    p = os_getenv("SAE_TEST_LOG")
+    if p == null { return "" }
+    body, err = fs.read(p)
+    if string.length(err) > 0 { return "" }
+    from = 0
+    k = 0
+    while k < n {
+        at = string.index_of_from(body, text, from)
+        if at < 0 { return "" }
+        from = at + string.length(text)
+        k = k + 1
+    }
+    end = string.index_of_from(body, "\n", from)
+    if end < 0 { end = string.length(body) }
+    return string.substring(body, from, end)
 }
 
 // 1 once `text` has been printed at least n times: for a line a page
