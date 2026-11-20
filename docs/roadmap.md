@@ -92,18 +92,18 @@ underneath it, and `architecture.md` already lists it as stage 3. Concretely:
 2. **The gate generated from one spec, with `seal except`** (stage 2's
    remaining half). One spec per page-API call (name, argument types,
    capability, service), the README table and, in section 3, the `sae.d.ts`
-   for authors. One source of truth, compiler-checked. **Built, but the
-   `seal except` half**: the spec is a DSL in `src/sae_host.ae` (`gate_spec_`)
-   that registers every name a page can reach (nothing registers outside it,
-   `tests/check_gate.sh`), `sae.d.ts` is made from it, and the live page, the
-   lowerer's tables and a `tsc` over real pages are held to it
-   (docs/design/gate-dsl.md, "As built, steps 8 to 11"). The 300 host
-   functions still carry the pasted `hide` line: replacing it with
-   `seal except` meets three faults of Aether 0.923.0 (a closure passed to a
-   module function loses the function's locals, a module's const is refused,
-   and an unlisted struct silently loses its field types), held as tripwires in
-   `tests/check_gate_probes.sh`. The README table is not yet made from the
-   spec.
+   for authors. One source of truth, compiler-checked. **Built**: the spec
+   is a DSL in `src/sae_host.ae` (`gate_spec_`) that registers every name a
+   page can reach (nothing registers outside it, `tests/check_gate.sh`),
+   `sae.d.ts` is made from it, and the live page, the lowerer's tables and a
+   `tsc` over real pages are held to it (docs/design/gate-dsl.md, "As built,
+   steps 8 to 11"). Since 2026-11-20 (Aether 0.926.0) 296 of the 302 host
+   functions open with their own `seal except` line in place of the pasted
+   `hide`, held to the spec's `basis` and each space's `reach`, and the
+   helpers they name carry the veto or are reviewed kernel helpers. The six
+   sqlite functions keep the veto until Aether fixes two seal faults, held
+   as tripwires in `tests/check_gate_probes.sh`. The README table is not yet
+   made from the spec.
 3. **`std.audit` as the browser's "why was that refused" panel**: every
    denial (capability, sandbox, cap) in one queryable log, shown in the
    devtools overlay (section 5, demo 5) and asserted on by specs.
@@ -372,7 +372,8 @@ Each wave is what a few agent-days can finish and verify on every lane
    LD_PRELOAD and Capsicum lanes running the corpus.
 3. The gate generated from one spec, with `seal except`, and `sae.d.ts` out
    of the same spec (1.3 item 2, 3.2). **The spec and `sae.d.ts`: done. The
-   `seal except` conversion: waits on Aether** (1.3 item 2).
+   `seal except` conversion: done, but six sqlite functions that wait on
+   Aether** (1.3 item 2).
 4. Same-origin and in-bundle `import` (3.1). **Done.**
 5. The reactive surface for pages (3.4) and the AeVG surface (4): the full
    grammar in TS guise, components, bindings, data joins, tweens, events, and

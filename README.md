@@ -239,7 +239,7 @@ dropped.
 takes any method and request headers; `res.headers` holds the response's,
 with lowercased names.
 
-Where a page may reach is the kernel's decision, behind the page veto: in
+Where a page may reach is the kernel's decision, behind each function's seal: in
 the browser, the page's own origin, and any other origin that consents to
 that page with a `Sae-Allow-Origin` header on its answer (the CORS-alike,
 under "Browser security rules" below); in an app, the URL prefixes its
@@ -732,16 +732,23 @@ process access.
 
 Behind that, the host's page-facing functions are walled off from the rest
 of the browser (the "kernel": fetching, the file system, the environment,
-the lowerer, the engine's parse/run calls). Each one opens with the same
-`hide` line (Aether's compile-time `hide`, `aether/docs/hide-and-seal.md`),
-so it cannot name `fs`, `os`, `client` or the page-lifecycle functions; what
-it needs from the kernel goes through a few named helpers. A file read added
-to, say, `vg.set_fill`'s host function is a compile error, at any depth.
+the lowerer, the engine's parse/run calls). Each one opens with its own
+`seal except` line (Aether's compile-time seal,
+`aether/docs/hide-and-seal.md`): it names everything from outside the
+function that the body may use, and the body can name nothing else, at any
+depth. The names are held to the gate spec's policy: a `basis` every
+function may use (the engine, the argument helpers, the widget and scene
+modules) and each namespace's own `reach` (its service, its helpers), so a
+file read added to, say, `vg.set_fill`'s host function is a compile error,
+and listing `files` there to make it compile fails `tests/check_gate.sh`.
+The helpers a seal names carry the page veto, a `hide` line that takes the
+kernel out of their scope, unless the spec lists them as kernel helpers
+with a reason (the clocks, storage's files, opening a request, navigation).
 `tests/check_page_veto.sh` checks that every page-reachable function has
-the line and that the compiler enforces it (nested blocks need Aether with
-[aether#2381](https://github.com/aether-lang-dev/aether/pull/2381)). The
-list starts with the file system and its neighbours and grows from there;
-the end state is `seal except`, an explicit whitelist per function.
+its seal (six sqlite ones keep the veto until Aether fixes two faults, held
+as tripwires in `tests/check_gate_probes.sh`) and that the compiler
+enforces seal and veto; it is compile-time hygiene with a reviewed helper
+set, not a security boundary (the sandbox around each page entry is that).
 
 The effects a page can ask for live in their own modules,
 `services/files`, `services/documents`, `services/clipboard`, `services/bus` (with `services/agent_auth` and `services/secure_channel`, copied from aeo), `services/shell`, `services/net` and `services/stdlib`

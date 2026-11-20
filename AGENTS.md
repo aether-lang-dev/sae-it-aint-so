@@ -42,15 +42,23 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 1. A host function in `src/sae_host.ae` with the signature
    `(p: *Page, this_val: int, argv: int) -> int` (`p` is the page whose
    runtime calls it, handed over by `host_fn_`; `argv` an array of the
-   arguments), whose first line is the page veto (copy the `hide fs, os,
-   client, ...` line from any other one; "The page veto" in that file says
-   why), whose second is `ctx = p.ctx` (the page's contrib.quickjs runtime)
-   and whose third is `argc = quickjs.arg_count(ctx, argv)`. Nothing looks a
-   page up by its runtime, and there is no global browser: the Browser is
-   `p.browser`. It returns a value handle, 0 for
-   undefined, or `sae_throw_type_error(...)`. If it needs something the
-   veto hides, add a narrow kernel helper (as `now_ns_` wraps the clock)
-   rather than dropping the line.
+   arguments), whose first line is its own `seal except <names>`: the
+   shortest list it compiles with (write the body, start from `seal except
+   quickjs`, add each name the compiler refuses; its own parameters and
+   locals need none; a module by its real name, not an import alias; a
+   selectively imported const as the body writes it; `string` and `print` in
+   backticks). Every name must be in the spec's `basis(...)` or its space's
+   `reach(...)` (add it to the reach if the space really needs it), and a
+   helper of this file it names opens with the page veto (the `hide fs, os,
+   client, ...` line every such helper carries; "The seals and the page
+   veto" in that file) or is a `kernel_helper(...)` with its reason
+   (`tests/check_gate.sh` part viii). Its second line is `ctx = p.ctx` (the
+   page's contrib.quickjs runtime) and its third `argc =
+   quickjs.arg_count(ctx, argv)`. Nothing looks a page up by its runtime,
+   and there is no global browser: the Browser is `p.browser`. It returns a
+   value handle, 0 for undefined, or `sae_throw_type_error(...)`. If it needs
+   the kernel, add a narrow helper (as `now_ns_` wraps the clock) and list
+   it as a kernel helper, rather than reaching past the seal.
 2. Its entry in `gate_spec_` (docs/design/gate-dsl.md): `api("name", host_fn, arity) { ... }` in its `space` (one `api(` per line; the function comes before the arity), or `global_fn`. Everything a page can reach is in the spec: `storage`, `browserContext`, `performance`, `ui`, `vg`, `http`, `fs`, `printing`, `shell`, `documents`, `clipboard`, `bus`, `backend`, `print`, the timer globals, the prelude's globals, `Date.now`, `sqlite.<db>` (`space_each`: its entries go on every database the page gets), `natives.<mod>` (a hidden `raw_space`, its wrapper, and a `provided_dynamic`), the loader's `$sae.m` (`loader_fn`) and the test-only sandbox probe (`test_space`, never in `sae.d.ts`). A member the prelude's or a wrapper's JavaScript provides is a `provided(name, arity)`, with no function, and a wrapper is a `js_wrapper(name, source)` in a `raw_space` of the hidden object, then a `provided_space` for what the page sees. Nothing calls `reg_`, `host_fn_` or `quickjs.set_global` outside the DSL (`tests/check_gate.sh` part v). Then `tools/gen-dts.sh` (it regenerates `sae.d.ts`, which is checked in).
 3. If it reaches the file system, the system or the network, it goes
    through a service (`services/`), never `std.fs` or `client.request`
@@ -79,7 +87,7 @@ tests/run_all.sh                             # every spec and check below, each 
 SAE_TEST_SITE_PORT=18091 AETHER_UI_TEST_PORT=19222 tests/run_all.sh   # beside another checkout's run: run_spec.sh runs the specs, the site's pages and the test apps as copies with 8091 and 9222 moved (target/retarget/)
 tests/run_spec.sh                            # spec_nav: 45 specs
 # A slow engine (the x86_64 lab host ae-x64 runs QuickJS about twelve times slower than the Macs): SAE_TEST_WAIT_SCALE=6 multiplies every wait's three seconds, SAE_PAGE_TIME_MS=60000 lifts the page's 5 s limit per entry into JS (without it "InternalError: interrupted" ends Solver and the like; do NOT set it for spec_app_bus, which asserts the 5 s limit, there SAE_TEST_WAIT_SCALE=6 alone is right); a timing budget in a test (spraedsheet's sheet_large) stays the Mac's.
-tests/check_page_veto.sh                     # page veto present and enforced
+tests/check_page_veto.sh                     # every page-API function sealed (the six sqlite ones on the veto), seal and veto enforced
 tests/check_layers.sh                        # services held to their imports
 tests/check_android_sources.sh               # the APK compiles the same C as .build.ae
 ../aether/build/ae run tests/spec_http_grants.ae   # capabilities.http matching, no window
@@ -125,8 +133,8 @@ tests/check_spec_lock.sh                      # run_spec.sh's one-spec-at-a-time
 tests/check_page_sandbox.sh                   # the sandbox's source rules: who may read the environment, every kernel tick guarded, sandbox_push/pop only in the entry helpers, effects after the entry
 ../aether/build/ae run tests/spec_page_grants.ae   # the page's grant list, by doing each operation under it: no window
 tests/check_timed_entries.sh                  # every host read of a page's value (getter, toString, valueOf, toJSON) is a timed entry: no raw quickjs.get/to_string/... outside the js_* helpers
-tests/check_gate.sh                          # the gate spec, sae.d.ts and the objects a page really sees agree (twenty dump modes, the natives one on the app's own sae that tools/saehost.sh builds), no registration outside the DSL, the lowerer's tables equal the spec's, and, with SAE_TSC=<typescript's bin/tsc> or a tsc on PATH, sae.d.ts and 38 real pages, in either form (each through tools/tscheck.sh), pass tsc --strict (tools/gen-dts.sh regenerates the d.ts)
-tests/check_gate_probes.sh                   # what the pinned Aether does with the gate's mechanics, and three faults of seal except held as tripwires (they fail when Aether fixes one)
+tests/check_gate.sh                          # the gate spec, sae.d.ts and the objects a page really sees agree (twenty dump modes, the natives one on the app's own sae that tools/saehost.sh builds), no registration outside the DSL, every seal within the spec's basis and reach and every helper it names vetoed or a kernel helper, the lowerer's tables equal the spec's, and, with SAE_TSC=<typescript's bin/tsc> or a tsc on PATH, sae.d.ts and 38 real pages, in either form (each through tools/tscheck.sh), pass tsc --strict (tools/gen-dts.sh regenerates the d.ts)
+tests/check_gate_probes.sh                   # what the pinned Aether does with the gate's mechanics and seal except (0.926.0's fixes held), and two seal faults it still has as tripwires (they fail when Aether fixes one)
 tests/check_listeners.sh                      # tests/lib/listeners.sh (what the app specs ask of lsof: /proc on Linux) sees a TCP and a Unix listener
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom

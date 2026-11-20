@@ -32,10 +32,15 @@ and the guest can only ask, through the gate, for what a service will do.
    `std.fs (read, write_atomic)` (the spec log). `services/net` imports one
    client call, `std.http.client (request)`: it builds requests; it cannot
    send them or reach anything else.
-2. **The page veto, checked by the compiler.** Every gate function opens
-   with a `hide` line naming the kernel (fs, os, the network client, the
-   lowerer, page lifecycle, the engine's parse/run), so a gate cannot name
-   them at any depth (`tests/check_page_veto.sh`).
+2. **Each gate function's seal, checked by the compiler.** Every gate
+   function opens with its own `seal except <names>` line, so it can name
+   nothing else at any depth; `tests/check_gate.sh` holds the names to the
+   spec's `basis` and the `reach` of its namespace. The helpers a seal
+   names open with the page veto, a `hide` line naming the kernel (fs, os,
+   the network client, the lowerer, page lifecycle, the engine's
+   parse/run), or are the spec's reviewed kernel helpers
+   (`tests/check_page_veto.sh`; docs/design/gate-dsl.md, step 10). Six
+   sqlite functions keep the veto until Aether fixes two seal faults.
 3. **Layer rules, checked by the compiler and a script.** The kernel
    imports `ui hiding (open_url, print_pdf, clipboard_read, clipboard_write)`
    and `std.http.client hiding (request)`, so naming any of them outside
