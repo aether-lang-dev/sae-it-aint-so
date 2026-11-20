@@ -492,7 +492,9 @@ Run (2026-11-19): every socket spec, contained, on cachyos (CachyOS,
 Linux 7.3, Landlock, Aether 0.923.0); `spec_backend_socket_service` (no
 window: the socket, a descriptor handed over, kill, and `spawn_socket`'s
 refusal) on macOS (Aether 0.923.0) and on ghostbsd (GhostBSD, FreeBSD 15.1,
-its installed Aether 0.909.0). The Windows row is what Aether's own
+its installed Aether 0.909.0). On ghostbsd again (2026-11-20, Aether
+0.926.0) every socket spec: `spec_app_backend_socket` the refusal, and the
+example apps with `--uncontained-backend` (docs/freebsd.md). The Windows row is what Aether's own
 documents say (std.ipc's README, docs/containment-sandbox.md) and what
 services/backend checks before it tries; not run on Windows.
 

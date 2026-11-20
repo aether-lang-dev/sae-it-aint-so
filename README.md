@@ -774,7 +774,8 @@ status line under the toolbar shows the status and final URL.
 
 The desktop build selects AppKit on macOS, GTK4 on Linux/FreeBSD and Win32
 on Windows (MSYS2 MINGW64; `docs/windows.md`, which also runs the page server
-in WSL).
+in WSL). FreeBSD builds and tests as Linux does, with the differences in
+`docs/freebsd.md`.
 On Debian/Ubuntu, install the GTK4 build dependencies with
 `sudo apt install build-essential pkg-config libgtk-4-dev libepoxy-dev`.
 

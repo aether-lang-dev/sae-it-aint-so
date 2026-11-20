@@ -169,6 +169,15 @@ PATH=$PWD/../aether/build:$PATH AETHER_HOME=$PWD/../aether \
 WSL under `wslc`, `SAE_TEST_SERVER=external`, and which specs still fail
 there.
 
+### FreeBSD
+
+`docs/freebsd.md`: the packages (`gtk4 libepoxy xorg-vfbserver lsof`),
+`bootstrap.sh` taking the pinned release's `freebsd-x86_64` binary, the
+same `./build.sh` steps, `tests/run_all.sh` starting its own Xvfb, and what
+the specs assert there instead of Linux's containment (no contained socket
+backend: `spawn_socket` refuses, the example apps run with
+`--uncontained-backend`).
+
 ### A machine with only sae (a Claude Code cloud session)
 
 `tools/setup-siblings.sh` clones whichever of `../aether`, `../aether-ui`

@@ -330,4 +330,13 @@ AETHER_UI_URL=https://github.com/aether-lang-dev/aether-ui.git
 # 0.914's E0202 for a ptr from map.get; CI on aeb v0.347). A tracking move, no
 # new primitive needed. Verified: tests/run_all.sh on cachyos, ae-x64 and win11,
 # the counts under AE_PIN.
-AETHER_UI_REF=b1b14a3f6fdb3278fa013940111f6b3754b3f6c0
+# 39d8e808 (2026-11-20): a real move, evidence-based. The driver writes each
+# answer from its HTTP thread, not the UI thread: the control bus's ui
+# channel, which reads the driver's answer on the UI thread, could not read a
+# large one (spraedsheet's /widgets, 345 KB) past FreeBSD's small loopback
+# buffers, and answered "the UI driver did not answer in 10 s"
+# (spraedsheet's spec_app_sheet_bus). No new primitive. Verified on ghostbsd
+# (FreeBSD 15.1, GTK 4.20, Aether 0.926.0 from get.sh): tests/run_all.sh 97 of
+# 97 (spec_app_docstats once lost a race with another user clearing
+# ~/.aether/cache, passing when rerun), spraedsheet's ./run-tests.sh 13 of 13.
+AETHER_UI_REF=39d8e80817d2200192e87bd84a8c667f9bacb97a
