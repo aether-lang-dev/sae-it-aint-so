@@ -5343,28 +5343,28 @@ docs_adopt_(p: *Page, path: string) -> int {
 }
 
 sae_docs_pick_open(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, docs_adopt_, own_, quickjs, slashes_, ui
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     return docs_adopt_(p, slashes_(ui.open_file(own_(arg_str_(ctx, argv, argc, 0)), "")))
 }
 
 sae_docs_pick_save(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, docs_adopt_, own_, quickjs, slashes_, ui
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     return docs_adopt_(p, slashes_(ui.save_file("Save", own_(arg_str_(ctx, argv, argc, 0)))))
 }
 
 sae_docs_name(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_int_, browser_of_, documents, quickjs
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     return quickjs.new_string(ctx, documents.name(browser_of_(p).documents, arg_int_(ctx, argv, argc, 0, 0)))
 }
 
 sae_docs_read_text(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_int_, browser_of_, documents, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     text, err = documents.read_text(browser_of_(p).documents, arg_int_(ctx, argv, argc, 0, 0))
@@ -5373,7 +5373,7 @@ sae_docs_read_text(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_docs_write_text(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_int_, arg_str_, browser_of_, documents, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     err = documents.write_text(browser_of_(p).documents, arg_int_(ctx, argv, argc, 0, 0), own_(arg_str_(ctx, argv, argc, 1)))
@@ -5382,7 +5382,7 @@ sae_docs_write_text(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_docs_read_base64(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_int_, browser_of_, documents, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     b64, err = documents.read_base64(browser_of_(p).documents, arg_int_(ctx, argv, argc, 0, 0))
@@ -5391,7 +5391,7 @@ sae_docs_read_base64(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_docs_write_base64(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_int_, arg_str_, browser_of_, documents, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     err = documents.write_base64(browser_of_(p).documents, arg_int_(ctx, argv, argc, 0, 0), own_(arg_str_(ctx, argv, argc, 1)))
