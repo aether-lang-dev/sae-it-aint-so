@@ -12,7 +12,12 @@
 // unlock fs, http and shell, and a "hide" at the top of a function takes
 // names away from it (docs/app-capabilities.md).
 //
-// The one rewrite that is not an erasure: a static `import` or `export`
+// Trailing blocks (docs/design/trailing-blocks.md): a '{' on the same line
+// as a call's ')' or a name opens a block, `f(a) { b }` written in place as
+// `f(a, () => { b })` (parse_trailing_block_); lower_ts applies that alone,
+// keeping the TypeScript, for tsc.
+//
+// The other rewrite that is not an erasure: a static `import` or `export`
 // statement becomes a call on `$sae`, the loader object the host hands the
 // page (README, "Modules"), and a unit that imports, exports or awaits at
 // its top level is wrapped in one function expression (its first line gets

@@ -25,9 +25,10 @@ Maintainers: Paul and Nic, with Claude and Codex. Commit straight to `main`.
 | `natives/` | `module.ae`: the natives module the kernel calls for an app's own native modules (`natives.<name>.<fn>`, `docs/natives.md`); here the stub with none, generated in an app's own host by `tools/saenatives.ae` (`tools/saehost.sh <app>` builds that host, each module checked to be capability-empty) |
 | `lib/sae/` | The `sae:` page standard library (`noise`, `scales`, `easing`), written in the dialect; `MANIFEST` holds their build-time hashes (`tools/hash-lib.sh`) |
 | `tools/saejs.ae` | Runs a JS file on sae's engine with only `print`; the lowerer tests use it |
-| `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae` |
+| `lower/` | The dialect lowerer (Aether, import-only package), its tests and its dialect reference; the module loader's host half is the `wave1/imports` section of `src/sae_host.ae`. Pages are written with trailing blocks (`f(a) { body }`, `docs/design/trailing-blocks.md`); a callback with parameters stays an arrow |
 | `tools/pageserver.ae` | Filesystem-mapped dev page server (`/about` → `site/about.ts`; modules in folders four deep) |
-| `tools/saelower.ae` | CLI for the lowerer, and `--from-svg` (an SVG as an AeVG-TS page) |
+| `tools/saelower.ae` | CLI for the lowerer, `--ts` (the trailing-block desugar alone, types kept, for tsc), and `--from-svg` (an SVG as an AeVG-TS page) |
+| `tools/tscheck.sh` | Type-checks pages in either form against `sae.d.ts`: each desugared by `saelower --ts`, then `tsc --strict` (`SAE_TSC` or a tsc on PATH) |
 | `tools/saebus.ae` | `sae-bus <app name> <command>`: one command to an app's control bus (finds the courier file, seals, prints the opened answer); what other programs, and the spreadsheet's REXX scripts, drive an app with |
 | `site/` | The demo/test site; `tests/spec_nav.ae` drives it |
 | `../spraedsheet` | Not here: demo 18, the spreadsheet, moved there on 2026-10-14 (its `app/`, with RexxJS vendored; GitHub `aether-lang-dev/spraedsheet`, formerly `RexxJS/example-app-spreadsheet`). It runs on this checkout (`sae -> ../sae`) and its `./run-tests.sh` runs sae's harnesses on its tests (`lower/run-tests.sh --mod`, `tests/run_spec.sh <path>.ae`); run it before pushing a change to a page API it uses (documents, clipboard, the control bus, the datagrid) |
@@ -73,7 +74,7 @@ AETHER_UI_WITH_DRIVER=1 ./build.sh           # target/build/bin/sae-driver
 ../aether/build/ae build tools/saejs.ae -o target/saejs
 ../aether/build/ae build tools/saebus.ae -o target/sae-bus
 ../aether/build/ae build tools/saegate.ae -o target/saegate   # sae --gate-describe | saegate: sae.d.ts (tools/gen-dts.sh)
-lower/run-tests.sh                           # 70 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless; --mod DIR runs another repo's)
+lower/run-tests.sh                           # 81 lowerer tests (run, err, mod, golden; mod/algos_* test site/algos/ headless; --mod DIR runs another repo's)
 tests/run_all.sh                             # every spec and check below, each with its environment (a label filter: tests/run_all.sh spec_app_)
 SAE_TEST_SITE_PORT=18091 AETHER_UI_TEST_PORT=19222 tests/run_all.sh   # beside another checkout's run: run_spec.sh runs the specs, the site's pages and the test apps as copies with 8091 and 9222 moved (target/retarget/)
 tests/run_spec.sh                            # spec_nav: 45 specs
@@ -124,13 +125,14 @@ tests/check_spec_lock.sh                      # run_spec.sh's one-spec-at-a-time
 tests/check_page_sandbox.sh                   # the sandbox's source rules: who may read the environment, every kernel tick guarded, sandbox_push/pop only in the entry helpers, effects after the entry
 ../aether/build/ae run tests/spec_page_grants.ae   # the page's grant list, by doing each operation under it: no window
 tests/check_timed_entries.sh                  # every host read of a page's value (getter, toString, valueOf, toJSON) is a timed entry: no raw quickjs.get/to_string/... outside the js_* helpers
-tests/check_gate.sh                          # the gate spec, sae.d.ts and the objects a page really sees agree (twenty dump modes, the natives one on the app's own sae that tools/saehost.sh builds), no registration outside the DSL, the lowerer's tables equal the spec's, and, with SAE_TSC=<typescript's bin/tsc> or a tsc on PATH, sae.d.ts and 26 real pages pass tsc --strict (tools/gen-dts.sh regenerates the d.ts)
+tests/check_gate.sh                          # the gate spec, sae.d.ts and the objects a page really sees agree (twenty dump modes, the natives one on the app's own sae that tools/saehost.sh builds), no registration outside the DSL, the lowerer's tables equal the spec's, and, with SAE_TSC=<typescript's bin/tsc> or a tsc on PATH, sae.d.ts and 38 real pages, in either form (each through tools/tscheck.sh), pass tsc --strict (tools/gen-dts.sh regenerates the d.ts)
 tests/check_gate_probes.sh                   # what the pinned Aether does with the gate's mechanics, and three faults of seal except held as tripwires (they fail when Aether fixes one)
 tests/check_listeners.sh                      # tests/lib/listeners.sh (what the app specs ask of lsof: /proc on Linux) sees a TCP and a Unix listener
 tests/run_spec.sh spec_reactive                # state, computed, bind (one- and two-way, the template), each, batch
 tests/run_spec.sh spec_aevg                    # the AeVG grammar, group cascade, bindings, data join, tweens, events, zoom
 tests/run_spec.sh spec_aevg_parity             # corpus pages (tools/gen-corpus.sh) against librsvg's PNGs: mean error
 tests/run_spec.sh spec_camera                  # demo 1b (site/camera.ts) and the clock components
+tests/run_spec.sh spec_fib_clock               # site/fib_clock.ts: 4:30 and 9:15 pinned, held to geometry
 tests/run_spec.sh spec_reorder                 # ui.reorderable: a plain hstack and an each() row dragged over the driver (site/reorder.ts)
 tests/run_spec.sh spec_a11y                    # ui.a11y_label/role/description/announce on a widget and a vg scene; vg.on_key: a board from the keyboard (site/a11y.ts)
 ```

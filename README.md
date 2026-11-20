@@ -48,29 +48,38 @@ Container builders take their block as the last argument, the way Aether's
 trailing block works: `ui.vstack(4, fn)` makes the stack under the current
 parent, runs `fn` with the stack as the parent, and pops it again even if
 `fn` throws. A stack's or grid's spacing may be left out (`vstack(fn)`,
-4 points).
+4 points). The dialect lets the block follow the call, as in Ruby, Groovy
+and Aether, with no `() =>`: `f(a) { body }` is `f(a, () => { body })`, on
+the same lines (`lower/README.md`, "Trailing blocks";
+`docs/design/trailing-blocks.md`). It is the house style; both forms stay
+legal, and a callback that takes parameters stays an arrow.
 
 ```ts
-grid(4, () => {                       // four to a row, filled a row at a time
+grid(4) {                             // four to a row, filled a row at a time
   equal_cells();                      // every key one size: a keypad
   [..."789+456-123*0C=/"].forEach(key);
-});
+}
 ```
+
+The brace goes on the call's line (a `{` on the next line after a call is
+refused as ambiguous). An editor's TypeScript service shows a syntax error
+at each block opener but keeps completing and checking the calls inside;
+`tools/tscheck.sh page.ts` desugars and type-checks a page against `sae.d.ts`.
 
 The `ui` object (each builder returns its widget handle):
 
 | | |
 |---|---|
 | containers | `vstack([spacing,] fn)`, `hstack([spacing,] fn)`, `wrap(fn)` (left to right, onto the next line when the width runs out: aether-ui's flow container), `grid(cols, [spacing,] fn)` (the block's widgets fill it row by row), `scroll(fn)`, `button(label, fn)` (the block styles the button) |
-| widgets | `text(s)`, `btn(label, onPress)`, `divider()`, `spacer()`, `textfield(placeholder, onChange(text))`, `securefield(placeholder, onChange(text))` (its text not shown: a password; `get_text` reads it), `textarea(placeholder, onChange(text)?)` (several lines; `bind` binds it both ways to a string state) |
-| modifiers (inside a block) | `margin(t, r, b, l)`, `bg_color(r, g, b, a)`, `onclick(fn)`, `ondrag(fn(phase, x, y))` (press at (x, y) in the widget, then moves and the release as offsets), `onsubmit(fn(text))` (in a field's block), `onfocuschange(fn(inside))` (focus came into the widget or left it; or `ui.on_focus_change(h, fn)`), `ui.set_focusable(h, on)` (let a stack or a vg scene's canvas take the keyboard focus, and so be a stop of Tab; `ui.focus(h)` gives it, on a scene too), `pointer_shape(name)` (the mouse pointer over the widget: "col-resize", "row-resize", "move", "grab", "pointer", "text", "crosshair", "not-allowed", "wait", "default"; or `ui.pointer_cursor(h, name)`), `equal_cells()` (in a grid: one width per column, one height per row, for all). `text(label, block)` and `textfield(placeholder, onChange, block)` take blocks of their own |
+| widgets | `text(s)`, `btn(label, onPress)`, `divider()`, `spacer()`, `textfield(placeholder, block?)` (`onchange(fn(text))` in its block), `securefield(placeholder, onChange(text))` (its text not shown: a password; `get_text` reads it), `textarea(placeholder, onChange(text)?)` (several lines; `bind` binds it both ways to a string state) |
+| modifiers (inside a block) | `margin(t, r, b, l)`, `bg_color(r, g, b, a)`, `onclick(fn)`, `ondrag(fn(phase, x, y))` (press at (x, y) in the widget, then moves and the release as offsets), `onchange(fn(text))` (in a textfield's block: every edit), `onsubmit(fn(text))` (in a field's block), `onfocuschange(fn(inside))` (focus came into the widget or left it; or `ui.on_focus_change(h, fn)`), `ui.set_focusable(h, on)` (let a stack or a vg scene's canvas take the keyboard focus, and so be a stop of Tab; `ui.focus(h)` gives it, on a scene too), `pointer_shape(name)` (the mouse pointer over the widget: "col-resize", "row-resize", "move", "grab", "pointer", "text", "crosshair", "not-allowed", "wait", "default"; or `ui.pointer_cursor(h, name)`), `equal_cells()` (in a grid: one width per column, one height per row, for all). `text(label, block)` and `textfield(placeholder, block)` take blocks of their own |
 | reading and writing | `get_text(h)`, `set_text(h, s)`: synchronous, no `await` |
 | rebuilding | `clear(h)` empties a `vstack`/`hstack`/`grid` the page made; `into(h, fn)` builds into it again |
 | inputs and indicators | `toggle(label, onChange(on))`, `slider(min, max, initial, onChange(v))`, `picker(onChange(i))` + `picker_add(h, item)`, `progressbar(f)` + `set_progress(h, f)`; `get_`/`set_toggle`, `get_`/`set_slider`; `scrollbar(vertical, min, max, page, value, onChange(v))` (a windowing slider: the thumb is the window, page of max - min; the value is the window's start, min to max - page; native where the platform has one), `set_scrollbar(h, min, max, page, value)` (no onChange), `scrollbar_steps(h, step, pageStep)`, `get_scrollbar(h)`, `scrollbar_range(h)` → `[min, max, page]` |
 | styles | `styles(sheet)`, `add_class(h, name)`, `style_id(h, name)`: see below |
 | timers | `timer(ms, fn)` repeats, `after(ms, fn)` runs once, both return an id for `timer_cancel(id)`; `sleep(ms)` is a promise; `frame(fn)` runs `fn(timestamp)` on the next display frame, `frame_cancel(id)`; see Timers below |
 | showing | `set_visible(h, on)`: hide a view and keep it (and its timers, vg scenes) alive |
-| reactive state | `state(v)`, `computed(fn, ...states)`, `bind(widget, state)`, `` bind`...${s}...` ``, `bind_enabled`, `bind_hidden`, `each(list, key, render)` (a column of rows; a row of them inside an `hstack`), `batch(fn)` (globals too: see Reactive state below); the cell-level `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` still work |
+| reactive state | `state(v)`, `computed(...states, fn)`, `bind(widget, state)`, `` bind`...${s}...` ``, `bind_enabled`, `bind_hidden`, `each(list, key, render)` (a column of rows; a row of them inside an `hstack`), `batch(fn)` (globals too: see Reactive state below); the cell-level `ui_state(v)`, `ui_set(state, v)`, `text_bound(state, prefix, suffix)` still work |
 | enabling | `set_enabled(h, on)`: grey a widget out, or back |
 | tooltips | `tooltip(h, text)` → h: what shows when the pointer rests on a widget the page made (aether-ui's, each backend's native tooltip); `""` takes it off. `site/tooltip.ts`, `spec_tooltip` |
 | context menus | `context_menu(target, items)`: what a right click (a long press on touch) on `target` offers: a widget the page made, a vg shape's handle, or `0` for the whole page (anywhere with nothing deeper of its own). `items` is an array of `{ label, accel?, enabled?, action }` and `"-"` (a separator), read again each time the menu opens, so changing the array changes the menu. Below a divider, sae's own section: Back, Forward, Reload, View page source, Inspect, which a page cannot remove, reorder, disable or add under; an item taking one of those labels is refused, as is one with no action that is not `enabled: false`. A page with no menu still has sae's. `on_double_click(h, fn)`: a widget's double click (a double tap on touch) |
@@ -112,9 +121,9 @@ Pages are not given `window()`: the browser owns the window.
 ```ts
 const count = state(0);
 const name = state("");
-const greeting = computed(() => (name.value ? `Hello, ${name.value}` : "Hello, stranger"), name);
+const greeting = computed(name, () => (name.value ? `Hello, ${name.value}` : "Hello, stranger"));
 bind(text(""), count);                          // a label follows a state
-bind(textfield("Your name", () => {}), name);   // a field and a string state, both ways
+bind(textfield("Your name"), name);   // a field and a string state, both ways
 bind`Count: ${count} of ${total}`;              // the tagged template: a multi-state label
 bind_enabled(goButton, busy, true);             // greyed while busy (true inverts)
 bind_hidden(spinner, busy, true);               // shown while busy
@@ -525,8 +534,8 @@ import { linear } from "sae:scales#sha256-...";     // optional: the bytes it ex
   default`, and the re-exports `export { a } from`, `export * from`,
   `export * as ns from`. A module cannot `"seeks"`; it may name what the
   page importing it sought. A page cannot `export` (nothing imports a
-  page). `lower/README.md` has the rewrite, the one non-erasure the
-  lowerer makes.
+  page). `lower/README.md` has the rewrite, one of the lowerer's two
+  rewrites that are not erasures (trailing blocks are the other).
 - **The `sae:` library** (`lib/sae/`): modules sae carries, loadable in
   the browser and in apps with no capability, each hashed at build time
   into `lib/sae/MANIFEST` (`tools/hash-lib.sh`, run by `./build.sh`) and
@@ -671,6 +680,12 @@ camera, emitted with `--solid` and made operable (demo 1b: turn the mode
 dial, press the shutter, zoom the lens, the LCD bound to state), and
 `site/clock.ts` places one clock-face component four times by transforms,
 its hands bound to the time; `tests/spec_camera.ae` drives both.
+`site/fib_clock.ts` is aether-ui's Fibonacci clock (one golden-spiral family
+for the hour lanes and the hand), its artwork built once and the time-bound
+parts (readout, hot lane, hand, which spiral shows and how far it has grown)
+bound to three states a timer sets each second; `tests/spec_fib_clock.ae`
+pins 4:30 and 9:15 and checks the geometry. Both are written in trailing
+blocks.
 
 ### Pixels from a page
 

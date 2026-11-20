@@ -11,12 +11,19 @@ target/saelower page.ts > page.js
 lower/run-tests.sh
 ```
 
-It erases TypeScript and does one more thing (Modules, below). It
+It erases TypeScript and does two more things: it desugars trailing blocks
+(below) and rewrites static `import`/`export` (Modules, below). It
 tokenizes, parses the grammar enough to know what each token is, and
 overwrites the TypeScript with spaces (the ts-blank-space approach), so
 every line and column stays where the author wrote it: a position in an
-engine error is a position in the `.ts`. The JavaScript is passed through
+engine error is a position in the `.ts` (on a line with a trailing block or
+an import, columns after the rewrite move). The JavaScript is passed through
 untouched. `lower/run-tests.sh` checks the line count for every test page.
+
+```sh
+target/saelower --ts page.ts > page.tsc.ts   # the desugar alone, types kept: for tsc
+tools/tscheck.sh site/clock.ts               # that, then tsc --strict against sae.d.ts
+```
 
 ## The dialect
 
@@ -53,7 +60,66 @@ including on a promise an http callback resolves.
 | `implements I, J`; `abstract` classes and members; index signatures | |
 | `this:` parameters, overload signatures (functions and methods) | |
 
-## Modules: the one non-erasure
+## Trailing blocks
+
+The page API nests: a container's or a shape's last argument is a block
+that runs with it as the parent. The dialect lets that block follow the
+call, as in Ruby, Groovy and Aether (`../docs/design/trailing-blocks.md` has
+the whole design):
+
+> A `{` on the same line as a call's closing `)`, or as a name, opens a
+> trailing block: `f(a) { body }` is `f(a, () => { body })`, and
+> `f { body }` is `f(() => { body })`. Wherever JavaScript gives that `{` a
+> meaning of its own, it keeps it.
+
+```ts
+const face = (r: number) => g {
+  circle(0, 0, r) { fill(PAPER); stroke(INK, r * 0.04) }
+  for (let i = 0; i < 12; i++) line(0, -r * 0.92, 0, -r * 0.8) { stroke(INK, r * 0.03); transform(`rotate(${i * 30})`) }
+}
+scene("0 0 400 400", 400, 400) {
+  g { transform("translate(100 100)"); face(80) }
+}
+```
+
+"A name" is an identifier or a dotted chain (`g`, `ui.hstack`); "a call" is
+any call (`f(a)`, `o.m(a)`, `f(a)(b)`, `f?.(a)`, `f<T>(a)`). A block works in
+any expression position (a statement, `return`, an initialiser, an argument,
+an arrow's concise body) and the call's value is the expression's. It is an
+arrow's body: `this` and `arguments` are the enclosing function's, `return`
+leaves the block, it is not `async`, and it takes no parameters (a callback
+with parameters stays an arrow: `slider(0, 9, 0, (v) => ...)`).
+
+JavaScript keeps its brace after a statement head (`if (x) {`, `for`,
+`while`, `switch`, `catch`), a function's or method's parameters, `=>`, an
+operator or keyword (an object literal, `do`, `else`, `try`), a label, a
+class heritage (`class A extends mixin(B) {`) and a type position
+(`): T {`), on the same line or the next.
+
+Refused, with the line and column (`lower/tests/err/block_*.ts`):
+
+| Written | Error |
+|---|---|
+| a call or a name, then `{` on the next line | `a '{' on the line after a call or a name is ambiguous: put it on the call's line for a trailing block, or end the call with ';' for a plain block` |
+| `a[i] { }`, `(f) { }`, `new C() { }`, a tagged template | `a trailing block follows a call's ')' or a name, not ...` |
+| `f(a) { } { }` | `only one trailing block follows a call` |
+| `each(xs) { \|x\| ... }` | `a trailing block takes no parameters; write an arrow, (x) => { ... }` |
+
+The rewrite is in place: `)` becomes `, () =>` (`() =>` after an empty list
+or a trailing comma), a bare name gets `(() =>` after it, and the block's `}`
+becomes `})`. `golden/blocks` holds it exactly. `saelower --ts` (`lower_ts`)
+applies this desugar alone and leaves the TypeScript, the module syntax and
+the page unwrapped, so `tsc` can check a page in either form
+(`tools/tscheck.sh`, `tests/check_gate.sh` part vii).
+
+What an editor makes of it: a TypeScript language service does not know the
+desugar, so it shows one syntax error per block opener (`';' expected`),
+reads the block as a plain block statement and goes on; completion, hover
+and the type errors of the calls inside the block keep working. It cannot
+check the block against the parameter it is passed to; `tools/tscheck.sh`
+does.
+
+## Modules: the other rewrite
 
 A static `import` or `export` statement is rewritten, in place, into a
 call on `$sae`, the loader object sae's host hands each unit (README,
@@ -144,8 +210,9 @@ its own, not the capability. See `../docs/app-capabilities.md`.
 
 `lower/tests/run/*.ts` are lowered and run on sae's engine (`target/saejs`,
 from `tools/saejs.ae`): each must print exactly its `// expect:` lines and
-keep its line count. `modern.ts` covers the JavaScript above and
-`ts_classes.ts` the TypeScript erased inside classes. `lower/tests/err/*.ts`
+keep its line count. `modern.ts` covers the JavaScript above,
+`ts_classes.ts` the TypeScript erased inside classes and `blocks.ts` every
+form of trailing block and the braces JavaScript keeps. `lower/tests/err/*.ts`
 must fail with the `// error: line:col: message` they state
 (`err/module_*.ts` are lowered as modules). `lower/tests/mod/*.ts` are
 pages with imports: each is lowered, its import closure (`./lib/*.ts`
@@ -159,7 +226,7 @@ and `mock`). `lower/run-tests.sh --mod DIR` runs another repo's module
 tests the same way: spraedsheet's `tests/headless/`, once demo
 18's `sheet_*.ts`.
 `lower/tests/mod/golden/*.ts` are compared with their `.js`: the exact
-rewrite.
+rewrite (`golden/ts_*.ts` through `saelower --ts`).
 
 ## History
 

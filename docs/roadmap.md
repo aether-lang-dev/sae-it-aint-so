@@ -215,7 +215,7 @@ either erasable or one small, documented desugar. In order of leverage:
    calls before a page is served. No grammar change at all; it is the gate's
    second output. **Built** (`sae.d.ts` at the root, `tools/gen-dts.sh`;
    `tests/check_gate.sh` regenerates it and compares, and with a `tsc`
-   type-checks 26 real pages against it). It does not yet declare the `sae:`
+   type-checks 38 real pages, in either form, against it). It does not yet declare the `sae:`
    library, `app:/` or URL module specifiers.
 3. **One tagged template, no syntax change:** ``bind`Count: ${n} of
    ${total}` `` is a multi-state `text_bound`. (Not an ``svg`…` `` loader:
@@ -225,7 +225,7 @@ either erasable or one small, documented desugar. In order of leverage:
    `computed`, `bind_text`, `bind_value` (two-way), `bind_enabled`,
    `bind_hidden`, `each` with keyed reconciliation and `ui_batch`. Pages see
    only `ui_state`, `ui_set` and `text_bound`. Expose the rest as
-   `state(v)`, `computed(fn, ...states)`, `bind(widget, state)`,
+   `state(v)`, `computed(...states, fn)`, `bind(widget, state)`,
    `each(list, key, render)` and `batch(fn)`. This is the Vue-alike half of
    "SVG + Vue": declare once, never call `set_text` again.
    **Built** (wave1/aevg): `state`, `computed`, `bind` (two-way on a text
@@ -239,7 +239,17 @@ either erasable or one small, documented desugar. In order of leverage:
    one (`lower/README.md` "The wrapper").
 6. **Keyboard and pointer in pages**: `on_key`, `on_drag`, `on_scroll`,
    `on_hover` exist in aether-ui and are needed by half the demos below.
-7. **Non-goals, deliberately.** No JSX: it is a real transform, and the
+7. **Trailing blocks.** **Built** (2026-11-19,
+   `docs/design/trailing-blocks.md`, `lower/README.md` "Trailing blocks"):
+   the one small desugar, `f(a) { body }` as `f(a, () => { body })` and
+   `g { body }` as `g(() => { body })` on the same lines, the brace on the
+   call's line, ambiguous input refused with its line. `saelower --ts` keeps
+   terse pages type-checked (`tools/tscheck.sh`, `check_gate.sh` part vii);
+   `computed(...states, fn)` and `textfield(placeholder, body?)` with
+   `onchange(fn)` moved so the block is always last. The site's clocks
+   (`site/clock.ts`, `site/fib_clock.ts`) and its builder blocks are written
+   in it; callbacks with parameters stay arrows.
+8. **Non-goals, deliberately.** No JSX: it is a real transform, and the
    trailing-block form is the house style (`tsyne-migrated.md`, "Pages stay
    declarative"). No `enum` or decorators: `tsc --erasableSyntaxOnly` refuses
    them too, and the dialect stays "what tsc erases".
