@@ -1,17 +1,23 @@
 #!/bin/sh
-# tests/check_page_veto.sh — the page veto is in place and enforced.
+# tests/check_page_veto.sh — the page-API functions' seals and the page veto
+# are in place and enforced.
 #
-# 1. Every function a page can reach (each one api_register_ or ae_register_
-#    in src/sae_host.ae installs with reg_, glob_fn_ or host_fn_, and each
-#    one the gate spec binds with api, global_fn or patch) opens with the
-#    page veto: one `hide` line, the same in all of them (see "The page
-#    veto" in src/sae_host.ae); and every function with the page-API
-#    signature is one of them (none left unbound, as dead code the check
-#    could not see).
-# 2. The compiler in use enforces that line where it matters: a hidden
-#    module named inside an `if` body, a nested block or a closure fails to
-#    compile. Aether before the fix for nested qualified names let all three
-#    through, which made `hide fs` decorative.
+# 1. Every function a page can reach (each one the gate spec binds with api,
+#    global_fn, patch, loader_fn or held_fn, and any api_register_ or
+#    ae_register_ still installs with reg_, glob_fn_ or host_fn_) opens with
+#    its own `seal except <names>` line (step 10 of docs/design/gate-dsl.md;
+#    tests/check_gate.sh holds the names to the spec's basis and reach), but
+#    for SEAL_HELD's (tests/check_gate.sh), which open with the page veto
+#    until Aether fixes the faults that keep them there; every function with
+#    the page-API signature is one of them (none left unbound, as dead code
+#    the check could not see); and every veto line in the host (the helpers
+#    the seals name carry it) is the one written here.
+# 2. The compiler in use enforces both where it matters: a hidden module, or
+#    one a seal does not list, named inside an `if` body, a nested block or a
+#    closure fails to compile; a seal admits what it lists, the function's
+#    own parameters and locals, and a closure's view of them. Aether before
+#    the fix for nested qualified names let the veto's three through, which
+#    made `hide fs` decorative.
 #
 # Exit status: the number of failed checks.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -41,6 +47,7 @@ others=$(grep '^    hide fs, os, client' "$HOST" | grep -vxF -- "$veto" | head -
 [ -z "$others" ] || bad "a veto line in src/sae_host.ae differs from the one this check holds: $others"
 n=0
 nseal=0
+held=$(sed -n 's/^SEAL_HELD="\(.*\)"$/\1/p' "$ROOT/tests/check_gate.sh")
 # The functions api_register_ hands the engine: the last argument of each
 # reg_(...), glob_fn_(...) and host_fn_(...) call inside it; and the functions
 # the gate spec (gate_spec_, the DSL of src/sae_host.ae) binds: the function
@@ -60,16 +67,17 @@ for fn in $fns; do
     n=$((n + 1))
     # Each takes its page first (host_fn_ hands it over): fn(p: *Page, ...).
     first=$(awk -v fn="$fn" 'index($0, fn "(p: *Page,") == 1 { getline; print; exit }' "$HOST")
-    # During step 10 of docs/design/gate-dsl.md a function opens with the
-    # veto or with its own `seal except` line (tests/check_gate.sh holds the
-    # seal's names to the spec's basis and reach).
     case "$first" in
         "    seal except "*) nseal=$((nseal + 1)) ;;
-        *) [ "$first" = "$veto" ] || bad "$fn: does not open with the page veto or a seal (has: ${first:-nothing})" ;;
+        *)
+            case " $held " in
+                *" $fn "*) [ "$first" = "$veto" ] || bad "$fn: held on the veto (SEAL_HELD), but does not open with it (has: ${first:-nothing})" ;;
+                *) bad "$fn: does not open with a seal (has: ${first:-nothing})" ;;
+            esac ;;
     esac
 done
 [ "$n" -gt 0 ] || bad "no page-API functions found in api_register_"
-[ "$fails" -eq 0 ] && ok "all $n page-API functions open with the page veto ($((n - nseal))) or a seal ($nseal)"
+[ "$fails" -eq 0 ] && ok "all $n page-API functions open with a seal ($nseal) or, held by an Aether fault, the page veto ($((n - nseal)))"
 # Every function with the page-API signature is bound by one of them.
 tmp_b=$(mktemp); tmp_d=$(mktemp)
 printf '%s\n' "$fns" | sort > "$tmp_b"
@@ -132,5 +140,41 @@ probe client_in_closure reject '    g = || { _r = client.request("GET", "http://
     g()'
 probe kernel_fn reject '    if n > 0 { _x = fetch_() }'
 probe net_service reject '    if n > 0 { _x = net() }'
+
+# A page-API function's own seal: what it lists and its own names pass, and
+# anything else is refused at any depth (the shape of the bound functions:
+# `seal except quickjs, own_` and the like).
+sealprobe() {   # sealprobe <name> <expect> <seal list> <body lines>
+    name=$1; expect=$2; list=$3; body=$4
+    {
+        cat "$work/head.ae"
+        echo "$lower_stub"
+        echo 'helper_(x: int) -> int { return x + 1 }
+mm_(f: fn) { f() }'
+        echo "page_fn(n: int) -> int {"
+        echo "    seal except $list"
+        printf '%s\n' "$body"
+        echo "    return n"
+        echo "}"
+        echo "main() { println(page_fn(1)) }"
+    } > "$work/$name.ae"
+    if (cd "$work" && ae build "$name.ae" -o "$work/$name" >"$work/$name.log" 2>&1); then got=accept; else got=reject; fi
+    if [ "$got" = "$expect" ]; then
+        ok "compiler: seal $name is ${expect}ed"
+    else
+        bad "compiler: seal $name should be ${expect}ed (log: target/veto-check/$name.log)"
+    fi
+}
+sealprobe listed accept 'helper_' '    x = helper_(n)
+    q = x + n'
+sealprobe closure_locals accept 'helper_, mm_' '    x = n + 1
+    mm_(|| { _y = helper_(x + n) })'
+sealprobe unlisted_helper reject 'mm_' '    if n > 0 { _x = helper_(n) }'
+sealprobe fs_unlisted reject 'helper_' '    {
+        _c, _e = fs.read("/etc/hosts")
+    }'
+sealprobe client_in_closure reject 'helper_, mm_' '    mm_(|| { _r = client.request("GET", "http://example.com") })'
+sealprobe kernel_fn reject 'helper_' '    if n > 0 { _x = fetch_() }'
+sealprobe os_listed_other reject 'fs' '    _v = os.getenv("HOME")'
 
 exit $fails

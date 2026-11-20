@@ -32,6 +32,12 @@
 #       functions listed here. A page-visible name added by a stray call
 #       fails here; one added by JavaScript is caught by (ii).
 #
+# (viii) the seal (step 10; the design's "(v)"): each host function the spec
+#       binds opens with a `seal except` line whose names are all in the
+#       spec's basis(...) or the reach(...) of its space; no basis or reach
+#       name is stale; each helper those name opens with the page veto or is
+#       a kernel_helper(...); and only SEAL_HELD's functions keep the veto.
+#
 # (vi)  the spec agrees with the other copies of what it says: the lowerer's
 #       SEEKABLE (lower/module.ae: which privilege unlocks which object, less
 #       clipboard-read, which gates a read in the clipboard's space), its
@@ -156,6 +162,100 @@ if grep -q 'if cond == WHEN_APP_SEEKS && browser_of_(p).app_dir == "" { s.on = 0
     ok "gate_space_ still keeps an app-only space out of a page from a file (held by its text: no dump can tell)"
 else
     bad "gate_space_ no longer tests app_dir for WHEN_APP_SEEKS (held by its text: no dump can tell; docs/design/gate-dsl.md, Step 11)"
+fi
+
+# --- (viii) the seal: each host function's seal within the spec's policy ---
+# Step 10 of docs/design/gate-dsl.md (the design numbers this check (v)). Each
+# host function the spec binds opens with `seal except <names>`, and the
+# compiler holds its body to those names; here the names are held to the
+# spec's policy, as `saegate --seal` reads it from the description:
+#   - each name is in basis(...) or in the reach(...) of the space binding the
+#     function (global_reach(...) for global_fn, patch, loader_fn, held_fn);
+#   - each basis and reach name is one some seal there lists (no stale entry);
+#   - each helper so named (a top-level function of src/sae_host.ae) opens with
+#     the page veto, or is a kernel_helper(...), whose names are such helpers
+#     that do not, so the veto reaches one call further than the seal;
+#   - the functions that keep the veto are exactly SEAL_HELD below.
+# A seal does not reach through calls: a helper's helpers are trusted as the
+# helper is.
+HOST="$ROOT/src/sae_host.ae"
+# Held on the veto by two Aether 0.926.0 seal faults that tests/check_gate_probes.sh
+# part h holds as tripwires (E: sae_sqlite_transaction; F: the other five).
+SEAL_HELD="sae_sqlite_all sae_sqlite_begin sae_sqlite_end sae_sqlite_get sae_sqlite_run sae_sqlite_transaction"
+veto=$(sed -n "s/^veto='\(.*\)'\$/\1/p" "$ROOT/tests/check_page_veto.sh")
+[ -n "$veto" ] || bad "no veto text in tests/check_page_veto.sh"
+"$GATE" --seal < "$WORK/describe.jsonl" | LC_ALL=C sort -u > "$WORK/seal-policy.txt"
+# fn space: the space of each binding in gate_spec_ ("(global)" for the global kinds)
+awk '/^gate_spec_\(/ { on = 1; next } on && /^}/ { exit }
+     on && /^    (space|raw_space|space_each|test_space|provided_space)\(g, "/ { split($0, a, "\""); sp = a[2] }
+     on && /^[[:space:]]*(api|global_fn|patch|loader_fn|held_fn)\(/ {
+         line = $0; sub(/^[[:space:]]*/, "", line); kind = line; sub(/\(.*/, "", kind)
+         sub(/^[a-z_]+\(/, "", line); sub(/\).*$/, "", line); n = split(line, a, ",")
+         i = (kind == "api") ? 2 : (kind == "patch") ? 4 : 3
+         f = a[i]; gsub(/[[:space:]]/, "", f)
+         print f, (kind == "api") ? sp : "(global)" }' "$HOST" | LC_ALL=C sort -u > "$WORK/seal-fnspace.txt"
+# fn name: each name of a bound function's seal line; fn VETO for the veto
+awk -v veto="$veto" '/^[a-z_0-9]+\(p: \*Page, this_val: int, argv: int\)/ { split($0, a, "("); fn = a[1]; getline
+         if ($0 == veto) { print fn, "VETO"; next }
+         if (index($0, "    seal except ") != 1) { print fn, "NONE"; next }
+         line = substr($0, 17); gsub(/[` ]/, "", line); n = split(line, a, ",")
+         for (i = 1; i <= n; i++) print fn, a[i] }' "$HOST" | LC_ALL=C sort -u > "$WORK/seal-names.txt"
+nfn=$(cut -d' ' -f1 "$WORK/seal-fnspace.txt" | sort -u | wc -l | tr -d ' ')
+held=$(awk '$2 == "VETO" { print $1 }' "$WORK/seal-names.txt" | LC_ALL=C sort | tr '\n' ' ')
+if [ "$held" = "$(echo $SEAL_HELD | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')" ]; then
+    ok "the functions on the veto are SEAL_HELD's: $held"
+else
+    bad "the functions on the veto are: ${held:-none}; SEAL_HELD says: $SEAL_HELD"
+fi
+none=$(awk '$2 == "NONE" { print $1 }' "$WORK/seal-names.txt" | tr '\n' ' ')
+[ -z "$none" ] || bad "page-API functions that open with neither a seal nor the veto: $none"
+# each (function, space, name) against basis + reach(space)
+viol=$(awk 'FILENAME == ARGV[1] { if ($1 == "basis") B[$2] = 1; else if ($1 == "reach") R[$2 " " $3] = 1; next }
+            FILENAME == ARGV[2] { sp[$1] = sp[$1] " " $2; next }
+            $2 == "VETO" || $2 == "NONE" { next }
+            { n = split(sp[$1], s, " ")
+              if (n == 0) { print $1 " (bound by nothing in the spec) lists " $2; next }
+              for (i = 1; i <= n; i++) if (!($2 in B) && !((s[i] " " $2) in R)) print $1 " (" s[i] ") lists " $2 }' \
+       "$WORK/seal-policy.txt" "$WORK/seal-fnspace.txt" "$WORK/seal-names.txt")
+nseal=$(awk '$2 != "VETO" && $2 != "NONE" { print $1 }' "$WORK/seal-names.txt" | sort -u | wc -l | tr -d ' ')
+if [ -z "$viol" ]; then
+    ok "every seal of the $nseal sealed functions (of $nfn bound) is within basis + its space's reach"
+else
+    echo "$viol" | while read -r v; do echo "FAIL seal: $v, which is neither in basis(...) nor in that space's reach(...)"; done
+    fails=$((fails + $(echo "$viol" | wc -l)))
+fi
+# stale policy: a basis or reach name no seal lists (a space whose functions
+# all keep the veto is left out: its reach is what their seals will list)
+stale=$(awk 'FILENAME == ARGV[1] { sp[$1] = sp[$1] " " $2; next }
+             FILENAME == ARGV[2] { if ($2 == "VETO") { held[$1] = 1; next } if ($2 == "NONE") next
+                                    used[$2] = 1; n = split(sp[$1], s, " "); for (i = 1; i <= n; i++) { usedin[s[i] " " $2] = 1; live[s[i]] = 1 }; next }
+             $1 == "basis" && !($2 in used) { print "basis " $2 }
+             $1 == "reach" && ($2 in live) && !(($2 " " $3) in usedin) { print "reach(" $2 ") " $3 }' \
+       "$WORK/seal-fnspace.txt" "$WORK/seal-names.txt" "$WORK/seal-policy.txt")
+if [ -z "$stale" ]; then
+    ok "every basis and reach name is one a seal lists"
+else
+    echo "$stale" | while read -r v; do echo "FAIL seal policy: $v is listed by no seal"; done
+    fails=$((fails + $(echo "$stale" | wc -l)))
+fi
+# helpers: each policy name that is a function of the host opens with the veto,
+# or is a kernel helper (which then does not)
+awk -v veto="$veto" '/^[a-zA-Z_0-9]+\(/ { split($0, a, "("); fn = a[1]
+         if ($0 ~ /\{[^}]*\}[[:space:]]*$/ || $0 !~ /\{[[:space:]]*$/) { print fn, "OTHER"; next }
+         getline; print fn, ($0 == veto) ? "VETO" : "OTHER" }' "$HOST" | LC_ALL=C sort -u > "$WORK/seal-helpers.txt"
+hv=$(awk 'FILENAME == ARGV[1] { if ($2 == "VETO") V[$1] = 1; D[$1] = 1; next }
+          $1 == "kernel" { K[$2] = 1; if (!($2 in D)) print "kernel_helper " $2 " is not a function of the host"; else if ($2 in V) print "kernel_helper " $2 " opens with the veto: it is not one"; next }
+          { nm = ($1 == "reach") ? $3 : $2; if ($1 == "basis" || $1 == "reach") N[nm] = 1 }
+          END { for (k in K) if (!(k in N)) print "kernel_helper " k " is in no basis or reach"
+                for (n in N) if ((n in D) && !(n in V) && !(n in K)) print "helper " n " opens neither with the page veto nor is a kernel_helper" }' \
+       "$WORK/seal-helpers.txt" "$WORK/seal-policy.txt" | LC_ALL=C sort)
+nhelp=$(awk 'FILENAME == ARGV[1] { D[$1] = 1; next } { nm = ($1 == "reach") ? $3 : $2 } ($1 == "basis" || $1 == "reach") && (nm in D) { print nm }' "$WORK/seal-helpers.txt" "$WORK/seal-policy.txt" | sort -u | wc -l | tr -d ' ')
+nkern=$(grep -c '^kernel ' "$WORK/seal-policy.txt")
+if [ -z "$hv" ]; then
+    ok "the $nhelp helpers the seals name open with the page veto, but the $nkern kernel helpers"
+else
+    echo "$hv" | while read -r v; do echo "FAIL seal: $v"; done
+    fails=$((fails + $(echo "$hv" | wc -l)))
 fi
 
 # --- (vi) the other copies of the privilege and global tables ---
