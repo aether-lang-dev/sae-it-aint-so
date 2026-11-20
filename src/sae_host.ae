@@ -5522,7 +5522,7 @@ sae_shell_open(p: *Page, this_val: int, argv: int) -> int {
 // the kernel's (storage_file_ below); a page reaches only these three calls.
 
 sae_storage_get(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, own_, quickjs, sae_throw_type_error, storage_key_ok_, storage_read_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
@@ -5533,7 +5533,7 @@ sae_storage_get(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_storage_set(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except STORAGE_MAX, arg_str_, esc_storage_over_, esc_storage_refuse_, own_, quickjs, sae_throw_type_error, storage_key_ok_, storage_write_, `string`
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))
@@ -5546,7 +5546,7 @@ sae_storage_set(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_storage_remove(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, own_, quickjs, sae_throw_type_error, storage_key_ok_, storage_remove_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     key = own_(arg_str_(ctx, argv, argc, 0))

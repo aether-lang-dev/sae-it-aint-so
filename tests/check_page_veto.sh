@@ -39,6 +39,7 @@ if [ -z "$veto" ]; then
     exit 1
 fi
 n=0
+nseal=0
 # The functions api_register_ hands the engine: the last argument of each
 # reg_(...), glob_fn_(...) and host_fn_(...) call inside it; and the functions
 # the gate spec (gate_spec_, the DSL of src/sae_host.ae) binds: the function
@@ -58,12 +59,16 @@ for fn in $fns; do
     n=$((n + 1))
     # Each takes its page first (host_fn_ hands it over): fn(p: *Page, ...).
     first=$(awk -v fn="$fn" 'index($0, fn "(p: *Page,") == 1 { getline; print; exit }' "$HOST")
-    if [ "$first" != "$veto" ]; then
-        bad "$fn: does not open with the page veto (has: ${first:-nothing})"
-    fi
+    # During step 10 of docs/design/gate-dsl.md a function opens with the
+    # veto or with its own `seal except` line (tests/check_gate.sh holds the
+    # seal's names to the spec's basis and reach).
+    case "$first" in
+        "    seal except "*) nseal=$((nseal + 1)) ;;
+        *) [ "$first" = "$veto" ] || bad "$fn: does not open with the page veto or a seal (has: ${first:-nothing})" ;;
+    esac
 done
 [ "$n" -gt 0 ] || bad "no page-API functions found in api_register_"
-[ "$fails" -eq 0 ] && ok "all $n page-API functions open with the page veto"
+[ "$fails" -eq 0 ] && ok "all $n page-API functions open with the page veto ($((n - nseal))) or a seal ($nseal)"
 # Every function with the page-API signature is bound by one of them.
 tmp_b=$(mktemp); tmp_d=$(mktemp)
 printf '%s\n' "$fns" | sort > "$tmp_b"
