@@ -5627,7 +5627,7 @@ sae_vg_set_opacity(p: *Page, this_val: int, argv: int) -> int {
 // --- the page API: browserContext ---
 
 sae_bc_change_page(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except NAV_GO, arg_str_, browser_of_, quickjs, request_nav_, resolve_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     b = browser_of_(p)
@@ -5637,7 +5637,7 @@ sae_bc_change_page(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_bc_back(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except NAV_BACK, browser_of_, quickjs, request_nav_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(p), NAV_BACK, "")
@@ -5645,7 +5645,7 @@ sae_bc_back(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_bc_forward(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except NAV_FORWARD, browser_of_, quickjs, request_nav_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(p), NAV_FORWARD, "")
@@ -5653,7 +5653,7 @@ sae_bc_forward(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_bc_reload(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except NAV_RELOAD, browser_of_, quickjs, request_nav_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     request_nav_(browser_of_(p), NAV_RELOAD, "")
