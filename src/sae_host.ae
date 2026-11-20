@@ -5076,7 +5076,7 @@ backend_wslc_(wv: ptr, decl: ptr) -> (string, ptr, string) {
 }
 
 sae_backend_listen(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except hold_arg_, is_fn_arg_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "backend: its dispatcher must be a function") }
@@ -5090,7 +5090,7 @@ sae_backend_listen(p: *Page, this_val: int, argv: int) -> int {
 // picked file is opened (services/documents) and handed over with the call
 // as an open descriptor, on a socket backend only; a refusal throws.
 sae_backend_call(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except BackendCall, Browser, arg_int_, arg_str_, backend, backend_gone_, documents, list, now_ms_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     b = p.browser as *Browser
@@ -5124,7 +5124,7 @@ sae_backend_call(p: *Page, this_val: int, argv: int) -> int {
 // started again after the page's entry (an effect outside the page:
 // later_add_), and the dispatcher hears (3, id, ok, "", why) when it has.
 sae_backend_restart(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except BackendRestart, Browser, LATER_BACKEND_RESTART, later_add_, list, quickjs, sae_throw_type_error
     ctx = p.ctx
     b = p.browser as *Browser
     if b.backend_decl == null { return sae_throw_type_error(ctx, "backend.restart: ${b.backend_why}") }
@@ -5159,7 +5159,7 @@ backend_restart_(b: *Browser) {
 }
 
 sae_backend_why(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except Browser, quickjs
     ctx = p.ctx
     b = p.browser as *Browser
     return quickjs.new_string(ctx, b.backend_why)
