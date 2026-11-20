@@ -6937,7 +6937,7 @@ natives_deliver_(b: *Browser, j: *NativeJob) {
 // natives.<module>.<function>(text) (the raw gate the page's object calls):
 // a promise of the function's answer, the call made on the module's worker.
 sae_natives_call(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, natives_submit_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if argc < 3 { return sae_throw_type_error(ctx, "natives: call it as natives.<module>.<function>(text)") }
