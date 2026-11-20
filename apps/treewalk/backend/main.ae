@@ -181,7 +181,7 @@ walk(sb: ptr, w: *Walk, id: int, arg: string) -> int {
 }
 
 // The folder's listing: (list, "") or (null, why). WORKAROUND (Aether
-// 0.923 to 0.925): dir.list gives an empty listing, not an error, when the
+// 0.923 to 0.926): dir.list gives an empty listing, not an error, when the
 // folder cannot be opened (std/fs/aether_fs.c: `if (!dir) return list;`),
 // so a folder the sandbox refuses would read as an empty one. Opening it
 // first says which: Landlock refuses the open of a folder it may not read.

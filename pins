@@ -129,7 +129,20 @@
 # spec_app_bus, which asserts the 5 s limit); on win11 (a private toolchain,
 # fresh clones) 68/69, spec_app_sqlite losing a race for driver port 9222 with
 # the spec before it and passing alone, spec_escape 8 of 8 runs.
-AE_PIN=0.923.0
+# 0.926.0 (2026-11-20): a real floor move, evidence-based: step 10 of the
+# gate DSL (docs/design/gate-dsl.md) needs its `seal except` fixes (aether
+# #3769): a struct the list does not name keeps its field types, so a sealed
+# body compiles to the C it compiled to under the veto; a closure passed to
+# another module's function sees the sealed function's locals; a listed
+# module's constants are admitted; a function body's seal admits its own
+# parameters. 0.925.0 (#3754) is the closure-capture fix beside them. Nothing
+# in 0.924 to 0.926 needed a change in src/, services/ or tools/.
+# Verified (get.sh installs of 0.926.0, SAE_AETHER_HOME=none): macOS
+# lower/run-tests.sh 97/97 and the headless checks; tests/run_all.sh on
+# cachyos 96/97 before the next commit, the one failure check_gate_probes'
+# tripwires reporting the three faults fixed, which the next commit turns
+# into probes of the fixed behaviour.
+AE_PIN=0.926.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
