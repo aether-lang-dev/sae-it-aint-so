@@ -16,7 +16,8 @@
 #                   host's loader object; "// expect:" lines and the line
 #                   count as for run/. tests/mod/golden/*.ts are lowered and
 #                   compared with their .js, the exact rewrite (golden/ts_*.ts
-#                   with saelower --ts: the desugar alone, types kept).
+#                   with saelower --ts, ts_module_*.ts with --ts-module: the
+#                   desugar alone, types kept).
 #
 #   --mod DIR       only the module tests in DIR, another repo's (an app
 #                   built on sae, such as ../spraedsheet), run
@@ -186,7 +187,7 @@ done
 [ $only_mod -eq 1 ] || for t in "$MOD"/golden/*.ts; do
     name=$(basename "$t" .ts)
     mode=""
-    case "$name" in module_*) mode="--module" ;; ts_*) mode="--ts" ;; esac
+    case "$name" in module_*) mode="--module" ;; ts_module_*) mode="--ts-module" ;; ts_*) mode="--ts" ;; esac
     if ! "$LOWER" $mode "$t" > "$OUT/golden_$name.js" 2>&1; then
         echo "FAIL golden/$name: lowering failed: $(cat "$OUT/golden_$name.js")"
         fail=$((fail + 1))

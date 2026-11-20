@@ -1838,6 +1838,10 @@ wrap_(x: *Lx) {
         return
     }
     if x.is_module == 0 && x.has_io == 0 && x.tla == 0 { return }
+    // lower_ts keeps a module's import and export lines as they are, so
+    // there is no wrapper, and nothing recorded for the line below to mark
+    // (it wrote before the edit vector, and free() aborted).
+    if x.ts_only == 1 { return }
     prefix = "(function ($sae) {"
     if x.tla == 1 { prefix = "(async function ($sae) {" }
     if x.is_module == 1 { prefix = "(function ($sae, $exports) {" }
