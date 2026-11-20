@@ -63,7 +63,19 @@ main() {
             b.assert_page("About", string.concat("200 ", b.test_url("/about")), "navigate")
         }
         spec.it("Reload reloads the same page") callback {
+            // The page before the reload reads the same as the one after it,
+            // so wait for the reload to build it again (its heading a new
+            // widget) before asserting, or go_home can find the old page's
+            // Home button, which the reload then frees (the click's POST
+            // failed on FreeBSD, a slower host).
+            before = uidriver.widget_id_of("text", "About")
             b.reload()
+            k = 0
+            while k < 60 && uidriver.widget_id_of("text", "About") == before {
+                sleep(100)
+                k = k + 1
+            }
+            spec.assert_true(uidriver.widget_id_of("text", "About") != before, "built again (the heading was widget ${before})")
             b.assert_page("About", string.concat("200 ", b.test_url("/about")), "reload")
             go_home("home after reload")
         }
