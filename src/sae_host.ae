@@ -7838,7 +7838,7 @@ ae_shape_done_(p: *Page, argv: int, argc: int, fn_at: int, node: @keep ptr, kind
 }
 
 sae_ae_circle(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_SHAPE, arg_num_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_SHAPE, ae_shape_done_, arg_num_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.circle() must be called inside vg.scene()") }
@@ -7847,7 +7847,7 @@ sae_ae_circle(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_ae_rect(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_SHAPE, arg_num_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_SHAPE, ae_shape_done_, arg_num_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.rect() must be called inside vg.scene()") }
@@ -7856,7 +7856,7 @@ sae_ae_rect(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_ae_rrect(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_SHAPE, arg_num_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_SHAPE, ae_shape_done_, arg_num_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.rrect() must be called inside vg.scene()") }
@@ -7865,7 +7865,7 @@ sae_ae_rrect(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_ae_line(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_SHAPE, arg_num_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_SHAPE, ae_shape_done_, arg_num_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.line() must be called inside vg.scene()") }
@@ -7874,7 +7874,7 @@ sae_ae_line(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_ae_path(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_SHAPE, arg_str_, own_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_SHAPE, ae_shape_done_, arg_str_, own_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.path() must be called inside vg.scene()") }
@@ -7910,7 +7910,7 @@ ae_points_arg_(p: *Page, argv: int, argc: int) -> string {
 }
 
 sae_ae_polygon(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_points_arg_, ae_shape_done_, aevg_K_SHAPE, quickjs, sae_throw_type_error, utils, vg, vg_scene_open_, vg_top_
+    seal except K_SHAPE, ae_points_arg_, ae_shape_done_, quickjs, sae_throw_type_error, utils, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.polygon() must be called inside vg.scene()") }
@@ -7919,7 +7919,7 @@ sae_ae_polygon(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_ae_polyline(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_points_arg_, ae_shape_done_, aevg_K_SHAPE, quickjs, sae_throw_type_error, utils, vg, vg_scene_open_, vg_top_
+    seal except K_SHAPE, ae_points_arg_, ae_shape_done_, quickjs, sae_throw_type_error, utils, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.polyline() must be called inside vg.scene()") }
@@ -7929,7 +7929,7 @@ sae_ae_polyline(p: *Page, this_val: int, argv: int) -> int {
 
 // ellipse(cx, cy, rx, ry, fn?): two arcs, as the transpiler emits it.
 sae_ae_ellipse(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_SHAPE, arg_num_, quickjs, sae_throw_type_error, utils, vg, vg_scene_open_, vg_top_
+    seal except K_SHAPE, ae_shape_done_, arg_num_, quickjs, sae_throw_type_error, utils, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.ellipse() must be called inside vg.scene()") }
@@ -7944,7 +7944,7 @@ sae_ae_ellipse(p: *Page, this_val: int, argv: int) -> int {
 // anchor are part of the text's record, so they are arguments, not block
 // modifiers.
 sae_ae_text(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_TEXT, arg_num_, arg_str_, own_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_TEXT, ae_shape_done_, arg_num_, arg_str_, own_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.text() must be called inside vg.scene()") }
@@ -7954,7 +7954,7 @@ sae_ae_text(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_ae_text_sized(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_TEXT, arg_num_, arg_str_, own_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_TEXT, ae_shape_done_, arg_num_, arg_str_, own_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.text_sized() must be called inside vg.scene()") }
@@ -7964,7 +7964,7 @@ sae_ae_text_sized(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_ae_text_anchored(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_TEXT, arg_num_, arg_str_, own_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_TEXT, ae_shape_done_, arg_num_, arg_str_, own_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.text_anchored() must be called inside vg.scene()") }
@@ -7977,7 +7977,7 @@ sae_ae_text_anchored(p: *Page, this_val: int, argv: int) -> int {
 // vg.g(fn): a group. Its block's fill, stroke, opacity and transform reach
 // the shapes made inside it (and set_transform(g, t) turns them all later).
 sae_ae_g(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_shape_done_, aevg_K_GROUP, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
+    seal except K_GROUP, ae_shape_done_, quickjs, sae_throw_type_error, vg, vg_scene_open_, vg_top_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "vg.g() must be called inside vg.scene()") }
@@ -8358,7 +8358,7 @@ sae_ae_set(p: *Page, this_val: int, argv: int) -> int {
 // vg.get(h): what the node currently has: fill, opacity, transform (its
 // own), visible, text, and its geometry once drawn.
 sae_ae_get(p: *Page, this_val: int, argv: int) -> int {
-    seal except ae_put_num_, ae_put_str_, ae_rec_of_handle_, aevg_K_TEXT, arg_int_, element, element_SHAPE_CIRCLE, element_SHAPE_LINE, element_SHAPE_RECT, js_set_, quickjs, sae_throw_type_error
+    seal except K_TEXT, SHAPE_CIRCLE, SHAPE_LINE, SHAPE_RECT, ae_put_num_, ae_put_str_, ae_rec_of_handle_, arg_int_, element, js_set_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(p, arg_int_(ctx, argv, argc, 0, 0))
@@ -8509,7 +8509,7 @@ sae_ae_view_box(p: *Page, this_val: int, argv: int) -> int {
 // vg.set_view_box(scene, "x y w h"): the scene handle is what vg.scene()
 // returned.
 sae_ae_set_view_box(p: *Page, this_val: int, argv: int) -> int {
-    seal except AeScene, ae_model_, ae_rec_of_handle_, ae_repaint_, aevg, aevg_K_SCENE, arg_int_, arg_str_, own_, quickjs, sae_throw_type_error
+    seal except AeScene, K_SCENE, ae_model_, ae_rec_of_handle_, ae_repaint_, aevg, arg_int_, arg_str_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     r = ae_rec_of_handle_(p, arg_int_(ctx, argv, argc, 0, 0))
