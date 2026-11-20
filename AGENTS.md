@@ -145,7 +145,7 @@ tests/run_spec.sh spec_reorder                 # ui.reorderable: a plain hstack 
 tests/run_spec.sh spec_a11y                    # ui.a11y_label/role/description/announce on a widget and a vg scene; vg.on_key: a board from the keyboard (site/a11y.ts)
 ```
 
-Toolchain: Aether 0.926.0 or later (`AE_PIN` in `pins`: `seal except` that keeps value types and the generated C, admits a function's own parameters, a listed module's constants and a closure's view of the sealed locals (aether #3769), which the page-API functions' seal lines need; contrib.quickjs's 0.915+ API, `quickjs.to_string` returning `(string, error)` and a per-runtime absolute deadline, `set_deadline_ns`, in place of `set_time_limit`; `@keep ptr` parameters, aether#2926; enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
+Toolchain: Aether 0.931.0 or later (`AE_PIN` in `pins`: `seal except` that keeps value types and the generated C, admits a function's own parameters, a listed module's constants and a closure's view of the sealed locals (aether #3769), a destructured local named like a top-level function and a module by the name the source writes (aether #3781), which the page-API functions' seal lines need; contrib.quickjs's 0.915+ API, `quickjs.to_string` returning `(string, error)` and a per-runtime absolute deadline, `set_deadline_ns`, in place of `set_time_limit`; `@keep ptr` parameters, aether#2926; enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
 and column API, contrib.quickjs's `arg_bytes`), installed, or a dev tree
 (`$SAE_AETHER_HOME`, default `../aether`, built with `make compiler ae
 stdlib contrib`; `SAE_AETHER_HOME=none` builds against the installed one even when

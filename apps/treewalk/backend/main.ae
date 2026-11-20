@@ -127,7 +127,9 @@ walk(sb: ptr, w: *Walk, id: int, arg: string) -> int {
         folder = string.copy(folder)
         list.list_remove(todo, n - 1)
         w.current = folder
-        l, lerr = list_(folder)
+        // A folder that cannot be listed (not there, not a folder, refused by
+        // the sandbox) is an error, not an empty listing (Aether 0.931.0).
+        l, lerr = dir.list(folder)
         if lerr != "" {
             if folder == root {
                 w.state = "stopped"
@@ -178,18 +180,6 @@ walk(sb: ptr, w: *Walk, id: int, arg: string) -> int {
         _a = saebackend.answer(sb, id, "${w.state}: ${w.files} files, ${w.dirs} folders, ${w.bytes} bytes")
     }
     return 1
-}
-
-// The folder's listing: (list, "") or (null, why). WORKAROUND (Aether
-// 0.923 to 0.926): dir.list gives an empty listing, not an error, when the
-// folder cannot be opened (std/fs/aether_fs.c: `if (!dir) return list;`),
-// so a folder the sandbox refuses would read as an empty one. Opening it
-// first says which: Landlock refuses the open of a folder it may not read.
-list_(folder: string) -> (ptr, string) {
-    fd, oerr = io.fd_open_read(folder)
-    if oerr != "" { return null, oerr }
-    _c = io.fd_close(fd)
-    return dir.list(folder)
 }
 
 // One call taken without waiting, if one is there: 1 to go on, 0 when the

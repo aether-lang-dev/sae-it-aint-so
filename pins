@@ -142,7 +142,28 @@
 # cachyos 96/97 before the next commit, the one failure check_gate_probes'
 # tripwires reporting the three faults fixed, which the next commit turns
 # into probes of the fixed behaviour.
-AE_PIN=0.926.0
+# 0.931.0 (2026-11-20): a real floor move, evidence-based: the last six seals
+# of step 10 (the sqlite functions, held on the page veto until now) need
+# aether #3781's `seal except` fixes: a tuple-destructured local named like a
+# top-level function is a new local (sae_sqlite_transaction's `r, err =`), and
+# a module sharing its last name with another (services.sqlite beside
+# contrib.sqlite) is admitted by the name the source writes (sqlite.KIND_*).
+# The same fix admits a module by its import alias, which check_gate now
+# refuses among the seal policy's names. 0.928 to 0.930 were tagged, never
+# published. Changed for sae since 0.926.0, nothing else in src/ or services/:
+# dir.list reports a folder it cannot open as an error, not an empty listing
+# (#3781), so apps/treewalk's backend drops its open-first workaround (the
+# page server took it in c431152); a ptr passed to a string parameter (0.927.0)
+# and a string passed to a number one (#3781) are refused, neither of which
+# sae or spraedsheet does; the sandbox's check of a symlink's own name (#3751)
+# refuses nothing sae's specs do.
+# Verified (get.sh installs of 0.931.0, SAE_AETHER_HOME=none, with the seals,
+# probes and checks of the three commits after this one): macOS build and
+# lower/run-tests.sh 97/97; ae-x64 (Ubuntu 22.04) tests/run_all.sh 97/97 and
+# lowerer 97/97; cachyos check_gate.sh (tsc 6.0.3) and check_gate_probes.sh
+# green. On this commit alone check_gate_probes' three tripwires fail, as
+# they were written to.
+AE_PIN=0.931.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
