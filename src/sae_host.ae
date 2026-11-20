@@ -4208,7 +4208,7 @@ sae_ui_timer_cancel(p: *Page, this_val: int, argv: int) -> int {
 
 // setTimeout(fn, ms, ...args): call fn(...args) once, ms from now.
 sae_set_timeout(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except ESC_TIMERS_MAX, delay_arg_, esc_timers_pending_, esc_timers_refuse_, held_fn_, quickjs, rest_args_, sae_throw_type_error, timer_add_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if esc_timers_pending_(p) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, p) }   // wave1/escape: the timers cap
@@ -4220,7 +4220,7 @@ sae_set_timeout(p: *Page, this_val: int, argv: int) -> int {
 
 // setInterval(fn, ms, ...args): call fn(...args) every ms until cleared.
 sae_set_interval(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except ESC_TIMERS_MAX, delay_arg_, esc_timers_pending_, esc_timers_refuse_, held_fn_, quickjs, rest_args_, sae_throw_type_error, timer_add_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     if esc_timers_pending_(p) >= ESC_TIMERS_MAX { return esc_timers_refuse_(ctx, p) }   // wave1/escape: the timers cap
@@ -5665,7 +5665,7 @@ sae_bc_reload(p: *Page, this_val: int, argv: int) -> int {
 // All of print's output goes through C stdio, then is flushed, so it cannot
 // interleave with the host's own println output. Objects print as JSON.
 js_print(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except fflush, fputs, js_str_, js_to_json_, putchar, quickjs, sae_stdout
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     out = sae_stdout()
@@ -5689,7 +5689,7 @@ js_print(p: *Page, this_val: int, argv: int) -> int {
 
 // Date.now() and performance.now(), on sae's clocks (SAE_TIME_SCALE).
 js_date_now(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except browser_of_, now_unix_ms_, quickjs
     ctx = p.ctx
     return quickjs.new_float(ctx, now_unix_ms_(browser_of_(p).clock) as float)
 }
@@ -13120,7 +13120,7 @@ modules_free_(p: *Page) {
 // against the unit's own URL (this.url). Nothing is fetched here: a module
 // not in the registry (not imported statically) is a TypeError.
 sae_mod_get(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except Browser, arg_str_, js_prop_str_, mod_find_, module_resolve_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     spec = arg_str_(ctx, argv, argc, 0)
@@ -13134,7 +13134,7 @@ sae_mod_get(p: *Page, this_val: int, argv: int) -> int {
 
 // $sae.fail(e): what a page's top-level await left unhandled.
 sae_mod_fail(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, quickjs, say_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     say_("sae: uncaught exception in ${p.url} (after a top-level await):\n${arg_str_(ctx, argv, argc, 0)}")
