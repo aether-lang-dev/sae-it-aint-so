@@ -199,7 +199,7 @@ const play = (): void => { playing = true; last = Date.now(); set_text(noticeTex
 const pause = (): void => { playing = false; render(); };
 const resetPeriod = (): void => { startPeriod(period); render(); };
 
-timer(250, () => {
+timer(250) {
   if (!playing) return;
   const now = Date.now();
   count -= (now - last) / 1000;
@@ -207,7 +207,7 @@ timer(250, () => {
   if (count <= 0) { finish(true); return; }
   set_text(clockText, clock(count));
   renderRing();
-});
+}
 
 // --- the Tasks view ---
 

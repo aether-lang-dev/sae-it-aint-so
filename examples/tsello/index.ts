@@ -22,10 +22,10 @@ let editing: { kind: "card" | "list"; id: string } | null = null;
 let board = 0;
 let newListField = 0;
 
-const updateStatus = (): void => status.set(`${store.getListCount()} lists, ${store.getCardCount()} cards`);
+const updateStatus = (): void => { status.set(`${store.getListCount()} lists, ${store.getCardCount()} cards`); };
 
 const cardRow = (list: KanbanList, card: KanbanCard, i: number, ix: number, lists: KanbanList[]): void => {
-  hstack(4, () => {
+  hstack(4) {
     if (editing && editing.kind === "card" && editing.id === card.id) {
       const f = textfield("Card text");
       set_text(f, card.label);
@@ -40,12 +40,12 @@ const cardRow = (list: KanbanList, card: KanbanCard, i: number, ix: number, list
       btn("Edit", () => { editing = { kind: "card", id: card.id }; render(); });
       btn("Delete", () => store.deleteCard(card.id));
     }
-  });
+  }
 };
 
 const listColumn = (list: KanbanList, ix: number, lists: KanbanList[]): void => {
-  const col = vstack(6, () => {
-    hstack(4, () => {
+  const col = vstack(6) {
+    hstack(4) {
       if (editing && editing.kind === "list" && editing.id === list.id) {
         const f = textfield("List title");
         set_text(f, list.title);
@@ -58,31 +58,31 @@ const listColumn = (list: KanbanList, ix: number, lists: KanbanList[]): void => 
         btn("Rename", () => { editing = { kind: "list", id: list.id }; render(); });
         btn("Delete list", () => store.deleteList(list.id));
       }
-    });
+    }
     divider();
     const cards = store.getCardsForList(list.id);
     if (cards.length === 0) text("No cards");
     else {
-      const stack = vstack(4, () => cards.forEach((c, i) => cardRow(list, c, i, ix, lists)));
+      const stack = vstack(4) { cards.forEach((c, i) => cardRow(list, c, i, ix, lists)) };
       reorderable(stack, (from: number, to: number) => store.moveCard(cards[from].id, list.id, to));
     }
-    hstack(4, () => {
+    hstack(4) {
       const f = textfield(`Add a card to ${list.title}`);
       const add = (t: string) => { if (t.trim()) store.addCard(list.id, t.trim()); };
       ui.on_submit(f, add);
       btn("+ Add Card", () => add(get_text(f)));
-    });
-  });
+    }
+  };
   set_width(col, 300);
 };
 
 const render = (): void => {
   clear(board);
-  into(board, () => {
+  into(board) {
     const lists = store.getLists();
     if (lists.length === 0) text("No lists yet. Add one to get started.");
     lists.forEach((l, ix) => listColumn(l, ix, lists));
-  });
+  }
   updateStatus();
 };
 
@@ -91,7 +91,7 @@ store.subscribe(() => {
   render();
 });
 
-hstack(8, () => {
+hstack(8) {
   text("Tsello");
   spacer();
   bind(text(""), status);
@@ -101,8 +101,8 @@ hstack(8, () => {
   ui.on_submit(newListField, addList);
   btn("+ Add List", () => addList(get_text(newListField)));
   btn("Clear All", () => store.clear());
-});
+}
 divider();
-scroll(() => { board = hstack(10); });
+scroll { board = hstack(10) }
 
 render();

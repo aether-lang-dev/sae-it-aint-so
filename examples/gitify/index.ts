@@ -218,7 +218,7 @@ const startList = (): void => {
 
 const schedule = (): void => {
   if (pollTimer !== 0) timer_cancel(pollTimer);
-  pollTimer = timer(pollSeconds * 1000, () => refresh());
+  pollTimer = timer(pollSeconds * 1000) { refresh() };
 };
 
 const refresh = (): void => {
@@ -308,7 +308,7 @@ const openNote = (n: Note): void => {
     try {
       shell.open(`${html}${html.indexOf("?") >= 0 ? "&" : "?"}notification_referrer_id=${ref}`);
     } catch (e) {
-      set_text(listStatus, e.message);
+      set_text(listStatus, (e as Error).message);
       return;
     }
     if (settings.markOnOpen) markRead(n);

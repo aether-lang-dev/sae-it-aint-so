@@ -247,8 +247,9 @@ either erasable or one small, documented desugar. In order of leverage:
    terse pages type-checked (`tools/tscheck.sh`, `check_gate.sh` part vii);
    `computed(...states, fn)` and `textfield(placeholder, body?)` with
    `onchange(fn)` moved so the block is always last. The site's clocks
-   (`site/clock.ts`, `site/fib_clock.ts`) and its builder blocks are written
-   in it; callbacks with parameters stay arrows.
+   (`site/clock.ts`, `site/fib_clock.ts`), its builder blocks and every
+   app under `examples/` are written in it; callbacks with parameters, and
+   event handlers, stay arrows.
 8. **Non-goals, deliberately.** No JSX: it is a real transform, and the
    trailing-block form is the house style (`tsyne-migrated.md`, "Pages stay
    declarative"). No `enum` or decorators: `tsc --erasableSyntaxOnly` refuses

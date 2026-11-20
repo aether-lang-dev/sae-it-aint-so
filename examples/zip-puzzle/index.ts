@@ -47,17 +47,17 @@ const drawBoard = (): void => {
   vg.resize(sceneH, px, px);
   if (boardG) vg.remove(boardG);
   cellFill = [];
-  vg.into(sceneH, () => {
-    boardG = g(() => {
+  vg.into(sceneH) {
+    boardG = g {
       for (let i = 0; i < size * size; i++) {
         const x = (i % size) * PITCH, y = Math.floor(i / size) * PITCH;
         const click = () => on_click(() => { game.tryClick(i); refresh(); });
-        cellFill[i] = rect(x, y, CELL, CELL, () => { fill("#F0F0F0"); stroke("#CCCCCC", 1); click(); });
+        cellFill[i] = rect(x, y, CELL, CELL) { fill("#F0F0F0"); stroke("#CCCCCC", 1); click() };
         const wp = game.getWaypoint(i);
-        if (wp) text_anchored(x + CELL / 2, y + CELL / 2 + 8, 24, "middle", String(wp), () => { fill("#FFFFFF"); click(); });
+        if (wp) text_anchored(x + CELL / 2, y + CELL / 2 + 8, 24, "middle", String(wp)) { fill("#FFFFFF"); click() }
       }
-    });
-  });
+    };
+  }
 };
 
 const newLevel = (level: number): void => {
@@ -67,12 +67,12 @@ const newLevel = (level: number): void => {
   refresh();
 };
 
-hstack(4, () => {
+hstack(4) {
   btn("Reset", () => { announced = false; game.reset(); refresh(); });
   btn("<", () => newLevel(game.getLevel() - 1));
   bind(text(""), levelText);
   btn(">", () => newLevel(game.getLevel() + 1));
-});
+}
 divider();
 sceneH = scene("0 0 258 258", 258, 258);
 divider();

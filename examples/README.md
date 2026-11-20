@@ -7,6 +7,12 @@ its `license` (an SPDX identifier) and `author`. sae does not read those two
 fields yet; they are for the gallery and for `saepack` once it requires them
 (docs/roadmap.md, 8.4).
 
+Every example is written in the page dialect's house style
+(`docs/design/trailing-blocks.md`): builders (stacks, scenes, groups, shapes,
+`into`, `ui.timer`) take their block after the call, and handlers and callbacks
+with parameters (`btn`, `on_click`, `on_drag_end`, `ui.frame`, the `bind_*`
+functions, `store.subscribe`) stay arrows.
+
 The ports from Tsyne (`tsyne/tsyne` at ae3b8d44, Paul Hammant's TypeScript UI
 toolkit) are the apps only; none of Tsyne's framework code is used.
 
