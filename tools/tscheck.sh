@@ -10,7 +10,8 @@
 # where they were) into a mirror under target/, and tsc --strict reads the
 # mirror with sae.d.ts. Messages name the page's own path; a column on a line
 # with a block is the desugared line's (a few characters right of the
-# source's). A file the desugar refuses is reported as such.
+# source's). An import of "sae:NAME" resolves to lib/sae/NAME.ts, as the
+# loader maps it. A file the desugar refuses is reported as such.
 #
 # Prints "ok <page>" or "FAIL <page>" and tsc's messages, per page; the exit
 # status is the number of pages that failed (2 with no tsc or no saelower).
@@ -26,13 +27,28 @@ elif command -v tsc >/dev/null 2>&1; then
     TSC_CMD="tsc"
 fi
 [ -n "$TSC_CMD" ] || { echo "tscheck: no TypeScript compiler (set SAE_TSC to typescript's bin/tsc, or put tsc on PATH)"; exit 2; }
-TSC_FLAGS="--noEmit --strict --lib es2020 --target es2020 --typeRoots /nonexistent --module es2022 --moduleResolution bundler --allowImportingTsExtensions"
 
 mkdir -p "$ROOT/target" || exit 2
 MIRROR=$(mktemp -d "$ROOT/target/tscheck.XXXXXX") || exit 2
 trap 'rm -rf "$MIRROR"' EXIT
 trap 'exit 130' INT
 cp "$ROOT/sae.d.ts" "$MIRROR/sae.d.ts"
+# `import ... from "sae:scales"` names the page standard library, lib/sae/*.ts
+# (the loader maps the specifier the same way): mirror it desugared beside
+# sae.d.ts and give tsc the mapping through a tsconfig.
+if [ -d "$ROOT/lib/sae" ]; then
+    mkdir -p "$MIRROR/lib/sae"
+    for f in "$ROOT"/lib/sae/*.ts; do
+        [ -f "$f" ] || continue
+        "$LOWER" --ts-module "$f" > "$MIRROR/lib/sae/$(basename "$f")" 2>/dev/null || :
+    done
+fi
+cat > "$MIRROR/tsconfig.json" <<'EOF2'
+{ "compilerOptions": { "noEmit": true, "strict": true, "lib": ["es2020"], "target": "es2020",
+    "typeRoots": ["/nonexistent"], "module": "es2022", "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true, "paths": { "sae:*": ["./lib/sae/*"] } },
+  "files": ["sae.d.ts"] }
+EOF2
 
 # Desugar one file to its mirror path: as a page if it is one of the pages
 # named, else as a module, else as a page (a page beside the one checked).
@@ -67,7 +83,10 @@ for page in "$@"; do
         continue
     fi
     rel="${dir#/}"
-    if out=$(cd "$MIRROR" && $TSC_CMD $TSC_FLAGS sae.d.ts "$rel/$base" 2>&1); then
+    cat > "$MIRROR/tsconfig.page.json" <<EOF3
+{ "extends": "./tsconfig.json", "files": ["sae.d.ts", "$rel/$base"] }
+EOF3
+    if out=$(cd "$MIRROR" && $TSC_CMD -p tsconfig.page.json 2>&1); then
         echo "ok   $page"
     else
         echo "FAIL $page"
