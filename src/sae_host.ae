@@ -738,8 +738,8 @@ ui_done_(p: *Page, t: long) {
 // or is one of the spec's kernel_helper(...)s, each with its reason: the
 // clocks (`now_ns_`, `now_ms_`, `now_unix_ms_`, `esc_perf_now_`), storage's
 // files, the one place a request is opened (`http_start_`), navigation
-// (`request_nav_`, deferred to the event loop). The six sqlite functions keep
-// the veto in place of a seal until Aether fixes two faults
+// (`request_nav_`, deferred to the event loop). Every page-API function has
+// its seal; the six sqlite ones took theirs last, on Aether 0.931.0
 // (tests/check_gate_probes.sh part h). It is compile-time hygiene, not a
 // security boundary: the guarantee is the reviewed helper set.
 // tests/check_page_veto.sh fails a page-API function without its seal, and
@@ -6675,21 +6675,21 @@ sqlite_call_(p: *Page, this_val: int, argv: int, argc: int, kind: int, what: str
 }
 
 sae_sqlite_all(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except quickjs, sqlite, sqlite_call_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     return sqlite_call_(p, this_val, argv, argc, sqlite.KIND_ALL, "all")
 }
 
 sae_sqlite_get(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except quickjs, sqlite, sqlite_call_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     return sqlite_call_(p, this_val, argv, argc, sqlite.KIND_GET, "get")
 }
 
 sae_sqlite_run(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except quickjs, sqlite, sqlite_call_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     return sqlite_call_(p, this_val, argv, argc, sqlite.KIND_RUN, "run")
@@ -6700,7 +6700,7 @@ sae_sqlite_run(p: *Page, this_val: int, argv: int) -> int {
 // or ROLLBACK if the callback throws or its promise rejects (the promise
 // returned rejects with the same error). Resolves to the callback's value.
 sae_sqlite_transaction(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except Browser, is_fn_arg_, js_call_, js_set_index_, quickjs, rethrow_, sae_throw_type_error, sqlite_fns_for_, sqlite_page_dbs_, sqlite_this_, `string`
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     name, _tx = sqlite_this_(p, this_val)
@@ -6728,7 +6728,7 @@ sae_sqlite_transaction(p: *Page, this_val: int, argv: int) -> int {
 // sqlite.<name>.__begin(id): the transaction helper's BEGIN (a job in the
 // database's order; waits while another caller's transaction is open).
 sae_sqlite_begin(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except SQLITE_OP_BEGIN, arg_int_, browser_of_, quickjs, sae_throw_type_error, sqlite, sqlite_submit_, sqlite_this_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     name, _tx = sqlite_this_(p, this_val)
@@ -6740,7 +6740,7 @@ sae_sqlite_begin(p: *Page, this_val: int, argv: int) -> int {
 
 // sqlite.<name>.__end(id, commit): its COMMIT (true) or ROLLBACK (false).
 sae_sqlite_end(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except SQLITE_OP_END, arg_int_, js_to_bool_, quickjs, sae_throw_type_error, sqlite, sqlite_submit_, sqlite_this_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     name, _tx = sqlite_this_(p, this_val)

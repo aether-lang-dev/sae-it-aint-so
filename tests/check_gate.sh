@@ -179,9 +179,11 @@ fi
 # A seal does not reach through calls: a helper's helpers are trusted as the
 # helper is.
 HOST="$ROOT/src/sae_host.ae"
-# Held on the veto by two Aether 0.926.0 seal faults that tests/check_gate_probes.sh
-# part h holds as tripwires (E: sae_sqlite_transaction; F: the other five).
-SEAL_HELD="sae_sqlite_all sae_sqlite_begin sae_sqlite_end sae_sqlite_get sae_sqlite_run sae_sqlite_transaction"
+# The bound functions held on the page veto by an Aether fault in seal except,
+# each named with its fault; none since Aether 0.931.0 (aether #3781 fixed the
+# two that held the six sqlite functions, which tests/check_gate_probes.sh
+# part h now holds fixed).
+SEAL_HELD=""
 veto=$(sed -n "s/^veto='\(.*\)'\$/\1/p" "$ROOT/tests/check_page_veto.sh")
 [ -n "$veto" ] || bad "no veto text in tests/check_page_veto.sh"
 "$GATE" --seal < "$WORK/describe.jsonl" | LC_ALL=C sort -u > "$WORK/seal-policy.txt"
@@ -202,8 +204,8 @@ awk -v veto="$veto" '/^[a-z_0-9]+\(p: \*Page, this_val: int, argv: int\)/ { spli
          for (i = 1; i <= n; i++) print fn, a[i] }' "$HOST" | LC_ALL=C sort -u > "$WORK/seal-names.txt"
 nfn=$(cut -d' ' -f1 "$WORK/seal-fnspace.txt" | sort -u | wc -l | tr -d ' ')
 held=$(awk '$2 == "VETO" { print $1 }' "$WORK/seal-names.txt" | LC_ALL=C sort | tr '\n' ' ')
-if [ "$held" = "$(echo $SEAL_HELD | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')" ]; then
-    ok "the functions on the veto are SEAL_HELD's: $held"
+if [ "$held" = "$(for f in $SEAL_HELD; do echo "$f"; done | LC_ALL=C sort | tr '\n' ' ')" ]; then
+    ok "the functions on the veto are SEAL_HELD's: ${held:-none}"
 else
     bad "the functions on the veto are: ${held:-none}; SEAL_HELD says: $SEAL_HELD"
 fi

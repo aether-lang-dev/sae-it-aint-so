@@ -77,7 +77,7 @@ for fn in $fns; do
     esac
 done
 [ "$n" -gt 0 ] || bad "no page-API functions found in api_register_"
-[ "$fails" -eq 0 ] && ok "all $n page-API functions open with a seal ($nseal) or, held by an Aether fault, the page veto ($((n - nseal)))"
+[ "$fails" -eq 0 ] && ok "all $n page-API functions open with a seal ($nseal) or, held by an Aether fault (SEAL_HELD), the page veto ($((n - nseal)))"
 # Every function with the page-API signature is bound by one of them.
 tmp_b=$(mktemp); tmp_d=$(mktemp)
 printf '%s\n' "$fns" | sort > "$tmp_b"
@@ -140,7 +140,6 @@ probe client_in_closure reject '    g = || { _r = client.request("GET", "http://
     g()'
 probe kernel_fn reject '    if n > 0 { _x = fetch_() }'
 probe net_service reject '    if n > 0 { _x = net() }'
-
 # A page-API function's own seal: what it lists and its own names pass, and
 # anything else is refused at any depth (the shape of the bound functions:
 # `seal except quickjs, own_` and the like).

@@ -87,7 +87,7 @@ tests/run_all.sh                             # every spec and check below, each 
 SAE_TEST_SITE_PORT=18091 AETHER_UI_TEST_PORT=19222 tests/run_all.sh   # beside another checkout's run: run_spec.sh runs the specs, the site's pages and the test apps as copies with 8091 and 9222 moved (target/retarget/)
 tests/run_spec.sh                            # spec_nav: 45 specs
 # A slow engine (the x86_64 lab host ae-x64 runs QuickJS about twelve times slower than the Macs): SAE_TEST_WAIT_SCALE=6 multiplies every wait's three seconds, SAE_PAGE_TIME_MS=60000 lifts the page's 5 s limit per entry into JS (without it "InternalError: interrupted" ends Solver and the like; do NOT set it for spec_app_bus, which asserts the 5 s limit, there SAE_TEST_WAIT_SCALE=6 alone is right); a timing budget in a test (spraedsheet's sheet_large) stays the Mac's.
-tests/check_page_veto.sh                     # every page-API function sealed (the six sqlite ones on the veto), seal and veto enforced
+tests/check_page_veto.sh                     # every page-API function sealed, seal and veto enforced
 tests/check_layers.sh                        # services held to their imports
 tests/check_android_sources.sh               # the APK compiles the same C as .build.ae
 ../aether/build/ae run tests/spec_http_grants.ae   # capabilities.http matching, no window
