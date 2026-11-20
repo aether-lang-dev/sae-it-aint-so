@@ -5695,7 +5695,7 @@ js_date_now(p: *Page, this_val: int, argv: int) -> int {
 }
 
 js_performance_now(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except browser_of_, esc_perf_now_, quickjs
     ctx = p.ctx
     return quickjs.new_float(ctx, esc_perf_now_(browser_of_(p)))
 }
@@ -5705,7 +5705,7 @@ js_performance_now(p: *Page, this_val: int, argv: int) -> int {
 // A page learns only how big it is; a spec samples it between steps to show
 // that a long run stays bounded.
 js_performance_memory_used(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except quickjs
     ctx = p.ctx
     return quickjs.new_float(ctx, quickjs.memory_used(ctx) as float)
 }
@@ -5715,7 +5715,7 @@ js_performance_memory_used(p: *Page, this_val: int, argv: int) -> int {
 // drops widgets should see this level off, and a count that keeps climbing
 // is a callback no widget lets go of.
 js_performance_handles_held(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except quickjs
     ctx = p.ctx
     return quickjs.new_float(ctx, quickjs.handles(ctx) as float)
 }
