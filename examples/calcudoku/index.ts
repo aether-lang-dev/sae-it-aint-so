@@ -53,32 +53,32 @@ const drawBoard = (): void => {
   if (boardG) vg.remove(boardG);
   cellFill = [];
   cellVal = [];
-  vg.into(sceneH, () => {
-    boardG = g(() => {
+  vg.into(sceneH) {
+    boardG = g {
       for (let i = 0; i < size * size; i++) {
         const x = (i % size) * CELL, y = Math.floor(i / size) * CELL;
         const cage = game.getCageForCell(i);
         // on_click belongs to a shape's own block, so each shape of the cell has one
         const pick = () => on_click(() => { game.selectCell(i); refresh(); });
-        g(() => {
-          cellFill[i] = rect(x + 1, y + 1, CELL - 2, CELL - 2, () => { fill("#FFFFFF"); stroke("#333333", 2); pick(); });
+        g {
+          cellFill[i] = rect(x + 1, y + 1, CELL - 2, CELL - 2) { fill("#FFFFFF"); stroke("#333333", 2); pick() };
           if (cage && game.isCageTopLeft(i)) {
-            text_anchored(x + 5, y + 14, 12, "start", `${cage.target}${cage.op}`, () => { fill("#666666"); pick(); });
+            text_anchored(x + 5, y + 14, 12, "start", `${cage.target}${cage.op}`) { fill("#666666"); pick() }
           }
-          cellVal[i] = text_anchored(x + CELL / 2, y + CELL / 2 + 14, 28, "middle", "", () => { fill("#222222"); pick(); });
-        });
+          cellVal[i] = text_anchored(x + CELL / 2, y + CELL / 2 + 14, 28, "middle", "") { fill("#222222"); pick() };
+        }
       }
-    });
-  });
+    };
+  }
 };
 
 let numRow = 0;
 const drawNumbers = (): void => {
   clear(numRow);
-  into(numRow, () => {
+  into(numRow) {
     for (let n = 1; n <= game.getSize(); n++) btn(String(n), () => enter(n));
     btn("C", () => { game.clearCell(); refresh(); });
-  });
+  }
 };
 
 const enter = (n: number): void => {
@@ -112,21 +112,21 @@ const visibleSolve = (): void => {
   game.reset();
   refresh();
   let i = 0;
-  solveTimer = timer(150, () => {
+  solveTimer = timer(150) {
     game.setCell(i, solution[i]);
     i++;
     refresh();
     if (i >= solution.length) stopSolve();
-  });
+  };
 };
 
-hstack(4, () => {
+hstack(4) {
   btn("Reset", () => { stopSolve(); announced = false; game.reset(); refresh(); });
   btn("Solve", visibleSolve);
   btn("<", () => newLevel(game.getLevel() - 1));
   bind(text(""), levelText);
   btn(">", () => newLevel(game.getLevel() + 1));
-});
+}
 divider();
 sceneH = scene("0 0 165 165", 165, 165);
 divider();

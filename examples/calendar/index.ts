@@ -53,30 +53,30 @@ let gotoField = 0;
 const renderCalendar = (): void => {
   monthText.set(`${MONTH_NAMES[currentMonth.month]} ${currentMonth.year}`);
   clear(grid);
-  into(grid, () => {
-    hstack(2, () => { for (const d of WEEKDAY_NAMES) text(d); });
+  into(grid) {
+    hstack(2) { for (const d of WEEKDAY_NAMES) text(d) }
     for (const week of currentMonth.weeks) {
-      hstack(2, () => {
+      hstack(2) {
         for (const day of week) {
           const hasEvents = day.events.length > 0;
           text(day.isCurrentMonth ? `${day.date.getDate()}${hasEvents ? " •" : ""}` : "");
         }
-      });
+      }
     }
-  });
+  }
 };
 
 const eventRow = (e: CalendarEvent, when: string): void => {
-  hstack(4, () => {
-    vstack(2, () => { text(e.title); text(when); });
+  hstack(4) {
+    vstack(2) { text(e.title); text(when) }
     spacer();
     btn("Delete", () => { calendar.deleteEvent(e.id); refresh(); });
-  });
+  }
 };
 
 const renderEvents = (): void => {
   clear(eventsList);
-  into(eventsList, () => {
+  into(eventsList) {
     const todayEvents = calendar.getTodayEvents();
     const upcoming = calendar.getUpcomingEvents(7).filter((e) => !todayEvents.find((te) => te.id === e.id)).slice(0, 5);
     if (todayEvents.length > 0) {
@@ -88,20 +88,20 @@ const renderEvents = (): void => {
       for (const e of upcoming) eventRow(e, `${SHORT_MONTHS[e.date.getMonth()]} ${e.date.getDate()} - ${e.allDay ? "All Day" : e.startTime}`);
     }
     if (todayEvents.length === 0 && upcoming.length === 0) text("No events scheduled");
-  });
+  }
 };
 
 const refresh = (): void => { renderCalendar(); renderEvents(); };
 
 text("Calendar");
 divider();
-hstack(4, () => {
+hstack(4) {
   btn("< Prev", () => { currentMonth = calendar.previousMonth(); refresh(); });
   bind(text(""), monthText);
   btn("Next >", () => { currentMonth = calendar.nextMonth(); refresh(); });
-});
+}
 btn("Today", () => { currentMonth = calendar.goToDate(calendar.getToday()); message.set(""); refresh(); });
-hstack(4, () => {
+hstack(4) {
   gotoField = textfield("YYYY-MM-DD");
   btn("Go to", () => {
     const m = /^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$/.exec(get_text(gotoField));
@@ -110,12 +110,12 @@ hstack(4, () => {
     currentMonth = calendar.goToDate(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
     refresh();
   });
-});
+}
 bind(text(""), message);
 divider();
 grid = vstack(2);
 divider();
-hstack(4, () => {
+hstack(4) {
   titleField = textfield("Event title");
   btn("+ New Event", () => {
     const title = get_text(titleField).trim() || "New Event";
@@ -123,9 +123,9 @@ hstack(4, () => {
     set_text(titleField, "");
     refresh();
   });
-});
+}
 divider();
 text("Events");
-scroll(() => { eventsList = vstack(4); });
+scroll { eventsList = vstack(4) }
 
 refresh();
