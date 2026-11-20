@@ -4452,7 +4452,7 @@ sae_fs_read_text(p: *Page, this_val: int, argv: int) -> int {
 const BUS_DEADLINE_MS = 10000
 
 sae_bus_serve(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except Browser, LATER_BUS_LISTEN, bus, channel, hold_arg_, is_fn_arg_, later_add_, quickjs, sae_throw_type_error, say_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     b = p.browser as *Browser
@@ -4482,7 +4482,7 @@ sae_bus_serve(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_bus_stop(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except Browser, LATER_BUS_SILENCE, later_add_, quickjs
     ctx = p.ctx
     b = p.browser as *Browser
     if p.bus_ref != 0 {
@@ -4499,7 +4499,7 @@ sae_bus_stop(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_bus_answer(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_int_, arg_str_, browser_of_, ctl_answer_, own_, quickjs
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     id = arg_int_(ctx, argv, argc, 0, 0)
