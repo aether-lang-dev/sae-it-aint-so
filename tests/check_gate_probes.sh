@@ -5,7 +5,8 @@
 # rejected; a rejection is checked against its diagnostic, not only the exit
 # status. Nothing here touches src/ or target/; only `ae` is needed.
 #
-# FINDINGS (Aether 0.923.0; same on macOS and Linux, see the design doc)
+# FINDINGS (Aether 0.926.0, the pin; first taken on 0.923.0, same on macOS
+# and Linux, see the design doc)
 #
 #   name used inside `seal except ...`          sealed?  what to list
 #   ------------------------------------------  -------  -------------------
@@ -15,19 +16,25 @@
 #   `string` module                             yes      `string` in backticks (bare: E0100, reserved)
 #   import std.fs as files                      yes      the REAL name `fs`; `files` alone is E0304
 #   top-level const                             yes      its name  (E0304)
+#   a listed module's exported const (mm.K)     no       the module is enough (0.926.0; refused before)
 #   enum name (Color.RED)                       yes      the enum  (E0304)
 #   extern C function (putchar)                 yes      its name  (E0301)
 #   struct name as parameter type (p: *T)       no       -
 #   struct name in sizeof(T)                    no       -
 #   struct name in `p as *T`                    yes      the struct (E0200 "'T' is not a struct type")
-#   struct name in heap.new(T) / T{...}         yes      the struct (E0200 / E0302)
+#   struct name in heap.new(T) / T{...}         yes      the struct (E0200 / E0304)
 #   heap.new / heap.free themselves             no       -  (only T needs listing)
+#   a field read of an unlisted struct          no       the value keeps its type (0.926.0; on
+#                                                        0.923.0 the field silently lost it)
 #   local variable, closure, "${}"              no       -
-#   parameter of the function itself            YES      its name  (E0304; a seal with no `p, n`
-#                                                        refuses the body's own parameters: this
-#                                                        corrects the first findings)
+#   parameter of the function itself            no       - (0.926.0; through 0.923.0 E0304: each
+#                                                        had to be listed). A seal on a nested
+#                                                        block still needs them; `hide p` hides one
+#   a function's locals in a closure passed     no       - (0.926.0; through 0.923.0 E0300 when
+#     to another module's function                       the function was a module's)
 #   `fs.member` with `seal except fs`           admitted: all of fs, not one member
 #   `hide fs.read` / `import fs hiding (read)`  still bite under `seal except fs`; other fs.* stay
+#   generated C                                 the same with and without the seal (0.926.0)
 #   seal reaches through calls                  no: a listed helper may use anything (the
 #                                               guarantee is the reviewed helper set)
 #   seal not on the first line                  accepted; it covers the whole body, also
@@ -45,7 +52,8 @@
 #   fn value in a struct field, called later, via a list or a local           works
 #   cost: see the timing probe at the end (microseconds per page-load equivalent)
 #
-# Part g records three faults of seal except found at step 10 (tripwires).
+# Part g holds what step 10 needs of seal except on sae's kind of function:
+# the four fixes of Aether 0.926.0, each with what must still be refused.
 #
 # Exit status: the number of failed checks.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -84,18 +92,20 @@ PRE='import std.fs
 import std.string
 import std.os
 const K = 5
+const NONE = 0
 enum Color { RED, GREEN }
 struct T { a: int }
 extern putchar(c: int) -> int
 helper(x: int) -> int { return x + 1 }'
 
 # sealed <name> <accept|reject> <pattern> <seal list> <body>: body inside a
-# top-level function whose first line is `seal except <list>`.
+# top-level function whose first line is `seal except <list>` (`NONE`, a
+# const the body never names, when the list is empty: a seal needs a name).
 sealed() {
     {
         echo "$PRE"
         echo "f(p: ptr, n: int) -> int {"
-        echo "    seal except $4"
+        echo "    seal except ${4:-NONE}"
         printf '%s\n' "$5"
         echo "    return n"
         echo "}"
@@ -105,43 +115,50 @@ sealed() {
 }
 
 # --- a. what seal blocks, and what must be listed ---
-sealed s_base        accept ''      'p, n, println' '    x = n + 1
+sealed s_base        accept ''      'println' '    x = n + 1
     println("${x}")'
-sealed s_local_param accept ''      'p, n' '    q = n + 1
+sealed s_local_param accept ''      '' '    q = n + 1
     h = |x: int| { return x + q }
     _r = h(1)'
-sealed s_param_unlisted reject E0304 'helper' '    _x = n'
-sealed s_println     reject E0301   'p, n' '    println("hi")'
-sealed s_outerfn     reject E0301   'p, n' '    _x = helper(n)'
-sealed s_outerfn_ok  accept ''      'p, n, helper' '    _x = helper(n)'
-sealed s_modprefix   reject E0304   'p, n' '    _x = string.length("ab")'
-sealed s_string_bare reject E0100   'p, n, string' '    _x = n'
-sealed s_string_bt   accept ''      'p, n, `string`' '    _x = string.length("ab")'
-sealed s_const       reject E0304   'p, n' '    _x = K'
-sealed s_const_ok    accept ''      'p, n, K' '    _x = K'
-sealed s_enum        reject E0304   'p, n' '    _x = Color.RED'
-sealed s_enum_ok     accept ''      'p, n, Color' '    _x = Color.RED'
-sealed s_extern      reject E0301   'p, n' '    _x = putchar(65)'
-sealed s_extern_ok   accept ''      'p, n, putchar' '    _x = putchar(65)'
-sealed s_cast        reject E0200   'p, n' '    q = p as *T
+sealed s_param_unlisted accept ''  'helper' '    _x = helper(n)'
+sealed s_param_listed accept ''    'p, n' '    _x = n'
+sealed s_param_hidden reject E0304 '' '    hide n
+    _x = n'
+sealed s_param_nested reject E0304 '' '    if n > 0 {
+        seal except println
+        _x = n
+    }'
+sealed s_println     reject E0301   '' '    println("hi")'
+sealed s_outerfn     reject E0301   '' '    _x = helper(n)'
+sealed s_outerfn_ok  accept ''      'helper' '    _x = helper(n)'
+sealed s_modprefix   reject E0304   '' '    _x = string.length("ab")'
+sealed s_string_bare reject E0100   'string' '    _x = n'
+sealed s_string_bt   accept ''      '`string`' '    _x = string.length("ab")'
+sealed s_const       reject E0304   '' '    _x = K'
+sealed s_const_ok    accept ''      'K' '    _x = K'
+sealed s_enum        reject E0304   '' '    _x = Color.RED'
+sealed s_enum_ok     accept ''      'Color' '    _x = Color.RED'
+sealed s_extern      reject E0301   '' '    _x = putchar(65)'
+sealed s_extern_ok   accept ''      'putchar' '    _x = putchar(65)'
+sealed s_cast        reject E0200   '' '    q = p as *T
     _x = q.a'
-sealed s_cast_ok     accept ''      'p, n, T' '    q = p as *T
+sealed s_cast_ok     accept ''      'T' '    q = p as *T
     _x = q.a'
-sealed s_sizeof      accept ''      'p, n' '    _x = sizeof(T)'
-sealed s_heapnew     reject E0200   'p, n, heap' '    e = heap.new(T)
+sealed s_sizeof      accept ''      '' '    _x = sizeof(T)'
+sealed s_heapnew     reject E0200   'heap' '    e = heap.new(T)
     heap.free(e)'
-sealed s_heapnew_ok  accept ''      'p, n, T' '    e = heap.new(T)
+sealed s_heapnew_ok  accept ''      'T' '    e = heap.new(T)
     heap.free(e)'
-sealed s_structlit   reject E0302   'p, n' '    _e = T{a: 2}'
-sealed s_structlit_ok accept ''     'p, n, T' '    _e = T{a: 2}'
-sealed s_not_first   accept ''      'p, n, fs' '    _x = n
-    seal except n, fs
+sealed s_structlit   reject E0304   '' '    _e = T{a: 2}'
+sealed s_structlit_ok accept ''     'T' '    _e = T{a: 2}'
+sealed s_not_first   accept ''      'fs' '    _x = n
+    seal except fs
     _y = fs.exists("/")'
 cat > "$work/s_above_seal.ae" <<EOP
 $PRE
 f(n: int) -> int {
     _y = helper(n)
-    seal except n
+    seal except K
     return n
 }
 main() { println(f(1)) }
@@ -150,7 +167,7 @@ check s_above_seal reject E0301
 {   # a struct name only as a parameter type
     echo "$PRE"
     echo 'g(p: *T, n: int) -> int {
-    seal except p, n
+    seal except K
     return p.a + n
 }
 main() { t = T{a: 1}  println(g(&t, 1)) }'
@@ -363,11 +380,9 @@ else
 fi
 
 # --- g. step 10, what `seal except` does to sae's own kind of function ---
-# Three Aether 0.923.0 faults found converting the 300 page-API functions
-# (docs/design/gate-dsl.md, "Step 10"; minimal repros in the lab's
-# repro/seal-bugs). Each probe is a tripwire: it passes while the fault is
-# there and FAILS when Aether fixes it, which is the signal that step 10's
-# conversion can go on.
+# Aether 0.923.0 stopped step 10 on three faults (docs/design/gate-dsl.md,
+# "Step 10"); 0.926.0 fixes them and admits a function's own parameters. Each
+# probe holds one fix, beside what the seal must still refuse.
 mkdir -p "$work/mm"
 cat > "$work/mm/module.ae" <<'EOP'
 exports (run_it, K, bump)
@@ -375,36 +390,39 @@ const K = 7
 run_it(f: @keep fn) { f() }
 bump(x: int) -> int { return x + K }
 EOP
-# A: a closure passed straight to a MODULE function cannot see the sealed
-# function's own locals; the same closure passed to a function of the file can.
-cat > "$work/g_closure_module.ae" <<'EOP'
-import mm
-helper(x: int) -> int { return x + 1 }
-f1(p: int, argv: int) -> int {
-    seal except p, argv, mm, helper
-    ctx = p + 1
+# A: a closure passed straight to a MODULE function sees the sealed
+# function's own locals, as one passed to a function of the file does; an
+# unlisted top-level function stays refused inside it.
+gclosure() {   # gclosure <name> <run_it spelling> <seal list>
+    {
+        [ "$2" = mm.run_it ] && echo 'import mm' || echo 'run_it(f: @keep fn) { f() }'
+        echo 'helper(x: int) -> int { return x + 1 }'
+        echo 'f1(p: int, argv: int) -> int {'
+        echo "    seal except $3"
+        echo '    ctx = p + 1
     seq = argv
-    mm.run_it(|| {
-        _x = helper(ctx + seq)
+    out = 0
+    '"$2"'(|| {
+        out = helper(ctx + seq)
     })
-    return 0
+    return out
 }
-main() { println(f1(1, 2)) }
-EOP
-cat > "$work/g_closure_local.ae" <<'EOP'
-run_it(f: @keep fn) { f() }
-helper(x: int) -> int { return x + 1 }
-f1(p: int, argv: int) -> int {
-    seal except p, argv, run_it, helper
-    ctx = p + 1
-    seq = argv
-    run_it(|| {
-        _x = helper(ctx + seq)
-    })
-    return 0
+main() { println(f1(1, 2)) }'
+    } > "$work/$1.ae"
 }
-main() { println(f1(1, 2)) }
-EOP
+# p and argv are listed (allowed, and a no-op on 0.926.0) so that these hold
+# fault A alone.
+gclosure g_closure_local run_it 'p, argv, run_it, helper'
+gclosure g_closure_module mm.run_it 'p, argv, mm, helper'
+gclosure g_closure_module_unlisted mm.run_it 'p, argv, mm'
+check g_closure_local accept ''
+check g_closure_module accept ''
+[ "$("$work/g_closure_module" 2>&1)" = "$("$work/g_closure_local" 2>&1)" ] \
+    && ok "g_closure_module runs as g_closure_local does ($("$work/g_closure_module" 2>&1))" \
+    || bad "g_closure_module printed '$("$work/g_closure_module" 2>&1)', g_closure_local '$("$work/g_closure_local" 2>&1)'"
+check g_closure_module_unlisted reject "E0301.*helper"
+# B: a listed module's exported const is admitted with the module; without
+# the module neither is.
 cat > "$work/g_module_const.ae" <<'EOP'
 import mm
 f1(p: int) -> int {
@@ -414,6 +432,15 @@ f1(p: int) -> int {
 }
 main() { println(f1(1)) }
 EOP
+sed 's/seal except p, mm/seal except p, println/' "$work/g_module_const.ae" > "$work/g_module_const_unlisted.ae"
+export AETHER_LIB_DIR="$work"
+check g_module_const accept ''
+[ "$("$work/g_module_const")" = 15 ] && ok "g_module_const runs (15)" || bad "g_module_const printed '$("$work/g_module_const")'"
+check g_module_const_unlisted reject "E0304.*mm"
+# C: a struct not on the list keeps its field types: the string field is
+# compared as a string under the seal too, and the generated C of a sealed
+# body is the C of the same body unsealed (aetherc, `#line` lines left out).
+# Naming the struct itself (heap.new) still needs it listed.
 cat > "$work/g_field_type.ae" <<'EOP'
 struct T { name: string }
 new_t() -> *T {
@@ -422,14 +449,14 @@ new_t() -> *T {
     return t
 }
 f1(p: int) -> int {
-    seal except p, new_t
+    seal except new_t
     t = new_t()
     s = "ab"
     if t.name == "${s}c" { return 1 }
     return 0
 }
 f2(p: int) -> int {
-    seal except p, new_t, T
+    seal except new_t, T
     t = new_t()
     s = "ab"
     if t.name == "${s}c" { return 1 }
@@ -437,34 +464,29 @@ f2(p: int) -> int {
 }
 main() { println("${f1(0)}${f2(0)}") }
 EOP
-export AETHER_LIB_DIR="$work"
-if build g_closure_local; then ok "g_closure_local accepted: a closure to a function of the file sees the sealed function's locals"; else bad "g_closure_local rejected ($(head -c 300 "$work/g_closure_local.log" | tr '\n' ' '))"; fi
-if build g_closure_module; then
-    bad "Aether fixed bug A (a closure passed to a module function, under seal except, sees the function's locals): convert the 9 page-API functions that pass one (docs/design/gate-dsl.md, Step 10)"
-elif grep -q "E0300.*Undefined variable 'ctx'" "$work/g_closure_module.log"; then
-    ok "bug A stands (g_closure_module rejected: E0300 Undefined variable 'ctx')"
-else
-    bad "g_closure_module rejected, but not as bug A ($(head -c 300 "$work/g_closure_module.log" | tr '\n' ' '))"
-fi
-if build g_module_const; then
-    bad "Aether fixed bug B (a module's exported const under seal except): convert the 5 sqlite page-API functions (docs/design/gate-dsl.md, Step 10)"
-elif grep -q "E0200.*module 'mm' has no export 'K'" "$work/g_module_const.log"; then
-    ok "bug B stands (g_module_const rejected: module 'mm' has no export 'K')"
-else
-    bad "g_module_const rejected, but not as bug B ($(head -c 300 "$work/g_module_const.log" | tr '\n' ' '))"
-fi
-if build g_field_type; then
-    got=$("$work/g_field_type")
-    if [ "$got" = "01" ]; then
-        ok "bug C stands (g_field_type: a sealed function whose struct is not listed compares a string field by pointer: $got)"
-    elif [ "$got" = "11" ]; then
-        bad "Aether fixed bug C (an unlisted struct loses its field types under seal except, silently): the codegen check of docs/design/gate-dsl.md Step 10 is no longer needed"
+check g_field_type accept ''
+got=$("$work/g_field_type")
+[ "$got" = 11 ] && ok "g_field_type: a string field of an unlisted struct compares as a string ($got)" \
+    || bad "g_field_type printed '$got' (01: the unlisted struct lost its field types, the 0.923.0 fault)"
+sed 's/^    seal except .*$/    _sealed_line = 0/' "$work/g_field_type.ae" > "$work/g_field_plain.ae"
+gen_c() { (cd "$work" && aetherc "$1.ae" "$1.c" >"$1.clog" 2>&1) && grep -v '^#line' "$work/$1.c" | sed 's/g_field_plain/g_field_type/g' > "$work/$1.cn"; }
+if gen_c g_field_type && gen_c g_field_plain; then
+    # The plain twin has `_sealed_line = 0` where the seal was: drop that one
+    # statement's C before comparing.
+    grep -v '_sealed_line' "$work/g_field_plain.cn" > "$work/g_field_plain.cm"
+    grep -v '_sealed_line' "$work/g_field_type.cn" > "$work/g_field_type.cm"
+    if cmp -s "$work/g_field_plain.cm" "$work/g_field_type.cm"; then
+        ok "g_field_type: the generated C with the seals is the C without them"
     else
-        bad "g_field_type printed '$got'"
+        bad "g_field_type: the generated C differs with the seals ($(diff "$work/g_field_plain.cm" "$work/g_field_type.cm" | head -6 | tr '\n' ' '))"
     fi
 else
-    bad "g_field_type did not build ($(head -c 300 "$work/g_field_type.log" | tr '\n' ' '))"
+    bad "g_field_type/g_field_plain: aetherc failed ($(cat "$work/g_field_type.clog" "$work/g_field_plain.clog" | head -c 300 | tr '\n' ' '))"
 fi
+sed 's/seal except new_t, T/seal except new_t/; s/t = new_t()$/t = heap.new(T)/' "$work/g_field_type.ae" > "$work/g_struct_named.ae"
+check g_struct_named reject "E0200.*T"
+# D: the body's own parameters (here p and argv) need no listing; that is
+# s_param_unlisted, s_param_hidden and s_param_nested in part a.
 unset AETHER_LIB_DIR
 
 exit $fails
