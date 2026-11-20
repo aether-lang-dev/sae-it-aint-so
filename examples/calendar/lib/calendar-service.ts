@@ -29,7 +29,9 @@
 // ae3b8d44). Copyright (c) 2025 Paul Hammant (see ../NOTICE.md). Changes: the
 // service takes the clock it reads "today" from (default: the system's), so a
 // test can fix it; dateToString uses the local date, where Tsyne's
-// toISOString gave the previous day for a local midnight east of Greenwich.
+// toISOString gave the previous day for a local midnight east of Greenwich;
+// startTime and endTime are optional (an all-day event has none, as the seed
+// data shows) and an all-day event sorts first, where Tsyne's sort threw on it.
 
 
 /**
@@ -44,8 +46,8 @@ export interface CalendarEvent {
   title: string;
   description?: string;
   date: Date; // Event date
-  startTime: string; // HH:MM format
-  endTime: string; // HH:MM format
+  startTime?: string; // HH:MM format; none for an all-day event
+  endTime?: string; // HH:MM format; none for an all-day event
   location?: string;
   allDay: boolean;
   remindMinutes?: number; // Remind X minutes before
@@ -380,7 +382,9 @@ export class MockCalendarService implements ICalendarService {
     return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
   }
 
-  private timeToMinutes(timeStr: string): number {
+  // An all-day event has no start time and sorts before the timed ones.
+  private timeToMinutes(timeStr: string | undefined): number {
+    if (timeStr === undefined) return -1;
     const [hours, minutes] = timeStr.split(':').map(Number);
     return hours * 60 + minutes;
   }

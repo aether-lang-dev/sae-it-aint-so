@@ -44,6 +44,13 @@ for (const id of ["event-1", "event-2"]) sorted.deleteEvent(id);
 sorted.addEvent({ title: "Event 1", date: sorted.getToday(), startTime: "14:00", endTime: "15:00", allDay: false, color: "#FF0000" });
 sorted.addEvent({ title: "Event 2", date: sorted.getToday(), startTime: "09:00", endTime: "10:00", allDay: false, color: "#FF0000" });
 eq("a day's events are sorted by start time", titles(sorted.getEventsForDate(sorted.getToday())), ["Event 2", "Event 1"]);
+const mixed = new MockCalendarService(NOW);
+for (const id of ["event-1", "event-2"]) mixed.deleteEvent(id);
+mixed.addEvent({ title: "Late", date: mixed.getToday(), startTime: "14:00", endTime: "15:00", allDay: false, color: "#FF0000" });
+mixed.addEvent({ title: "Holiday", date: mixed.getToday(), allDay: true, color: "#00FF00" });
+mixed.addEvent({ title: "Early", date: mixed.getToday(), startTime: "09:00", endTime: "10:00", allDay: false, color: "#FF0000" });
+mixed.addEvent({ title: "Retreat", date: mixed.getToday(), allDay: true, color: "#00FF00" });
+eq("an all-day event on a day with timed ones comes first, the timed by start time", titles(mixed.getEventsForDate(mixed.getToday())), ["Holiday", "Retreat", "Early", "Late"]);
 const east = new MockCalendarService(() => new Date(2026, 0, 1, 0, 30, 0));
 eq("the first of January at half past midnight: today's events are today's (the UTC-date bug is gone)", titles(east.getTodayEvents()), ["Team Standup", "Lunch Break"]);
 // expect: ok today is the held day, at midnight
@@ -66,4 +73,5 @@ eq("the first of January at half past midnight: today's events are today's (the 
 // expect: ok delete, once, and announces
 // expect: ok all-day events
 // expect: ok a day's events are sorted by start time
+// expect: ok an all-day event on a day with timed ones comes first, the timed by start time
 // expect: ok the first of January at half past midnight: today's events are today's (the UTC-date bug is gone)
