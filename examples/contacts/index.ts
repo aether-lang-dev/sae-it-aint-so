@@ -53,28 +53,28 @@ const formTitle = state("");
 let fName = 0, fPhone = 0, fEmail = 0, fAddress = 0, fNotes = 0, form = 0;
 
 const row = (c: Contact): void => {
-  hstack(4, () => {
-    vstack(2, () => {
-      hstack(4, () => {
+  hstack(4) {
+    vstack(2) {
+      hstack(4) {
         text(c.name);
         spacer();
         btn(c.isFavorite ? "Unstar" : "Star", () => contacts.updateContact(c.id, { isFavorite: !c.isFavorite }));
-      });
+      }
       text(c.phone);
       if (c.email) text(c.email);
       if (c.address) text(c.address);
       if (c.notes) text(`Note: ${c.notes}`);
-    });
+    }
     spacer();
     btn("Edit", () => openForm(c));
     btn("Delete", () => contacts.deleteContact(c.id));
-  });
+  }
 };
 
 function update(): void {
   status.set(`${contacts.getContactCount()} contacts`);
   clear(listBox);
-  into(listBox, () => {
+  into(listBox) {
     const shown = searchQuery.trim() ? contacts.searchContacts(searchQuery) : contacts.getContacts();
     if (shown.length === 0) { text(searchQuery ? "No contacts found" : "No contacts yet"); return; }
     if (!searchQuery) {
@@ -87,7 +87,7 @@ function update(): void {
     }
     text(searchQuery ? `Search Results (${shown.length})` : `All Contacts (${shown.length})`);
     for (const c of shown) row(c);
-  });
+  }
 }
 
 function openForm(c: Contact | null): void {
@@ -110,28 +110,28 @@ const saveForm = (): void => {
 
 text("Contacts");
 divider();
-hstack(4, () => {
+hstack(4) {
   textfield("Search contacts...") { ui.onchange((v: string) => { searchQuery = v; update(); }) }
   spacer();
   btn("Add", () => openForm(null));
-});
+}
 divider();
 bind(text(""), status);
-form = vstack(4, () => {
+form = vstack(4) {
   bind(text(""), formTitle);
   fName = textfield("Name");
   fPhone = textfield("Phone");
   fEmail = textfield("Email (optional)");
   fAddress = textfield("Address (optional)");
   fNotes = textfield("Notes (optional)");
-  hstack(4, () => {
+  hstack(4) {
     btn("Save", saveForm);
     btn("Cancel", () => { editingId = null; set_visible(form, false); });
-  });
+  }
   divider();
-});
+};
 set_visible(form, false);
 divider();
-scroll(() => { listBox = vstack(6); });
+scroll { listBox = vstack(6) }
 
 update();

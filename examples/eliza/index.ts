@@ -19,9 +19,9 @@ let input = 0;
 
 const refresh = (): void => {
   clear(list);
-  into(list, () => {
+  into(list) {
     for (const m of messages.slice(-20)) text_wrapped(`${m.who}: ${m.text}`, 440);
-  });
+  }
 };
 
 const say = (who: "You" | "ELIZA", t: string, debug = false): void => { messages.push({ who, text: t, debug }); };
@@ -44,20 +44,20 @@ const send = (raw: string): void => {
   set_text(input, "");
 };
 
-hstack(4, () => {
+hstack(4) {
   btn("Clear", () => { messages = [{ who: "ELIZA", text: getInitialGreeting(), debug: false }]; refresh(); status.set("Conversation cleared"); });
   btn("Debug", () => { debugMode = !debugMode; status.set(debugMode ? "Debug mode: ON" : "Debug mode: OFF"); });
   spacer();
   bind(text(""), status);
-});
+}
 divider();
-scroll(() => { list = vstack(4); });
+scroll { list = vstack(4) }
 divider();
-hstack(4, () => {
+hstack(4) {
   text("You:");
   input = textfield("Type a message");
   ui.on_submit(input, (t: string) => send(t));
   btn("Send", () => send(ui.get_text(input)));
-});
+}
 text_wrapped("Type a message and press Enter. Try: \"I am feeling sad\" or \"I remember my childhood\"", 440);
 refresh();

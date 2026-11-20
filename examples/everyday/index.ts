@@ -31,13 +31,13 @@ const tipView = (): void => {
   text("Bill Amount:");
   textfield("Enter amount") { ui.onchange((v: string) => { const n = parseFloat(v); if (!isNaN(n) && n >= 0) { bill = n; calcTip(); } }) }
   text("Tip Percentage:");
-  hstack(4, () => { for (const p of TIP_PERCENTS) btn(`${p}%`, () => { tipPercent = p; calcTip(); }); });
+  hstack(4) { for (const p of TIP_PERCENTS) btn(`${p}%`, () => { tipPercent = p; calcTip(); }) }
   text("Split Between:");
-  hstack(4, () => {
+  hstack(4) {
     btn("-", () => { if (people > 1) { people--; calcTip(); } });
     bind(text(""), peopleLine);
     btn("+", () => { people++; calcTip(); });
-  });
+  }
   divider();
   bind(text(""), tipLine); bind(text(""), totalLine); bind(text(""), perLine);
   btn("Clear", () => { bill = 0; tipPercent = 15; people = 1; calcTip(); });
@@ -58,10 +58,10 @@ const calcBmi = (): void => {
 const bmiView = (): void => {
   text("BMI Calculator");
   divider();
-  hstack(4, () => {
+  hstack(4) {
     btn("Metric", () => { metric = true; calcBmi(); });
     btn("Imperial", () => { metric = false; calcBmi(); });
-  });
+  }
   bind(text(""), heightLine);
   slider(100, 250, heightCm, (v: number) => { heightCm = Math.round(v); calcBmi(); });
   bind(text(""), weightLine);
@@ -119,11 +119,11 @@ const diceView = (): void => {
     diceResult.set(`Results: ${r.results.join("  ")}`);
     diceTotal.set(`Total: ${r.total}`);
     ui.clear(historyBox);
-    ui.into(historyBox, () => { for (const l of history) text(l); });
+    ui.into(historyBox) { for (const l of history) text(l) }
   });
   bind(text(""), diceResult); bind(text(""), diceTotal);
   text("Recent Rolls:");
-  scroll(() => { historyBox = vstack(2, () => { for (const l of history) text(l); }); });
+  scroll { historyBox = vstack(2) { for (const l of history) text(l) } }
 };
 
 // ---------- rock paper scissors ----------
@@ -133,7 +133,7 @@ const rpsView = (): void => {
   text("Rock Paper Scissors");
   divider();
   text("Choose your weapon:");
-  hstack(4, () => {
+  hstack(4) {
     for (const c of CHOICES) btn(`${EMOJIS[c]} ${c}`, () => {
       const mine = CHOICES[Math.floor(Math.random() * 3)];
       const r = judge(c, mine);
@@ -143,7 +143,7 @@ const rpsView = (): void => {
       outcome.set(RESULT_TEXT[r]);
       score.set(`You: ${playerScore} | Computer: ${computerScore} | Ties: ${ties}`);
     });
-  });
+  }
   bind(text(""), youChose); bind(text(""), theyChose); bind(text(""), outcome);
   divider();
   bind(text(""), score);
@@ -161,7 +161,7 @@ let qi = 0, qScore = 0, selected = -1;
 const chosen = state("");
 const quizBody = (): void => {
   ui.clear(holder);
-  ui.into(holder, () => {
+  ui.into(holder) {
     const q = QUESTIONS[qi];
     text("Programming Quiz");
     divider();
@@ -176,13 +176,13 @@ const quizBody = (): void => {
       if (selected === q.correct) qScore++;
       quizResult();
     });
-  });
+  }
 };
 const quizResult = (): void => {
   const q = QUESTIONS[qi];
   const ok = selected === q.correct;
   ui.clear(holder);
-  ui.into(holder, () => {
+  ui.into(holder) {
     text("Programming Quiz");
     divider();
     text(`Question ${qi + 1} of ${QUESTIONS.length}`);
@@ -195,12 +195,12 @@ const quizResult = (): void => {
     text(q.explanation);
     if (qi < QUESTIONS.length - 1) btn("Next Question", () => { qi++; selected = -1; chosen.set(""); quizBody(); });
     else btn("See Final Score", quizFinal);
-  });
+  }
 };
 const quizFinal = (): void => {
   const f = finalMessage(qScore, QUESTIONS.length);
   ui.clear(holder);
-  ui.into(holder, () => {
+  ui.into(holder) {
     text("Quiz Complete!");
     divider();
     text(`${f.emoji} ${f.message}`);
@@ -209,22 +209,22 @@ const quizFinal = (): void => {
     text(`Correct: ${qScore}`);
     text(`Incorrect: ${QUESTIONS.length - qScore}`);
     btn("Play Again", () => { qi = 0; qScore = 0; selected = -1; chosen.set(""); quizBody(); });
-  });
+  }
 };
 
 const show = (name: string): void => {
   if (name === "Quiz") { qi = 0; qScore = 0; selected = -1; chosen.set(""); quizBody(); return; }
   ui.clear(holder);
-  ui.into(holder, () => {
+  ui.into(holder) {
     if (name === "Tip") tipView();
     else if (name === "BMI") bmiView();
     else if (name === "Password") passwordView();
     else if (name === "Dice") diceView();
     else rpsView();
-  });
+  }
 };
 
-hstack(4, () => { for (const name of TABS) btn(name, () => show(name)); });
+hstack(4) { for (const name of TABS) btn(name, () => show(name)) }
 divider();
 holder = vstack(6);
 show("Tip");
