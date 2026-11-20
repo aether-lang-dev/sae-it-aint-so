@@ -12577,38 +12577,38 @@ gate_describe_() {
 }
 
 sae_probe_fs(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except browser_of_, quickjs, sandboxprobe
     return quickjs.new_string(p.ctx, sandboxprobe.read_canary(browser_of_(p).probe_dir))
 }
 
 sae_probe_write(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except browser_of_, quickjs, sandboxprobe
     return quickjs.new_string(p.ctx, sandboxprobe.write_canary(browser_of_(p).probe_dir))
 }
 
 sae_probe_env(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except quickjs, sandboxprobe
     return quickjs.new_string(p.ctx, sandboxprobe.read_path_var())
 }
 
 sae_probe_tcp(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except browser_of_, quickjs, sandboxprobe
     return quickjs.new_string(p.ctx, sandboxprobe.connect(browser_of_(p).probe_port))
 }
 
 sae_probe_exec(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except quickjs, sandboxprobe
     return quickjs.new_string(p.ctx, sandboxprobe.run_true())
 }
 
 // The grant levels in force on this thread: 0 outside any entry.
 sae_probe_depth(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except quickjs, sandboxprobe
     return quickjs.new_int(p.ctx, sandboxprobe.levels())
 }
 
 sae_probe_tick(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except browser_of_, probe_tick_
     probe_tick_(browser_of_(p))
     return 0
 }

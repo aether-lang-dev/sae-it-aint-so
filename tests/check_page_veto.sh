@@ -33,11 +33,12 @@ bad()  { echo "FAIL $1"; fails=$((fails + 1)); }
 
 # --- 1. every page-API function carries the veto ---
 
-veto=$(grep -m1 '^    hide fs, os, client' "$HOST")
-if [ -z "$veto" ]; then
-    bad "src/sae_host.ae has no page veto line"
-    exit 1
-fi
+# The page veto, as every function that carries it writes it (since step 10
+# the page-API functions open with their own seal, and the veto is the line
+# of the helpers they reach: tests/check_gate.sh).
+veto='    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_'
+others=$(grep '^    hide fs, os, client' "$HOST" | grep -vxF -- "$veto" | head -3)
+[ -z "$others" ] || bad "a veto line in src/sae_host.ae differs from the one this check holds: $others"
 n=0
 nseal=0
 # The functions api_register_ hands the engine: the last argument of each
