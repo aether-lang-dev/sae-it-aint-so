@@ -29,7 +29,7 @@ const tipView = (): void => {
   text("Tip Calculator");
   divider();
   text("Bill Amount:");
-  textfield("Enter amount", (v: string) => { const n = parseFloat(v); if (!isNaN(n) && n >= 0) { bill = n; calcTip(); } });
+  textfield("Enter amount") { ui.onchange((v: string) => { const n = parseFloat(v); if (!isNaN(n) && n >= 0) { bill = n; calcTip(); } }) }
   text("Tip Percentage:");
   hstack(4, () => { for (const p of TIP_PERCENTS) btn(`${p}%`, () => { tipPercent = p; calcTip(); }); });
   text("Split Between:");

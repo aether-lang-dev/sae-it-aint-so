@@ -301,7 +301,11 @@ struct Page {
 struct HeldRef {
     widget: int
     ref: int
+    kind: int        // HK_PLAIN, or HK_CHANGE: a textfield's change handler, set by onchange()
 }
+
+const HK_PLAIN = 0
+const HK_CHANGE = 1
 
 // ui.context_menu(target, items): a widget's, a vg shape's or the whole
 // page's (target 0) menu items, the page's array held and read again each
@@ -556,6 +560,7 @@ track_(p: *Page, h: int, ref: int) {
     e = heap.new(HeldRef)
     e.widget = h
     e.ref = ref
+    e.kind = HK_PLAIN
     list.add(p.held, e as ptr)
 }
 
@@ -585,7 +590,7 @@ drop_held_(ctx: ptr, p: *Page, root: int, self_too: int) {
         v, _ = list.get(p.held, i)
         e = v as *HeldRef
         if under_(e.widget, root) == 1 && (self_too == 1 || e.widget != root) {
-            quickjs.release(ctx, e.ref)
+            if e.ref != 0 { quickjs.release(ctx, e.ref) }
             heap.free(e)
         } else {
             list.add(kept, v)
@@ -1000,38 +1005,62 @@ sae_ui_spacer(p: *Page, this_val: int, argv: int) -> int {
     return quickjs.new_int(ctx, h)
 }
 
-// textfield(placeholder, onChange?): onChange(text) on every edit.
+// textfield(placeholder, body?): a one-line field; the block runs with the
+// field on top, for onchange(fn) (fn(text) on every edit), onsubmit and the
+// rest. The change handler is a verb in the block, not an argument before
+// it, so the block is always the last argument (docs/design/trailing-blocks.md).
+// The field's closure reads its handler from a HeldRef of its own (kind
+// HK_CHANGE, ref 0 until onchange sets it), let go of with the widget.
 sae_ui_textfield(p: *Page, this_val: int, argv: int) -> int {
     hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     placeholder = own_(arg_str_(ctx, argv, argc, 0))
-    has_fn = 0
-    ref = 0
-    if argc >= 2 && is_fn_arg_(ctx, argv, 1) != 0 {
-        has_fn = 1
-        ref = hold_arg_(ctx, argv, 1)
-    }
+    e = heap.new(HeldRef)
+    e.widget = 0
+    e.ref = 0
+    e.kind = HK_CHANGE
     on_change = |s: string| {
-        if has_fn == 1 {
-            r = call1_str_(p, ref, s)
-            if r < 0 { report_exception_(p, "a textfield handler") }
+        if e.ref != 0 {
+            r = call1_str_(p, e.ref, s)
+            if r < 0 { report_exception_(p, "a textfield's onchange") }
             settle_(p)
         }
     }
     long t = now_ns_()
     h = ui.textfield(mem.long_to_ptr(top_(p)), placeholder, on_change)
-    track_(p, h, ref)
+    e.widget = h
+    list.add(p.held, e as ptr)
     ui_done_(p, t)
-    // textfield(placeholder, onChange, () => { onsubmit(...) }): a third
-    // argument is the field's own block.
-    if argc >= 3 && is_fn_arg_(ctx, argv, 2) != 0 {
+    if argc >= 2 && is_fn_arg_(ctx, argv, 1) != 0 {
         if push_(p, h) == 0 { return sae_throw_type_error(ctx, "containers nested too deeply") }
-        r = call_arg_(p, argv, 2)
+        r = call_arg_(p, argv, 1)
         pop_(p)
         if r < 0 { return rethrow_(ctx) }
     }
     return quickjs.new_int(ctx, h)
+}
+
+// onchange(fn): in a textfield's block, fn(text) on every edit.
+sae_ui_onchange(p: *Page, this_val: int, argv: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    ctx = p.ctx
+    argc = quickjs.arg_count(ctx, argv)
+    target = modifier_target_(p, "onchange")
+    if argc < 1 || is_fn_arg_(ctx, argv, 0) == 0 { return sae_throw_type_error(ctx, "onchange(fn): fn must be a function") }
+    n = list.size(p.held)
+    i = 0
+    while target != 0 && i < n {
+        v, _ = list.get(p.held, i)
+        e = v as *HeldRef
+        if e.widget == target && e.kind == HK_CHANGE {
+            if e.ref != 0 { quickjs.release(ctx, e.ref) }
+            e.ref = hold_arg_(ctx, argv, 0)
+            return 0
+        }
+        i = i + 1
+    }
+    return sae_throw_type_error(ctx, "onchange() must be called inside a textfield's block")
 }
 
 // securefield(placeholder, onChange?): a field whose text is not shown (a
@@ -7503,7 +7532,7 @@ sae_ae_computed(p: *Page, this_val: int, argv: int) -> int {
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     ref = held_fn_(ctx, argv, argc, 0)
-    if ref == 0 { return sae_throw_type_error(ctx, "computed(fn, ...states): fn must be a function") }
+    if ref == 0 { return sae_throw_type_error(ctx, "computed(...states, fn): fn must be a function") }
     a = arg_int_(ctx, argv, argc, 1, 0)
     b = arg_int_(ctx, argv, argc, 2, 0)
     seq = p.seq
@@ -10667,10 +10696,9 @@ gate_spec_(g: *Gate) {
         }
         api("textfield", sae_ui_textfield, 2) {
             arg("placeholder", T_STR)
-            opt_ts("onChange", "(text: string) => void")
-            beyond("body", T_BLOCK)
+            opt("body", T_BLOCK)
             gives(T_WIDGET)
-            doc("A one-line text field; onChange(text) on each edit; a block may follow.")
+            doc("A one-line text field; its block runs with it on top (onchange, onsubmit, onfocuschange).")
         }
         api("securefield", sae_ui_securefield, 2) {
             arg("placeholder", T_STR)
@@ -10989,6 +11017,10 @@ gate_spec_(g: *Gate) {
         api("onsubmit", sae_ui_onsubmit, 1) {
             arg_ts("fn", "(text: string) => void")
             doc("In a field's block: fn(text) on Return.")
+        }
+        api("onchange", sae_ui_onchange, 1) {
+            arg_ts("fn", "(text: string) => void")
+            doc("In a textfield's block: fn(text) on every edit.")
         }
         api("on_drag", sae_ui_on_drag, 2) {
             arg("h", T_WIDGET)
@@ -11613,11 +11645,10 @@ gate_spec_(g: *Gate) {
             signature("<T>(initial: T): sae.State<T>")
             doc("A reactive value: a number, string or boolean is one aether-ui cell; any other value is kept by the page and the cell counts its versions.")
         }
-        provided("computed", 1) {
-            arg("fn", T_FN)
-            rest("states")
-            signature("<T>(fn: () => T, ...states: sae.State<any>[]): sae.State<T>")
-            doc("A state that follows fn(), evaluated again whenever one of states changes.")
+        provided("computed", 0) {
+            rest("args")
+            signature("<T>(...args: [...states: sae.State<any>[], fn: () => T]): sae.State<T>")
+            doc("computed(...states, fn): a state that follows fn(), evaluated again whenever one of states changes; fn last, so it may be a trailing block.")
         }
         provided("bind", 1) {
             arg("widget", T_ANY)
@@ -11959,11 +11990,10 @@ gate_spec_(g: *Gate) {
         signature("<T>(initial: T): sae.State<T>")
         doc("As ui.state: a reactive value.")
     }
-    provided_global(g, "computed", 1) {
-        arg("fn", T_FN)
-        rest("states")
-        signature("<T>(fn: () => T, ...states: sae.State<any>[]): sae.State<T>")
-        doc("As ui.computed: a state that follows fn().")
+    provided_global(g, "computed", 0) {
+        rest("args")
+        signature("<T>(...args: [...states: sae.State<any>[], fn: () => T]): sae.State<T>")
+        doc("As ui.computed: computed(...states, fn), a state that follows fn().")
     }
     provided_global(g, "bind", 1) {
         arg("widget", T_ANY)

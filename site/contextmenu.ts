@@ -21,13 +21,13 @@ context_menu(0, [{ label: "Page item", action: () => set_text(status, "chose: Pa
 
 // A shape's menu, and another shape's plain right click.
 let shape = 0;
-scene("0 0 200 60", 200, 60, () => {
-  shape = rect(0, 0, 100, 60, () => fill("#c8d8f0"));
-  rect(100, 0, 100, 60, () => {
+scene("0 0 200 60", 200, 60) {
+  shape = rect(0, 0, 100, 60) { fill("#c8d8f0") }
+  rect(100, 0, 100, 60) {
     fill("#f0d8c8");
     on_right_click(() => set_text(status, "right-clicked the other shape"));
-  });
-});
+  }
+}
 context_menu(shape, [{ label: "Shape item", action: () => set_text(status, "chose: Shape item") }]);
 
 // sae's own labels are refused, as is an item that does nothing.

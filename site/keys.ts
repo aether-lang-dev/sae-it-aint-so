@@ -18,7 +18,7 @@ ui.on_submit(field, (t: string) => print(`submitted: ${t}`));
 btn("Focus the field", () => ui.focus(field));
 
 // ui.set_focusable: a stack that takes the keyboard focus (a toolbar's one stop of Tab).
-const box = ui.hstack(2, () => { text("a stack that takes the focus"); });
+const box = ui.hstack(2) { text("a stack that takes the focus"); }
 print(`set_focusable returns its widget: ${ui.set_focusable(box, 1) === box}`);
 btn("Focus the stack", () => ui.focus(box));
 btn("Stack off", () => ui.set_focusable(box, 0));
@@ -34,11 +34,11 @@ print(`ellipsize: ${cut.endsWith("…")} ${vg.measure(cut, 14).width <= m2.width
 print(`ellipsize keeps a short one: ${vg.ellipsize("ok", 14, 500) === "ok"}`);
 // A text moved after it was made: vg.set's x and y on a text node.
 let moved = 0;
-vg.scene("0 0 200 60", 200, 60, () => {
-  vg.rect(0, 0, 200, 60, () => vg.fill("#ffffff"));
-  moved = vg.text_sized(10, 45, 40, "", () => vg.fill("#000000"));
+vg.scene("0 0 200 60", 200, 60) {
+  vg.rect(0, 0, 200, 60) { vg.fill("#ffffff") }
+  moved = vg.text_sized(10, 45, 40, "") { vg.fill("#000000") }
   vg.set(moved, { text: "M" });
-});
+}
 btn("Move", () => {
   vg.set(moved, { x: 150 });
   print(`moved: ${vg.get(moved).x}`);

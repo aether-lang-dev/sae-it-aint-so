@@ -84,8 +84,8 @@ declare const ui: {
   scroll(body?: () => void): sae.Widget;
   /** Flexible empty space. */
   spacer(): sae.Widget;
-  /** A one-line text field; onChange(text) on each edit; a block may follow. */
-  textfield(placeholder: string, onChange?: (text: string) => void, body?: () => void): sae.Widget;
+  /** A one-line text field; its block runs with it on top (onchange, onsubmit, onfocuschange). */
+  textfield(placeholder: string, body?: () => void): sae.Widget;
   /** A text field that does not show its text (a password); get_text reads it. */
   securefield(placeholder: string, onChange?: (text: string) => void): sae.Widget;
   /** The text of a label, field or button the page made. */
@@ -206,6 +206,8 @@ declare const ui: {
   on_submit(h: sae.Widget, fn: (text: string) => void): sae.Widget;
   /** In a field's block: fn(text) on Return. */
   onsubmit(fn: (text: string) => void): void;
+  /** In a textfield's block: fn(text) on every edit. */
+  onchange(fn: (text: string) => void): void;
   /** A press at (x, y) in the widget, then moves and the release, as offsets. */
   on_drag(h: sae.Widget, fn: (phase: number, x: number, y: number) => void): sae.Widget;
   /** Lets the children of a vstack or hstack be dragged among themselves; fn(from, to) on a drop; the page moves the item. */
@@ -396,8 +398,8 @@ declare const ui: {
   datagrid_edit_insert(g: sae.Grid, text: string): sae.Grid;
   /** A reactive value: a number, string or boolean is one aether-ui cell; any other value is kept by the page and the cell counts its versions. */
   state<T>(initial: T): sae.State<T>;
-  /** A state that follows fn(), evaluated again whenever one of states changes. */
-  computed<T>(fn: () => T, ...states: sae.State<any>[]): sae.State<T>;
+  /** computed(...states, fn): a state that follows fn(), evaluated again whenever one of states changes; fn last, so it may be a trailing block. */
+  computed<T>(...args: [...states: sae.State<any>[], fn: () => T]): sae.State<T>;
   /** The widget's text follows the state (a text field and a string state both ways); the tagged template bind`` is a label following several states. */
   bind<W extends sae.Widget>(widget: W, state: sae.State<any> | number): W;
   bind(strings: TemplateStringsArray, ...values: unknown[]): sae.Widget;
@@ -516,8 +518,8 @@ declare const shell: {
 };
 /** As ui.state: a reactive value. */
 declare function state<T>(initial: T): sae.State<T>;
-/** As ui.computed: a state that follows fn(). */
-declare function computed<T>(fn: () => T, ...states: sae.State<any>[]): sae.State<T>;
+/** As ui.computed: computed(...states, fn), a state that follows fn(). */
+declare function computed<T>(...args: [...states: sae.State<any>[], fn: () => T]): sae.State<T>;
 /** As ui.bind: the widget's text follows the state. */
 declare function bind<W extends sae.Widget>(widget: W, state: sae.State<any> | number): W;
 declare function bind(strings: TemplateStringsArray, ...values: unknown[]): sae.Widget;

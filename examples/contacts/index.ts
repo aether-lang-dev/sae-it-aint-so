@@ -111,7 +111,7 @@ const saveForm = (): void => {
 text("Contacts");
 divider();
 hstack(4, () => {
-  textfield("Search contacts...", (v: string) => { searchQuery = v; update(); });
+  textfield("Search contacts...") { ui.onchange((v: string) => { searchQuery = v; update(); }) }
   spacer();
   btn("Add", () => openForm(null));
 });

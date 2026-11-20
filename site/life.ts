@@ -59,8 +59,8 @@ const load = (i: number) => {
 
 text("Life");
 load(0);
-vg.scene(`0 0 ${N} ${N}`, 384, 384, () => {
-  raster = vg.raster(N, N, px, () => {
+vg.scene(`0 0 ${N} ${N}`, 384, 384) {
+  raster = vg.raster(N, N, px) {
     vg.rendering("pixelated");   // each cell a crisp square, not a blur
     vg.on_click((x: number, y: number) => {
       const cx = Math.floor(x), cy = Math.floor(y);
@@ -70,11 +70,11 @@ vg.scene(`0 0 ${N} ${N}`, 384, 384, () => {
       paint();
       print(`life: cell ${cx},${cy} ${cells[i] === 1 ? "born" : "died"}`);
     });
-  });
-});
+  }
+}
 text_bound(gen, "Generation ", "");
 btn("Step", step);
-toggle("Run", (on: boolean) => { running = on; });
+toggle("Run", (on: number) => { running = on === 1; });
 const choose = picker((i: number) => load(i));
 for (const [name] of patterns) picker_add(choose, name);
 btn("Home", () => browserContext.changePage("/"));

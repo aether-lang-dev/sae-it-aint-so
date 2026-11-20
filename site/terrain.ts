@@ -74,9 +74,9 @@ const render = () => {
 text("Terrain: value noise, coloured by height");
 let raster = 0;
 render();
-vg.scene("0 0 128 128", 384, 384, () => {
+vg.scene("0 0 128 128", 384, 384) {
   raster = vg.raster(W, H, px);
-});
+}
 text("Scale");
 slider(4, 64, scale, (v: number) => { scale = Math.round(v); render(); });
 text("Octaves");

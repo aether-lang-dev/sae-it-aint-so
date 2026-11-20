@@ -28,9 +28,9 @@ const minute = state(0);
 const second = state(0);
 const live = state(true);
 
-const setTime = (h24: number, m: number, s: number) => batch(() => {
+const setTime = (h24: number, m: number, s: number) => batch {
   hour.set(h24 % 12 === 0 ? 12 : h24 % 12); minute.set(m); second.set(s);
-});
+}
 const tick = () => { if (live.value) { const d = new Date(); setTime(d.getHours(), d.getMinutes(), d.getSeconds()); } };
 const pin = (h: number, m: number) => { live.set(false); setTime(h, m, 0); };
 

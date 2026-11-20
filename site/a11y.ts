@@ -12,14 +12,14 @@ const marked = new Set<string>();
 const name = () => `${files[cx]}${3 - cy}`;
 const say = () => `${name()}, ${marked.has(name()) ? "marked" : "empty"}`;
 let cursor = 0;
-const board: number = vg.scene("0 0 30 30", 150, 150, () => {
+const board: number = vg.scene("0 0 30 30", 150, 150) {
   for (let r = 0; r < 3; ++r) {
     for (let c = 0; c < 3; ++c) {
-      vg.rect(c * 10, r * 10, 10, 10, () => vg.fill((r + c) % 2 ? "#b58863" : "#f0d9b5"));
+      vg.rect(c * 10, r * 10, 10, 10) { vg.fill((r + c) % 2 ? "#b58863" : "#f0d9b5") }
     }
   }
-  cursor = vg.rect(0.5, 0.5, 9, 9, () => { vg.fill("none"); vg.stroke("#1060d0", 1); });
-});
+  cursor = vg.rect(0.5, 0.5, 9, 9) { vg.fill("none"); vg.stroke("#1060d0", 1); }
+}
 a11y_role(board, "group");
 const named = () => {
   a11y_label(board, `Board, ${say()}`);

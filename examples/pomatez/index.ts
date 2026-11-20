@@ -93,11 +93,11 @@ const show = (i: number): void => {
   views.forEach((v: number, j: number) => set_visible(v, j === i));
 };
 
-hstack(4, () => {
+hstack(4) {
   btn("Timer", () => show(0));
   btn("Tasks", () => show(1));
   btn("Config", () => show(2));
-});
+}
 divider();
 
 // --- the Timer view ---
@@ -106,33 +106,33 @@ const TICKS = 60;
 let ticks: number[] = [];
 let clockText = 0, periodText = 0, roundText = 0, noticeText = 0, playBtn = 0, focusText = 0;
 
-views.push(vstack(6, () => {
+views.push(vstack(6) {
   periodText = text(LABEL.STAY_FOCUS);
   style_id(periodText, "period");
   // The ring: sixty ticks round a clock face, lit for the time left. (Pomatez
   // draws an SVG arc; sae's vg has lines and per-shape opacity.)
-  vg.scene("0 0 200 200", 220, 220, () => {
+  vg.scene("0 0 200 200", 220, 220) {
     for (let i = 0; i < TICKS; i++) {
       const a = (i / TICKS) * 2 * Math.PI;
       const sx = Math.sin(a), cy = -Math.cos(a);
-      ticks.push(vg.line(100 + 78 * sx, 100 + 78 * cy, 100 + 94 * sx, 100 + 94 * cy, () => {
+      ticks.push(vg.line(100 + 78 * sx, 100 + 78 * cy, 100 + 94 * sx, 100 + 94 * cy) {
         vg.stroke(COLOUR.STAY_FOCUS, 4);
-      }));
+      });
     }
-  });
+  }
   clockText = text(clock(count));
   style_id(clockText, "clock");
   roundText = text("");
-  hstack(6, () => {
+  hstack(6) {
     playBtn = btn("Start", () => (playing ? pause() : play()));
     btn("Reset", () => resetPeriod());
     btn("Skip", () => finish(false));
-  });
+  }
   noticeText = text("");
   style_id(noticeText, "notice");
   focusText = text("");
   add_class(focusText, "muted");
-}));
+});
 
 let litTicks = TICKS;
 let ringColour = COLOUR.STAY_FOCUS;
@@ -214,33 +214,33 @@ timer(250, () => {
 let taskList = 0, taskCount = 0;
 const renderTasks = (): void => {
   clear(taskList);
-  into(taskList, () => {
+  into(taskList) {
     tasks.forEach((t: Task, i: number) => {
-      hstack(4, () => {
+      hstack(4) {
         const box = toggle(t.text, (on: number) => {
           tasks[i].done = on === 1;
           saveTasks(); renderTasks(); render();
         });
         if (t.done) set_toggle(box, 1);
         btn("Delete", () => { tasks.splice(i, 1); saveTasks(); renderTasks(); render(); });
-      });
+      }
     });
-  });
+  }
   const left = tasks.filter((t: Task) => !t.done).length;
   set_text(taskCount, `${left} to do, ${tasks.length - left} done`);
 };
 
-views.push(vstack(6, () => {
+views.push(vstack(6) {
   add_class(text("Tasks"), "heading");
-  const field = textfield("Add a task", (s: string) => {});
+  const field = textfield("Add a task");
   btn("Add task", () => {
     const t = get_text(field);
     if (t !== "") { tasks.push({ text: t, done: false }); set_text(field, ""); saveTasks(); renderTasks(); render(); }
   });
   taskCount = text("");
   add_class(taskCount, "muted");
-  taskList = vstack(2, () => {});
-}));
+  taskList = vstack(2) {}
+});
 
 // --- the Config view (Pomatez's Config route: four sliders and a switch) ---
 
@@ -264,7 +264,7 @@ const configChanged = (): void => {
 
 let ruleRows: { value: number; slider: number }[] = [];
 let autoToggle = 0;
-views.push(vstack(6, () => {
+views.push(vstack(6) {
   add_class(text("Rules"), "heading");
   RULES.forEach((r: Rule) => {
     const value = text(ruleText(r));
@@ -289,7 +289,7 @@ views.push(vstack(6, () => {
     set_toggle(autoToggle, 0);
     configChanged();
   });
-}));
+});
 
 startPeriod("STAY_FOCUS");
 renderTasks();

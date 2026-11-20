@@ -14,34 +14,34 @@ const view = state("0 0 100 100");
 let ball = 0, rotor = 0, sceneH = 0;
 
 text("AeVG alive");
-sceneH = scene("0 0 100 100", 300, 300, () => {
+sceneH = scene("0 0 100 100", 300, 300) {
   vg.view_box(view);                         // zoom and pan: the viewBox follows a state
-  rect(0, 0, 100, 100, () => fill("#ffffff"));
-  rect(5, 5, 20, 20, () => {                 // bound fill: follows `hot`
+  rect(0, 0, 100, 100) { fill("#ffffff") }
+  rect(5, 5, 20, 20) {                       // bound fill: follows `hot`
     bind_fill(() => (hot.value ? "#ff0000" : "#0000ff"));
     tooltip("A bound square");
     cursor("pointer");
     on_hover((inside: boolean) => print(`hover ${inside ? "in" : "out"}`));
     on_double_click((px: number, py: number) => print(`double at ${Math.round(px)},${Math.round(py)}`));
-  });
-  circle(60, 15, 6, () => {                  // a shape shown while a state holds
+  }
+  circle(60, 15, 6) {                        // a shape shown while a state holds
     fill("#008800");
     visible_when(() => hot.value);
-  });
-  circle(20, 45, 6, () => {                  // bound position: cx follows `x`
+  }
+  circle(20, 45, 6) {                        // bound position: cx follows `x`
     fill("#aa00aa");
     bind_pos(() => ({ cx: x.value }));
     on_drag((px: number, py: number, dx: number, dy: number) => x.set(px));
     on_scroll((dx: number, dy: number) => print(`scroll ${dy < 0 ? "in" : "out"}`));
-  });
-  text_sized(5, 70, 8, "idle", () => { fill("#000000"); bind_text(() => label.value); });
-  g(() => {                                  // a data join: one bar per item, keyed
-    vg.items(bars, "id", (b: Bar, i: number) => rect(50 + i * 12, 100 - b.h - 5, 8, b.h, () => fill("#ff8800")),
+  }
+  text_sized(5, 70, 8, "idle") { fill("#000000"); bind_text(() => label.value); }
+  g {                                        // a data join: one bar per item, keyed
+    vg.items(bars, "id", (b: Bar, i: number) => rect(50 + i * 12, 100 - b.h - 5, 8, b.h) { fill("#ff8800") },
       (b: Bar, h: number) => vg.set(h, { h: b.h, y: 100 - b.h - 5 }));
-  });
-  ball = circle(80, 50, 8, () => fill("#ff0000"));
-  rotor = g(() => { rect(70, 75, 20, 4, () => fill("#444444")); });
-});
+  }
+  ball = circle(80, 50, 8) { fill("#ff0000") }
+  rotor = g { rect(70, 75, 20, 4) { fill("#444444") }; }
+}
 btn("Heat", () => { hot.set(!hot.value); label.set(hot.value ? "hot" : "idle"); });
 btn("Move right", () => x.set(x.value + 20));
 btn("Add bar", () => bars.update((bs) => [...bs, { id: bs.length + 1, h: 30 }]));

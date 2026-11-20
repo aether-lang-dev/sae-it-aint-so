@@ -10,18 +10,18 @@ let presses = 0;
 let selfs = 0;
 const status = text("presses: 0");
 const handles = text("handles: ?");
-const row = vstack(2, () => {});
+const row = vstack(2) {}
 
 const build = (): void => {
-  into(row, () => {
-    hstack(2, () => {
+  into(row) {
+    hstack(2) {
       const b = btn("Press", () => { presses++; set_text(status, `presses: ${presses}`); });
-      textfield("name", (s: string) => {});
+      textfield("name");
       toggle("on", (on: number) => {});
       btn("Self", () => { clear(row); build(); selfs++; set_text(handles, `self: ${selfs}`); });
       context_menu(b, [{ label: "One", action: () => {} }, { label: "Two", action: () => {} }]);
-    });
-  });
+    }
+  }
 };
 
 btn("Rebuild", () => {

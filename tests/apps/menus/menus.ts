@@ -32,7 +32,7 @@ try {
 ui.shortcut_chord("Primary+K", "Primary+B", () => said.set("chord"));
 
 ui.text("Menus");
-bind(ui.text(""), computed(() => `Actions taken: ${taken.value}`, taken));
-bind(ui.text(""), computed(() => `Last: ${said.value}`, said));
+bind(ui.text(""), computed(taken, () => `Actions taken: ${taken.value}`));
+bind(ui.text(""), computed(said, () => `Last: ${said.value}`));
 ui.text(`nested: ${nested}`);
 ui.text(`stray: ${stray}`);

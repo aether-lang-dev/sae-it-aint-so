@@ -8,10 +8,10 @@ let items: string[] = ["Initial Item 1", "Initial Item 2", "Initial Item 3"];
 
 const show_items = (list: number): void => {
   clear(list);
-  into(list, () => {
+  into(list) {
     if (items.length === 0) text("(no items)");
     items.forEach((item: string, i: number) => text(`  ${i + 1}. ${item}`));
-  });
+  }
   print(`items: ${items.length}`);
 };
 
@@ -21,17 +21,17 @@ divider();
 
 text("=== Dynamic Counter ===");
 const display = text(`Count: ${counter}`);
-hstack(4, () => {
+hstack(4) {
   btn("-", () => set_text(display, `Count: ${--counter}`));
   btn("Reset", () => { counter = 0; set_text(display, `Count: ${counter}`); });
   btn("+", () => set_text(display, `Count: ${++counter}`));
-});
+}
 divider();
 
 text("=== Dynamic List ===");
-const name = textfield("New item name", (s: string) => {});
-const list = vstack(2, () => {});
-hstack(4, () => {
+const name = textfield("New item name");
+const list = vstack(2) {}
+hstack(4) {
   btn("Add Item", () => {
     const typed = get_text(name);
     items.push(typed !== "" ? typed : `Item ${items.length + 1}`);
@@ -39,7 +39,7 @@ hstack(4, () => {
   });
   btn("Remove Last", () => { items.pop(); show_items(list); });
   btn("Clear All", () => { items = []; show_items(list); });
-});
+}
 show_items(list);
 divider();
 

@@ -35,14 +35,14 @@ styles(themes.blue);
 let balance = 1250;
 let status: number;
 
-vstack(8, () => {
+vstack(8) {
   add_class(text("Current account"), "header");
   const shown = text(`Balance: ${balance} EUR`);
   style_id(shown, "balance");
   divider();
   add_class(text("Transfer"), "header");
-  const amount = textfield("amount", (s: string) => {});
-  hstack(4, () => {
+  const amount = textfield("amount");
+  hstack(4) {
     btn("Send", () => {
       const n = parseInt(ui.get_text(amount), 10);
       if (n > 0 && n <= balance) {
@@ -53,7 +53,7 @@ vstack(8, () => {
         set_text(status, "Not a valid amount");
       }
     });
-  });
+  }
   status = text("");
   divider();
   text("Theme:");
@@ -63,5 +63,5 @@ vstack(8, () => {
     print(`theme ${names[i]}`);
   });
   for (const n of names) picker_add(pick, n);
-});
+}
 btn("Back to Home", () => browserContext.changePage("/"));

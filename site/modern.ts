@@ -37,7 +37,7 @@ class Overdrawn extends Error {
 }
 let caught = "nothing caught";
 try {
-  ui.vstack(() => { throw new Overdrawn(5); });
+  ui.vstack { throw new Overdrawn(5); }
 } catch (e) {
   caught = e instanceof Overdrawn ? `caught ${e.name}: ${e.message}` : `lost its class: ${e}`;
 }

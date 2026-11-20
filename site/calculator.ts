@@ -23,9 +23,9 @@ const clear = () => { num = 0; prev = 0; ui_set(display, 0); };
 
 const key = (k: string) => {
   if (k in OPS) {
-    button(k, () => { bg_color(0.95, 0.85, 0.5, 1.0); onclick(() => operator(k)); });
+    button(k) { bg_color(0.95, 0.85, 0.5, 1.0); onclick(() => operator(k)); }
   } else if (k === "C") {
-    button(k, () => { bg_color(0.9, 0.6, 0.6, 1.0); onclick(clear); });
+    button(k) { bg_color(0.9, 0.6, 0.6, 1.0); onclick(clear); }
   } else if (k === "=") {
     btn(k, equals);
   } else {
@@ -33,13 +33,13 @@ const key = (k: string) => {
   }
 };
 
-vstack(() => {
+vstack {
   margin(12, 12, 12, 12);
   text_bound(display, " ", "");
   divider();
-  grid(4, () => {
+  grid(4) {
     equal_cells();
     [..."789+456-123*0C=/"].forEach(key);
-  });
-});
+  }
+}
 btn("Home", () => browserContext.changePage("/"));

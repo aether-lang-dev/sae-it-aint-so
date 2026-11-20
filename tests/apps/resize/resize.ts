@@ -12,17 +12,17 @@ let board = 0;
 ui.text("Resize");
 bind(ui.text(""), winSize);
 bind(ui.text(""), sceneSize);
-bind(ui.text(""), computed(() => `clicks: ${clicks.value}`, clicks));
-const row = ui.hstack(() => {
+bind(ui.text(""), computed(clicks, () => `clicks: ${clicks.value}`));
+const row = ui.hstack {
   ui.btn("Make it 120", () => size(120));
   bind(ui.text(""), rowSize);
-});
-board = vg.scene("0 0 10 10", 200, 200, () => {
-  vg.rect(0, 0, 10, 10, () => {
+}
+board = vg.scene("0 0 10 10", 200, 200) {
+  vg.rect(0, 0, 10, 10) {
     vg.fill("#3a7d44");
     vg.on_click(() => clicks.set(clicks.value + 1));
-  });
-});
+  }
+}
 
 function size(px: number): void {
   vg.resize(board, px, px);

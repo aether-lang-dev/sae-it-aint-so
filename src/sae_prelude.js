@@ -58,7 +58,12 @@
   };
 
   const state = (v) => new State(v);
-  const computed = (fn, ...states) => {
+  // computed(...states, fn): the function last, so it can be a trailing
+  // block: computed(a, b) { return a.value + b.value }
+  const computed = (...args) => {
+    const fn = args.pop();
+    const states = args;
+    if (typeof fn !== "function") throw new TypeError("computed(...states, fn): fn must be a function");
     const s = new State(fn());
     let seeded = false;
     observe(() => { if (seeded) s.set(fn()); seeded = true; }, states);

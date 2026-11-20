@@ -30,7 +30,7 @@ const tick = (): void => {
 };
 
 const hands = () => handRotations(Math.floor(secs.value / 3600), Math.floor(secs.value / 60) % 60, secs.value % 60);
-const digits = computed(() => formatTime(Math.floor(secs.value / 3600), Math.floor(secs.value / 60) % 60, secs.value % 60), secs);
+const digits = computed(secs, () => formatTime(Math.floor(secs.value / 3600), Math.floor(secs.value / 60) % 60, secs.value % 60));
 
 scene(`0 0 ${CLOCK_SIZE} ${CLOCK_SIZE}`, CLOCK_SIZE, CLOCK_SIZE, () => {
   circle(CLOCK_CENTER, CLOCK_CENTER, CLOCK_RADIUS + 5, () => { fill("#f5f5f5"); stroke("#333333", 3); });

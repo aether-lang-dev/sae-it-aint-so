@@ -15,21 +15,21 @@ const quad = new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0
 
 let raster = 0;
 let picture = 0;
-vg.scene("0 0 100 100", 300, 300, () => {
-  vg.rect(0, 0, 100, 100, () => vg.fill("#ffffff"));
-  raster = vg.raster(2, 2, px, () => {
+vg.scene("0 0 100 100", 300, 300) {
+  vg.rect(0, 0, 100, 100) { vg.fill("#ffffff") }
+  raster = vg.raster(2, 2, px) {
     vg.box(0, 0, 50, 50);                       // stretched over the top-left quarter
     vg.on_click((x: number, y: number) => {
       for (let i = 0; i < 4; i++) px.set([255, 255, 0, 255], i * 4);     // yellow
       vg.raster_update(raster, px);
       print(`raster clicked at ${Math.floor(x)},${Math.floor(y)}`);
     });
-  });
-  picture = vg.image(quad, () => {
+  }
+  picture = vg.image(quad) {
     vg.box(50, 50, 50, 50);                     // the decoded PNG, bottom-right quarter
     vg.fit("contain");
-  });
-});
+  }
+}
 const [pw, ph] = vg.raster_size(picture);
 print(`image decoded as ${pw}x${ph}`);
 ui.image(quad);                                  // the same picture as a widget
@@ -46,7 +46,7 @@ const refuse = (what: string, f: () => void) => {
   catch (e) { print(`${what}: ${(e as Error).message}`); }
 };
 btn("Refusals", () => {
-  vg.scene("0 0 10 10", 10, 10, () => {
+  vg.scene("0 0 10 10", 10, 10) {
     refuse("too wide", () => vg.raster(4097, 1, new Uint8Array(4097 * 4)));
     refuse("short buffer", () => vg.raster(2, 2, new Uint8Array(15)));
     refuse("not bytes", () => vg.raster(2, 2, [1, 2, 3] as unknown as Uint8Array));
@@ -56,9 +56,9 @@ btn("Refusals", () => {
     // 32 MB of pixels a page: three 8 MB rasters fit beside the small ones
     // above, a fourth (which would make 32 MB and 48 bytes) does not.
     const big = new Uint8Array(1024 * 2048 * 4);
-    for (let i = 0; i < 3; i++) refuse(`big ${i}`, () => { vg.raster(1024, 2048, big, () => vg.box(0, 0, 1, 1)); });
+    for (let i = 0; i < 3; i++) refuse(`big ${i}`, () => { vg.raster(1024, 2048, big) { vg.box(0, 0, 1, 1) }; });
     refuse("big 3", () => vg.raster(1024, 2048, big));
-  });
+  }
   refuse("outside a scene", () => vg.raster(2, 2, px));
   refuse("ui.image not an image", () => ui.image(new Uint8Array([1, 2, 3])));
 });

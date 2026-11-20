@@ -203,6 +203,7 @@ else
         bad "tsc --strict: sae.d.ts does not compile:"; echo "$out" | sed 's/^/       /' | head -10
     fi
     PAGES_TSC="site/counter.ts site/form.ts site/reactive.ts site/grid.ts site/clock.ts site/vg.ts site/aevg.ts site/http.ts site/clip.ts site/seeks_fs.ts site/banking.ts site/calculator.ts site/keys.ts site/menus.ts site/widgets.ts site/a11y.ts site/raster.ts
+        site/fib_clock.ts site/camera.ts site/reorder.ts site/aevg_live.ts site/dynamic.ts site/rebuild.ts site/scrolling.ts site/life.ts site/terrain.ts site/contextmenu.ts site/tooltip.ts site/about.ts
         tests/apps/sqlite_demo/index.ts tests/apps/documents/index.ts tests/apps/clipboard/index.ts tests/apps/bus/index.ts tests/apps/backend/index.ts tests/apps/natives/index.ts tests/apps/sandbox/index.ts tests/apps/menus/menus.ts tests/apps/resize/resize.ts"
     # Through tools/tscheck.sh: each page desugared by saelower --ts first, so
     # a page written with trailing blocks is held to sae.d.ts as an arrow-form

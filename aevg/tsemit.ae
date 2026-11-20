@@ -2,11 +2,12 @@
 // `saelower --from-svg` (docs/roadmap.md section 4, "the transpiler as a dev
 // tool"). The same walk as aether-ui's vg/svg/transpiler.ae (which emits the
 // Aether DSL), emitting a sae page in the house style: shapes read like the
-// SVG they came from, modifiers sit in each shape's block, groups nest as
-// `g(() => { ... })` (sae's host cascades a group's transform, opacity, fill
-// and stroke to its children, so nothing is flattened), gradients and clip
-// paths go into one `defs(() => { ... })`, and every path's d is normalised
-// to absolute M/L/C/Z. Run once, then edit: the output is source.
+// SVG they came from, modifiers sit in each shape's trailing block
+// (docs/design/trailing-blocks.md), groups nest as `g { ... }` (sae's host
+// cascades a group's transform, opacity, fill and stroke to its children, so
+// nothing is flattened), gradients and clip paths go into one `defs { ... }`,
+// and every path's d is normalised to absolute M/L/C/Z. Run once, then edit:
+// the output is source.
 //
 //   emit_ts(svg, name, size, solid) -> string
 //     name: for the header comment; size: the canvas's pixel size (0: the
@@ -72,11 +73,11 @@ emit_ts(svg: string, name: string, size: int, solid: int) -> string {
     // Gradients first: the defs block, and the colours a solid rendering uses.
     index_gradients(e, root)
     collect_defs(e, root, 2)
-    _4 = strbuilder.append(sb, "scene(\"${vb}\", ${w}, ${h}, () => {\n")
+    _4 = strbuilder.append(sb, "scene(\"${vb}\", ${w}, ${h}) {\n")
     if strbuilder.length(e.defs) > 0 {
-        _5 = strbuilder.append(sb, "  defs(() => {\n")
+        _5 = strbuilder.append(sb, "  defs {\n")
         _6 = strbuilder.append(sb, strbuilder.finish(e.defs))
-        _7 = strbuilder.append(sb, "  });\n")
+        _7 = strbuilder.append(sb, "  }\n")
     }
     // The root's own presentation attributes cascade to everything: one
     // group carries them.
@@ -84,13 +85,13 @@ emit_ts(svg: string, name: string, size: int, solid: int) -> string {
     rs = style_attr(root, "stroke")
     rsw = style_attr(root, "stroke-width")
     if string.length(root_mods) > 0 {
-        _8 = strbuilder.append(sb, "  g(() => { ${root_mods}\n")
+        _8 = strbuilder.append(sb, "  g { ${root_mods}\n")
         emit_children(e, root, 2, rs, rsw)
-        _9 = strbuilder.append(sb, "  });\n")
+        _9 = strbuilder.append(sb, "  }\n")
     } else {
         emit_children(e, root, 1, rs, rsw)
     }
-    _a = strbuilder.append(sb, "});\n")
+    _a = strbuilder.append(sb, "}\n")
     if e.skipped > 0 { _b = strbuilder.append(sb, "// ${e.skipped} element(s) skipped: see the comments above.\n") }
     return strbuilder.finish(sb)
 }
@@ -128,14 +129,14 @@ emit_node(e: *Emit, node: ptr, indent: int, in_stroke: string, in_sw: string) {
         gid = attr_or(node, "id", "")
         if string.length(gid) > 0 { gid = " // ${esc(gid)}" }
         if string.length(mods) > 0 {
-            _1 = strbuilder.append(e.sb, "g(() => { ${mods}${gid}\n")
+            _1 = strbuilder.append(e.sb, "g { ${mods}${gid}\n")
         } else {
-            _2 = strbuilder.append(e.sb, "g(() => {${gid}\n")
+            _2 = strbuilder.append(e.sb, "g {${gid}\n")
         }
         note_unsupported(e, node, indent + 1)
         emit_children(e, node, indent + 1, inherit(node, "stroke", in_stroke), inherit(node, "stroke-width", in_sw))
         pad(e, indent)
-        _3 = strbuilder.append(e.sb, "});\n")
+        _3 = strbuilder.append(e.sb, "}\n")
         return
     }
     if tag == "use" {
@@ -147,10 +148,10 @@ emit_node(e: *Emit, node: ptr, indent: int, in_stroke: string, in_sw: string) {
             mods = "transform(\"${esc(tf)}\"); ${mods}"
         }
         pad(e, indent)
-        _4 = strbuilder.append(e.sb, "g(() => { ${mods}\n")
+        _4 = strbuilder.append(e.sb, "g { ${mods}\n")
         emit_node(e, target, indent + 1, inherit(node, "stroke", in_stroke), inherit(node, "stroke-width", in_sw))
         pad(e, indent)
-        _5 = strbuilder.append(e.sb, "});\n")
+        _5 = strbuilder.append(e.sb, "}\n")
         return
     }
     note_unsupported(e, node, indent)
@@ -195,15 +196,15 @@ emit_rect(e: *Emit, node: ptr, indent: int, mods: string) {
     emit_call(e, indent, mods, "rect(${num(node, "x")}, ${num(node, "y")}, ${num(node, "width")}, ${num(node, "height")}")
 }
 
-// `verb(args` + either `);` or `, () => { mods });`, with the SVG's id as a
+// `verb(args` + either `)` or `) { mods }` (a trailing block), with the SVG's id as a
 // trailing comment so the hand that edits the page can find a shape.
 emit_call(e: *Emit, indent: int, mods: string, head: string) {
     pad(e, indent)
     _1 = strbuilder.append(e.sb, head)
     if string.length(mods) > 0 {
-        _2 = strbuilder.append(e.sb, ", () => { ${mods} });")
+        _2 = strbuilder.append(e.sb, ") { ${mods} }")
     } else {
-        _3 = strbuilder.append(e.sb, ");")
+        _3 = strbuilder.append(e.sb, ")")
     }
     if string.length(e.cur_id) > 0 { _4 = strbuilder.append(e.sb, " // ${esc(e.cur_id)}") }
     _5 = strbuilder.append(e.sb, "\n")

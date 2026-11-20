@@ -70,45 +70,45 @@ const views: VgLane[] = [];
 const load = () => {
   const data = shuffled(N, seed);
   const [a, b] = matchups[matchup];
-  batch(() => {
+  batch {
     const lanes = [a, b].map((algo, k) => {
       views[k].start(algo.name);
       return new Lane(algo, data, views[k]);
     });
     race = new Race(...lanes);
     verdict.set(`${a.name} vs ${b.name}, seed ${seed}`);
-  });
+  }
   print(`algos: ${a.name} vs ${b.name} on seed ${seed}`);
 };
 
 const advance = (n: number) => {
   if (!race || race.finished) return;
-  batch(() => {
+  batch {
     const won = race!.tick(n);
     if (won === "tie") verdict.set("A dead heat");
     else if (won) verdict.set(`${won.algorithm.name} wins in ${won.steps} steps`);
     if (won) print(`algos: ${won === "tie" ? "tie" : `${won.algorithm.name} wins`}`);
-  });
+  }
 };
 
 text("Algorithm theatre");
-vg.scene(`0 0 ${N * SLOT} ${BASES[1] + 2}`, 480, 260, () => {
-  vg.rect(0, 0, N * SLOT, BASES[1] + 2, () => vg.fill("#14161c"));
+vg.scene(`0 0 ${N * SLOT} ${BASES[1] + 2}`, 480, 260) {
+  vg.rect(0, 0, N * SLOT, BASES[1] + 2) { vg.fill("#14161c") }
   for (const base of BASES) {
-    const title = vg.text_sized(2, base - 52, 6, "", () => vg.fill("#c8ccd4"));
+    const title = vg.text_sized(2, base - 52, 6, "") { vg.fill("#c8ccd4") }
     const rects = Array.from({ length: N }, (_, i) =>
-      vg.rect(i * SLOT + (SLOT - BAR) / 2, base - N * UNIT, BAR, N * UNIT, () => vg.fill(COLOURS.idle)));
+      vg.rect(i * SLOT + (SLOT - BAR) / 2, base - N * UNIT, BAR, N * UNIT) { vg.fill(COLOURS.idle) });
     views.push(new VgLane(rects, title, base));
   }
-});
+}
 for (const v of views) bind(text(""), v.label);
 bind(text(""), verdict);
 
-hstack(() => {
+hstack {
   btn("Step", () => advance(1));
-  toggle("Run", (on: boolean) => { running = on; });
+  toggle("Run", (on: number) => { running = on === 1; });
   btn("Shuffle", () => { seed++; load(); });
-});
+}
 slider(1, 32, speed, (v: number) => { speed = Math.max(1, Math.round(v)); });
 const choose = picker((i: number) => { matchup = i; load(); });
 for (const [a, b] of matchups) picker_add(choose, `${a.name} vs ${b.name}`);

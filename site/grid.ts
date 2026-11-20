@@ -23,7 +23,7 @@ const edits: { [k: string]: string } = {};
 
 text("Grid");
 const picked = text("picked: none");
-const g = ui.datagrid(1000000, 40, 15, 5, 1, () => {
+const g = ui.datagrid(1000000, 40, 15, 5, 1) {
   // "=a+b" is a formula: the cell shows its sum, an editor holds the formula.
   const shown = (raw: string): string =>
     raw.startsWith("=") ? String(raw.slice(1).split("+").reduce((t, n) => t + Number(n), 0)) : raw;
@@ -53,7 +53,7 @@ const g = ui.datagrid(1000000, 40, 15, 5, 1, () => {
   on_col_move((from: number, to: number) =>
     print(`grid moved ${from} to ${to}; view ${to} shows model ${ui.datagrid_col_model(g, to)}`));
   on_header_click((c: number) => print(`grid header clicked ${c}`));
-});
+}
 btn("Widen B", () => {
   ui.datagrid_set_col_width(g, 2, 150);
   print(`grid B is ${ui.datagrid_col_width(g, 2)} wide`);
@@ -99,11 +99,11 @@ btn("Float", () => {
     return;
   }
   floating = ui.datagrid_float(g, 3, 2, 2, 2, 50, 30);
-  ui.into(floating, () => {
-    vg.scene("0 0 50 30", 50, 30, () => {
-      vg.rect(0, 0, 50, 30, () => vg.fill("#d82626"));
-    });
-  });
+  ui.into(floating) {
+    vg.scene("0 0 50 30", 50, 30) {
+      vg.rect(0, 0, 50, 30) { vg.fill("#d82626") }
+    }
+  }
   print(`grid float on, ${ui.datagrid_floats(g)} over the grid`);
 });
 btn("Taller rows", () => {
@@ -160,17 +160,17 @@ btn("To the top", () => {
 // ui.datagrid_* setters by handle (each returns the grid).
 const small = ui.datagrid(3, 2, 3, 2, 0, (r: number, c: number) => `s${r}${c}`);
 ui.datagrid_header(ui.datagrid_set_col_widths(small, 60), (c: number) => `S${c}`);
-textfield("note", (s: string) => {}, () => {
+textfield("note") {
   onsubmit((t: string) => print(`note submitted ${t}`));
   onfocuschange((inside: number) => print(`note focus ${inside}`));
-});
+}
 print(`key_text comma is ${ui.key_text("comma")}`);
-text("drag me", () => {
+text("drag me") {
   pointer_shape("grab");
   ondrag((phase: number, x: number, y: number) => {
     if (phase === 2) print(`dragged by ${x},${y}`);
   });
-});
+};
 // A third grid for the rows and cells API: hidden rows, frozen rows,
 // merges, row heights, styles past colour and bold, tooltips, and the
 // editor's text as it is typed (ui.datagrid_on_edit_change, _edit_insert).
@@ -204,6 +204,6 @@ btn("Insert X1", () => ui.datagrid_edit_insert(rows, "X1"));
 // ui.textarea: several lines, bound both ways to a state.
 const story = state("");
 bind(ui.textarea("story"), story);
-bind(ui.text(""), computed(() => `story has ${story.value.split("\n").length} lines`, story));
+bind(ui.text(""), computed(story, () => `story has ${story.value.split("\n").length} lines`));
 btn("Two lines", () => story.set("one\ntwo"));
 btn("Home", () => browserContext.changePage("/"));

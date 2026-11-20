@@ -31,15 +31,15 @@ reorderable(row, (from: number, to: number) => {
 
 const sheets = state(["Sheet1", "Sheet2", "Sheet3", "Sheet4"]);
 const emoved = text("each moved: none");
-bind`each order: ${computed(() => sheets.value.join(" > "), sheets)}`;
-hstack(4, () => {
+bind`each order: ${computed(sheets, () => sheets.value.join(" > "))}`;
+hstack(4) {
   text("Tabs:");
   const tabs = each(sheets, (n: string) => n, (n: string) => btn(n, () => set_text(clicked, `clicked: ${n}`)));
   reorderable(tabs, (from: number, to: number) => {
     set_text(emoved, `each moved: ${from} > ${to}`);
     sheets.update((s) => move(s, from, to));
   });
-});
+};
 
 // Not a stack: refused.
 let refused = "no";

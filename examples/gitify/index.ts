@@ -130,41 +130,41 @@ let hostField = 0, tokenField = 0, loginStatus = 0;
 let whoText = 0, countText = 0, listStatus = 0, listBox = 0;
 
 // Sign in (Gitify's LoginWithPersonalAccessTokenForm)
-views.push(vstack(8, () => {
+views.push(vstack(8) {
   style_id(text("Gitify"), "title");
   text("Sign in with a personal access token");
   add_class(text("Scopes: notifications, read:user, repo"), "meta");
   text("Hostname");
-  hostField = textfield("github.com", (s: string) => {});
+  hostField = textfield("github.com");
   text("Token");
-  tokenField = textfield("ghp_...", (s: string) => {});
+  tokenField = textfield("ghp_...");
   btn("Sign in", () => signIn());
   loginStatus = text("");
   style_id(loginStatus, "status");
-}));
+});
 
 // Notifications (Gitify's Notifications route)
-views.push(vstack(6, () => {
-  hstack(6, () => {
+views.push(vstack(6) {
+  hstack(6) {
     whoText = text("");
     style_id(whoText, "title");
-  });
-  hstack(4, () => {
+  }
+  hstack(4) {
     btn("Refresh", () => refresh());
     btn("Mark all read", () => markAllRead());
     btn("Settings", () => show(2));
-  });
+  }
   countText = text("");
   add_class(countText, "meta");
   listStatus = text("");
   style_id(listStatus, "status");
   divider();
-  scroll(() => { listBox = vstack(6, () => {}); });
-}));
+  scroll { listBox = vstack(6) {}; }
+});
 
 // Settings (a few of Gitify's)
 let partToggle = 0, markToggle = 0;
-views.push(vstack(8, () => {
+views.push(vstack(8) {
   style_id(text("Settings"), "title");
   partToggle = toggle("Show only participating", (on: number) => {
     settings.participating = on === 1; saveSettings(); refresh();
@@ -174,7 +174,7 @@ views.push(vstack(8, () => {
   });
   btn("Sign out", () => signOut());
   btn("Back", () => show(1));
-}));
+});
 if (settings.participating) set_toggle(partToggle, 1);
 if (settings.markOnOpen) set_toggle(markToggle, 1);
 
@@ -248,26 +248,26 @@ const render = (): void => {
     byRepo[r].push(n);
   });
   clear(listBox);
-  into(listBox, () => {
+  into(listBox) {
     order.forEach((repo: string) => {
-      hstack(6, () => {
+      hstack(6) {
         add_class(text(repo), "repo");
         btn("Mark repo read", () => markRepoRead(repo));
-      });
+      }
       byRepo[repo].forEach((n: Note) => {
-        vstack(2, () => {
+        vstack(2) {
           text(`${TYPE[n.subject.type] || n.subject.type}: ${n.subject.title}`);
           add_class(text(`${REASON[n.reason] || "Unknown"} · ${ago(n.updated_at)}`), "meta");
-          hstack(4, () => {
+          hstack(4) {
             btn("Open", () => openNote(n));
             btn("Read", () => markRead(n));
             btn("Done", () => markDone(n));
-          });
-        });
+          }
+        }
       });
       divider();
     });
-  });
+  }
 };
 
 const drop = (pred: (n: Note) => boolean): void => {
