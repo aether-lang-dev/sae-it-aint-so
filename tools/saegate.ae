@@ -284,6 +284,26 @@ dts_header_(out: ptr) {
     _k = strbuilder.append(out, "}\n")
 }
 
+// --seal: one line per name of the seal policy, "basis NAME", "reach SPACE
+// NAME" (the global functions' space is "(global)") and "kernel NAME", for
+// tests/check_gate.sh to hold each host function's seal line to.
+seal_names_(prefix: string, names: string) {
+    parts = string.split(names, ",")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        nm = string.trim(string.string_array_get(parts, i))
+        if nm != "" { io.stdout_write("${prefix} ${nm}\n") }
+        i = i + 1
+    }
+}
+
+seal_lines_(kind: string, names: string) {
+    if kind == "seal_basis" { seal_names_("basis", names) }
+    if kind == "seal_global_reach" { seal_names_("reach (global)", names) }
+    if kind == "seal_kernel_helper" { seal_names_("kernel", names) }
+}
+
 main() {
     arg1 = os.args_get(1)
     expect_mode = ""
@@ -293,7 +313,7 @@ main() {
         if string.contains(",web,webseeks,all,some,unsought,optional,none,probe,module,", ",${expect_mode},") == 0 && string.starts_with(expect_mode, "just-") == 0 { fail_("--expect takes web, webseeks, all, some, unsought, optional, none, probe, module or just-<privilege>") }
         if os.args_get(3) == "--names" { each_names = os.args_get(4) }
     } else {
-        if arg1 != "" && arg1 != "--check-arity" && arg1 != "--seeks" && arg1 != "--always" { fail_("usage: saegate [--expect MODE [--names N] | --check-arity | --seeks | --always]") }
+        if arg1 != "" && arg1 != "--check-arity" && arg1 != "--seeks" && arg1 != "--always" && arg1 != "--seal" { fail_("usage: saegate [--expect MODE [--names N] | --check-arity | --seeks | --always | --seal]") }
     }
     out = strbuilder.new(4096)
     if arg1 == "" { dts_header_(out) }
@@ -312,7 +332,14 @@ main() {
             space = str_of_(e, "space")
             name = str_of_(e, "name")
             params = json.json_object_get_raw(e, "params")
-            if arg1 == "--check-arity" {
+            if string.starts_with(kind, "seal_") == 1 {
+                // the seal policy (basis, global_reach, kernel_helper): not part of
+                // what a page sees; only --seal prints it
+                count = count - 1
+                if arg1 == "--seal" { seal_lines_(kind, str_of_(e, "names")) }
+            } else if arg1 == "--seal" {
+                if str_of_(e, "reach") != "" { seal_names_("reach ${space}", str_of_(e, "reach")) }
+            } else if arg1 == "--check-arity" {
                 if kind != "value" && kind != "provided_value" && kind != "dynamic" && nonrest_(params) != int_of_(e, "arity") {
                     _w = io.stderr_write("FAIL ${space}.${name}: arity ${int_of_(e, "arity")} but ${nonrest_(params)} non-rest parameters\n")
                     bad = bad + 1
@@ -453,7 +480,7 @@ main() {
         io.stdout_write("ok   ${count} entries: each arity is its count of non-rest parameters\n")
         return
     }
-    if arg1 == "--seeks" || arg1 == "--always" { return }
+    if arg1 == "--seeks" || arg1 == "--always" || arg1 == "--seal" { return }
     if cur != "" && expect_mode == "" {
         if cur_each == 1 { _l2 = strbuilder.append(out, "  };\n") }
         _l = strbuilder.append(out, "};\n")
