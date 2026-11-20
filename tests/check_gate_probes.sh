@@ -54,6 +54,8 @@
 #
 # Part g holds what step 10 needs of seal except on sae's kind of function:
 # the four fixes of Aether 0.926.0, each with what must still be refused.
+# Part h holds two faults 0.926.0 still has as tripwires (they fail when
+# Aether fixes one).
 #
 # Exit status: the number of failed checks.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -487,6 +489,63 @@ sed 's/seal except new_t, T/seal except new_t/; s/t = new_t()$/t = heap.new(T)/'
 check g_struct_named reject "E0200.*T"
 # D: the body's own parameters (here p and argv) need no listing; that is
 # s_param_unlisted, s_param_hidden and s_param_nested in part a.
+
+# --- h. two faults of seal except that 0.926.0 still has (tripwires) ---
+# Each passes while the fault stands and FAILS when Aether fixes it, which is
+# the signal to convert the sqlite functions that keep the page veto
+# (docs/design/gate-dsl.md, "Step 10").
+# E: a tuple-destructured local named like a top-level name (a function, a
+# const or an extern) is refused under a seal, though `r = ...` makes the
+# same local and the unsealed body shadows it: sae_sqlite_transaction's
+# `r, err = js_call_(...)` (sae has an outer `r`).
+cat > "$work/h_tuple_shadow.ae" <<'EOP'
+r(x: int) -> int { return x }
+pair(x: int) -> (int, string) { return x, "" }
+f(p: int) -> int {
+    seal except pair
+    r, err = pair(p)
+    if err != "" { return 0 }
+    return r
+}
+main() { println(f(1)) }
+EOP
+sed 's/    r, err = pair(p)/    r = pair(p)/; s/    if err != "" { return 0 }//; s/^pair(x: int) -> (int, string) { return x, "" }/pair(x: int) -> int { return x }/' "$work/h_tuple_shadow.ae" > "$work/h_plain_shadow.ae"
+check h_plain_shadow accept ''
+if build h_tuple_shadow; then
+    bad "Aether fixed fault E (a sealed tuple destructure to a local named like a top-level name): seal sae_sqlite_transaction (docs/design/gate-dsl.md, Step 10)"
+elif grep -q "E0304.*'r' is hidden" "$work/h_tuple_shadow.log"; then
+    ok "fault E stands (h_tuple_shadow: E0304 'r' is hidden, for the body's own tuple local)"
+else
+    bad "h_tuple_shadow rejected, but not as fault E ($(head -c 300 "$work/h_tuple_shadow.log" | tr '\n' ' '))"
+fi
+# F: a module whose last name another module also has (services.sqlite,
+# which imports contrib.sqlite as engine) is not admitted by its name: `seal
+# except mq` refuses mq.bump and mq.KIND as 'services_mq.bump', and only the
+# merged name `services_mq` admits them. sae_sqlite_all, _get, _run, _begin
+# and _end use sqlite.KIND_*.
+mkdir -p "$work/services/mq2" "$work/contrib/mq2"
+printf 'exports (low)\nlow(x: int) -> int { return x }\n' > "$work/contrib/mq2/module.ae"
+cat > "$work/services/mq2/module.ae" <<'EOP'
+import contrib.mq2 as engine
+exports (KIND, bump)
+const KIND = 3
+bump(x: int) -> int { return engine.low(x) + KIND }
+EOP
+cat > "$work/h_module_twin.ae" <<'EOP'
+import services.mq2
+f(p: int) -> int {
+    seal except mq2
+    return mq2.bump(p) + mq2.KIND
+}
+main() { println(f(1)) }
+EOP
+if build h_module_twin; then
+    bad "Aether fixed fault F (a module sharing its last name with another, under seal except): seal sae_sqlite_all, _get, _run, _begin, _end (docs/design/gate-dsl.md, Step 10)"
+elif grep -q "E0304.*services_mq2" "$work/h_module_twin.log"; then
+    ok "fault F stands (h_module_twin: E0304 'services_mq2.bump': only the merged name is admitted)"
+else
+    bad "h_module_twin rejected, but not as fault F ($(head -c 300 "$work/h_module_twin.log" | tr '\n' ' '))"
+fi
 unset AETHER_LIB_DIR
 
 exit $fails
