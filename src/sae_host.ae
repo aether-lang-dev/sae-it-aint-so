@@ -5503,7 +5503,7 @@ sae_printing_pdf(p: *Page, this_val: int, argv: int) -> int {
 // shell.open(url): hand a URL to the system (the default browser for https:),
 // if capabilities.shell.open lists a prefix of it. App mode only.
 sae_shell_open(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except LATER_SHELL_OPEN, arg_str_, browser_of_, later_add_, own_, quickjs, sae_throw_type_error, shell
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     url = own_(arg_str_(ctx, argv, argc, 0))
