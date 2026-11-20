@@ -4420,7 +4420,7 @@ sae_http_request(p: *Page, this_val: int, argv: int) -> int {
 // See docs/app-capabilities.md.
 
 sae_fs_read_text(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, browser_of_, enter_grants_, files, leave_grants_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
@@ -5400,7 +5400,7 @@ sae_docs_write_base64(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_fs_write_text(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, browser_of_, enter_grants_, files, leave_grants_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
@@ -5413,7 +5413,7 @@ sae_fs_write_text(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_fs_read_base64(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, browser_of_, enter_grants_, files, leave_grants_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
@@ -5425,7 +5425,7 @@ sae_fs_read_base64(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_fs_write_base64(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, browser_of_, enter_grants_, files, leave_grants_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
@@ -5438,7 +5438,7 @@ sae_fs_write_base64(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_fs_exists(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, browser_of_, enter_grants_, files, leave_grants_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
@@ -5450,7 +5450,7 @@ sae_fs_exists(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_fs_list(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, browser_of_, enter_grants_, files, json_value_, leave_grants_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
@@ -5463,7 +5463,7 @@ sae_fs_list(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_fs_mkdir(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, browser_of_, enter_grants_, files, leave_grants_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
@@ -5475,7 +5475,7 @@ sae_fs_mkdir(p: *Page, this_val: int, argv: int) -> int {
 }
 
 sae_fs_remove(p: *Page, this_val: int, argv: int) -> int {
-    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    seal except arg_str_, browser_of_, enter_grants_, files, leave_grants_, own_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     path = own_(arg_str_(ctx, argv, argc, 0))
