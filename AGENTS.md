@@ -146,7 +146,7 @@ tests/run_spec.sh spec_reorder                 # ui.reorderable: a plain hstack 
 tests/run_spec.sh spec_a11y                    # ui.a11y_label/role/description/announce on a widget and a vg scene; vg.on_key: a board from the keyboard (site/a11y.ts)
 ```
 
-Toolchain: Aether 0.931.0 or later (`AE_PIN` in `pins`: `seal except` that keeps value types and the generated C, admits a function's own parameters, a listed module's constants and a closure's view of the sealed locals (aether #3769), a destructured local named like a top-level function and a module by the name the source writes (aether #3781), which the page-API functions' seal lines need; contrib.quickjs's 0.915+ API, `quickjs.to_string` returning `(string, error)` and a per-runtime absolute deadline, `set_deadline_ns`, in place of `set_time_limit`; `@keep ptr` parameters, aether#2926; enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
+Toolchain: Aether 0.934.0 or later (`AE_PIN` in `pins`: contrib.quickjs's patched `Array.prototype.find`, which an interrupt no longer makes free an element twice (0.934.0, aether#3799); `seal except` that keeps value types and the generated C, admits a function's own parameters, a listed module's constants and a closure's view of the sealed locals (aether #3769), a destructured local named like a top-level function and a module by the name the source writes (aether #3781), which the page-API functions' seal lines need; contrib.quickjs's 0.915+ API, `quickjs.to_string` returning `(string, error)` and a per-runtime absolute deadline, `set_deadline_ns`, in place of `set_time_limit`; `@keep ptr` parameters, aether#2926; enforce leaving the sandbox off after its block, aether#2905; contrib.sqlite's authorizer
 and column API, contrib.quickjs's `arg_bytes`), installed, or a dev tree
 (`$SAE_AETHER_HOME`, default `../aether`, built with `make compiler ae
 stdlib contrib`; `SAE_AETHER_HOME=none` builds against the installed one even when
@@ -181,8 +181,8 @@ The report is in `target/<spec>.log`, with the stack that freed the value.
 A short page time limit (300 ms) stops page code in hundreds of places a
 normal run never does, which is where such frees hide: spraedsheet's
 spec_sheet under it found quickjs-ng's `Array.prototype.find` freeing an
-element twice when interrupted (asks/quickjs-array-find-interrupt.md) in
-25 minutes on ae-x64. The spec's assertions fail at that limit; its
+element twice when interrupted (asks/quickjs-array-find-interrupt.md, fixed in
+Aether 0.934.0) in 25 minutes on ae-x64. The spec's assertions fail at that limit; its
 crashes are what count. For a handle released twice at the host boundary,
 build against a copy of the toolchain whose `aether_quickjs.c` has the
 handle check in that ask: a freed handle is not handed out again soon, and

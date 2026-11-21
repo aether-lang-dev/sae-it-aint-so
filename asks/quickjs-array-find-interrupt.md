@@ -1,7 +1,11 @@
 # contrib.quickjs: Array.prototype.find frees an element twice when interrupted
 
 **From:** sae (agent qjs-heap, 2026-11-21). **Aether:** 0.931.0 (contrib.quickjs
-on quickjs-ng 0.18.0). **Status:** open. sae guards against it meanwhile (below).
+on quickjs-ng 0.18.0). **Status:** RESOLVED in Aether 0.934.0 (aether PR #3799): contrib.quickjs
+carries upstream's fix as contrib/quickjs/patches/0001-array-find-clear-value-after-release.patch,
+applied when the amalgamation is fetched; the release archive's amalgamation has it. sae's JavaScript
+guard in the prelude is removed and spec_interrupted passes on the native find
+(it fails on 0.931.0 with the guard removed). Kept as the record.
 
 ## What happens
 

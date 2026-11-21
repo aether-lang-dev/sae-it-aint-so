@@ -163,7 +163,14 @@
 # lowerer 97/97; cachyos check_gate.sh (tsc 6.0.3) and check_gate_probes.sh
 # green. On this commit alone check_gate_probes' three tripwires fail, as
 # they were written to.
-AE_PIN=0.931.0
+# 0.934.0 (2026-11-21): a floor move. contrib.quickjs carries quickjs-ng's fix
+# for Array.prototype.find (and findIndex, findLast, findLastIndex) freeing an
+# element twice when the deadline interrupt stops it (aether#3799, a patch
+# applied when the amalgamation is fetched, so the release archive has it).
+# sae's JavaScript replacements of the four in src/sae_prelude.js are removed,
+# and tests/spec_interrupted.ae (kept) fails without them on 0.931.0 and passes
+# on 0.934.0. See asks/quickjs-array-find-interrupt.md.
+AE_PIN=0.934.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
