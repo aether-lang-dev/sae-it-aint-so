@@ -31,6 +31,17 @@ main() {
             b.click("Count")
             spec.assert_true(b.wait_for_text("clicks: 1"), "a click still lands")
         }
+        spec.it("a find the limit stopped between two elements leaves its array whole") callback {
+            // quickjs-ng 0.18.0 freed the element before last twice here
+            // (asks/quickjs-array-find-interrupt.md): the check saw another
+            // object in its place, or the GC aborted the browser.
+            b.click("Find past the limit")
+            spec.assert_true(b.wait_for_text_secs("told: 3", 20), "told it was stopped")
+            b.click("Check the items")
+            spec.assert_true(b.wait_for_text_secs("items: 20011 intact", 20), "every element still the object it was")
+            b.click("Count")
+            spec.assert_true(b.wait_for_text("clicks: 2"), "and the page still works")
+        }
     }
 
     return spec.run_summary(fw)

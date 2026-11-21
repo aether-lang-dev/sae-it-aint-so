@@ -24,9 +24,14 @@ control_source_() -> string {
     return "aether-ui/backend/aether_ui_no_control.c"
 }
 
+// A debugging build (SAE_EXTRA_CFLAGS: AddressSanitizer, say) is a binary of
+// its own, sae-dbg or sae-driver-dbg, beside the plain ones: aeb keeps a
+// stamp per output, so neither is mistaken for the other.
 output_name_() -> string {
-    if with_driver_() == 1 { return "sae-driver" }
-    return "sae"
+    dbg = ""
+    if string.length(os.getenv("SAE_EXTRA_CFLAGS")) > 0 { dbg = "-dbg" }
+    if with_driver_() == 1 { return "sae-driver${dbg}" }
+    return "sae${dbg}"
 }
 
 // The Aether the engine and host compile against. SAE_AETHER_HOME names an
@@ -55,6 +60,12 @@ aeb(cap) {
             cflag("-D_GNU_SOURCE")
             cflag("-fno-math-errno")
             cflag("-fno-trapping-math")
+            // A debugging build's own flags (AGENTS.md, "A heap-checking
+            // lane": AddressSanitizer); empty in a normal build.
+            extra_c = os.getenv("SAE_EXTRA_CFLAGS")
+            if string.length(extra_c) > 0 { cflag(extra_c) }
+            extra_l = os.getenv("SAE_EXTRA_LDFLAGS")
+            if string.length(extra_l) > 0 { link_flag(extra_l) }
             if string.length(aether_root_()) > 0 { aether_home(aether_root_()) }
             // ui reads theme files (std.fs) and the environment (std.os);
             // the host reads and fetches pages (std.fs, std.http). Pages

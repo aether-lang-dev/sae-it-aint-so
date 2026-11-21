@@ -163,6 +163,31 @@ PATH=$PWD/../aether/build:$PATH AETHER_HOME=$PWD/../aether \
 `./build.sh`) need the QuickJS amalgamation in the dev tree too: run
 `./build.sh` first, or `sh ../aether/scripts/fetch-quickjs-amalgamation.sh`.
 
+### A heap-checking lane (off by default)
+
+A crash in the engine's GC (`gc_decref_child` asserting, a SIGSEGV in
+`find_own_property`) is a value freed once too often, found long after.
+AddressSanitizer finds the free and the first use after it. Linux, on a lab
+host (it opens windows):
+
+```sh
+SAE_EXTRA_CFLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address" SAE_EXTRA_LDFLAGS=-fsanitize=address \
+  AETHER_UI_WITH_DRIVER=1 ./build.sh          # target/build/bin/sae-driver-dbg, beside sae-driver
+SAE_TEST_BIN=$PWD/target/build/bin/sae-driver-dbg SAE_PAGE_TIME_MS=300 \
+  ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:detect_stack_use_after_return=0 tests/run_spec.sh <spec>
+```
+
+The report is in `target/<spec>.log`, with the stack that freed the value.
+A short page time limit (300 ms) stops page code in hundreds of places a
+normal run never does, which is where such frees hide: spraedsheet's
+spec_sheet under it found quickjs-ng's `Array.prototype.find` freeing an
+element twice when interrupted (asks/quickjs-array-find-interrupt.md) in
+25 minutes on ae-x64. The spec's assertions fail at that limit; its
+crashes are what count. For a handle released twice at the host boundary,
+build against a copy of the toolchain whose `aether_quickjs.c` has the
+handle check in that ask: a freed handle is not handed out again soon, and
+using or releasing a stale one aborts in the host function that did it.
+
 ### Windows
 
 `docs/windows.md`: the MSYS2 MINGW64 build (symlinks need

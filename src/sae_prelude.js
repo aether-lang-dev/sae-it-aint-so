@@ -14,6 +14,37 @@
 // counter, bumped on every set, so observers and each() still fire.
 "use strict";
 (function () {
+  // Array.prototype.find, findIndex, findLast and findLastIndex, written
+  // here in JavaScript over the engine's own. quickjs-ng 0.18.0's native
+  // ones free the element before last a second time when the page's time
+  // limit stops them between two elements, so an object the array still
+  // holds is freed and the page's heap is corrupt (spraedsheet's spec_sheet
+  // died in the GC some steps later). A loop here is stopped by the
+  // interpreter, which frees what it holds once. Upstream's fix is
+  // quickjs-ng e22ce4de; asks/quickjs-array-find-interrupt.md asks
+  // contrib.quickjs to carry it. Remove this when it does.
+  const finder = (name, last, index) => {
+    const f = {
+      [name](pred) {
+        if (this === null || this === undefined) throw new TypeError(`Array.prototype.${name} called on null or undefined`);
+        if (typeof pred !== "function") throw new TypeError(`Array.prototype.${name}: not a function`);
+        const o = Object(this), thisArg = arguments[1];
+        const n = Math.trunc(Number(o.length)) || 0;
+        const len = n <= 0 ? 0 : Math.min(n, Number.MAX_SAFE_INTEGER);
+        for (let k = last ? len - 1 : 0; last ? k >= 0 : k < len; k += last ? -1 : 1) {
+          const v = o[k];
+          if (pred.call(thisArg, v, k, o)) return index ? k : v;
+        }
+        return index ? -1 : undefined;
+      },
+    }[name];
+    Object.defineProperty(Array.prototype, name, { value: f, writable: true, enumerable: false, configurable: true });
+  };
+  finder("find", false, false);
+  finder("findIndex", false, true);
+  finder("findLast", true, false);
+  finder("findLastIndex", true, true);
+
   const ui_ = ui, vg_ = vg;
   const kindOf = (v) => (typeof v === "number" ? "f" : typeof v === "string" ? "s" : typeof v === "boolean" ? "b" : "v");
   let inBatch = 0, vgDirty = false;
