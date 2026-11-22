@@ -178,7 +178,11 @@
 # generated C is unchanged by it. contrib.quickjs's C ABI passes strings by length
 # (qjs_error is qjs_error_data and qjs_error_len, qjs_to_json returns a count);
 # sae calls the module's Aether functions, not qjs_* from C.
-AE_PIN=0.935.0
+# 0.936.0 (2026-11-22): a tracking move, no new primitive needed. Runtime ABI
+# revision 6, the TLS and tcp deadline additions and the per-task execution
+# contexts of cooperative builds touch nothing sae builds (it is a threaded build and
+# reaches no private TcpSocket layout).
+AE_PIN=0.936.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
