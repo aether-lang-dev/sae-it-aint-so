@@ -170,7 +170,15 @@
 # sae's JavaScript replacements of the four in src/sae_prelude.js are removed,
 # and tests/spec_interrupted.ae (kept) fails without them on 0.931.0 and passes
 # on 0.934.0. See asks/quickjs-array-find-interrupt.md.
-AE_PIN=0.934.0
+# 0.935.0 (2026-11-22): a tracking move, no new primitive needed. What it
+# changes that sae touches: a name the program binds now comes before a trailing
+# block's receiver export of the same name (aether #3802), so a top-level function
+# X no longer takes the place of a parameter X that a closure captures, and the
+# name audit in tests/check_gate.sh (part iv) that guarded that is removed; sae's
+# generated C is unchanged by it. contrib.quickjs's C ABI passes strings by length
+# (qjs_error is qjs_error_data and qjs_error_len, qjs_to_json returns a count);
+# sae calls the module's Aether functions, not qjs_* from C.
+AE_PIN=0.935.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
