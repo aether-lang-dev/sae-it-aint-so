@@ -182,7 +182,13 @@
 # revision 6, the TLS and tcp deadline additions and the per-task execution
 # contexts of cooperative builds touch nothing sae builds (it is a threaded build and
 # reaches no private TcpSocket layout).
-AE_PIN=0.936.0
+# 0.939.0 (2026-11-23): a floor move. std.http.client keeps no process-wide
+# connection pool any more (a request with no pool opens a connection of its own
+# and closes it), so services/net's Net owns a pool (client.pool_new, new in
+# 0.939.0), sets it on every request open_request builds and frees it with
+# net.free; a page that makes many calls to one origin keeps its connections.
+# tests/spec_net_pool.ae holds that: it fails on a Net that does not set the pool.
+AE_PIN=0.939.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and

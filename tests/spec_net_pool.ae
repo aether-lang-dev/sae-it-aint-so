@@ -1,0 +1,74 @@
+// spec_net_pool.ae — services/net's connection pool, with no window: the
+// requests one Net (one launch) opens reuse a connection with each other,
+// and no other Net's requests ever get that connection. A std.http server in
+// this process answers each GET /conn with the id of the connection it came
+// on (http.request_conn_id), so the test sees connections, not just answers.
+//
+//   ae run tests/spec_net_pool.ae          (from sae's root)
+//   SAE_TEST_NETPOOL_PORT=18393            the port it listens on
+import std.spec
+import std.string
+import std.http
+import std.http.client
+import std.os
+import services.net
+
+conn_(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "${http.request_conn_id(req)}")
+}
+
+// The connection id the server saw for one GET through `n`'s request.
+conn_of_(n: ptr, port: int) -> string {
+    req, why = net.open_request(n, "GET", "http://127.0.0.1:${port}/conn")
+    if req == null { return "refused: ${why}" }
+    client.set_timeout(req, 10s)
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if err != "" { return "error: ${err}" }
+    body = string.copy(client.response_body(resp))
+    client.response_free(resp)
+    return body
+}
+
+main() {
+    port = 18393
+    p = os.os_getenv("SAE_TEST_NETPOOL_PORT")
+    if p != null && string.length(p) > 0 {
+        pn, _ = string.to_int(p)
+        port = pn
+    }
+    server = http.server_create(port)
+    if server == 0 {
+        println("spec_net_pool: could not bind ${port}")
+        exit(1)
+    }
+    http.server_get(server, "/conn", conn_, 0)
+    http.server_start_background(server)
+
+    fw = spec.init()
+    spec.describe(fw, "services/net: one launch, one connection pool") {
+        spec.it("requests through one Net share a connection") callback {
+            a = net.new()
+            c1 = conn_of_(a, port)
+            c2 = conn_of_(a, port)
+            c3 = conn_of_(a, port)
+            spec.assert_str_eq(c2, c1, "the second request reused the first one's connection")
+            spec.assert_str_eq(c3, c1, "so did the third")
+            net.free(a)
+        }
+        spec.it("another Net never gets that connection") callback {
+            a = net.new()
+            b = net.new()
+            ca = conn_of_(a, port)
+            cb = conn_of_(b, port)
+            ca2 = conn_of_(a, port)
+            spec.assert_str_eq(ca2, ca, "a Net keeps its own connection")
+            spec.assert_eq(string.equals(ca, cb), 0, "the other Net got a connection of its own")
+            net.free(a)
+            net.free(b)
+        }
+    }
+    return spec.run_summary(fw)
+}

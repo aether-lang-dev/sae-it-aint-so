@@ -169,6 +169,7 @@ spec_contacts|SAE_TEST_APP=examples/contacts SAE_STORAGE_DIR=$T/spec-storage|spe
 spec_everyday|SAE_TEST_APP=examples/everyday|spec spec_everyday
 spec_playground|SAE_TEST_APP=examples/playground|spec spec_playground
 spec_http_grants||aerun spec_http_grants
+spec_net_pool||aerun spec_net_pool
 spec_page_grants||aerun spec_page_grants
 spec_origin_rules||aerun spec_origin_rules
 spec_sqlite_service||aerun spec_sqlite_service

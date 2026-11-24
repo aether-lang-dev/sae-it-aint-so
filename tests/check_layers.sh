@@ -58,7 +58,7 @@ expect_imports services/shell/module.ae \
 expect_imports services/print/module.ae \
     "import ui (print_pdf)|import std.fs (write_atomic, mkdir_p)|import std.string|import std.encoding"
 expect_imports services/net/module.ae \
-    "import std.http.client (request)|import std.string|import std.strarr"
+    "import std.http.client (request, set_pool, pool_new, pool_free)|import std.string|import std.strarr"
 expect_imports services/sqlite/module.ae \
     "import contrib.sqlite as engine|import std.json|import std.string|import std.strarr"
 

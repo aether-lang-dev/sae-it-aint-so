@@ -9,8 +9,10 @@
 // list. tests/check_layers.sh fails if any other module in sae names
 // client.request, so there is no route around the check.
 //
-// What it can reach is its imports: one client call (request: building a
-// request, not sending it), and std.string and std.strarr for the list.
+// What it can reach is its imports: the client calls that build a request
+// (request, and set_pool, which hands it this launch's connection pool; neither
+// sends anything), the pool's own make and free, and std.string and std.strarr
+// for the list.
 //
 // The list is URL prefixes, each a server (its origin) and a path:
 //
@@ -35,11 +37,11 @@
 // own origin, held by the kernel. In an app (enabled 1) an absent or empty
 // list means no network at all.
 
-import std.http.client (request)
+import std.http.client (request, set_pool, pool_new, pool_free)
 import std.string
 import std.strarr
 
-exports (new, configure, allow, granted, refusal, open_request, origin_of,
+exports (new, free, configure, allow, granted, refusal, open_request, origin_of,
          origin_text, cross_origin, mixed_content, allows_origin)
 
 // One launch's allowlist: the kernel holds one (new()) and passes it to every
@@ -47,6 +49,10 @@ exports (new, configure, allow, granted, refusal, open_request, origin_of,
 struct Net {
     enabled: int   // 0 in the browser: no allowlist applies
     entries: ptr   // strarr: "scheme://host:port\tpath", host maybe "*.rest"
+    pool: ptr      // this launch's HTTP connection pool: its requests (a page's
+                   // calls and page loads) reuse connections with each other and
+                   // with no other launch's; null if there is none (no pool then
+                   // means each request opens a connection of its own)
 }
 
 // For a web page: no allowlist.
@@ -54,7 +60,18 @@ new() -> ptr {
     n = heap.new(Net)
     n.enabled = 0
     n.entries = null
+    pool, _perr = pool_new()
+    n.pool = pool
     return n as ptr
+}
+
+// Free the allowlist and the connection pool it owns, closing the pool's
+// idle connections. Nothing may still be sending a request.
+free(h: ptr) {
+    if h == null { return }
+    n = h as *Net
+    if n.pool != null { pool_free(n.pool) }
+    heap.free(h)
 }
 
 // Set up for an app (enabled 1) or a web page (0). An app starts with
@@ -272,6 +289,8 @@ open_request(h: ptr, method: string, url: string) -> (ptr, string) {
     if why != "" { return null, why }
     req = request(method, url)
     if req == null { return null, "not a valid URL: ${url}" }
+    n = h as *Net
+    if n.pool != null { set_pool(req, n.pool) }
     return req, ""
 }
 
