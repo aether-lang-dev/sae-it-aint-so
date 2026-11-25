@@ -11,6 +11,7 @@ import std.string
 import std.http
 import std.http.client
 import std.os
+import std.tcp
 import services.net
 
 conn_(req: ptr, res: ptr, ud: ptr) {
@@ -46,6 +47,26 @@ main() {
     }
     http.server_get(server, "/conn", conn_, 0)
     http.server_start_background(server)
+    // server_start_background returns before the listener accepts: a request
+    // sent at once can fail with "connection failed", which made both specs
+    // flake (two failed requests compare equal as strings). Wait until a
+    // plain connect gets through, then run.
+    ready = 0
+    tries = 0
+    while ready == 0 && tries < 100 {
+        c, cerr = tcp.connect("127.0.0.1", port)
+        if cerr == "" {
+            _x = tcp.tcp_close(c)
+            ready = 1
+        } else {
+            sleep(50)
+            tries = tries + 1
+        }
+    }
+    if ready == 0 {
+        println("spec_net_pool: the server on ${port} never accepted")
+        exit(1)
+    }
 
     fw = spec.init()
     spec.describe(fw, "services/net: one launch, one connection pool") {

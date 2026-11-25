@@ -194,7 +194,14 @@
 # ("request timed out before the response arrived", ...); services/net and the
 # specs match no error text and rely on no POST retry. tcp.listen's backlog is
 # SOMAXCONN; a for loop sending from outside an actor batches its sends.
-AE_PIN=0.941.0
+# 0.944.0 (2026-11-25): a tracking move (0.942.0 to 0.944.0), no new primitive
+# needed, no source change. All performance: the runtime batches actor sends (a
+# batch from main waits for room in a full channel), std.math scalar functions
+# inline, slice-view release inline. Verified on cachyos (Linux x86_64, a 0.944.0
+# release install, SAE_AETHER_HOME=none): build.sh, lower/run-tests.sh (99/99) and
+# tests/run_all.sh (96 of 98 pass; rexxconsole needs a RexxAE sibling that was not
+# there, and spec_net_pool was flaky on 0.941.0 too: see its fix in the same commit).
+AE_PIN=0.944.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
