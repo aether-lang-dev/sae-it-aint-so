@@ -201,7 +201,14 @@
 # release install, SAE_AETHER_HOME=none): build.sh, lower/run-tests.sh (99/99) and
 # tests/run_all.sh (96 of 98 pass; rexxconsole needs a RexxAE sibling that was not
 # there, and spec_net_pool was flaky on 0.941.0 too: see its fix in the same commit).
-AE_PIN=0.944.0
+# 0.945.0 (2026-11-25): a tracking move, no new primitive needed, no source change.
+# A macOS cross-build fix and three merge/typechecker fixes (struct literal fields
+# vs module vars, glob import binds only exports, a local named like an imported
+# function is E0301); none fires in sae. Verified on cachyos (a 0.945.0 release
+# install, SAE_AETHER_HOME=none): build.sh, lower/run-tests.sh (99/99) and
+# tests/run_all.sh (97 of 98; spec_app_rexxconsole needs a RexxAE sibling that
+# was not there).
+AE_PIN=0.945.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
