@@ -278,6 +278,8 @@ struct Page {
     esc_logged_timers: int
     esc_logged_storage: int
     rasters: ptr     // wave1/raster: std.list of *PageRaster, freed with the page
+    gfx: ptr         // wave1/gfx: std.list of *GfxScene, freed with the page
+    gfx_ids: int     // the last gfx scene handle handed out
     ae: ptr          // wave1/aevg: its *AePage, made on first use, or null
     // What its lowering said (lower.Lowered): the privileges it seeks, as
     // ",local-filesystem,", those it can do without, and its imports
@@ -7349,6 +7351,369 @@ sae_ui_image(p: *Page, this_val: int, argv: int) -> int {
     return container_(p, argv, argc, h)
 }
 
+// ===== wave1/gfx: the page API: 3D scenes drawn by ae3d (gfx) =====
+//
+// docs/gpu-pages.md's `gfx`, its first slice, shaped by three.js's
+// AeRenderer (aether-lang-dev/three.js, branch sae-port): a page makes a
+// scene, and hands over ONE batch a frame, a buffer in ae3d.batch's layout
+// (version 1: the eye's view and lens, each draw's world matrix and
+// material, the meshes new or changed since). The page describes; the
+// drawing is ae3d's, and no shader text, no path and no GPU handle comes
+// from the page.
+//
+// Here the batch is checked whole and held to the page's budgets, and the
+// scene keeps what it holds (its meshes by the page's ids, the last frame's
+// draws), all freed with the page (gfx_page_free_, from page_free_). sae
+// does not link ae3d yet, so nothing is drawn: gfx.stats says what arrived.
+// Drawing it is ae3d.batch_submit on the same bytes (aether-lang-dev/ae3d#1102),
+// in a build of sae with ae3d (docs/gpu-pages.md, "Binary size").
+//
+// Budgets (provisional, like the rasters'): GFX_SCENES_MAX scenes a page,
+// GFX_DIM_MAX on either side, GFX_MESHES_MAX meshes and GFX_VERTICES_MAX
+// vertices a page over all its scenes, GFX_DRAWS_MAX draws and
+// GFX_BATCH_MAX bytes a batch. Over any is a TypeError saying which, and
+// the batch changes nothing.
+
+const GFX_SCENES_MAX = 4
+const GFX_DIM_MAX = 4096
+const GFX_MESHES_MAX = 256
+const GFX_VERTICES_MAX = 1048576
+const GFX_DRAWS_MAX = 4096
+const GFX_BATCH_MAX = 16777216
+const GFX_MAGIC = 826426689        // "AEB1"
+const GFX_VERSION = 1
+const GFX_HEADER_WORDS = 40
+const GFX_DRAW_WORDS = 20
+const GFX_MATERIALS = 1            // 1: three.js's MeshNormalMaterial
+const GFX_FLAGS = 1                // 1: both sides
+
+struct GfxScene {
+    handle: int
+    w: int
+    h: int
+    meshes: ptr      // std.list of *GfxMesh
+    frame: long      // the page's count, from its last batch
+    draws: int       // in its last batch
+    batches: int
+    bytes: int       // its last batch's
+}
+
+struct GfxMesh {
+    id: long
+    vertices: int
+    triangles: int
+}
+
+gfx_scene_of_(p: *Page, h: int) -> *GfxScene {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    n = list.size(p.gfx)
+    i = 0
+    while i < n {
+        sv, _ = list.get(p.gfx, i)
+        s = sv as *GfxScene
+        if s.handle == h { return s }
+        i = i + 1
+    }
+    return null
+}
+
+gfx_scene_drop_(s: *GfxScene) {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    i = list.size(s.meshes) - 1
+    while i >= 0 {
+        mv, _ = list.get(s.meshes, i)
+        heap.free(mv as *GfxMesh)
+        i = i - 1
+    }
+    list.free(s.meshes)
+    heap.free(s)
+}
+
+// A page's scenes go with it (from page_free_).
+gfx_page_free_(p: *Page) {
+    i = list.size(p.gfx) - 1
+    while i >= 0 {
+        sv, _ = list.get(p.gfx, i)
+        gfx_scene_drop_(sv as *GfxScene)
+        i = i - 1
+    }
+    list.free(p.gfx)
+}
+
+// The page's meshes and vertices over all its scenes but `but`.
+gfx_used_(p: *Page, but: *GfxScene) -> (int, int) {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    meshes = 0
+    vertices = 0
+    n = list.size(p.gfx)
+    i = 0
+    while i < n {
+        sv, _ = list.get(p.gfx, i)
+        s = sv as *GfxScene
+        if s != but {
+            k = 0
+            while k < list.size(s.meshes) {
+                mv, _ = list.get(s.meshes, k)
+                vertices = vertices + (mv as *GfxMesh).vertices
+                k = k + 1
+            }
+            meshes = meshes + list.size(s.meshes)
+        }
+        i = i + 1
+    }
+    return meshes, vertices
+}
+
+gfx_mesh_at_(s: *GfxScene, id: long) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    k = 0
+    while k < list.size(s.meshes) {
+        mv, _ = list.get(s.meshes, k)
+        if (mv as *GfxMesh).id == id { return k }
+        k = k + 1
+    }
+    return 0 - 1
+}
+
+gfx_w_(b: ptr, i: int) -> long {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return mem.get_u32_le(b, i * 4)
+}
+
+// The words a mesh section at word `at` takes.
+gfx_mesh_words_(b: ptr, at: int) -> int {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    return 3 + (gfx_w_(b, at + 1) as int) * 8 + (gfx_w_(b, at + 2) as int)
+}
+
+// "" when the batch (n bytes at b) is whole and within the page's budgets,
+// else why not. Nothing changes here: gfx_take_ applies a batch this
+// passed. ae3d.batch checks the same layout again before it draws.
+gfx_refusal_(p: *Page, s: *GfxScene, b: ptr, n: int) -> string {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    if n > GFX_BATCH_MAX { return "gfx.submit: a batch of ${n} bytes is over the ${GFX_BATCH_MAX} limit" }
+    if n < (GFX_HEADER_WORDS + 3) * 4 || n % 4 != 0 { return "gfx.submit: ${n} bytes is not a batch" }
+    words = n / 4
+    if gfx_w_(b, 0) != (GFX_MAGIC as long) { return "gfx.submit: not a batch (its first word)" }
+    if gfx_w_(b, 1) != (GFX_VERSION as long) { return "gfx.submit: batch version ${gfx_w_(b, 1)}, not ${GFX_VERSION}" }
+    if gfx_w_(b, 2) != (words as long) { return "gfx.submit: the batch says ${gfx_w_(b, 2)} words and is ${words}" }
+    used_meshes, used_vertices = gfx_used_(p, s)
+    live = list.size(s.meshes)
+    vertices = 0
+    k = 0
+    while k < live {
+        mv, _ = list.get(s.meshes, k)
+        vertices = vertices + (mv as *GfxMesh).vertices
+        k = k + 1
+    }
+    at = GFX_HEADER_WORDS
+    sent = gfx_w_(b, at) as int
+    at = at + 1
+    sent_at = at
+    k = 0
+    while k < sent {
+        if at + 3 > words { return "gfx.submit: mesh ${k} runs past the end" }
+        id = gfx_w_(b, at)
+        v = gfx_w_(b, at + 1)
+        ix = gfx_w_(b, at + 2)
+        if id == 0 { return "gfx.submit: mesh ${k} has id 0" }
+        if v < 3 || v > (GFX_VERTICES_MAX as long) { return "gfx.submit: mesh ${id} has ${v} vertices" }
+        if ix % 3 != 0 || ix > (GFX_VERTICES_MAX as long) * 6 || (ix == 0 && v % 3 != 0) { return "gfx.submit: mesh ${id}'s ${ix} indices are not whole triangles" }
+        size = 3 + v * 8 + ix
+        if (at as long) + size > (words as long) { return "gfx.submit: mesh ${id} runs past the end" }
+        base = at + 3 + (v as int) * 8
+        i = 0
+        while (i as long) < ix {
+            if gfx_w_(b, base + i) >= v { return "gfx.submit: mesh ${id}'s index ${i} is past its vertices" }
+            i = i + 1
+        }
+        j = sent_at
+        q = 0
+        while q < k {
+            if gfx_w_(b, j) == id { return "gfx.submit: mesh ${id} sent twice" }
+            j = j + gfx_mesh_words_(b, j)
+            q = q + 1
+        }
+        old = gfx_mesh_at_(s, id)
+        if old >= 0 {
+            ov, _ = list.get(s.meshes, old)
+            vertices = vertices - (ov as *GfxMesh).vertices
+        } else {
+            live = live + 1
+        }
+        vertices = vertices + (v as int)
+        at = at + (size as int)
+        k = k + 1
+    }
+    if at + 1 > words { return "gfx.submit: the batch ends before its frees" }
+    freed = gfx_w_(b, at) as int
+    at = at + 1
+    freed_at = at
+    if (at as long) + (freed as long) + 1 > (words as long) { return "gfx.submit: its frees run past the end" }
+    k = 0
+    while k < freed {
+        fk = gfx_mesh_at_(s, gfx_w_(b, at + k))
+        if fk < 0 { return "gfx.submit: it frees mesh ${gfx_w_(b, at + k)}, which the scene has not" }
+        fv, _ = list.get(s.meshes, fk)
+        vertices = vertices - (fv as *GfxMesh).vertices
+        live = live - 1
+        k = k + 1
+    }
+    at = at + freed
+    if used_meshes + live > GFX_MESHES_MAX { return "gfx.submit: this page's scenes would hold ${used_meshes + live} meshes, over the ${GFX_MESHES_MAX} limit" }
+    if used_vertices + vertices > GFX_VERTICES_MAX { return "gfx.submit: this page's scenes would hold ${used_vertices + vertices} vertices, over the ${GFX_VERTICES_MAX} limit" }
+    draws = gfx_w_(b, at)
+    at = at + 1
+    if draws > (GFX_DRAWS_MAX as long) { return "gfx.submit: ${draws} draws, over the ${GFX_DRAWS_MAX} limit a batch" }
+    if (at as long) + draws * (GFX_DRAW_WORDS as long) != (words as long) { return "gfx.submit: its draws do not end it" }
+    k = 0
+    while (k as long) < draws {
+        d = at + k * GFX_DRAW_WORDS
+        id = gfx_w_(b, d)
+        found = false
+        j = sent_at
+        q = 0
+        while q < sent && !found {
+            if gfx_w_(b, j) == id { found = true }
+            j = j + gfx_mesh_words_(b, j)
+            q = q + 1
+        }
+        if !found && gfx_mesh_at_(s, id) >= 0 {
+            found = true
+            q = 0
+            while q < freed {
+                if gfx_w_(b, freed_at + q) == id { found = false }
+                q = q + 1
+            }
+        }
+        if !found { return "gfx.submit: draw ${k} names mesh ${id}, which the scene has not" }
+        if gfx_w_(b, d + 1) < 1 || gfx_w_(b, d + 1) > (GFX_MATERIALS as long) { return "gfx.submit: draw ${k}'s material ${gfx_w_(b, d + 1)} is not one there is" }
+        if gfx_w_(b, d + 2) > (GFX_FLAGS as long) { return "gfx.submit: draw ${k}'s flags ${gfx_w_(b, d + 2)}" }
+        k = k + 1
+    }
+    return ""
+}
+
+// A batch gfx_refusal_ passed, taken: its meshes kept (a mesh sent again
+// replaced), its frees dropped, its frame and draws noted.
+gfx_take_(s: *GfxScene, b: ptr, n: int) {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    at = GFX_HEADER_WORDS
+    sent = gfx_w_(b, at) as int
+    at = at + 1
+    k = 0
+    while k < sent {
+        id = gfx_w_(b, at)
+        m = null as *GfxMesh
+        old = gfx_mesh_at_(s, id)
+        if old >= 0 {
+            mv, _ = list.get(s.meshes, old)
+            m = mv as *GfxMesh
+        } else {
+            m = heap.new(GfxMesh)
+            m.id = id
+            list.add(s.meshes, m as ptr)
+        }
+        m.vertices = gfx_w_(b, at + 1) as int
+        ix = gfx_w_(b, at + 2) as int
+        if ix == 0 { ix = m.vertices }
+        m.triangles = ix / 3
+        at = at + gfx_mesh_words_(b, at)
+        k = k + 1
+    }
+    freed = gfx_w_(b, at) as int
+    at = at + 1
+    k = 0
+    while k < freed {
+        fk = gfx_mesh_at_(s, gfx_w_(b, at + k))
+        fv, _ = list.get(s.meshes, fk)
+        heap.free(fv as *GfxMesh)
+        list.list_remove(s.meshes, fk)
+        k = k + 1
+    }
+    at = at + freed
+    s.draws = gfx_w_(b, at) as int
+    s.frame = gfx_w_(b, 3)
+    s.batches = s.batches + 1
+    s.bytes = n
+}
+
+// gfx.scene(w, h): a scene w x h pixels for the page's batches; its handle.
+sae_gfx_scene(p: *Page, this_val: int, argv: int) -> int {
+    seal except GFX_DIM_MAX, GFX_SCENES_MAX, GfxScene, arg_int_, heap, list, quickjs, sae_throw_type_error
+    ctx = p.ctx
+    argc = quickjs.arg_count(ctx, argv)
+    w = arg_int_(ctx, argv, argc, 0, 0)
+    h = arg_int_(ctx, argv, argc, 1, 0)
+    if w < 1 || h < 1 || w > GFX_DIM_MAX || h > GFX_DIM_MAX { return sae_throw_type_error(ctx, "gfx.scene(w, h): ${w}x${h} is not a size from 1 to ${GFX_DIM_MAX} each way") }
+    if list.size(p.gfx) >= GFX_SCENES_MAX { return sae_throw_type_error(ctx, "gfx.scene(w, h): a page has at most ${GFX_SCENES_MAX} scenes") }
+    p.gfx_ids = p.gfx_ids + 1
+    s = heap.new(GfxScene)
+    s.handle = p.gfx_ids
+    s.w = w
+    s.h = h
+    s.meshes = list.new()
+    list.add(p.gfx, s as ptr)
+    return quickjs.new_int(ctx, s.handle)
+}
+
+// gfx.submit(scene, batch): the frame's one batch, ae3d.batch's layout.
+sae_gfx_submit(p: *Page, this_val: int, argv: int) -> int {
+    seal except arg_bytes_, arg_int_, bytes_refusal_, gfx_refusal_, gfx_scene_of_, gfx_take_, quickjs, sae_throw_type_error
+    ctx = p.ctx
+    argc = quickjs.arg_count(ctx, argv)
+    s = gfx_scene_of_(p, arg_int_(ctx, argv, argc, 0, 0))
+    if s == null { return sae_throw_type_error(ctx, "gfx.submit(scene, batch): scene is not a gfx.scene of this page") }
+    b, n = arg_bytes_(ctx, argv, argc, 1)
+    if b == null { return sae_throw_type_error(ctx, bytes_refusal_("gfx.submit(scene, batch)", n)) }
+    why = gfx_refusal_(p, s, b, n)
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    gfx_take_(s, b, n)
+    return 0
+}
+
+// gfx.stats(scene): what the scene holds and what its last batch said.
+sae_gfx_stats(p: *Page, this_val: int, argv: int) -> int {
+    seal except GfxMesh, arg_int_, gfx_scene_of_, json_value_, list, quickjs, sae_throw_type_error
+    ctx = p.ctx
+    argc = quickjs.arg_count(ctx, argv)
+    s = gfx_scene_of_(p, arg_int_(ctx, argv, argc, 0, 0))
+    if s == null { return sae_throw_type_error(ctx, "gfx.stats(scene): scene is not a gfx.scene of this page") }
+    vertices = 0
+    triangles = 0
+    k = 0
+    while k < list.size(s.meshes) {
+        mv, _ = list.get(s.meshes, k)
+        m = mv as *GfxMesh
+        vertices = vertices + m.vertices
+        triangles = triangles + m.triangles
+        k = k + 1
+    }
+    return json_value_(ctx, "{\"width\": ${s.w}, \"height\": ${s.h}, \"frame\": ${s.frame}, \"batches\": ${s.batches}, \"bytes\": ${s.bytes}, \"meshes\": ${list.size(s.meshes)}, \"vertices\": ${vertices}, \"triangles\": ${triangles}, \"draws\": ${s.draws}, \"drawn\": false}")
+}
+
+// gfx.free(scene): the scene and everything it holds, now.
+sae_gfx_free(p: *Page, this_val: int, argv: int) -> int {
+    seal except arg_int_, gfx_scene_drop_, gfx_scene_of_, list, quickjs
+    ctx = p.ctx
+    argc = quickjs.arg_count(ctx, argv)
+    s = gfx_scene_of_(p, arg_int_(ctx, argv, argc, 0, 0))
+    if s == null { return 0 }
+    n = list.size(p.gfx)
+    i = 0
+    while i < n {
+        sv, _ = list.get(p.gfx, i)
+        if sv == s as ptr {
+            list.list_remove(p.gfx, i)
+            break
+        }
+        i = i + 1
+    }
+    gfx_scene_drop_(s)
+    return 0
+}
+// ===== end wave1/gfx =====
+
 // ===== wave1/aevg: the reactive surface and the AeVG surface for pages =====
 //
 // docs/roadmap.md sections 3.4 and 4. Two halves:
@@ -12230,6 +12595,32 @@ gate_spec_(g: *Gate) {
         signature("<T>(fn: () => T): T")
         doc("As ui.batch: the observers of every state fn sets run once, at the end.")
     }
+    // gfx: 3D scenes a page describes and ae3d draws (docs/gpu-pages.md): a
+    // batch a frame in ae3d.batch's layout, as three.js's AeRenderer writes it.
+    space(g, "gfx", WHEN_ALWAYS, "") {
+        reach("GFX_DIM_MAX, GFX_SCENES_MAX, GfxMesh, GfxScene, gfx_refusal_")
+        reach("gfx_scene_drop_, gfx_scene_of_, gfx_take_, heap")
+        api("scene", sae_gfx_scene, 2) {
+            arg("w", T_INT)
+            arg("h", T_INT)
+            gives(T_INT)
+            doc("A scene w x h pixels that the page's batches describe; its handle. At most 4 a page, 4096 px each way.")
+        }
+        api("submit", sae_gfx_submit, 2) {
+            arg("scene", T_INT)
+            arg("batch", T_BYTES)
+            doc("The frame's one batch, in ae3d.batch's layout (three.js's AeRenderer writes it): checked whole and held to the page's budgets, or a TypeError saying why, with nothing changed.")
+        }
+        api("stats", sae_gfx_stats, 1) {
+            arg("scene", T_INT)
+            gives_ts("{ width: number; height: number; frame: number; batches: number; bytes: number; meshes: number; vertices: number; triangles: number; draws: number; drawn: boolean }")
+            doc("What the scene holds and what its last batch said; drawn is false where this sae draws no scenes.")
+        }
+        api("free", sae_gfx_free, 1) {
+            arg("scene", T_INT)
+            doc("The scene and everything it holds, now; a page's scenes also go with the page.")
+        }
+    }
     space(g, "storage", WHEN_ALWAYS, "") {
         reach("STORAGE_MAX, esc_storage_over_, esc_storage_refuse_, storage_key_ok_")
         reach("storage_read_, storage_remove_, storage_write_")
@@ -12886,6 +13277,8 @@ page_new_(b: *Browser, url: string, absent: string, http_scopes: string, seeks: 
     p.esc_logged_timers = 0
     p.esc_logged_storage = 0
     p.rasters = list.new()
+    p.gfx = list.new()
+    p.gfx_ids = 0
     p.ae = null
     p.entry_depth = 0
     esc_coarse_decide_(b)
@@ -12924,6 +13317,7 @@ page_free_(p: *Page) {
     timers_free_(p)
     modules_free_(p)   // wave1/imports: its module registry
     raster_page_free_(p)   // wave1/raster: its rasters' buffers
+    gfx_page_free_(p)   // wave1/gfx: its scenes and what they hold
     vg_keys_free_(p)
     list.free(p.vg_nodes)
     list.free(p.stacks)

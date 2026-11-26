@@ -825,6 +825,27 @@ curl -s -X POST localhost:9333/widget/9/click
 The driver build is a separate binary because the control server must not
 ship in `sae`.
 
+### 3D scenes: `gfx` (first slice, not drawn yet)
+
+```ts
+const scene = gfx.scene(640, 480);             // at most 4 a page, 4096 px each way
+gfx.submit(scene, batch);                      // a Uint8Array: the frame's ONE batch
+gfx.stats(scene);                              // { frame, meshes, vertices, triangles, draws, bytes, drawn, ... }
+gfx.free(scene);                               // or leave it: a page's scenes go with the page
+```
+
+A page describes its 3D frame in one buffer a frame, in ae3d's
+`ae3d.batch` layout (version 1: the eye's view and lens, each draw's world
+matrix and material, the meshes new or changed since; aether-lang-dev/ae3d#1102);
+the drawing is ae3d's, and no shader text, path or GPU handle comes from
+the page (`docs/gpu-pages.md`). three.js's `AeRenderer`
+(aether-lang-dev/three.js, branch `sae-port`) writes it, so a three.js
+page runs as it is. The host checks the whole batch and holds it to the
+page's budgets (256 meshes and a million vertices over its scenes, 4096
+draws and 16 MB a batch), else a `TypeError` that says why, with nothing
+changed. This build does not link ae3d, so a batch is checked and counted
+(`drawn: false`) but not drawn. `site/gfx.ts`; `tests/spec_nav.ae`'s "gfx".
+
 ### App mode: a folder of pages as an installable app
 
 Tauri's model, on sae: the same engine without the browser chrome, the pages

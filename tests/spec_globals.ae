@@ -27,7 +27,7 @@ const LANGUAGE = "Object Function Error EvalError RangeError ReferenceError Synt
 // computed, bind, bind_enabled, bind_hidden, each and batch are page-scoped
 // (cells and bindings go with the page's widgets), so they are globals in
 // every page, browser or app.
-const SAE_EVERY_PAGE = "performance ui vg storage browserContext print setTimeout setInterval clearTimeout clearInterval requestAnimationFrame cancelAnimationFrame state computed bind bind_enabled bind_hidden each batch"
+const SAE_EVERY_PAGE = "performance ui vg gfx storage browserContext print setTimeout setInterval clearTimeout clearInterval requestAnimationFrame cancelAnimationFrame state computed bind bind_enabled bind_hidden each batch"
 
 // Object.prototype, the one prototype above globalThis.
 const OBJECT_PROTO = "toString toLocaleString valueOf hasOwnProperty isPrototypeOf propertyIsEnumerable __proto__ __defineGetter__ __defineSetter__ __lookupGetter__ __lookupSetter__ constructor"

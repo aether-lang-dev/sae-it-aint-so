@@ -7,7 +7,7 @@
 // whose members are objects of the page's own names, the members' members
 // too. A page that imports (a wrapped page) also has the module loader's
 // object, $sae, and prints it.
-const names = ["ui", "vg", "storage", "browserContext", "performance", "print",
+const names = ["ui", "vg", "gfx", "storage", "browserContext", "performance", "print",
   "setTimeout", "setInterval", "clearTimeout", "clearInterval",
   "requestAnimationFrame", "cancelAnimationFrame",
   "state", "computed", "bind", "bind_enabled", "bind_hidden", "each", "batch",

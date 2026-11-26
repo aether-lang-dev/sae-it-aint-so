@@ -531,6 +531,16 @@ declare function bind_hidden(widget: sae.Widget, state: unknown, invert?: boolea
 declare function each<T>(list: sae.State<T[]>, key: keyof T | ((item: T) => unknown), render: (item: T, i: number) => unknown): sae.Widget;
 /** As ui.batch: the observers of every state fn sets run once, at the end. */
 declare function batch<T>(fn: () => T): T;
+declare const gfx: {
+  /** A scene w x h pixels that the page's batches describe; its handle. At most 4 a page, 4096 px each way. */
+  scene(w: number, h: number): number;
+  /** The frame's one batch, in ae3d.batch's layout (three.js's AeRenderer writes it): checked whole and held to the page's budgets, or a TypeError saying why, with nothing changed. */
+  submit(scene: number, batch: Uint8Array | Uint8ClampedArray): void;
+  /** What the scene holds and what its last batch said; drawn is false where this sae draws no scenes. */
+  stats(scene: number): { width: number; height: number; frame: number; batches: number; bytes: number; meshes: number; vertices: number; triangles: number; draws: number; drawn: boolean };
+  /** The scene and everything it holds, now; a page's scenes also go with the page. */
+  free(scene: number): void;
+};
 declare const storage: {
   /** The value stored under key, or null; keys are letters, digits, '.', '_' and '-'. */
   get(key: string): string | null;

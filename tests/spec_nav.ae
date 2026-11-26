@@ -508,6 +508,25 @@ main() {
         }
     }
 
+    spec.describe(fw, "gfx") {
+        spec.it("a batch a frame is checked and counted natively; refusals change nothing; a page's scenes are budgeted") callback {
+            b.navigate(b.test_url("/gfx"))
+            b.assert_text("gfx frame 2: meshes 1, vertices 8, triangles 12, draws 2, batches 2, drawn false", "the second frame, the mesh kept")
+            spec.assert_true(b.wait_for_console("gfx frame 1: meshes 1, vertices 8, triangles 12, draws 1, batches 1, drawn false"), "the first frame sent the cube")
+            spec.assert_true(b.wait_for_console("gfx not a batch: gfx.submit: not a batch (its first word)"), "a wrong first word refused")
+            spec.assert_true(b.wait_for_console("gfx a draw of a mesh it has not: gfx.submit: draw 0 names mesh 9, which the scene has not"), "an unknown mesh refused")
+            spec.assert_true(b.wait_for_console("gfx a mesh of two million vertices: gfx.submit: mesh 1 has 2000000 vertices"), "over the vertex budget refused")
+            spec.assert_true(b.wait_for_console("gfx after the refusals frame 2: meshes 1, vertices 8, triangles 12, draws 2, batches 2, drawn false"), "the refusals changed nothing")
+            spec.assert_true(b.wait_for_console("gfx a fifth scene: gfx.scene(w, h): a page has at most 4 scenes"), "four scenes a page")
+            spec.assert_true(b.wait_for_console("gfx stats of a freed scene: gfx.stats(scene): scene is not a gfx.scene of this page"), "a freed scene is gone")
+            // The budget is the page's: loaded again, it has its four scenes back.
+            go_home("home from gfx, the first time")
+            b.navigate(b.test_url("/gfx"))
+            b.assert_text("gfx frame 2: meshes 1, vertices 8, triangles 12, draws 2, batches 2, drawn false", "loaded again: a new page, its own four scenes")
+            go_home("home from gfx")
+        }
+    }
+
     spec.describe(fw, "teardown") {
         spec.it("five round trips leave the widget census where it started") callback {
             baseline = b.widget_count()

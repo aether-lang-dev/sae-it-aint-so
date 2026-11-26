@@ -1,8 +1,20 @@
 # GPU pages: a design sketch
 
-Status: thinking, not built. Written 2026-10-03 to start the discussion of
-how a sae page reaches the GPU: Vulkan, Metal and Direct3D 12 through
-Aether's `contrib` modules, and 3D scenes through ae3d.
+Status: thinking, with a first slice built. Written 2026-10-03 to start the
+discussion of how a sae page reaches the GPU: Vulkan, Metal and Direct3D 12
+through Aether's `contrib` modules, and 3D scenes through ae3d.
+
+**Built so far (2026-11-26), shaped by three.js rather than by the builder
+below:** `gfx.scene`, `gfx.submit`, `gfx.stats`, `gfx.free` (README "3D
+scenes"). A page hands over one buffer a frame in ae3d's `ae3d.batch`
+layout (aether-lang-dev/ae3d#1102), which three.js's `AeRenderer` writes
+(aether-lang-dev/three.js, branch `sae-port`, `PORT.md`). sae checks it
+whole, holds it to the page's budgets and frees it with the page; it does
+not link ae3d yet, so nothing is drawn in sae itself. ae3d draws the same
+bytes offscreen (`batch_submit`, `batch_draw`, `batch_pixels`), checked
+against three.js's own maths on cachyos. Still open below: presenting the
+picture in the page (a `sae-gfx` build that links ae3d, or a GPU process),
+which renderer, and whether the builder API is wanted beside the batch.
 
 ## The constraint that shapes everything
 
