@@ -1,0 +1,292 @@
+// spec_gfx_service.ae — services/gfx and the GPU helper, sae-gfx, with no
+// window (docs/gpu-pages.md, "The GPU helper"): the helper started on a
+// socket as sae starts it, three.js's README cube drawn from its batches
+// (tests/gfx/cube_dump.txt, made by three.js's sae-port/cube/readme_cube.js:
+// each batch and, per face the eye sees, its centre's pixel and colour by
+// three.js's maths) and held to them, a malformed batch and a malformed
+// message refused with the helper still drawing, the helper killed and a new
+// one drawing; the helper's own lockdown refusing a file it read before it;
+// and, on Linux, why the process sandbox cannot hold it yet.
+//
+//   gfx/build.sh && ae run tests/spec_gfx_service.ae      (from sae's root)
+//
+// On Linux the helper needs a display for its GL context (DISPLAY; Xvfb is
+// fine). On macOS it draws through CGL with no window.
+import std.spec
+import std.string
+import std.fs
+import std.os
+import std.list
+import std.json
+import std.mem
+import std.bytes
+import std.time (now_ms)
+import services.gfx
+
+extern malloc(n: long) -> ptr
+extern free(p: ptr)
+
+const PROG = "target/build/bin/sae-gfx"
+const SIZE = 256
+
+// The next reply within 10 s: (reply, "") or (null, why).
+reply_(g: ptr) -> (ptr, string) {
+    start = now_ms()
+    while now_ms() - start < 10000 {
+        r, why = gfx.poll(g)
+        if why != "" { return null, why }
+        if r != null { return r, "" }
+        sleep(5)
+    }
+    return null, "no reply within 10 s"
+}
+
+// "ok N", "err N why" or "pixels N", for an assertion; a picture's pixels
+// copied to `px` when it is not null.
+said_(g: ptr, px: ptr) -> string {
+    r, why = reply_(g)
+    if r == null { return "(gone: ${why})" }
+    op = gfx.reply_op(r)
+    out = "${op} ${gfx.reply_id(r)}"
+    if op == "err" { out = "${out} ${gfx.reply_text(r)}" }
+    if op == "pixels" && px != null && gfx.reply_w(r) == SIZE && gfx.reply_h(r) == SIZE { gfx.reply_pixels(r, px) }
+    gfx.reply_free(r)
+    return out
+}
+
+hexv_(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48 }
+    return c - 87
+}
+
+// The hex line as bytes, in a buffer of its own: (ptr, n).
+unhex_(s: string) -> (ptr, int) {
+    n = string.length(s) / 2
+    b = malloc(n as long)
+    i = 0
+    while i < n {
+        _s = mem.set_uint8(b, i, hexv_(string.string_char_at(s, i * 2)) * 16 + hexv_(string.string_char_at(s, i * 2 + 1)))
+        i = i + 1
+    }
+    return b, n
+}
+
+// Each face three.js says the eye sees in `want` (a JSON line), held at its
+// centre to its colour within 2/255: the failures, as text ("" when none).
+faces_(want: ptr, px: ptr) -> string {
+    bad = ""
+    faces = json.json_object_get_raw(want, "faces")
+    k = 0
+    while k < json.json_array_size(faces) {
+        f = json.json_array_get_raw(faces, k)
+        x = json.json_get_int(json.json_object_get_raw(f, "x"))
+        y = json.json_get_int(json.json_object_get_raw(f, "y"))
+        rgb = json.json_object_get_raw(f, "rgb")
+        at = (y * SIZE + x) * 4
+        c = 0
+        while c < 3 {
+            got = mem.get_uint8(px, at + c)
+            exp = json.json_get_int(json.json_array_get_raw(rgb, c))
+            d = got - exp
+            if d < 0 { d = 0 - d }
+            if d > 2 { bad = "${bad} face ${json.json_get_int(json.json_object_get_raw(f, "face"))} channel ${c} is ${got}, three.js says ${exp};" }
+            c = c + 1
+        }
+        k = k + 1
+    }
+    return bad
+}
+
+covered_(px: ptr) -> int {
+    n = 0
+    i = 0
+    while i < SIZE * SIZE {
+        if mem.get_uint8(px, i * 4) != 0 || mem.get_uint8(px, i * 4 + 1) != 0 || mem.get_uint8(px, i * 4 + 2) != 0 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// The helper's environment: the display and the GL driver's variables sae has.
+env_list_() -> ptr {
+    env = list.new()
+    names = string.string_split(gfx.ENV_NAMES, " ")
+    k = 0
+    while k < string.string_array_size(names) {
+        nm = string.string_array_get(names, k)
+        v = os.getenv(nm)
+        if v != null && v != "" { list.add(env, "${nm}=${v}") }
+        k = k + 1
+    }
+    string.string_array_free(names)
+    return env
+}
+
+linux_() -> int {
+    if os.platform() == "linux" { return 1 }
+    return 0
+}
+
+// The helper as sae starts it (--uncontained-gfx): no process sandbox, its
+// own calls locked down.
+start_(probe: string) -> (ptr, string) {
+    env = env_list_()
+    full, _rk, _re = fs.realpath(PROG)
+    g, err = gfx.start(full, null, env, probe)
+    return g, err
+}
+
+// Wait for its hello: what draws, or "" when it went first.
+hello_(g: ptr) -> string {
+    start = now_ms()
+    while now_ms() - start < 10000 && gfx.hello(g) == "" && gfx.alive(g) == 1 {
+        _r, _w = gfx.poll(g)
+        sleep(5)
+    }
+    return gfx.hello(g)
+}
+
+main() {
+    fw = spec.init()
+    if fs.exists(PROG) == 0 {
+        println("spec_gfx_service: build ${PROG} first (gfx/build.sh)")
+        exit(2)
+    }
+    text, rerr = fs.read("tests/gfx/cube_dump.txt")
+    if rerr != "" {
+        println("spec_gfx_service: tests/gfx/cube_dump.txt: ${rerr}")
+        exit(2)
+    }
+    lines = string.string_split(text, "\n")
+    px1 = malloc((SIZE * SIZE * 4) as long)
+    px2 = malloc((SIZE * SIZE * 4) as long)
+
+    spec.describe(fw, "the GPU helper draws three.js's batches") {
+        spec.it("starts, opens a scene, and draws the README cube as three.js says it looks") callback {
+            g, err = start_("")
+            spec.assert_str_eq(err, "", "started")
+            what = hello_(g)
+            println("  the helper draws with ${what}")
+            spec.assert_true(what != "", "said hello")
+            spec.assert_true(gfx.send_frame(g, gfx.open(1, SIZE, SIZE), SIZE * SIZE * 4) == "", "open sent")
+            spec.assert_str_eq(said_(g, null), "ok 1", "the scene is open")
+            want1, _e1 = json.parse(string.string_array_get(lines, 0))
+            b1, n1 = unhex_(string.string_array_get(lines, 1))
+            _s1 = gfx.send_frame(g, gfx.submit_frame(1, 1, b1, n1), SIZE * SIZE * 4)
+            spec.assert_str_eq(said_(g, px1), "pixels 1", "frame 1 drawn")
+            spec.assert_str_eq(faces_(want1, px1), "", "frame 1: each face the colour three.js says")
+            c1 = covered_(px1)
+            spec.assert_true(c1 > 1000 && c1 < SIZE * SIZE / 4, "frame 1: the cube covers ${c1} pixels")
+            spec.assert_true(mem.get_uint8(px1, 0) == 0 && mem.get_uint8(px1, 3) == 255, "the corner is the clear colour")
+            want2, _e2 = json.parse(string.string_array_get(lines, 2))
+            b2, n2 = unhex_(string.string_array_get(lines, 3))
+            _s2 = gfx.send_frame(g, gfx.submit_frame(1, 1, b2, n2), SIZE * SIZE * 4)
+            spec.assert_str_eq(said_(g, px2), "pixels 1", "frame 2 (the mesh kept) drawn")
+            spec.assert_str_eq(faces_(want2, px2), "", "frame 2: each face the colour three.js says")
+            differ = 0
+            i = 0
+            while i < SIZE * SIZE {
+                if mem.get_uint8(px1, i * 4) != mem.get_uint8(px2, i * 4) { differ = differ + 1 }
+                i = i + 1
+            }
+            spec.assert_true(differ > 200, "the frames differ in ${differ} pixels")
+
+            // Malformed: refused, nothing changed, and it goes on drawing.
+            bad, nb = unhex_(string.string_array_get(lines, 3))
+            _m = mem.set_u32_le(bad, 0, 7)
+            _s3 = gfx.send_frame(g, gfx.submit_frame(1, 1, bad, nb), 0)
+            r3 = said_(g, null)
+            spec.assert_true(string.string_starts_with(r3, "err 1 submit: ") == 1, "a batch that is not one refused: ${r3}")
+            _m2 = mem.set_u32_le(bad, 0, 826426689)
+            _m3 = mem.set_u32_le(bad, 41 * 4 + 4, 99)
+            _s4 = gfx.send_frame(g, gfx.submit_frame(1, 1, bad, nb), 0)
+            r4 = said_(g, null)
+            spec.assert_true(string.string_starts_with(r4, "err 1 submit: ") == 1, "a draw of a mesh it has not refused: ${r4}")
+            _s5 = gfx.send_frame(g, "zap 1 2 3", 0)
+            r5 = said_(g, null)
+            spec.assert_true(string.string_starts_with(r5, "err 0 not a message") == 1, "a message that is not one refused: ${r5}")
+            _s6 = gfx.send_frame(g, gfx.open(2, 0, 9999), 0)
+            r6 = said_(g, null)
+            spec.assert_true(string.string_starts_with(r6, "err 0 open:") == 1, "an open of no size refused: ${r6}")
+            _s7 = gfx.send_frame(g, gfx.draw(1), SIZE * SIZE * 4)
+            spec.assert_str_eq(said_(g, px1), "pixels 1", "still drawing after the refusals")
+            spec.assert_str_eq(faces_(want2, px1), "", "the scene as frame 2 left it")
+            spec.assert_true(gfx.alive(g) == 1, "the helper is alive")
+
+            // Killed mid-run: gone, with why; a new one draws.
+            gfx.kill(g, "gfx: killed by the spec")
+            _r, why = gfx.poll(g)
+            spec.assert_true(why != "" && gfx.alive(g) == 0, "killed: gone (${why})")
+            h2, err2 = start_("")
+            spec.assert_str_eq(err2, "", "a new helper started")
+            spec.assert_true(hello_(h2) != "", "it said hello")
+            _o = gfx.send_frame(h2, gfx.open(7, SIZE, SIZE), SIZE * SIZE * 4)
+            spec.assert_str_eq(said_(h2, null), "ok 7", "a new scene")
+            _s8 = gfx.send_frame(h2, gfx.submit_frame(7, 1, b1, n1), SIZE * SIZE * 4)
+            spec.assert_str_eq(said_(h2, px2), "pixels 7", "the cube drawn by the new helper")
+            spec.assert_str_eq(faces_(want1, px2), "", "as three.js says")
+            gfx.stop(h2)
+            spec.assert_true(gfx.alive(h2) == 0, "stopped")
+            free(b1)
+            free(b2)
+            free(bad)
+            json.json_free(want1)
+            json.json_free(want2)
+        }
+    }
+
+    spec.describe(fw, "the helper's own lockdown") {
+        spec.it("reads a file sae did not hand it before its lockdown, and not in it") callback {
+            home = os.getenv("HOME")
+            secret = "${home}/.sae-gfx-spec-secret"
+            _w = fs.write(secret, "not the helper's")
+            g, err = start_(secret)
+            spec.assert_str_eq(err, "", "started")
+            spec.assert_true(hello_(g) != "", "said hello")
+            start = now_ms()
+            while gfx.probe(g) == "" && now_ms() - start < 5000 && gfx.alive(g) == 1 {
+                _r, _w2 = gfx.poll(g)
+                sleep(5)
+            }
+            spec.assert_str_eq(gfx.probe(g), "read refused", "${secret}: read before (the probe works), refused in the lockdown")
+            gfx.stop(g)
+            _d = fs.delete(secret)
+        }
+    }
+
+    if linux_() == 1 {
+        spec.describe(fw, "the process sandbox and a GL driver (Linux)") {
+            // What keeps the helper out of sandbox.spawn_socket: its sandbox
+            // refuses executable memory made at run time (the preload's
+            // mmap_exec_anonymous and mprotect_exec, with no grant to lift
+            // them), which the GL driver's dispatch and llvmpipe's JIT need.
+            // When Aether has such a grant this fails, and the kernel can
+            // start the helper contained (docs/gpu-pages.md, "Containment").
+            spec.it("a helper held to the GPU's grants cannot draw") callback {
+                // X's abstract socket is outside a Landlock-scoped child: the socket's path.
+                env = list.new()
+                d = os.getenv("DISPLAY")
+                if d != null && string.string_starts_with(d, ":") == 1 {
+                    list.add(env, "DISPLAY=/tmp/.X11-unix/X${string.string_substring(d, 1, string.length(d))}")
+                }
+                xa = os.getenv("XAUTHORITY")
+                if xa != null && xa != "" { list.add(env, "XAUTHORITY=${xa}") }
+                full, _rk, _re = fs.realpath(PROG)
+                g, err = gfx.start(full, gfx.grants_linux(full, env), env, "")
+                spec.assert_str_eq(err, "", "started contained")
+                what = hello_(g)
+                start = now_ms()
+                while gfx.alive(g) == 1 && now_ms() - start < 10000 {
+                    _r, _w = gfx.poll(g)
+                    sleep(5)
+                }
+                println("  contained: hello '${what}', then ${gfx.why(g)}")
+                spec.assert_true((what == "" || what == "none") && gfx.alive(g) == 0, "it did not draw")
+            }
+        }
+    }
+    free(px1)
+    free(px2)
+    string.string_array_free(lines)
+    return spec.run_summary(fw)
+}

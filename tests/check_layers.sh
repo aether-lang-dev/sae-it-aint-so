@@ -41,6 +41,8 @@ expect_imports services/bus/module.ae \
     "import std.tcp|import std.fs|import std.list|import std.string|import std.strarr|import std.json|import std.time (now_ms)|import services.agent_auth|import services.secure_channel"
 expect_imports services/backend/module.ae \
     "import std.os|import std.io (fd_close)|import std.ipc|import std.list|import std.string|import std.json|import std.sandbox|import services.frames"
+expect_imports services/gfx/module.ae \
+    "import std.list|import std.string|import std.mem|import std.bytes (string_from_ptr)|import services.backend"
 expect_imports services/channel/module.ae \
     "import std.ipc|import std.io (fd_close)|import std.list|import std.string|import std.json|import services.frames"
 expect_imports services/frames/module.ae \

@@ -182,6 +182,7 @@ spec_app_backend_stray|SAE_TEST_APP=tests/apps/backend_stray|backend tests/apps/
 spec_app_backend_deaf|SAE_TEST_APP=tests/apps/backend_deaf|backend tests/apps/backend_deaf spec_app_backend_deaf
 spec_app_backend_wslc|SAE_TEST_APP=tests/apps/backend_wslc|wslc spec_app_backend_wslc
 spec_backend_socket_service||backendrun tests/apps/backend_socket spec_backend_socket_service
+spec_gfx_service||gfx spec_gfx_service
 spec_app_backend_socket|AETHER_UI_HEADLESS=1 SAE_BACKEND_TEST_ENV=from-the-spec SAE_TEST_APP=tests/apps/backend_socket|backend tests/apps/backend_socket spec_app_backend_socket
 spec_app_docstats|AETHER_UI_HEADLESS=1 $OFF_LINUX_UNCONTAINED SAE_TEST_APP=apps/docstats|backend apps/docstats spec_app_docstats
 spec_app_rexxconsole|AETHER_UI_HEADLESS=1 $OFF_LINUX_UNCONTAINED SAE_TEST_APP=apps/rexxconsole|backend apps/rexxconsole spec_app_rexxconsole
@@ -234,6 +235,8 @@ for line in $TABLE; do
                   MINGW*|MSYS*|CYGWIN*) set -- sh -c 'sh tests/apps/backend_wslc/build-image.sh && tests/run_spec.sh "$1"' wslc "$1" ;;
                   *) set -- tests/run_spec.sh "$1" ;;
               esac ;;
+        # the GPU helper built first (gfx/build.sh: ../ae3d, or AE3D_DIR), then a spec with no window
+        gfx) set -- sh -c 'gfx/build.sh && ae run "tests/$1.ae"' gfx "$1" ;;
         aerun) set -- ae run "tests/$1.ae" ;;
         check) set -- sh "tests/$1.sh" ;;
         lower) set -- lower/run-tests.sh ;;

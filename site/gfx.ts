@@ -1,7 +1,9 @@
 // gfx: a page's 3D scene, described in one batch a frame
 // (docs/gpu-pages.md; ae3d.batch's layout, which three.js's AeRenderer
-// writes). This sae checks and counts the batch natively but does not draw
-// it yet; gfx.stats says what arrived. tests/spec_nav.ae reads the lines.
+// writes). sae checks and counts the batch natively; the GPU helper draws it
+// (sae-gfx, with --uncontained-gfx), a picture a tick or more later, so the
+// stats read here, straight after each submit, say drawn false either way.
+// tests/spec_nav.ae reads the lines.
 const { text, btn } = ui;
 
 text("gfx");

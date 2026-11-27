@@ -4,17 +4,148 @@ Status: thinking, with a first slice built. Written 2026-10-03 to start the
 discussion of how a sae page reaches the GPU: Vulkan, Metal and Direct3D 12
 through Aether's `contrib` modules, and 3D scenes through ae3d.
 
-**Built so far (2026-11-26), shaped by three.js rather than by the builder
-below:** `gfx.scene`, `gfx.submit`, `gfx.stats`, `gfx.free` (README "3D
-scenes"). A page hands over one buffer a frame in ae3d's `ae3d.batch`
-layout (aether-lang-dev/ae3d#1102), which three.js's `AeRenderer` writes
-(aether-lang-dev/three.js, branch `sae-port`, `PORT.md`). sae checks it
-whole, holds it to the page's budgets and frees it with the page; it does
-not link ae3d yet, so nothing is drawn in sae itself. ae3d draws the same
-bytes offscreen (`batch_submit`, `batch_draw`, `batch_pixels`), checked
-against three.js's own maths on cachyos. Still open below: presenting the
-picture in the page (a `sae-gfx` build that links ae3d, or a GPU process),
-which renderer, and whether the builder API is wanted beside the batch.
+**Built so far (2026-11-27), shaped by three.js rather than by the builder
+below:** `gfx.scene`, `gfx.submit`, `gfx.view`, `gfx.stats`, `gfx.free`
+(README "3D scenes"). A page hands over one buffer a frame in ae3d's
+`ae3d.batch` layout (aether-lang-dev/ae3d#1102), which three.js's
+`AeRenderer` writes (aether-lang-dev/three.js, branch `sae-port`,
+`PORT.md`). sae checks it whole, holds it to the page's budgets and frees it
+with the page. sae does not link ae3d: **sae-gfx**, a GPU helper process,
+draws it (below), and `gfx.view` shows the picture in the page. three.js's
+README cube runs on it, its faces the colours three.js's own maths says
+(`sae-port/cube/spec_cube.ae`). Still open: containment of the helper (a
+process sandbox that can hold a GL driver), Vulkan or Metal, and whether the
+builder API is wanted beside the batch.
+
+## The GPU helper (sae-gfx)
+
+Paul's decision (2026-11-26): ae3d runs in a process of its own, not linked
+into sae. sae's binary stays small, GLFW never meets GTK4 or AppKit in one
+process, and a GPU or driver crash ends the pages' 3D, not the browser.
+
+| Piece | Where | What |
+|---|---|---|
+| The helper | `gfx/main.ae`, built by `gfx/build.sh` into `target/build/bin/sae-gfx` | The one part of sae that imports ae3d: one OpenGL context offscreen (CGL on macOS, a hidden GLFW window's elsewhere), an `ae3d.batch` and its canvas per scene, each picture read back as RGBA |
+| Its process and protocol | `services/gfx` | Started through `services/backend` (still the one place sae starts a program) on a socket pair, `std.ipc` frames both ways; every message it sends held to the protocol |
+| The pages' scenes | `src/sae_host.ae`, wave1/gfx | Which scene the helper draws, what is queued for it, its pictures into each `gfx.view`, timeouts, teardown |
+
+`gfx/build.sh` points `gfx/ae3d` (a symlink, not committed) at an ae3d
+checkout: `../ae3d`, or `AE3D_DIR` (the #1102 worktree until that merges).
+sae finds the helper beside itself, or at `SAE_GFX_PROGRAM`.
+
+### The protocol (version 1)
+
+One `std.ipc` frame a message: a header line of words, `\n`, then the body.
+
+| From | Message | Answer |
+|---|---|---|
+| helper, first | `hello sae-gfx 1 <what draws>` (or `hello sae-gfx 1 none`, `err 0 <why>`, and it exits) | |
+| sae | `open <id> <w> <h>` | `ok <id>` or `err <id> <why>` |
+| sae | `submit <id> <draw 0\|1>\n<an ae3d.batch>` | with draw 1, a picture; `err <id> <why>` if refused |
+| sae | `draw <id>` | a picture of the scene as it stands |
+| sae | `free <id>`, `bye` | none |
+| helper | `pixels <id> <frame> <w> <h> <ms>\n<w*h*4 bytes, RGBA rows, top first>` | |
+
+Both sides check everything. The helper answers a header, size or id out of
+range, or a batch `ae3d.batch` refuses, with `err` and nothing changed, and
+goes on; a frame over 16 MB or a failed channel ends it. sae checks each batch
+before it sends it (the budgets below), and holds the helper to the
+protocol: a first message that is not its hello, a message it does not know,
+or a picture of the wrong size stops the helper, and its scenes are lost.
+
+**One picture in flight a scene.** A batch that comes while a picture is
+asked for is sent with draw 0 (its meshes are kept) and, once the picture
+comes, `draw` asks for the latest. A page faster than the GPU drops
+pictures; it never falls behind.
+
+### The swap to a shared buffer
+
+Pixels go in frames now. When std.ipc has its shared-memory buffer (a
+separate Aether batch, not released), the change is two messages and the
+copy:
+
+- `open <id> <w> <h>` carries a descriptor, sent with `ipc.send_fd` on the
+  frame (services/frames' `put_fd`; descriptors only go down, sae to helper),
+  of a buffer sae made of `2 * w * h * 4` bytes, two slots.
+- `pixels ...\n<bytes>` becomes `ready <id> <frame> <slot> <ms>` with no
+  body: the helper wrote the picture into that slot, and does not write it
+  again until sae's next `submit` or `draw` (which says the slot is free,
+  as it does now by asking).
+- sae's `gfx_answer_` points the view's image at the slot (`vg.image_pixels`,
+  which borrows) instead of copying.
+
+Nothing else moves: the flow control, timeouts and teardown are the same,
+and so is `gfx.view`.
+
+### Not blocking the page
+
+Nothing waits inside a page's entry. `gfx.scene`, `gfx.submit` and
+`gfx.free` check and queue a frame on the browser's list; `gfx_tick_`, a
+kernel tick that runs only once no entry does (`b.entry_depth`), starts the
+helper when a scene needs it, sends what is queued (std.ipc's frame writer,
+never a write that waits, the 5 s bound), reads its answers a tick at a
+time, and copies each picture into its view and repaints it.
+
+### When it dies or hangs
+
+A picture not back within 3 s is a hung helper, killed at once. A helper
+that dies, hangs or breaks the protocol loses every scene it drew: the
+browser says so once, `gfx.stats(scene).error` says why, and `gfx.submit`
+on a lost scene throws it. The browser goes on. The next `gfx.scene` starts
+a new helper. With no page holding a scene for 2 s the helper is told `bye`
+and stopped; a page's scenes go with the page.
+
+### Containment
+
+| | process sandbox | the helper's own lockdown | runs |
+|---|---|---|---|
+| Linux | no: Aether's refuses the executable memory a GL driver needs | yes | with `--uncontained-gfx` |
+| macOS | no: Aether holds no child there | yes | with `--uncontained-gfx` |
+| FreeBSD | no: likewise | yes | with `--uncontained-gfx` (not built or run there yet) |
+| Windows | no socket pair in std.ipc | | no |
+
+The plan was `sandbox.spawn_socket` on Linux, held to the GPU's device nodes
+(`/dev/dri/`), X's socket folder and cookie, the system's libraries read only
+and a few driver variables (`services/gfx`'s `grants_linux`). Run, it does
+not draw: Aether's sandbox preload refuses an anonymous executable mapping
+and adding execute to a mapping (`AETHER_DENIED: native
+mmap_exec_anonymous`, `native mprotect_exec`), with no grant that lifts it,
+and libglvnd's dispatch stubs and llvmpipe's JIT both need one. The helper
+dies on its first GL call (`spec_gfx_service`'s Linux case holds that, so it
+says when it changes). Two smaller things showed on the way: X's abstract
+socket is outside a Landlock-scoped child (the socket's path in `DISPLAY`
+works), and the X cookie (`XAUTHORITY`) must be granted.
+
+So the helper runs only when the person starts sae with
+`--uncontained-gfx`, said at start and at each launch of it; without it a
+scene is checked and counted, not drawn, and `gfx.stats().error` says why.
+On every platform the helper locks its own calls down once its GL context is
+made (`sandbox.enforce` with no grants: no file, program, variable or
+connection from its Aether code), which holds its own code, not the
+driver's C. Its environment is only the display and driver variables sae
+passes. The next step is Aether's: a grant for executable memory (a JIT
+grant), then the kernel starts the helper with `grants_linux`.
+
+### Tests
+
+- `tests/spec_gfx_service.ae` (no window; Linux needs a display, Xvfb is
+  fine): three.js's README cube from its own batches
+  (`tests/gfx/cube_dump.txt`, made by three.js's `readme_cube.js`) held to
+  three.js's maths at each face to 2/255, the frames differing; a malformed
+  batch, a draw of a mesh it has not, a message that is not one and an open
+  of no size each refused with the helper still drawing; the helper killed
+  and a new one drawing; its lockdown refusing a file it read before it; on
+  Linux, the process sandbox case above.
+- `sae-port/cube/spec_cube.ae` in three.js (`SAE_TEST_FLAGS=--uncontained-gfx
+  tests/run_spec.sh <spec> <page>`): the page turning the cube, every
+  frame drawn, two poses held to three.js's maths at the view's pixels, the
+  pictures differing, the helper killed mid-run (the page told, the page
+  going on), and a new scene drawn by a new helper.
+
+Verified 2026-11-27: on cachyos (Mesa 26.3.1 llvmpipe under Xvfb, not the
+Intel GPU: a hidden GLFW window needs an X display, and only Xvfb's was
+ours to use) both specs; on macOS (OpenGL 4.1 over Metal, CGL, no window)
+`spec_gfx_service`.
 
 ## The constraint that shapes everything
 
@@ -144,8 +275,8 @@ after an `on_update` that moves the cube, the centre is grey.
 - **Engine per page or shared.** One engine per `scene()` is simplest and
   makes teardown obvious; a shared device with per-page engines saves start
   time. Start with one per scene and measure.
-- **Binary size.** ae3d is large. `gfx` should be a build option of sae
-  (`sae` and `sae-gfx`), not something every build carries.
+- **Binary size.** ae3d is large: answered by the helper, a program of its
+  own (`sae-gfx`), which sae never links.
 
 ## First slice
 

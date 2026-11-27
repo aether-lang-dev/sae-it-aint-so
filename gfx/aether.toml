@@ -1,0 +1,21 @@
+# sae-gfx, the GPU helper (gfx/main.ae; docs/gpu-pages.md, "The GPU helper").
+# It is the one part of sae that imports ae3d, and it is a program of its
+# own: sae itself never links ae3d. gfx/build.sh points gfx/ae3d (a symlink,
+# not committed) at an ae3d checkout, the sibling ../ae3d by default or
+# AE3D_DIR, and builds target/build/bin/sae-gfx from here.
+
+[package]
+name = "sae-gfx"
+description = "sae's GPU helper: pages' 3D scenes drawn by ae3d in a process of its own"
+
+[dependencies]
+"github.com/aether-lang-dev/ae3d" = "0.1.0"
+"github.com/aether-lang-dev/aephysics" = "0.1.0"
+
+[patch]
+"github.com/aether-lang-dev/ae3d" = "ae3d"
+"github.com/aether-lang-dev/aephysics" = "ae3d/deps/aephysics"
+
+[build]
+# As ae3d builds itself (its aether.toml): every multiply and add rounded on its own.
+cflags = "-ffp-contract=off"

@@ -51,7 +51,7 @@ import std.json
 import std.sandbox
 import services.frames
 
-exports (start, start_wslc, start_socket, socket, alive, why, call, poll, kill, stop, excerpt, MAX_FRAME)
+exports (start, start_wslc, start_socket, start_socket_env, socket, alive, why, call, send_frame, set_max_frame, poll, kill, stop, excerpt, MAX_FRAME)
 
 // The largest frame either side may send. A header announcing more is an
 // error, and the channel is closed.
@@ -73,6 +73,7 @@ struct Backend {
     frames: int      // frames read so far
     hint: string     // said after an exit status when it exits before its first frame
     sock: int        // 1: the channel is a socket, rd the same descriptor the writer writes
+    max: int         // the largest frame it may send (MAX_FRAME unless set_max_frame said)
 }
 
 // Start `program` (a path the kernel has already resolved inside the app)
@@ -152,6 +153,7 @@ new_(wr: int, rd: int, pid: int, hint: string, sock: int) -> ptr {
     b.frames = 0
     b.hint = hint
     b.sock = sock
+    b.max = MAX_FRAME
     return b as ptr
 }
 
@@ -162,6 +164,14 @@ new_(wr: int, rd: int, pid: int, hint: string, sock: int) -> ptr {
 // (backend, "") or (null, why); where the child cannot be contained, why,
 // and nothing was started.
 start_socket(program: string, argv: ptr, grants: ptr) -> (ptr, string) {
+    return start_socket_env(program, argv, grants, null)
+}
+
+// start_socket with the child's whole environment given: `env` a std.list
+// of "NAME=value" strings (null: this process's), as sae's GPU helper
+// (services/gfx) is started with only the display and driver variables it
+// needs.
+start_socket_env(program: string, argv: ptr, grants: ptr, env: ptr) -> (ptr, string) {
     if os.platform() == "windows" {
         return null, "backend: a socket backend does not run on Windows (std.ipc has no socket channel or descriptor passing there); app.json capabilities.backend.channel \"stdio\" does"
     }
@@ -176,7 +186,7 @@ start_socket(program: string, argv: ptr, grants: ptr) -> (ptr, string) {
     pid = 0 - 1
     err = ""
     if grants == null {
-        ch, pid, err = sandbox.spawn_socket_uncontained(g, program, args, null)
+        ch, pid, err = sandbox.spawn_socket_uncontained(g, program, args, env)
     } else {
         n = list.size(grants)
         i = 0
@@ -185,7 +195,7 @@ start_socket(program: string, argv: ptr, grants: ptr) -> (ptr, string) {
             grant_(g, gv)
             i = i + 1
         }
-        ch, pid, err = sandbox.spawn_socket(g, program, args, null)
+        ch, pid, err = sandbox.spawn_socket(g, program, args, env)
     }
     if own == 1 { list.free(args) }
     // The child has its own copy of the grants (a sealed memfd), so ours goes.
@@ -284,6 +294,25 @@ call(h: ptr, id: int, name: string, arg: string, fd: int) -> string {
     return ""
 }
 
+// One frame of any bytes to the child, as it is (a caller with a protocol of
+// its own: services/gfx). The same writer, bound and reasons as call's.
+send_frame(h: ptr, data: string) -> string {
+    if alive(h) == 0 { return why(h) }
+    b = h as *Backend
+    if frames.put(b.out, data) != "" {
+        written_lost_(b)
+        return b.why
+    }
+    return ""
+}
+
+// The largest frame the child may send from now on (MAX_FRAME at start).
+set_max_frame(h: ptr, n: int) {
+    if h == null { return }
+    b = h as *Backend
+    b.max = n
+}
+
 // The writer has failed: the backend stopped reading its stdin (killed at
 // once: it is not reading, so closing its stdin would not end it), or the
 // write failed (it closed its end).
@@ -325,7 +354,7 @@ poll(h: ptr) -> (string, string) {
         }
         return "", ""
     }
-    data, st, rerr = frames.read(b.rd, MAX_FRAME, FRAME_MS, " (its stdout is the channel: nothing but frames may be written there)")
+    data, st, rerr = frames.read(b.rd, b.max, FRAME_MS, " (its stdout is the channel: nothing but frames may be written there)")
     if st == frames.EOF {
         lost_(b, "", 0)   // it closed its end: it has exited or is exiting
         return "", b.why

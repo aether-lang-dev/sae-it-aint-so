@@ -825,26 +825,37 @@ curl -s -X POST localhost:9333/widget/9/click
 The driver build is a separate binary because the control server must not
 ship in `sae`.
 
-### 3D scenes: `gfx` (first slice, not drawn yet)
+### 3D scenes: `gfx`, drawn by a GPU helper
 
 ```ts
 const scene = gfx.scene(640, 480);             // at most 4 a page, 4096 px each way
+vg.scene("0 0 640 480", 640, 480) { gfx.view(scene); }   // where its pictures show
 gfx.submit(scene, batch);                      // a Uint8Array: the frame's ONE batch
-gfx.stats(scene);                              // { frame, meshes, vertices, triangles, draws, bytes, drawn, ... }
+gfx.stats(scene);                              // { frame, meshes, draws, bytes, drawn, pictures, picture_frame, draw_ms, frame_ms, error, ... }
 gfx.free(scene);                               // or leave it: a page's scenes go with the page
 ```
 
 A page describes its 3D frame in one buffer a frame, in ae3d's
 `ae3d.batch` layout (version 1: the eye's view and lens, each draw's world
 matrix and material, the meshes new or changed since; aether-lang-dev/ae3d#1102);
-the drawing is ae3d's, and no shader text, path or GPU handle comes from
-the page (`docs/gpu-pages.md`). three.js's `AeRenderer`
-(aether-lang-dev/three.js, branch `sae-port`) writes it, so a three.js
-page runs as it is. The host checks the whole batch and holds it to the
-page's budgets (256 meshes and a million vertices over its scenes, 4096
-draws and 16 MB a batch), else a `TypeError` that says why, with nothing
-changed. This build does not link ae3d, so a batch is checked and counted
-(`drawn: false`) but not drawn. `site/gfx.ts`; `tests/spec_nav.ae`'s "gfx".
+no shader text, path or GPU handle comes from the page (`docs/gpu-pages.md`).
+three.js's `AeRenderer` (aether-lang-dev/three.js, branch `sae-port`) writes
+it, so a three.js page runs as it is. The host checks the whole batch and
+holds it to the page's budgets (256 meshes and a million vertices over its
+scenes, 4096 draws and 16 MB a batch), else a `TypeError` that says why,
+with nothing changed.
+
+sae does not link ae3d. **sae-gfx** (`gfx/`, built by `gfx/build.sh` beside
+sae) does the drawing in a process of its own, over std.ipc, and sends each
+picture back; `gfx.view` shows it. Nothing waits in the page: a picture
+comes a tick or more later, and `gfx.stats` says when (`drawn`,
+`picture_frame`). A helper that dies or hangs loses its scenes
+(`gfx.submit` throws why) and the browser goes on; the next `gfx.scene`
+starts a new one. No process sandbox can hold a GL driver yet
+(`docs/gpu-pages.md`, "Containment"), so the helper runs only when sae is
+started with `--uncontained-gfx`, and says so; without it scenes are checked
+and counted, not drawn. `site/gfx.ts`; `tests/spec_nav.ae`'s "gfx";
+`tests/spec_gfx_service.ae`.
 
 ### App mode: a folder of pages as an installable app
 

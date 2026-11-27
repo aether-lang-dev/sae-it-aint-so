@@ -38,6 +38,7 @@ import services.clipboard
 import services.bus
 import services.channel
 import services.backend
+import services.gfx
 import services.shell
 import services.print as printing
 import services.net
@@ -124,6 +125,19 @@ struct Browser {
     backend_deadline_ms: int  // a call not answered in this is failed (app.json deadlineMs)
     backend_decl: ptr    // *BackendDecl: how to start it (again, for backend.restart), or null
     backend_restarts: ptr  // std.list of *BackendRestart: pages waiting for a restart to settle
+    // The GPU helper (wave1/gfx, services/gfx): sae-gfx, a process of its
+    // own that draws the pages' 3D scenes, started on a page's first
+    // gfx.scene and stopped when no page has one.
+    gfx: ptr         // services/gfx's instance, or null while none runs
+    gfx_timer: int   // the UI timer that talks to it (gfx_tick_), or 0
+    gfx_out: ptr     // std.list of frames queued for it by entries, sent by the tick in order
+    gfx_live: ptr    // std.list of *GfxScene: every page's scenes the helper draws
+    gfx_ids: int     // the last scene id handed to the helper (browser-wide)
+    gfx_program: string  // the helper's absolute path, "" when there is none
+    gfx_mode: int    // GFX_UNCONTAINED (--uncontained-gfx) or GFX_REFUSED
+    gfx_refusal: string  // why no helper can start (GFX_REFUSED, or no program), else ""
+    gfx_env: ptr     // std.list of "NAME=value": the helper's whole environment, read at start
+    gfx_idle: long   // since when no page has had a scene (0 while one has)
     // The control channel (--control-stdio, services/channel): the program
     // that started sae drives the app over sae's stdin and stdout.
     control: ptr     // services/channel's instance, or null (not started that way)
@@ -7396,6 +7410,19 @@ struct GfxScene {
     draws: int       // in its last batch
     batches: int
     bytes: int       // its last batch's
+    // Its drawing, by the GPU helper (gfx_tick_):
+    hid: int         // its id with the helper (Browser.gfx_ids)
+    dead: string     // why it is not drawn ("" while it is): no helper here, or the helper went
+    lost: int        // 1: the helper went while it drew; gfx.submit throws dead
+    view: ptr        // its gfx.view's image node, or null
+    pix: ptr         // that node's pixels (the page's raster, freed with the page's rasters)
+    inflight: int    // 1 while a picture is asked for and has not come
+    since: long      // when that ask was sent (0 until the tick sends it)
+    dirty: int       // 1: a batch came while a picture was in flight; one more is asked for
+    pictures: int    // pictures drawn
+    pic_frame: long  // the batch frame the last picture shows
+    draw_ms: int     // the helper's time for it
+    round_ms: int    // from the ask sent to the picture shown
 }
 
 struct GfxMesh {
@@ -7429,11 +7456,13 @@ gfx_scene_drop_(s: *GfxScene) {
     heap.free(s)
 }
 
-// A page's scenes go with it (from page_free_).
+// A page's scenes go with it (from page_free_): the helper told to free
+// them, after this. Their views' pixels are the page's rasters.
 gfx_page_free_(p: *Page) {
     i = list.size(p.gfx) - 1
     while i >= 0 {
         sv, _ = list.get(p.gfx, i)
+        gfx_unlive_(p.browser as *Browser, sv as *GfxScene)
         gfx_scene_drop_(sv as *GfxScene)
         i = i - 1
     }
@@ -7640,7 +7669,7 @@ gfx_take_(s: *GfxScene, b: ptr, n: int) {
 
 // gfx.scene(w, h): a scene w x h pixels for the page's batches; its handle.
 sae_gfx_scene(p: *Page, this_val: int, argv: int) -> int {
-    seal except GFX_DIM_MAX, GFX_SCENES_MAX, GfxScene, arg_int_, heap, list, quickjs, sae_throw_type_error
+    seal except Browser, GFX_DIM_MAX, GFX_SCENES_MAX, GfxScene, arg_int_, gfx_live_, heap, list, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     w = arg_int_(ctx, argv, argc, 0, 0)
@@ -7654,27 +7683,30 @@ sae_gfx_scene(p: *Page, this_val: int, argv: int) -> int {
     s.h = h
     s.meshes = list.new()
     list.add(p.gfx, s as ptr)
+    gfx_live_(p.browser as *Browser, s)
     return quickjs.new_int(ctx, s.handle)
 }
 
 // gfx.submit(scene, batch): the frame's one batch, ae3d.batch's layout.
 sae_gfx_submit(p: *Page, this_val: int, argv: int) -> int {
-    seal except arg_bytes_, arg_int_, bytes_refusal_, gfx_refusal_, gfx_scene_of_, gfx_take_, quickjs, sae_throw_type_error
+    seal except Browser, arg_bytes_, arg_int_, bytes_refusal_, gfx_queue_batch_, gfx_refusal_, gfx_scene_of_, gfx_take_, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     s = gfx_scene_of_(p, arg_int_(ctx, argv, argc, 0, 0))
     if s == null { return sae_throw_type_error(ctx, "gfx.submit(scene, batch): scene is not a gfx.scene of this page") }
+    if s.lost == 1 { return sae_throw_type_error(ctx, "gfx.submit: this scene is lost (${s.dead}); a new gfx.scene starts the GPU helper again") }
     b, n = arg_bytes_(ctx, argv, argc, 1)
     if b == null { return sae_throw_type_error(ctx, bytes_refusal_("gfx.submit(scene, batch)", n)) }
     why = gfx_refusal_(p, s, b, n)
     if why != "" { return sae_throw_type_error(ctx, why) }
     gfx_take_(s, b, n)
+    gfx_queue_batch_(p.browser as *Browser, s, b, n)
     return 0
 }
 
 // gfx.stats(scene): what the scene holds and what its last batch said.
 sae_gfx_stats(p: *Page, this_val: int, argv: int) -> int {
-    seal except GfxMesh, arg_int_, gfx_scene_of_, json_value_, list, quickjs, sae_throw_type_error
+    seal except GfxMesh, arg_int_, gfx_scene_of_, js_set_, json_value_, list, quickjs, sae_throw_type_error
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     s = gfx_scene_of_(p, arg_int_(ctx, argv, argc, 0, 0))
@@ -7689,12 +7721,19 @@ sae_gfx_stats(p: *Page, this_val: int, argv: int) -> int {
         triangles = triangles + m.triangles
         k = k + 1
     }
-    return json_value_(ctx, "{\"width\": ${s.w}, \"height\": ${s.h}, \"frame\": ${s.frame}, \"batches\": ${s.batches}, \"bytes\": ${s.bytes}, \"meshes\": ${list.size(s.meshes)}, \"vertices\": ${vertices}, \"triangles\": ${triangles}, \"draws\": ${s.draws}, \"drawn\": false}")
+    drawn = "false"
+    if s.pictures > 0 { drawn = "true" }
+    text = "{\"width\": ${s.w}, \"height\": ${s.h}, \"frame\": ${s.frame}, \"batches\": ${s.batches}, \"bytes\": ${s.bytes}, \"meshes\": ${list.size(s.meshes)}, \"vertices\": ${vertices}, \"triangles\": ${triangles}, \"draws\": ${s.draws}, \"drawn\": ${drawn}, \"pictures\": ${s.pictures}, \"picture_frame\": ${s.pic_frame}, \"draw_ms\": ${s.draw_ms}, \"frame_ms\": ${s.round_ms}}"
+    o = json_value_(ctx, text)
+    ev = quickjs.new_string(ctx, s.dead)
+    _e = js_set_(p, o, "error", ev)
+    quickjs.release(ctx, ev)
+    return o
 }
 
 // gfx.free(scene): the scene and everything it holds, now.
 sae_gfx_free(p: *Page, this_val: int, argv: int) -> int {
-    seal except arg_int_, gfx_scene_drop_, gfx_scene_of_, list, quickjs
+    seal except Browser, arg_int_, gfx_scene_drop_, gfx_scene_of_, gfx_unlive_, list, quickjs
     ctx = p.ctx
     argc = quickjs.arg_count(ctx, argv)
     s = gfx_scene_of_(p, arg_int_(ctx, argv, argc, 0, 0))
@@ -7709,8 +7748,339 @@ sae_gfx_free(p: *Page, this_val: int, argv: int) -> int {
         }
         i = i + 1
     }
+    gfx_unlive_(p.browser as *Browser, s)
     gfx_scene_drop_(s)
     return 0
+}
+
+// --- drawing: the GPU helper (services/gfx, gfx/main.ae) ---
+//
+// The drawing is not done here: sae-gfx, a process of its own that links
+// ae3d, draws each scene offscreen and sends back its picture (RGBA), which
+// a gfx.view shows as a raster (vg.raster's path: an image node whose pixels
+// the host owns, repainted in place). sae never links ae3d, and a GPU or
+// driver crash ends the pages' 3D, not the browser.
+//
+// Nothing here waits, and nothing runs in a page's entry but queueing: a
+// page-API function checks, and puts the frame for the helper on
+// b.gfx_out; gfx_tick_, a kernel tick that waits for no entry to run, starts
+// the helper when a scene needs it (the first gfx.scene, or the first after
+// it went), sends what is queued, takes the helper's replies and shows the
+// pictures. One picture a scene is asked for at a time: a batch that comes
+// while one is in flight is sent to be taken (the meshes it carries are
+// kept) and not drawn, and once the picture comes a draw of the latest is
+// asked for, so a page faster than the GPU drops frames, never falls behind.
+//
+// A picture not back within GFX_FRAME_MS is a hung helper: it is killed. A
+// helper that dies, hangs or breaks the protocol loses every scene it drew
+// (gfx.submit throws why, gfx.stats says it); the browser goes on, and the
+// next gfx.scene starts a new one. With no scene left for GFX_IDLE_MS the
+// helper is told bye and stopped.
+
+const GFX_REFUSED = 0
+const GFX_UNCONTAINED = 2
+const GFX_FRAME_MS = 3000
+const GFX_IDLE_MS = 2000
+const GFX_TICK_MS = 4
+const GFX_REPLIES_PER_TICK = 16
+
+// The helper is found, and how it may run decided, once at start (it reads
+// the environment): SAE_GFX_PROGRAM, else sae-gfx beside sae. It runs only
+// when the person said --uncontained-gfx: no process sandbox holds a GL
+// driver yet.
+gfx_configure_(b: *Browser, exe: string, uncontained: int) {
+    prog = env_("SAE_GFX_PROGRAM")
+    if prog == "" { prog = "${dir_of_(exe)}sae-gfx" }
+    names = string.string_split(gfx.ENV_NAMES, " ")
+    k = 0
+    while k < string.string_array_size(names) {
+        nm = string.string_array_get(names, k)
+        v = env_(nm)
+        if v != "" { list.add(b.gfx_env, own_("${nm}=${v}")) }
+        k = k + 1
+    }
+    string.string_array_free(names)
+    if fs.exists(prog) == 0 {
+        b.gfx_refusal = own_("gfx: no GPU helper at ${prog} (gfx/build.sh builds it); scenes are checked and counted, not drawn")
+        return
+    }
+    full, _k, rerr = fs.realpath(prog)
+    if rerr != "" {
+        b.gfx_refusal = own_("gfx: the GPU helper ${prog}: ${rerr}")
+        return
+    }
+    b.gfx_program = own_(full)
+    if os.platform() == "windows" {
+        b.gfx_refusal = own_("gfx: the GPU helper does not run on Windows yet (it talks over a socket pair, which std.ipc has not there)")
+        return
+    }
+    if uncontained == 1 {
+        b.gfx_mode = GFX_UNCONTAINED
+        b.gfx_refusal = ""
+        say_("sae: gfx: the GPU helper ${full} will run with no process sandbox (--uncontained-gfx); it locks its own calls down")
+        return
+    }
+    // Where Aether holds a child (Linux), its sandbox refuses executable
+    // memory made at run time, which every GL driver's dispatch and a
+    // software renderer's JIT need (docs/gpu-pages.md, "Containment"); and
+    // elsewhere it holds no child at all. So no contained helper draws yet.
+    b.gfx_refusal = own_("gfx: the GPU helper cannot run in a process sandbox here (on Linux Aether's refuses the executable memory a GL driver needs; elsewhere it holds no child); start sae with --uncontained-gfx to draw 3D scenes")
+}
+
+// The tick running, from an entry or the kernel.
+gfx_wake_(b: *Browser) {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    if b.gfx_timer == 0 { b.gfx_timer = ui.timer(GFX_TICK_MS, || { gfx_tick_(b) }) }
+}
+
+// A new scene: drawn by the helper (its open queued), or dead with why not.
+gfx_live_(b: *Browser, s: *GfxScene) {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    b.gfx_ids = b.gfx_ids + 1
+    s.hid = b.gfx_ids
+    s.dead = ""
+    s.lost = 0
+    s.view = null
+    s.pix = null
+    s.inflight = 0
+    s.since = 0
+    s.dirty = 0
+    s.pictures = 0
+    s.pic_frame = 0
+    s.draw_ms = 0
+    s.round_ms = 0
+    if b.gfx_mode == GFX_REFUSED || b.gfx_program == "" {
+        s.dead = b.gfx_refusal
+        return
+    }
+    list.add(b.gfx_live, s as ptr)
+    list.add(b.gfx_out, gfx.open(s.hid, s.w, s.h))
+    b.gfx_idle = 0
+    gfx_wake_(b)
+}
+
+// A scene gone (gfx.free, or its page): the helper told to free it.
+gfx_unlive_(b: *Browser, s: *GfxScene) {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    i = 0
+    while i < list.size(b.gfx_live) {
+        sv, _ = list.get(b.gfx_live, i)
+        if sv == s as ptr {
+            list.list_remove(b.gfx_live, i)
+            list.add(b.gfx_out, gfx.free_scene(s.hid))
+            gfx_wake_(b)
+            return
+        }
+        i = i + 1
+    }
+}
+
+// A batch gfx_take_ took, queued for the helper (a copy): a picture asked
+// for unless one is in flight, and then the latest drawn once it comes.
+gfx_queue_batch_(b: *Browser, s: *GfxScene, data: ptr, n: int) {
+    hide fs, os, client, net, lower, pagegrants, env_, fetch_, load_, go_, run_nav_, page_new_, page_free_, page_run_, browser_new_, build_chrome_, set_status_, sae_main, engine_new_, engine_eval_, engine_dispose_
+    if s.dead != "" { return }
+    draw_it = 0
+    if s.inflight == 0 {
+        draw_it = 1
+        s.inflight = 1
+        s.since = 0
+    } else {
+        s.dirty = 1
+    }
+    list.add(b.gfx_out, gfx.submit_frame(s.hid, draw_it, data, n))
+    gfx_wake_(b)
+}
+
+gfx_live_of_(b: *Browser, hid: int) -> *GfxScene {
+    i = 0
+    while i < list.size(b.gfx_live) {
+        sv, _ = list.get(b.gfx_live, i)
+        s = sv as *GfxScene
+        if s.hid == hid { return s }
+        i = i + 1
+    }
+    return null
+}
+
+// The helper has gone (died, hung, broke the protocol, or would not start):
+// every scene it drew is lost, with why, said once.
+gfx_lost_(b: *Browser, why: string) {
+    if b.gfx != null {
+        gfx.kill(b.gfx, why)
+        b.gfx = null
+    }
+    say_("sae: ${why}")
+    while list.size(b.gfx_live) > 0 {
+        sv, _ = list.get(b.gfx_live, 0)
+        list.list_remove(b.gfx_live, 0)
+        s = sv as *GfxScene
+        s.dead = own_(why)
+        s.lost = 1
+        s.inflight = 0
+    }
+    // What was queued was for the scenes just lost.
+    list.free(b.gfx_out)
+    b.gfx_out = list.new()
+}
+
+// The largest picture a live scene can come back as.
+gfx_picture_max_(b: *Browser) -> int {
+    m = 0
+    i = 0
+    while i < list.size(b.gfx_live) {
+        sv, _ = list.get(b.gfx_live, i)
+        s = sv as *GfxScene
+        if s.w * s.h * 4 > m { m = s.w * s.h * 4 }
+        i = i + 1
+    }
+    return m
+}
+
+gfx_tick_(b: *Browser) {
+    if b.entry_depth > 0 { return }
+    now = os.now_monotonic_ms()
+    // Started when a scene needs it.
+    if b.gfx == null && list.size(b.gfx_live) > 0 {
+        // Only GFX_UNCONTAINED reaches here (gfx_live_): no process sandbox.
+        h, err = gfx.start(b.gfx_program, null, b.gfx_env, "")
+        if err != "" {
+            gfx_lost_(b, err)
+        } else {
+            b.gfx = h
+            say_("sae: gfx: the GPU helper ${b.gfx_program} started, with no process sandbox (--uncontained-gfx), its own calls locked down")
+        }
+    }
+    if b.gfx == null {
+        // Nothing to draw: frees for a helper that has gone are dropped.
+        list.free(b.gfx_out)
+        b.gfx_out = list.new()
+    } else {
+        // What the entries queued, in order.
+        pmax = gfx_picture_max_(b)
+        while list.size(b.gfx_out) > 0 && b.gfx != null {
+            fv, _ = list.get_string(b.gfx_out, 0)
+            f = string.copy(fv)
+            list.list_remove(b.gfx_out, 0)
+            serr = gfx.send_frame(b.gfx, f, pmax)
+            if serr != "" { gfx_lost_(b, serr) }
+        }
+        i = 0
+        while b.gfx != null && i < list.size(b.gfx_live) {
+            sv, _ = list.get(b.gfx_live, i)
+            s = sv as *GfxScene
+            if s.inflight == 1 && s.since == 0 { s.since = now }
+            i = i + 1
+        }
+        // Its replies.
+        k = 0
+        while b.gfx != null && k < GFX_REPLIES_PER_TICK {
+            k = k + 1
+            r, why = gfx.poll(b.gfx)
+            if why != "" {
+                gfx_lost_(b, why)
+            } else if r == null {
+                break
+            } else {
+                gfx_answer_(b, r, now)
+                gfx.reply_free(r)
+            }
+        }
+        // A picture not back in time: the helper has hung.
+        i = 0
+        while b.gfx != null && i < list.size(b.gfx_live) {
+            sv, _ = list.get(b.gfx_live, i)
+            s = sv as *GfxScene
+            if s.inflight == 1 && s.since > 0 && now - s.since > GFX_FRAME_MS {
+                gfx_lost_(b, "gfx: the GPU helper did not draw frame ${s.frame} within ${GFX_FRAME_MS} ms; it was stopped")
+            }
+            i = i + 1
+        }
+    }
+    // No page has a scene: the helper goes after a grace.
+    if list.size(b.gfx_live) == 0 && list.size(b.gfx_out) == 0 {
+        if b.gfx == null {
+            ui.timer_cancel(b.gfx_timer)
+            b.gfx_timer = 0
+            b.gfx_idle = 0
+        } else if b.gfx_idle == 0 {
+            b.gfx_idle = now
+        } else if now - b.gfx_idle > GFX_IDLE_MS {
+            gfx.stop(b.gfx)
+            b.gfx = null
+            say_("sae: gfx: the GPU helper stopped: no page has a scene")
+        }
+    } else {
+        b.gfx_idle = 0
+    }
+}
+
+// One reply: a scene opened, refused, or its picture.
+gfx_answer_(b: *Browser, r: ptr, now: long) {
+    op = gfx.reply_op(r)
+    s = gfx_live_of_(b, gfx.reply_id(r))
+    if op == "err" {
+        // sae checked what it sent, so a refusal is the helper's to say: the
+        // scene is not drawn from here on, and the page is told why.
+        why = "gfx: the GPU helper refused: ${gfx.reply_text(r)}"
+        say_("sae: ${why}")
+        if s != null {
+            s.dead = own_(why)
+            s.lost = 1
+            s.inflight = 0
+            gfx_unlive_(b, s)
+        }
+        return
+    }
+    if op != "pixels" || s == null { return }
+    if gfx.reply_w(r) != s.w || gfx.reply_h(r) != s.h {
+        gfx_lost_(b, "gfx: the GPU helper broke the protocol: a picture of ${gfx.reply_w(r)}x${gfx.reply_h(r)} for a scene of ${s.w}x${s.h}")
+        return
+    }
+    if s.pix != null {
+        gfx.reply_pixels(r, s.pix)
+        vg_repaint_(s.view)
+    }
+    s.pictures = s.pictures + 1
+    s.pic_frame = gfx.reply_frame(r)
+    s.draw_ms = gfx.reply_ms(r)
+    if s.since > 0 { s.round_ms = (now - s.since) as int }
+    s.inflight = 0
+    s.since = 0
+    if s.dirty == 1 {
+        s.dirty = 0
+        s.inflight = 1
+        list.add(b.gfx_out, gfx.draw(s.hid))
+    }
+}
+
+// gfx.view(scene, block?): inside vg.scene, an image element at viewBox
+// (0, 0), one unit a pixel, showing the scene's pictures as they come (black
+// till the first); its handle. Its pixels count against the page's raster
+// budget and go with the page.
+sae_gfx_view(p: *Page, this_val: int, argv: int) -> int {
+    seal except VG_BASE, arg_int_, gfx_scene_of_, list, malloc, mem, quickjs, raster_add_, raster_refusal_, sae_throw_type_error, vg, vg_scene_open_, vg_shape_done_, vg_top_
+    ctx = p.ctx
+    argc = quickjs.arg_count(ctx, argv)
+    if vg_scene_open_(p) == 0 { return sae_throw_type_error(ctx, "gfx.view() must be called inside vg.scene()") }
+    s = gfx_scene_of_(p, arg_int_(ctx, argv, argc, 0, 0))
+    if s == null { return sae_throw_type_error(ctx, "gfx.view(scene): scene is not a gfx.scene of this page") }
+    if s.view != null { return sae_throw_type_error(ctx, "gfx.view(scene): the scene has a view already") }
+    n = s.w * s.h * 4
+    why = raster_refusal_(p, "gfx.view", s.w, s.h, n)
+    if why != "" { return sae_throw_type_error(ctx, why) }
+    pix = malloc(n as long)
+    i = 0
+    while i < s.w * s.h {
+        mem.set_int(pix, i * 4, 0 - 16777216)   // opaque black, RGBA 0 0 0 255
+        i = i + 1
+    }
+    node = vg.image(vg_top_(p), 0.0, 0.0, s.w as float, s.h as float)
+    vg.image_pixels(node, pix, s.w, s.h)
+    raster_add_(p, VG_BASE + list.size(p.vg_nodes) + 1, node, pix, n, s.w, s.h)
+    s.view = node
+    s.pix = pix
+    return vg_shape_done_(p, argv, argc, 1, node)
 }
 // ===== end wave1/gfx =====
 
@@ -12600,6 +12970,8 @@ gate_spec_(g: *Gate) {
     space(g, "gfx", WHEN_ALWAYS, "") {
         reach("GFX_DIM_MAX, GFX_SCENES_MAX, GfxMesh, GfxScene, gfx_refusal_")
         reach("gfx_scene_drop_, gfx_scene_of_, gfx_take_, heap")
+        reach("Browser, gfx_live_, gfx_queue_batch_, gfx_unlive_, js_set_")
+        reach("vg, vg_scene_open_, vg_shape_done_, vg_top_")
         api("scene", sae_gfx_scene, 2) {
             arg("w", T_INT)
             arg("h", T_INT)
@@ -12613,8 +12985,14 @@ gate_spec_(g: *Gate) {
         }
         api("stats", sae_gfx_stats, 1) {
             arg("scene", T_INT)
-            gives_ts("{ width: number; height: number; frame: number; batches: number; bytes: number; meshes: number; vertices: number; triangles: number; draws: number; drawn: boolean }")
-            doc("What the scene holds and what its last batch said; drawn is false where this sae draws no scenes.")
+            gives_ts("{ width: number; height: number; frame: number; batches: number; bytes: number; meshes: number; vertices: number; triangles: number; draws: number; drawn: boolean; pictures: number; picture_frame: number; draw_ms: number; frame_ms: number; error: string }")
+            doc("What the scene holds and what its last batch said, and its drawing: drawn once a picture has come, the pictures so far, the batch frame the last shows, the helper's draw_ms and the frame_ms from ask to picture; error says why it is not drawn (no helper here, or the helper went: then gfx.submit throws it).")
+        }
+        api("view", sae_gfx_view, 2) {
+            arg("scene", T_INT)
+            opt("body", T_BLOCK)
+            gives(T_VGNODE)
+            doc("Inside vg.scene: an image element at (0, 0), one unit a pixel, showing the scene's pictures as the GPU helper draws them (black till the first); its handle. Its pixels count against the page's raster budget.")
         }
         api("free", sae_gfx_free, 1) {
             arg("scene", T_INT)
@@ -14082,6 +14460,16 @@ browser_new_() -> *Browser {
     b.entry_depth = 0
     b.app_data = ""
     b.later = list.new()
+    b.gfx = null
+    b.gfx_timer = 0
+    b.gfx_out = list.new()
+    b.gfx_live = list.new()
+    b.gfx_ids = 0
+    b.gfx_program = ""
+    b.gfx_mode = GFX_REFUSED
+    b.gfx_refusal = "gfx: no GPU helper"
+    b.gfx_env = list.new()
+    b.gfx_idle = 0
     // The sandbox probe: a page-API object only a test build with both
     // variables set installs (probe_* below).
     b.probe_dir = ""
@@ -14245,7 +14633,16 @@ main() {
         if os.args_get(k) == "--uncontained-backend" { uncontained = 1 }
         k = k + 1
     }
-    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()), ctl, bus_flag, uncontained)
+    // sae <url> --uncontained-gfx (or sae --app <dir> [...] --uncontained-gfx):
+    // the person runs the GPU helper with no process sandbox, where Aether
+    // cannot contain one (docs/gpu-pages.md, "The GPU helper"); said at start.
+    uncontained_gfx = 0
+    k = 2
+    while k < os.args_count() {
+        if os.args_get(k) == "--uncontained-gfx" { uncontained_gfx = 1 }
+        k = k + 1
+    }
+    code = sae_main(os.args_get(1), os.args_get(2), slashes_(os.argv0()), ctl, bus_flag, uncontained, uncontained_gfx)
     if code != 0 { exit(code) }
 }
 
@@ -14258,7 +14655,7 @@ slashes_(p: string) -> string {
     return p
 }
 
-sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int, uncontained: int) -> int {
+sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int, uncontained: int, uncontained_gfx: int) -> int {
     app = ""
     start_url = arg1
     if arg1 == "--app" { app = arg2 }
@@ -14275,6 +14672,7 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int,
     b.bus_flag = bus_flag
     b.uncontained = uncontained
     stdlib.configure(b.stdlib, lib_dir_(exe))   // wave1/imports: the sae: library
+    gfx_configure_(b, exe, uncontained_gfx)   // wave1/gfx: the GPU helper, and how it may run
     root = aether_ui_vstack_create(6)
     b.root = root
     // The window's size, for ui.on_resize: its own stack's layout.
@@ -14350,5 +14748,6 @@ sae_main(arg1: string, arg2: string, exe: string, ctl: @keep ptr, bus_flag: int,
     }
     ui.window_run(title, w, h, root)
     if b.backend != null { backend.stop(b.backend) }
+    if b.gfx != null { gfx.stop(b.gfx) }
     return 0
 }

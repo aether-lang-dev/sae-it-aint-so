@@ -1,0 +1,332 @@
+// services/gfx — sae's GPU helper, sae-gfx (gfx/main.ae): pages' 3D scenes
+// drawn by ae3d in a process of its own, never in sae's (docs/gpu-pages.md,
+// "The GPU helper"). This holds the helper's process and its protocol; the
+// kernel (src/sae_host.ae, wave1/gfx) holds the pages' scenes and decides
+// when to send what, a tick at a time, never inside a page's entry.
+//
+// The helper is started through services/backend (the one place sae starts
+// a program) on a socket pair: on Linux contained with sandbox.spawn_socket
+// to the grants made here (the GPU's device nodes, the X display's socket
+// folder, its own program and the system's libraries, read only, and the few
+// variables a GL driver reads), with an environment of only those variables;
+// where Aether cannot contain a child it is refused, unless the person
+// started sae with --uncontained-gfx, and then it is said every time.
+//
+// The protocol (version 1) is gfx/main.ae's: one std.ipc frame a message, a
+// header line of words, "\n", the body. Everything the helper says is held to
+// it: a message that is not one, or a picture of the wrong size, stops the
+// helper (fail closed), and the kernel fails the scenes it drew.
+//
+// Each Gfx is an instance with its own state (the kernel holds one); nothing
+// here is shared between them.
+
+import std.list
+import std.string
+import std.mem
+import std.bytes (string_from_ptr)
+import services.backend
+
+exports (start, alive, why, hello, probe, open, submit_frame, send_frame, draw, free_scene, bye, poll, kill,
+         stop, reply_op, reply_id, reply_frame, reply_w, reply_h, reply_ms, reply_text, reply_pixels,
+         reply_free, grants_linux, PROTOCOL, ENV_NAMES)
+
+const PROTOCOL = 1
+// A header line is at most this, both ways.
+const HEADER_MAX = 256
+
+// The variables the helper's environment may hold, each passed only when
+// sae's own has it: the display, and what selects or tunes the GL driver.
+const ENV_NAMES = "DISPLAY XAUTHORITY AETHER_SANDBOX_AUDIT LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER MESA_LOADER_DRIVER_OVERRIDE MESA_GL_VERSION_OVERRIDE"
+
+struct Gfx {
+    be: ptr          // services/backend's instance
+    hello: string    // the helper's hello ("" until it has said it)
+    probe: string    // its probe answer, when started with one
+    why: string      // why it is gone, "" while it runs
+    max: int         // the largest picture it may send, with its header
+}
+
+struct Reply {
+    op: string       // "ok", "err", "pixels"
+    id: int
+    frame: long
+    w: int
+    h: int
+    ms: int
+    text: string     // err's reason
+    data: string     // the whole frame (a picture's pixels follow its header)
+    off: int         // where the body starts in data
+}
+
+// The grants for a contained helper on Linux, as services/backend takes them
+// ("kind value"): the GPU's nodes read and written, X's socket folder, its
+// cookie (XAUTHORITY) and the libraries read, the variables in `env` read. `program` is its own path.
+grants_linux(program: string, env: ptr) -> ptr {
+    g = list.new()
+    list.add(g, "write /dev/dri/")
+    list.add(g, "read ${program}")
+    list.add(g, "read /usr/lib/")
+    list.add(g, "read /usr/lib64/")
+    list.add(g, "read /usr/share/drirc.d/")
+    list.add(g, "read /usr/share/glvnd/")
+    list.add(g, "read /etc/drirc")
+    list.add(g, "read /sys/dev/char/")
+    list.add(g, "read /sys/devices/")
+    list.add(g, "read /tmp/.X11-unix/")
+    list.add(g, "read /usr/share/X11/")
+    n = list.size(env)
+    i = 0
+    while i < n {
+        ev, _ = list.get_string(env, i)
+        eq = string.string_index_of(ev, "=")
+        if eq > 0 {
+            name = string.string_substring(ev, 0, eq)
+            list.add(g, "env ${name}")
+            // X's cookie: the one file of the display's it must read.
+            if name == "XAUTHORITY" { list.add(g, "read ${string.string_substring(ev, eq + 1, string.length(ev))}") }
+        }
+        i = i + 1
+    }
+    return g
+}
+
+// Start the helper at `program`: contained to `grants` (null: not contained,
+// the person's --uncontained-gfx), its environment `env` ("NAME=value"s), and
+// with `probe` a path it tries to read and says whether it could (a
+// containment spec's; "" for none). (gfx, "") or (null, why).
+start(program: string, grants: ptr, env: ptr, probe: string) -> (ptr, string) {
+    args = list.new()
+    if probe != "" {
+        list.add(args, "--probe")
+        list.add(args, probe)
+    }
+    be, err = backend.start_socket_env(program, args, grants, env)
+    list.free(args)
+    if err != "" { return null, string.string_replace_all(err, "backend: ", "gfx: the GPU helper: ") }
+    g = heap.new(Gfx)
+    g.be = be
+    g.hello = ""
+    g.probe = ""
+    g.why = ""
+    g.max = 4096
+    backend.set_max_frame(be, g.max)
+    return g as ptr, ""
+}
+
+alive(h: ptr) -> int {
+    if h == null { return 0 }
+    g = h as *Gfx
+    if g.why != "" { return 0 }
+    return backend.alive(g.be)
+}
+
+why(h: ptr) -> string {
+    if h == null { return "gfx: no GPU helper" }
+    g = h as *Gfx
+    if g.why != "" { return g.why }
+    w = backend.why(g.be)
+    if w == "" { return "" }
+    return "gfx: the GPU helper stopped: ${w}"
+}
+
+// What the helper said draws (its hello's last word), "" until it has.
+hello(h: ptr) -> string {
+    if h == null { return "" }
+    return (h as *Gfx).hello
+}
+
+// Its probe's answer, "<before> <after>" its lockdown, each "read" or
+// "refused"; "" until it has said.
+probe(h: ptr) -> string {
+    if h == null { return "" }
+    return (h as *Gfx).probe
+}
+
+// The frames, as the kernel queues them (pure: nothing is sent here).
+open(id: int, w: int, ht: int) -> string { return "open ${id} ${w} ${ht}" }
+draw(id: int) -> string { return "draw ${id}" }
+free_scene(id: int) -> string { return "free ${id}" }
+bye() -> string { return "bye" }
+
+// A batch (`n` bytes at `data`, the page's, checked by the kernel) as a
+// submit frame: a copy, so the page's buffer may change after.
+submit_frame(id: int, draw_it: int, data: ptr, n: int) -> string {
+    head = "submit ${id} ${draw_it}\n"
+    return string.concat(head, string_of_(data, n))
+}
+
+string_of_(data: ptr, n: int) -> string {
+    return bytes.string_from_ptr(data, n)
+}
+
+// A queued frame sent. A picture of w x h may come back: `picture_max` is
+// the largest the helper may send from now on. "" or why it has gone.
+send_frame(h: ptr, frame: string, picture_max: int) -> string {
+    if alive(h) == 0 { return why(h) }
+    g = h as *Gfx
+    if picture_max + HEADER_MAX > g.max {
+        g.max = picture_max + HEADER_MAX
+        backend.set_max_frame(g.be, g.max)
+    }
+    err = backend.send_frame(g.be, frame)
+    if err != "" { return why(h) }
+    return ""
+}
+
+// The next message: (reply, "") with a *Reply (reply_free it), (null, "")
+// when none waits, (null, why) when the helper has gone or broke the
+// protocol (and is stopped). hello and probe are taken here.
+poll(h: ptr) -> (ptr, string) {
+    if alive(h) == 0 { return null, why(h) }
+    g = h as *Gfx
+    while true {
+        f, err = backend.poll(g.be)
+        if err != "" { return null, why(h) }
+        if f == "" { return null, "" }
+        r, bad = parse_(g, f)
+        if bad != "" {
+            if string.string_starts_with(bad, "it cannot draw here") == 1 {
+                fail_(g, "gfx: the GPU helper: ${bad}")
+            } else {
+                fail_(g, "gfx: the GPU helper broke the protocol: ${bad}")
+            }
+            return null, g.why
+        }
+        if r != null { return r, "" }
+    }
+    return null, ""
+}
+
+fail_(g: *Gfx, why: string) {
+    if g.why == "" { g.why = string.copy(why) }
+    backend.kill(g.be, g.why)
+}
+
+// A decimal word, or -1.
+num_(words: ptr, i: int) -> long {
+    if i >= string.string_array_size(words) { return 0 - 1 }
+    w = string.string_array_get(words, i)
+    if string.length(w) < 1 || string.length(w) > 12 { return 0 - 1 }
+    k = 0
+    while k < string.length(w) {
+        c = string.string_char_at(w, k)
+        if c < 48 || c > 57 { return 0 - 1 }
+        k = k + 1
+    }
+    v, e = string.to_long(w)
+    if e != "" { return 0 - 1 }
+    return v
+}
+
+// (reply, "") for a reply, (null, "") for hello or probe (kept), (null, why)
+// for anything that is not the protocol.
+parse_(g: *Gfx, f: string) -> (ptr, string) {
+    n = string.length(f)
+    nl = string.string_index_of(f, "\n")
+    he = nl
+    if he < 0 { he = n }
+    if he > HEADER_MAX { return null, "a header of more than ${HEADER_MAX} bytes" }
+    head = string.string_substring(f, 0, he)
+    words = string.string_split(head, " ")
+    nw = string.string_array_size(words)
+    op = ""
+    if nw > 0 { op = string.copy(string.string_array_get(words, 0)) }
+    bad = ""
+    r = null as *Reply
+    if g.hello == "" {
+        if op != "hello" || nw != 4 || string.string_array_get(words, 1) != "sae-gfx" || num_(words, 2) != (PROTOCOL as long) {
+            bad = "its first message is not hello sae-gfx ${PROTOCOL}: ${backend.excerpt(head)}"
+        } else {
+            g.hello = string.copy(string.string_array_get(words, 3))
+        }
+    } else if g.hello == "none" {
+        // It cannot draw here, and says why before it exits.
+        if op == "err" && nw >= 3 {
+            bad = "it cannot draw here: ${string.string_substring(head, string.string_index_of_from(head, " ", 4) + 1, he)}"
+        } else {
+            bad = "it cannot draw here"
+        }
+    } else if op == "probe" && nw == 3 {
+        g.probe = string.copy("${string.string_array_get(words, 1)} ${string.string_array_get(words, 2)}")
+    } else if op == "ok" && nw == 2 && num_(words, 1) > 0 && nl < 0 {
+        r = make_reply_(op, num_(words, 1) as int, f, n)
+    } else if op == "err" && nw >= 2 && num_(words, 1) >= 0 && nl < 0 {
+        r = make_reply_(op, num_(words, 1) as int, f, n)
+        sp = string.string_index_of(head, " ")
+        sp2 = string.string_index_of_from(head, " ", sp + 1)
+        if sp2 > 0 { r.text = string.string_substring(head, sp2 + 1, he) } else { r.text = "" }
+    } else if op == "pixels" && nw == 6 && nl >= 0 {
+        id = num_(words, 1)
+        fr = num_(words, 2)
+        w = num_(words, 3)
+        ht = num_(words, 4)
+        ms = num_(words, 5)
+        if id < 1 || fr < 0 || w < 1 || ht < 1 || w > 4096 || ht > 4096 || ms < 0 {
+            bad = "a picture's header ${backend.excerpt(head)}"
+        } else if (n - nl - 1) as long != w * ht * 4 {
+            bad = "a picture of ${w}x${ht} with ${n - nl - 1} bytes"
+        } else {
+            r = make_reply_(op, id as int, f, nl + 1)
+            r.frame = fr
+            r.w = w as int
+            r.h = ht as int
+            r.ms = ms as int
+        }
+    } else {
+        bad = "${backend.excerpt(head)} is not a message"
+    }
+    string.string_array_free(words)
+    if bad != "" { return null, bad }
+    return r as ptr, ""
+}
+
+make_reply_(op: string, id: int, f: string, off: int) -> *Reply {
+    r = heap.new(Reply)
+    r.op = string.copy(op)
+    r.id = id
+    r.frame = 0
+    r.w = 0
+    r.h = 0
+    r.ms = 0
+    r.text = ""
+    r.data = f
+    r.off = off
+    return r
+}
+
+reply_op(r: ptr) -> string { return (r as *Reply).op }
+reply_id(r: ptr) -> int { return (r as *Reply).id }
+reply_frame(r: ptr) -> long { return (r as *Reply).frame }
+reply_w(r: ptr) -> int { return (r as *Reply).w }
+reply_h(r: ptr) -> int { return (r as *Reply).h }
+reply_ms(r: ptr) -> int { return (r as *Reply).ms }
+reply_text(r: ptr) -> string { return (r as *Reply).text }
+
+// A picture's pixels copied to `dst` (w*h*4 bytes), as they came.
+reply_pixels(r: ptr, dst: ptr) {
+    rr = r as *Reply
+    src = string.bytes(rr.data) as ptr
+    _c = mem.copy(dst, mem.long_to_ptr(mem.ptr_to_long(src) + (rr.off as long)), ((rr.w * rr.h * 4) as long))
+}
+
+reply_free(r: ptr) {
+    if r == null { return }
+    heap.free(r as *Reply)
+}
+
+// Kill it now (it hung), with `reason`.
+kill(h: ptr, reason: string) {
+    if h == null { return }
+    g = h as *Gfx
+    if g.why == "" { g.why = string.copy(reason) }
+    backend.kill(g.be, g.why)
+}
+
+// It is not needed: bye, the channel closed, a grace to exit, then killed.
+stop(h: ptr) {
+    if h == null { return }
+    g = h as *Gfx
+    if alive(h) == 1 { _s = backend.send_frame(g.be, "bye") }
+    if g.why == "" { g.why = "gfx: the GPU helper: stopped" }
+    backend.stop(g.be)
+}

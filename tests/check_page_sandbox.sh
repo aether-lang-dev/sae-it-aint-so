@@ -32,7 +32,7 @@ expect() {
 }
 
 # Who reads the environment (env_ and os.getenv), and who calls those readers.
-expect env_ "app_data_dir_ browser_new_ bus_ui_ clock_start_ control_gone_ esc_coarse_decide_ home_dir_ lib_dir_ page_time_ms_ read_capabilities_ sae_main storage_dir_ temp_dir_"
+expect env_ "app_data_dir_ browser_new_ bus_ui_ clock_start_ control_gone_ esc_coarse_decide_ gfx_configure_ home_dir_ lib_dir_ page_time_ms_ read_capabilities_ sae_main storage_dir_ temp_dir_"
 expect os.getenv "env_"
 expect page_time_ms_ "browser_new_"
 expect storage_dir_ "page_new_ sqlite_start_"
@@ -42,6 +42,7 @@ expect app_data_dir_ "read_capabilities_ sae_main"
 expect clock_start_ "browser_new_"
 expect esc_coarse_decide_ "page_new_"
 expect lib_dir_ "sae_main"
+expect gfx_configure_ "sae_main"
 [ $fail = 0 ] && echo "ok   no function an entry can reach reads the environment"
 
 # 2. A kernel tick does not run while page JS does. A nested event loop
@@ -49,7 +50,7 @@ expect lib_dir_ "sae_main"
 #    kernel's timers on the page's stack, under the page's grants; each tick
 #    begins by returning while b.entry_depth is above 0, and so does the
 #    navigation timer's closure. A tick added without the guard fails here.
-for fn in bus_tick_ backend_tick_ sqlite_poll_ http_poll_ later_tick_; do
+for fn in bus_tick_ backend_tick_ sqlite_poll_ http_poll_ later_tick_ gfx_tick_; do
     first=$(awk -v N="$fn" '
         index($0, N "(") == 1 { inside = 1; next }
         inside && /^[ \t]*\/\// { next }
@@ -63,7 +64,7 @@ for fn in bus_tick_ backend_tick_ sqlite_poll_ http_poll_ later_tick_; do
 done
 # every ui.timer / ui.on_frame the kernel arms: a tick function named above, or the
 # one listed here (the navigation timer's closure checks the guard inline)
-ticks=$(grep -n "ui\.timer(" "$F" | grep -v "^[0-9]*:[ \t]*//" | grep -v "bus_tick_(b)\|backend_tick_(b)\|sqlite_poll_(b)\|http_poll_(hb)\|later_tick_(b)\|b.nav_timer = ui.timer(1")
+ticks=$(grep -n "ui\.timer(" "$F" | grep -v "^[0-9]*:[ \t]*//" | grep -v "bus_tick_(b)\|backend_tick_(b)\|sqlite_poll_(b)\|http_poll_(hb)\|later_tick_(b)\|gfx_tick_(b)\|b.nav_timer = ui.timer(1")
 if [ -n "$ticks" ]; then echo "FAIL a kernel timer that is not one of the guarded ticks:"; echo "$ticks"; fail=1
 else echo "ok   every kernel timer is a guarded tick"; fi
 nav=$(grep -A3 "b.nav_timer = ui.timer(1" "$F" | grep -c "if b.entry_depth > 0 { return }")
@@ -74,6 +75,11 @@ nav=$(grep -A3 "b.nav_timer = ui.timer(1" "$F" | grep -c "if b.entry_depth > 0 {
 #    page-API functions only check (refusal) and queue (later_add_).
 expect shell.open "later_tick_"
 expect printing.pdf "later_tick_"
+# The GPU helper is started, written to and read by its tick alone; the
+# page-API functions only queue (gfx_live_, gfx_queue_batch_, gfx_unlive_).
+expect gfx.start "gfx_tick_"
+expect gfx.send_frame "gfx_tick_"
+expect gfx.poll "gfx_tick_"
 
 # 4. The runtime's sandbox_push and sandbox_pop (sandbox.enter and leave are
 #    not released; they replace the builtins when they are) are named in the

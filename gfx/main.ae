@@ -1,0 +1,274 @@
+// sae-gfx: the GPU helper. sae starts it on a page's first gfx.scene, on a
+// socket pair (std.ipc's socket channel, its fd 3), contained to the grants
+// services/gfx gives it where Aether can contain a child (Linux), and draws
+// the pages' 3D scenes in it with ae3d, offscreen, reading each picture back
+// to sae as RGBA. It is a process of its own so that ae3d, GLFW and the GPU
+// driver are never in sae's: a driver that crashes or hangs ends the pages'
+// 3D, not the browser (docs/gpu-pages.md, "The GPU helper").
+//
+// The protocol, version 1. Each message is one std.ipc frame: a header line
+// of words, "\n", then the body (bytes, possibly none).
+//
+//   helper -> sae, first:   hello sae-gfx 1 <what draws, a word>
+//                           (or hello sae-gfx 1 none, then err 0 <why>, and it exits)
+//                           (then, started with --probe PATH: probe <before> <after>,
+//                           each read|refused: PATH read before its lockdown and in it)
+//   sae -> helper           open <id> <w> <h>           ->  ok <id>  |  err <id> <why>
+//                           submit <id> <draw 0|1>\n<an ae3d.batch, version 1>
+//                                                       ->  (draw 1) picture, or err <id> <why>
+//                           draw <id>                   ->  picture  |  err <id> <why>
+//                           free <id>                   (no answer)
+//                           bye                         (it exits)
+//   picture                 pixels <id> <frame> <w> <h> <ms>\n<w*h*4 bytes: RGBA rows, top first>
+//
+// Everything that comes is checked: a header that is not one of these, a
+// size or id out of range, a batch that ae3d.batch refuses, each answered
+// `err` with nothing changed, and the helper goes on. A frame over the
+// largest a message may be, or a channel that fails, ends it (fail closed):
+// sae sees it gone and fails the pages' scenes.
+//
+// The swap to a shared buffer (docs/gpu-pages.md): `open` will come with a
+// descriptor (ipc.send_fd, sae to helper: descriptors only go down) of a
+// buffer of 2*w*h*4 bytes, and `pixels` becomes `ready <id> <frame> <slot>
+// <ms>` with no body, the picture written into slot 0 or 1 of that buffer.
+// Nothing else in the protocol changes.
+import std.ipc
+import std.fs
+import std.list
+import std.mem
+import std.os
+import std.string
+import std.bytes
+import std.sandbox
+import std.time (now_ms)
+import ae3d.core
+import ae3d.gl
+import ae3d.offscreen
+import ae3d.batch
+
+const PROTOCOL = 1
+const DIM_MAX = 4096
+const SCENES_MAX = 64
+// The largest message sae may send: a batch of sae's 16 MB at most, and its header.
+const FRAME_MAX = 16777472
+const HEADER_MAX = 256
+
+struct Scene {
+    id: int
+    w: int
+    h: int
+    b: ptr           // *Batch
+}
+
+struct Helper {
+    ch: int
+    renderer: ptr    // *GLRenderer
+    scenes: ptr      // std.list of *Scene
+}
+
+say(h: *Helper, text: string) -> string {
+    return ipc.write_frame(h.ch, text)
+}
+
+scene_of(h: *Helper, id: int) -> *Scene {
+    k = 0
+    while k < list.size(h.scenes) {
+        s = list.get_raw(h.scenes, k) as *Scene
+        if s.id == id { return s }
+        k = k + 1
+    }
+    return null
+}
+
+// A decimal word in [lo, hi], or lo - 1.
+word_int(words: ptr, i: int, lo: int, hi: int) -> int {
+    if i >= string.string_array_size(words) { return lo - 1 }
+    w = string.string_array_get(words, i)
+    if string.length(w) < 1 || string.length(w) > 9 { return lo - 1 }
+    k = 0
+    while k < string.length(w) {
+        c = string.string_char_at(w, k)
+        if c < 48 || c > 57 { return lo - 1 }
+        k = k + 1
+    }
+    v, err = string.to_int(w)
+    if err != "" || v < lo || v > hi { return lo - 1 }
+    return v
+}
+
+// The scene drawn and its picture sent.
+picture(h: *Helper, s: *Scene) -> string {
+    t0 = now_ms()
+    batch.batch_draw(s.b as *Batch)
+    px = batch.batch_pixels(s.b as *Batch)
+    if px == null { return say(h, "err ${s.id} the picture could not be read back") }
+    ms = now_ms() - t0
+    body = bytes.string_from_ptr(px, s.w * s.h * 4)
+    return say(h, string.concat("pixels ${s.id} ${batch.batch_frame(s.b as *Batch)} ${s.w} ${s.h} ${ms}\n", body))
+}
+
+// One message: "" to go on, else why the helper stops.
+take(h: *Helper, msg: string) -> string {
+    n = string.length(msg)
+    nl = string.string_index_of(msg, "\n")
+    head_end = nl
+    if nl < 0 { head_end = n }
+    if head_end > HEADER_MAX { return say(h, "err 0 a header of more than ${HEADER_MAX} bytes") }
+    head = string.string_substring(msg, 0, head_end)
+    words = string.string_split(head, " ")
+    nw = string.string_array_size(words)
+    op = ""
+    if nw > 0 { op = string.string_array_get(words, 0) }
+    out = ""
+    if op == "bye" && nw == 1 {
+        out = "bye"
+    } else if op == "open" && nw == 4 {
+        id = word_int(words, 1, 1, 1000000000)
+        w = word_int(words, 2, 1, DIM_MAX)
+        ht = word_int(words, 3, 1, DIM_MAX)
+        if id < 1 || w < 1 || ht < 1 {
+            out = say(h, "err 0 open: not an id and a size from 1 to ${DIM_MAX} each way")
+        } else if scene_of(h, id) != null {
+            out = say(h, "err ${id} open: scene ${id} is open already")
+        } else if list.size(h.scenes) >= SCENES_MAX {
+            out = say(h, "err ${id} open: ${SCENES_MAX} scenes are open")
+        } else {
+            b = batch.batch_new(h.renderer as *GLRenderer, w, ht)
+            if b == null {
+                out = say(h, "err ${id} open: no canvas of ${w}x${ht}")
+            } else {
+                s = heap.new(Scene)
+                s.id = id
+                s.w = w
+                s.h = ht
+                s.b = b as ptr
+                list.add_raw(h.scenes, s as ptr)
+                out = say(h, "ok ${id}")
+            }
+        }
+    } else if op == "submit" && nw == 3 && nl >= 0 {
+        id = word_int(words, 1, 1, 1000000000)
+        draw = word_int(words, 2, 0, 1)
+        s = scene_of(h, id)
+        if s == null || draw < 0 {
+            out = say(h, "err ${id} submit: no scene ${string.string_array_get(words, 1)}, or not draw 0 or 1")
+        } else {
+            body = string.string_substring(msg, nl + 1, n)
+            why = batch.batch_submit(s.b as *Batch, string.bytes(body) as ptr, string.length(body))
+            if why != "" {
+                out = say(h, "err ${id} submit: ${why}")
+            } else if draw == 1 {
+                out = picture(h, s)
+            }
+        }
+    } else if op == "draw" && nw == 2 {
+        id = word_int(words, 1, 1, 1000000000)
+        s = scene_of(h, id)
+        if s == null { out = say(h, "err ${id} draw: no scene ${string.string_array_get(words, 1)}") } else { out = picture(h, s) }
+    } else if op == "free" && nw == 2 {
+        id = word_int(words, 1, 1, 1000000000)
+        s = scene_of(h, id)
+        if s != null {
+            k = 0
+            while k < list.size(h.scenes) {
+                if list.get_raw(h.scenes, k) == s as ptr {
+                    list.list_remove(h.scenes, k)
+                    break
+                }
+                k = k + 1
+            }
+            batch.batch_free(s.b as *Batch)
+            heap.free(s)
+        }
+    } else {
+        out = say(h, "err 0 not a message: ${string.string_substring(head, 0, 64)}")
+    }
+    string.string_array_free(words)
+    return out
+}
+
+// "read" or "refused".
+probe_(path: string) -> string {
+    _d, rerr = fs.read(path)
+    if rerr != "" { return "refused" }
+    return "read"
+}
+
+// It cannot draw here: said, and it exits.
+cannot(ch: int, why: string) {
+    _h = ipc.write_frame(ch, "hello sae-gfx ${PROTOCOL} none")
+    _e = ipc.write_frame(ch, "err 0 ${why}")
+    exit(3)
+}
+
+main() {
+    ch = ipc.parent_channel()
+    if ch < 0 || ipc.parent_channel_kind() != "socket" {
+        println("sae-gfx: sae starts this, on a socket; it is not a program to run by hand")
+        exit(2)
+    }
+    probe = ""
+    k = 1
+    while k + 1 < os.args_count() {
+        if os.args_get(k) == "--probe" { probe = os.args_get(k + 1) }
+        k = k + 1
+    }
+    context = offscreen.context_create(256, 256)
+    if context == null {
+        cannot(ch, "no OpenGL context")
+        exit(3)
+    }
+    renderer = gl.renderer_new()
+    backend = gl.backend(renderer)
+    if !core.backend_init(&backend, context, 256, 256) {
+        cannot(ch, "the OpenGL backend would not initialise")
+        offscreen.context_destroy(context)
+        exit(3)
+    }
+    h = heap.new(Helper)
+    h.ch = ch
+    h.renderer = renderer as ptr
+    h.scenes = list.new()
+    what = string.string_replace_all(gl.gl_version(), " ", "_")
+    if what == "" { what = "opengl" }
+    if say(h, "hello sae-gfx ${PROTOCOL} ${what}") != "" { exit(4) }
+    // For sae's containment spec: is a file sae did not hand over readable,
+    // before the lockdown and in it?
+    before = ""
+    if probe != "" { before = probe_(probe) }
+    // Locked down from here, on every platform: with the GL context made,
+    // nothing the helper does needs a file, a program, the environment or
+    // the network, so its own std calls are refused all of them (the
+    // backends' shape, docs/design/ipc-backends.md). This holds the helper's
+    // Aether code, not the driver's C; the process sandbox is for that, and
+    // cannot hold a GL driver yet (docs/gpu-pages.md, "Containment").
+    why = ""
+    nothing = sandbox.new("sae-gfx: nothing") {}
+    sandbox.enforce(nothing) callback {
+        if probe != "" {
+            if say(h, "probe ${before} ${probe_(probe)}") != "" { why = "the channel failed" }
+        }
+        while why == "" {
+            msg, rerr = ipc.read_frame(ch, FRAME_MAX)
+            if rerr != "" {
+                why = rerr
+            } else {
+                why = take(h, msg)
+            }
+        }
+    }
+    sandbox.free(nothing)
+    k = list.size(h.scenes) - 1
+    while k >= 0 {
+        s = list.get_raw(h.scenes, k) as *Scene
+        batch.batch_free(s.b as *Batch)
+        heap.free(s)
+        k = k - 1
+    }
+    list.free(h.scenes)
+    core.backend_cleanup(&backend)
+    gl.renderer_free(renderer)
+    offscreen.context_destroy(context)
+    if why == "bye" || why == "end of stream" { exit(0) }
+    exit(1)
+}

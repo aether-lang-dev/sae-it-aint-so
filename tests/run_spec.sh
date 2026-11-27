@@ -152,7 +152,7 @@ elif [ -n "${SAE_TEST_APP:-}" ]; then
         --app "$(cd "$SAE_TEST_APP" && pwd)" ${SAE_TEST_FLAGS:-} >"$LOG" 2>&1 &
 else
     AETHER_UI_TEST_PORT=$DRIVER_PORT "$DRIVER_BIN" \
-        "${SAE_TEST_START:-http://127.0.0.1:$SITE_PORT/}" >"$LOG" 2>&1 &
+        "${SAE_TEST_START:-http://127.0.0.1:$SITE_PORT/}" ${SAE_TEST_FLAGS:-} >"$LOG" 2>&1 &
 fi
 [ -n "${SAE_TEST_PARENT:-}" ] || SAE=$!
 # Where the app runs from (a copy under target/retarget when ports moved),
@@ -164,11 +164,11 @@ cd "$SPEC_DIR"
 status=0
 if [ -n "${SAE_TEST_PARENT:-}" ]; then
     env AETHER_LIB_DIR="${SAE_TEST_LIB_DIR:+$SAE_TEST_LIB_DIR:}$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT:$ROOT/sdk" \
-        SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
+        SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" SAE_TEST_SAE_PID="$SAE" \
         ae run "$SPEC_FILE" 2>>"$LOG" || status=$?
 else
     env AETHER_LIB_DIR="${SAE_TEST_LIB_DIR:+$SAE_TEST_LIB_DIR:}$ROOT/tests/lib:$ROOT/aether-ui/tests/lib:$ROOT:$ROOT/sdk" \
-        SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" \
+        SAE_TEST_BASE="http://127.0.0.1:$SITE_PORT" SAE_TEST_LOG="$LOG" SAE_TEST_SAE_PID="$SAE" \
         ae run "$SPEC_FILE" || status=$?
 fi
 exit $status
