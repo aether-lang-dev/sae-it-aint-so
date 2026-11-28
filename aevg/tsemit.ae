@@ -359,7 +359,7 @@ solid_color(e: *Emit, url: string) -> string {
     if string.length(c) == 0 { c = "#000000" }
     op = stop_attr(mid, "stop-opacity")
     if string.length(op) > 0 {
-        ov, oe = string.to_double(op)
+        ov, oe = string.to_float(op)
         if oe == "" && ov < 1.0 { c = utils.apply_opacity_to_color(c, ov) }
     }
     return c
@@ -531,12 +531,12 @@ compose_opacity(node: ptr) -> string {
     prod = 1.0
     own = style_attr(node, "opacity")
     if string.length(own) > 0 {
-        v, e = string.to_double(own)
+        v, e = string.to_float(own)
         if e == "" { prod = prod * v }
     }
     fo = style_attr(node, "fill-opacity")
     if string.length(fo) > 0 {
-        v2, e2 = string.to_double(fo)
+        v2, e2 = string.to_float(fo)
         if e2 == "" { prod = prod * v2 }
     }
     if prod >= 0.999 { return "" }
@@ -555,7 +555,7 @@ num(node: ptr, key: string) -> string {
 lit(s: string) -> string {
     t = string.trim(s)
     if string.starts_with(t, "+") == 1 { t = string.substring(t, 1, string.length(t)) }
-    _v, e = string.to_double(t)
+    _v, e = string.to_float(t)
     if e == "" && string.contains(t, " ") == 0 { return trim_zeros(t) }
     if string.ends_with(t, "%") == 1 { return "\"${t}\"" }
     px = utils.parse_length_to_px(t)
@@ -708,7 +708,7 @@ px_of(root: ptr, attr: string, vb: string, vb_index: int) -> int {
         if string.length(p2) > 0 {
             seen = seen + 1
             if seen == vb_index {
-                f, e = string.to_double(p2)
+                f, e = string.to_float(p2)
                 if e == "" && f > 0.0 { return f as int }
             }
         }

@@ -38,7 +38,7 @@ parity(name: string) -> float {
     // "mae 3.21 samples 10000"
     rest = string.substring(out, 4, string.length(out))
     sp = string.index_of(rest, " ")
-    v, verr = string.to_double(string.substring(rest, 0, sp))
+    v, verr = string.to_float(string.substring(rest, 0, sp))
     if verr != "" {
         spec.fail("png_mae.py said: ${out}")
         return 0.0 - 1.0

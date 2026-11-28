@@ -211,7 +211,11 @@
 # 0.946.0 (2026-11-25): a tracking move, no new primitive needed, no source change.
 # Fixes a selective `import std.math (...)` in one module breaking `math.sqrt` in
 # another (E0301, aether#3877); none fires in sae. Verified: see the commit.
-AE_PIN=0.946.0
+# 0.949.0 (2026-11-28): a tracking move, no new primitive needed. Source change:
+# string.to_double -> string.to_float in aevg/tsemit.ae and tests/spec_aevg_parity.ae
+# (0.948.0 made to_float a correctly rounded 64-bit strtod and kept to_double only
+# as a delete-once-unused alias). Verified: see the commit.
+AE_PIN=0.949.0
 
 # aeb release. v0.325 is the first tag with what sae needs: b0cc057 gives each
 # aether_source its own object (sae compiles ~170 `module.ae` files), and
